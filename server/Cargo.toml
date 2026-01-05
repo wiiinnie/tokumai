@@ -3,13 +3,18 @@ name = "scramble-server"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "scramble-server"
+path = "src/main.rs"
+
 [dependencies]
 scramble-shared = { path = "../shared" }
+
 tokio = { workspace = true }
+nym-sdk = { workspace = true }
+reqwest = { version = "0.11", features = ["json"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
-reqwest = { workspace = true }
-dotenv = { workspace = true }
-nym-sdk = { workspace = true }
+dotenv = "0.15"
 chrono = "0.4"

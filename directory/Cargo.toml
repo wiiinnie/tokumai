@@ -1,10 +1,10 @@
 [package]
-name = "scramble-cli"
+name = "scramble-directory"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "scramble-cli"
+name = "scramble-directory"
 path = "src/main.rs"
 
 [dependencies]
@@ -12,6 +12,10 @@ scramble-shared = { path = "../shared" }
 
 tokio = { workspace = true }
 nym-sdk = { workspace = true }
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
+chrono = "0.4"
+uuid = { version = "1", features = ["v4"] }
+rand = "0.8"

@@ -1,5 +1,6 @@
 use anyhow::Result;
 use nym_sdk::mixnet::{self, MixnetMessageSender, Recipient, IncludedSurbs};
+use scramble_shared::directory::{DirectoryRequest, DirectoryResponse};
 use scramble_shared::{Request, Response};
 use std::io::{self, Write};
 use std::time::{SystemTime, UNIX_EPOCH, Duration};
@@ -10,15 +11,22 @@ async fn main() -> Result<()> {
     println!("🔐 ScrambleAI CLI - Private AI Chat");
     println!("===================================\n");
     
-    // Get server Nym address
-    print!("Enter server Nym address: ");
+    // Get directory address from user
+    print!("Enter Directory Nym address: ");
     io::stdout().flush()?;
-    let mut server_address = String::new();
-    io::stdin().read_line(&mut server_address)?;
-    let server_address = server_address.trim().to_string();
+    let mut directory_address = String::new();
+    io::stdin().read_line(&mut directory_address)?;
+    let directory_address = directory_address.trim().to_string();
+    
+    if directory_address.is_empty() {
+        eprintln!("❌ Directory address required!");
+        return Ok(());
+    }
+    
+    println!("✅ Will use directory: {}\n", directory_address);
     
     // Ask for privacy mode
-    println!("\nSelect privacy mode:");
+    println!("Select privacy mode:");
     println!("1. 🚀 Fast Mode (5-10s response, server sees your Nym address)");
     println!("2. 🔒 Maximum Privacy (30-60s response, server NEVER sees your address)");
     print!("Choice [1/2]: ");
@@ -29,32 +37,45 @@ async fn main() -> Result<()> {
     let use_surbs = mode_input.trim() == "2";
     
     if use_surbs {
-        println!("✅ Maximum Privacy Mode enabled (using SURBs)");
-        println!("⚠️  Responses will take 30-60 seconds\n");
+        println!("✅ Maximum Privacy Mode enabled\n");
     } else {
-        println!("✅ Fast Mode enabled");
-        println!("ℹ️  Server will see your Nym address (NOT your IP!)");
-        println!("ℹ️  Responses will take 5-10 seconds\n");
+        println!("✅ Fast Mode enabled\n");
     }
     
     println!("🚀 Initializing Nym Client...");
     let start = SystemTime::now();
     
-    // Initialize Nym client
     let client = mixnet::MixnetClientBuilder::new_ephemeral()
         .build()?;
     
     println!("⏱️  Client built in {:?}", start.elapsed()?);
     
-    // Connect to mixnet
     let connect_start = SystemTime::now();
     let mut client = client.connect_to_mixnet().await?;
     
     let my_address = client.nym_address().to_string();
     
-    println!("⏱️  Connected to mixnet in {:?}", connect_start.elapsed()?);
-    println!("✅ Connected to Nym Mixnet!");
+    println!("⏱️  Connected in {:?}", connect_start.elapsed()?);
+    println!("✅ Connected!");
     println!("📍 Your Nym Address: {}", my_address);
+    
+    println!("\n🔍 Looking for available servers...");
+    let servers = fetch_server_list(&mut client, &my_address, &directory_address).await?;
+    
+    if servers.is_empty() {
+        eprintln!("❌ No servers available!");
+        eprintln!("   Make sure at least one scramble-server is running.");
+        return Ok(());
+    }
+    
+    println!("✅ Found {} server(s):", servers.len());
+    for (i, server) in servers.iter().enumerate() {
+        println!("   {}. {}", i + 1, server.address);
+    }
+    
+    let server_address = &servers[0].address;
+    println!("\n🎯 Using server: {}", server_address);
+    
     println!("\n=== Commands ===");
     println!("ping <message>   - Test connection");
     println!("<any text>       - Send chat request to AI");
@@ -62,11 +83,9 @@ async fn main() -> Result<()> {
     println!("address          - Show your Nym address");
     println!("================\n");
     
-    // Parse recipient once
-    let recipient = Recipient::try_from_base58_string(&server_address)?;
+    let recipient = Recipient::try_from_base58_string(server_address)?;
     
     loop {
-        // Get user input
         print!("You: ");
         io::stdout().flush()?;
         
@@ -78,7 +97,6 @@ async fn main() -> Result<()> {
             continue;
         }
         
-        // Handle commands
         if input == "exit" {
             println!("👋 Goodbye!");
             break;
@@ -89,14 +107,12 @@ async fn main() -> Result<()> {
             continue;
         }
         
-        // Prepare reply_to based on mode
         let reply_to = if use_surbs {
-            None // SURBs mode - no address needed
+            None
         } else {
-            Some(my_address.clone()) // Fast mode - include address
+            Some(my_address.clone())
         };
         
-        // Check if ping
         let request = if input.starts_with("ping") {
             let message = input.strip_prefix("ping").unwrap_or("").trim();
             let message = if message.is_empty() { "hello" } else { message };
@@ -108,14 +124,13 @@ async fn main() -> Result<()> {
         let request_bytes = serde_json::to_vec(&request)?;
         
         if use_surbs {
-            println!("🔄 Sending through Mixnet with SURBs (Maximum Privacy)...");
+            println!("🔄 Sending through Mixnet with SURBs...");
         } else {
-            println!("🔄 Sending through Mixnet (Fast Mode)...");
+            println!("🔄 Sending through Mixnet...");
         }
         
         let send_start = SystemTime::now();
         
-        // Send with or without SURBs
         let surbs = if use_surbs {
             IncludedSurbs::Amount(10)
         } else {
@@ -125,13 +140,12 @@ async fn main() -> Result<()> {
         client.send_message(recipient, request_bytes, surbs).await?;
         
         println!("⏱️  Sent in {:?}", send_start.elapsed()?);
-        println!("⏳ Polling for response...");
+        println!("⏳ Waiting for response...");
         
         let wait_start = SystemTime::now();
         let max_polls = if use_surbs { 120 } else { 60 };
         let mut poll_count = 0;
         
-        // Keep polling until we get a response or timeout
         let poll_result = timeout(Duration::from_secs(if use_surbs { 300 } else { 60 }), async {
             loop {
                 poll_count += 1;
@@ -140,14 +154,12 @@ async fn main() -> Result<()> {
                     println!("   Polling attempt {}...", poll_count);
                 }
                 
-                // Wait for messages
                 if let Some(messages) = client.wait_for_messages().await {
                     if !messages.is_empty() {
                         return Some(messages);
                     }
                 }
                 
-                // Small delay between polls
                 sleep(Duration::from_millis(500)).await;
                 
                 if poll_count >= max_polls {
@@ -160,38 +172,25 @@ async fn main() -> Result<()> {
             Ok(Some(messages)) => {
                 let receive_time = wait_start.elapsed()?;
                 println!("⏱️  Response received after {:?} ({} polls)", receive_time, poll_count);
-                println!("📦 Received {} message(s)", messages.len());
                 
-                // Process all messages
-                for (i, received) in messages.iter().enumerate() {
-                    println!("📨 Processing message {}/{}", i + 1, messages.len());
-                    
+                for received in messages.iter() {
                     match serde_json::from_slice::<Response>(&received.message) {
-                        Ok(Response::Pong { original_timestamp, server_timestamp, message }) => {
+                        Ok(Response::Pong { original_timestamp, server_timestamp: _, message }) => {
                             let now = SystemTime::now()
                                 .duration_since(UNIX_EPOCH)
                                 .unwrap()
                                 .as_millis() as u64;
                             
-                            let client_to_server = server_timestamp.saturating_sub(original_timestamp);
-                            let server_to_client = now.saturating_sub(server_timestamp);
                             let total_roundtrip = now.saturating_sub(original_timestamp);
                             
                             println!("\n🏓 PONG: {}", message);
-                            println!("📊 Timing:");
-                            println!("   Client → Server: {} ms", client_to_server);
-                            println!("   Server → Client: {} ms", server_to_client);
-                            println!("   Total Roundtrip: {} ms ({:.2}s)\n", 
+                            println!("📊 Roundtrip: {} ms ({:.2}s)\n", 
                                 total_roundtrip, 
                                 total_roundtrip as f64 / 1000.0
                             );
                         }
                         Ok(Response::Chat(response)) => {
-                            println!("\n🤖 AI ({:?} - {}): {}\n", 
-                                response.provider, 
-                                response.model, 
-                                response.content
-                            );
+                            println!("\n🤖 AI: {}\n", response.content);
                         }
                         Err(e) => {
                             eprintln!("❌ Failed to parse response: {}", e);
@@ -203,10 +202,67 @@ async fn main() -> Result<()> {
                 eprintln!("❌ No response after {} polls", poll_count);
             }
             Err(_) => {
-                eprintln!("❌ Timeout after {} polls", poll_count);
+                eprintln!("❌ Timeout");
             }
         }
     }
     
     Ok(())
+}
+
+async fn fetch_server_list(
+    nym_client: &mut nym_sdk::mixnet::MixnetClient,
+    my_address: &str,
+    directory_address: &str,
+) -> Result<Vec<scramble_shared::directory::ServerEntry>> {
+    println!("   Trying directory...");
+    
+    fetch_from_directory(directory_address, nym_client, my_address).await
+}
+
+async fn fetch_from_directory(
+    dir_address: &str,
+    nym_client: &mut nym_sdk::mixnet::MixnetClient,
+    my_address: &str,
+) -> Result<Vec<scramble_shared::directory::ServerEntry>> {
+    let recipient = Recipient::try_from_base58_string(dir_address)?;
+    
+    let request = DirectoryRequest::ListServers {
+        reply_to: Some(my_address.to_string()),
+    };
+    
+    let request_bytes = serde_json::to_vec(&request)?;
+    
+    println!("   📤 Sending request...");
+    nym_client.send_message(recipient, request_bytes, IncludedSurbs::Amount(5)).await?;
+    
+    println!("   ⏳ Waiting for response (60s timeout)...");
+    
+    let result = timeout(Duration::from_secs(60), async {
+        let mut poll_count = 0;
+        loop {
+            poll_count += 1;
+            
+            if poll_count % 10 == 0 {
+                println!("      Polling attempt {}...", poll_count);
+            }
+            
+            if let Some(messages) = nym_client.wait_for_messages().await {
+                for msg in messages {
+                    if let Ok(response) = serde_json::from_slice::<DirectoryResponse>(&msg.message) {
+                        if let DirectoryResponse::ServerList { servers } = response {
+                            return Ok(servers);
+                        }
+                    }
+                }
+            }
+            sleep(Duration::from_millis(500)).await;
+        }
+    }).await;
+    
+    match result {
+        Ok(Ok(servers)) => Ok(servers),
+        Ok(Err(e)) => Err(e),
+        Err(_) => Err(anyhow::anyhow!("Timeout waiting for directory response")),
+    }
 }

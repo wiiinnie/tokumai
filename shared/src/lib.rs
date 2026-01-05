@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+pub mod directory;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Provider {
     Groq,
@@ -13,7 +15,7 @@ pub enum Request {
     Ping { 
         timestamp: u64,
         message: String,
-        reply_to: Option<String>, // Client Nym address for fast mode
+        reply_to: Option<String>,
     },
     Chat(ChatRequest),
 }
@@ -29,11 +31,17 @@ pub enum Response {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatMessage {
+    pub role: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatRequest {
     pub provider: Provider,
     pub model: String,
     pub prompt: String,
-    pub reply_to: Option<String>, // Client Nym address for fast mode
+    pub reply_to: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,24 +69,6 @@ impl Request {
         Self::Chat(ChatRequest {
             provider: Provider::Groq,
             model: "llama-3.3-70b-versatile".to_string(),
-            prompt: prompt.to_string(),
-            reply_to,
-        })
-    }
-    
-    pub fn chat_openai(prompt: &str, reply_to: Option<String>) -> Self {
-        Self::Chat(ChatRequest {
-            provider: Provider::OpenAI,
-            model: "gpt-4o".to_string(),
-            prompt: prompt.to_string(),
-            reply_to,
-        })
-    }
-    
-    pub fn chat_anthropic(prompt: &str, reply_to: Option<String>) -> Self {
-        Self::Chat(ChatRequest {
-            provider: Provider::Anthropic,
-            model: "claude-3-5-sonnet-20241022".to_string(),
             prompt: prompt.to_string(),
             reply_to,
         })
