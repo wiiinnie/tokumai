@@ -1,0 +1,14 @@
+[workspace]
+members = ["cli", "server", "shared"]
+resolver = "2"
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+reqwest = { version = "0.12", features = ["json"] }
+dotenv = "0.15"
+
+# Nym SDK vom letzten Release
+nym-sdk = { git = "https://github.com/nymtech/nym", tag = "nym-binaries-v2025.21-mozzarella" }
