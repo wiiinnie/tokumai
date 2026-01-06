@@ -54,7 +54,7 @@ async fn main() -> Result<()> {
     let client = builder.build()?;
     println!("   ⏱️  Built: {:.2}s", init_start.elapsed().as_secs_f64());
     
-    let mut nym_client = client.connect_to_mixnet().await?;
+    let nym_client = client.connect_to_mixnet().await?;
     println!("   ⏱️  Connected: {:.2}s", init_start.elapsed().as_secs_f64());
     
     let directory_address = nym_client.nym_address();
@@ -194,7 +194,7 @@ async fn handle_list_servers(
     let response = DirectoryResponse::ServerList { servers };
     let response_bytes = serde_json::to_vec(&response)?;
     
-    let mut client = nym_client.lock().await;
+    let client = nym_client.lock().await;
     
     if let Some(sender_tag) = &received.sender_tag {
         client.send_reply(sender_tag.clone(), response_bytes).await?;
@@ -249,7 +249,7 @@ async fn handle_register(
     };
     
     let challenge_bytes = serde_json::to_vec(&challenge_response)?;
-    let mut client = nym_client.lock().await;
+    let client = nym_client.lock().await;
     
     if let Some(sender_tag) = &received.sender_tag {
         client.send_reply(sender_tag.clone(), challenge_bytes).await?;
@@ -336,7 +336,7 @@ async fn handle_challenge_response(
     let response_bytes = serde_json::to_vec(&success_response)?;
     
     let recipient = Recipient::try_from_base58_string(&address)?;
-    let mut client = nym_client.lock().await;
+    let client = nym_client.lock().await;
     client.send_message(recipient, response_bytes, IncludedSurbs::none()).await?;
     
     println!("   📤 Confirmation sent");
