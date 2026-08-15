@@ -409,6 +409,21 @@
   </div>
 </div>
 
+<div class="scrim" id="importScrim" onclick="if(event.target===this)closeImport()">
+  <div class="modal">
+    <div class="mh"><span class="ttl">Import <b>encrypted</b></span><span class="x" onclick="closeImport()">✕</span></div>
+    <div class="mb">
+      <p>This handover is encrypted. Enter the passphrase it was saved with to decrypt and import it.</p>
+      <div class="passrow"><input type="password" id="importPass" placeholder="passphrase" onkeydown="if(event.key==='Enter')decryptImport()"></div>
+      <p class="hint" id="importStatus"></p>
+    </div>
+    <div class="mf">
+      <button class="btn" onclick="closeImport()">Cancel</button>
+      <button class="btn primary" onclick="decryptImport()">Decrypt &amp; import</button>
+    </div>
+  </div>
+</div>
+
 <div class="scrim" id="termsScrim">
   <div class="modal">
     <div class="mh"><span class="ttl">Provider <b>terms</b></span></div>
@@ -1060,22 +1075,43 @@
   function closeHandover(){ $("scrim").classList.remove("open"); }
 
   function pickImport(){ $("importFile").click(); }
+  // Encrypted imports need a passphrase — but prompt()/alert() are no-ops in the
+  // Tauri webview, so use an in-app modal instead of a native prompt.
+  let pendingImportText = null;
+  function closeImport(){ pendingImportText=null; $("importScrim").classList.remove("open"); }
   async function importHandover(ev){
     const file=ev.target.files&&ev.target.files[0]; if(!file) return;
     ev.target.value="";
-    let text=await file.text();
+    let text;
+    try{ text=await file.text(); }catch(e){ setStatus("could not read that file"); return; }
     if(PassphraseCrypto.isEnvelope(text)){
-      const pass=prompt("This handover is encrypted. Enter passphrase:");
-      if(pass===null) return;
-      try{ text=await PassphraseCrypto.decrypt(text,pass); }
-      catch(_){ alert("Wrong passphrase or corrupted file."); return; }
+      pendingImportText=text;
+      $("importStatus").textContent=""; $("importPass").value="";
+      $("importScrim").classList.add("open");
+      setTimeout(()=>$("importPass").focus(),50);
+      return;
     }
+    await finishImport(text);
+  }
+  async function decryptImport(){
+    const pass=$("importPass").value;
+    if(!pass){ $("importStatus").textContent="Enter the passphrase."; return; }
+    if(!pendingImportText){ closeImport(); return; }
+    $("importStatus").textContent="decrypting…";
+    let text;
+    try{ text=await PassphraseCrypto.decrypt(pendingImportText, pass); }
+    catch(_){ $("importStatus").textContent="Wrong passphrase or corrupted file."; return; }
+    closeImport();
+    await finishImport(text);
+  }
+  async function finishImport(text){
     const parsed=Handover.parse(text);
-    if(!parsed.messages.length){ alert("No conversation found in that file."); return; }
+    if(!parsed.messages.length){ setStatus("no conversation found in that file"); return; }
     current={ id:uuid(), title:parsed.title||(parsed.messages[0].text||"imported").slice(0,40),
       model:parsed.model||currentModel, created:parsed.created||new Date().toISOString(), messages:parsed.messages };
     messages=current.messages;
     await Vault.save(current); await refreshSessions(); renderThread();
+    setStatus("imported ✓");
   }
 
   // ---------- session end: export + prune ----------
@@ -1299,7 +1335,8 @@
     showRestore, askNew, cancelAcctView, saveServer, checkCredit,
     openEntryPicker, showExitInfo, chooseGateway, closeGw, filterGw,
     acceptTerms, declineTerms, chooseModel, openLink, saveImageAt,
-    pickImage, onImagePicked, clearImage, setMenuKind, toggleLatest });
+    pickImage, onImagePicked, clearImage, setMenuKind, toggleLatest,
+    closeImport, decryptImport });
 
   // ---------- init ----------
   function setMixnetOn(){
