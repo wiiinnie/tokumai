@@ -32,11 +32,17 @@ echo "→ 3/3  restart scrai.service"
 # there; /opt/scrai + the scrai user are our fixed server-side convention.
 ssh -t "$TARGET" '
   set -e
+  echo "   · sudo may prompt for your password now …"
   sudo rsync -a --delete \
-    --exclude .env --exclude data --exclude node_modules --exclude dist \
+    --exclude .env --exclude data --exclude images --exclude node_modules --exclude dist \
+    --exclude .nym --exclude bin \
     ~/scrai-stage/ /opt/scrai/
   sudo chown -R scrai:scrai /opt/scrai
-  sudo -u scrai HOME=/opt/scrai bash -lc "cd /opt/scrai && npm ci --include=dev && npm run build"
+  echo "   · npm ci (this is silent for ~30-90s) …"
+  sudo -u scrai HOME=/opt/scrai bash -lc "cd /opt/scrai && npm ci --include=dev"
+  echo "   · building (tsc) …"
+  sudo -u scrai HOME=/opt/scrai bash -lc "cd /opt/scrai && npm run build"
+  echo "   · restarting scrai.service …"
   sudo systemctl restart scrai
   sudo systemctl --no-pager status scrai | head -6
 '
