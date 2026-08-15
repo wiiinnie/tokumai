@@ -45,9 +45,16 @@ function toGemini(req: ChatRequest): {
     contents,
     generationConfig: {
       ...(req.temperature != null ? { temperature: req.temperature } : {}),
-      ...(req.maxTokens != null ? { maxOutputTokens: req.maxTokens } : {}),
-      // Thinking tokens bill as output but ignore maxOutputTokens, so they get
-      // their own hard cap — reserved for server-side, enforced here.
+      // On Gemini 3.x THINKING models the thinking tokens count AGAINST
+      // maxOutputTokens — so a bare maxOutputTokens=answer lets thinking eat the
+      // budget and truncates the visible answer mid-sentence. Give the visible
+      // answer its full budget ON TOP of the thinking budget. The server's
+      // ceiling already reserves (answer + thinking) output tokens, so this stays
+      // within what was billed.
+      ...(req.maxTokens != null
+        ? { maxOutputTokens: req.maxTokens + (req.thinkingBudget ?? 0) }
+        : {}),
+      // Hard cap on thinking so it cannot exceed what the ceiling reserved.
       ...(req.thinkingBudget != null ? { thinkingConfig: { thinkingBudget: req.thinkingBudget } } : {}),
     },
   };
