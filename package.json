@@ -1,0 +1,44 @@
+{
+  "name": "scrambleai",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Anonymer AI-Chat übers Nym-Mixnet — stateless Adapter-Server + Web-Client (murmur)",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "tsx watch --env-file=.env src/server.ts",
+    "start": "node dist/server.js",
+    "build": "tsc -p tsconfig.json",
+    "nym:install": "tsx src/cli/client.ts install-nym",
+    "client": "tsx --env-file-if-exists=.env src/cli/client.ts",
+    "client:setup": "tsx --env-file-if-exists=.env src/cli/client.ts setup",
+    "client:daemon": "tsx --env-file-if-exists=.env src/cli/client.ts daemon",
+    "server": "tsx --env-file=.env src/cli/server.ts run",
+    "server:setup": "tsx --env-file-if-exists=.env src/cli/server.ts setup",
+    "server:gw": "tsx --env-file-if-exists=.env src/cli/server.ts",
+    "issuer": "tsx --env-file-if-exists=.env src/cli/issuer.ts",
+    "test": "tsx test/billing.test.ts && tsx test/protocol.test.ts && tsx test/assembler.test.ts && tsx test/blind.test.ts && tsx test/money.test.ts",
+    "typecheck": "tsc -p tsconfig.check.json",
+    "check": "npm run typecheck && npm test",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4",
+    "@types/node": "^22.15.0",
+    "@types/qrcode": "^1.5.6",
+    "@types/qrcode-terminal": "^0.12.2",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@noble/curves": "^2.3.0",
+    "@tauri-apps/api": "^2.11.1",
+    "bip39": "^3.1.0",
+    "qrcode": "^1.5.4",
+    "qrcode-terminal": "^0.12.0"
+  }
+}

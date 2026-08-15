@@ -1,0 +1,129 @@
+{
+  "schema": "scrambler/pricing@1",
+  "version": "2026-07-30",
+  "source": "https://ai.google.dev/gemini-api/docs/pricing",
+  "tier": "paid-standard",
+  "currency": "USD",
+  "unit": "per_1m_tokens",
+  "note": "Standard (non-batch, non-flex, non-priority) paid-tier prices. Output prices include thinking tokens. Margin lives in MARGIN env, never here.",
+  "default": {
+    "label": "unknown model (conservative fallback)",
+    "in": 1.5,
+    "out": 9,
+    "cached_in": 0.15,
+    "audio_in": 3,
+    "fallback": true
+  },
+  "models": {
+    "gemini-3.6-flash": {
+      "label": "Gemini 3.6 Flash",
+      "in": 1.5,
+      "out": 7.5,
+      "cached_in": 0.15
+    },
+    "gemini-3.5-flash": {
+      "label": "Gemini 3.5 Flash",
+      "in": 1.5,
+      "out": 9,
+      "cached_in": 0.15
+    },
+    "gemini-3.5-flash-lite": {
+      "label": "Gemini 3.5 Flash-Lite",
+      "in": 0.3,
+      "out": 2.5,
+      "cached_in": 0.03,
+      "audio_in": 0.3
+    },
+    "gemini-3.1-flash-lite": {
+      "label": "Gemini 3.1 Flash-Lite",
+      "in": 0.25,
+      "out": 1.5,
+      "cached_in": 0.025,
+      "audio_in": 0.5
+    },
+    "gemini-3-flash-preview": {
+      "label": "Gemini 3 Flash Preview",
+      "in": 0.5,
+      "out": 3,
+      "cached_in": 0.05,
+      "audio_in": 1
+    },
+    "gemini-flash-latest": {
+      "label": "Gemini Flash (floating alias)",
+      "in": 1.5,
+      "out": 9,
+      "cached_in": 0.15,
+      "floating": true,
+      "note": "Google repoints this alias without notice. Priced at the most expensive flash currently listed so we never undercharge. Pin a concrete model id in production."
+    },
+    "gemini-3.1-flash-lite-image": {
+      "label": "Nano Banana 2 Lite",
+      "in": 0.3,
+      "out": 30,
+      "cached_in": 0.03,
+      "note": "UNVERIFIED PLACEHOLDER. Image output bills as output tokens, but these rates were not confirmed against Google's price list. Priced high on purpose so we never undercharge — replace with real figures before charging anyone."
+    },
+    "gemini-3.1-flash-image": {
+      "label": "Nano Banana 2",
+      "in": 0.3,
+      "out": 30,
+      "cached_in": 0.03,
+      "note": "UNVERIFIED PLACEHOLDER. Image output bills as output tokens, but these rates were not confirmed against Google's price list. Priced high on purpose so we never undercharge — replace with real figures before charging anyone."
+    },
+    "gemini-2.5-flash-image": {
+      "label": "Nano Banana",
+      "in": 0.3,
+      "out": 30,
+      "cached_in": 0.03,
+      "note": "UNVERIFIED PLACEHOLDER. Image output bills as output tokens, but these rates were not confirmed against Google's price list. Priced high on purpose so we never undercharge — replace with real figures before charging anyone."
+    },
+    "pollinations-512": {
+      "label": "Pollinations 512px (free)",
+      "in": 0,
+      "out": 0,
+      "note": "Keyless public service — costs nothing, so it bills nothing. Test instrument for the image transfer path."
+    },
+    "pollinations-1024": {
+      "label": "Pollinations 1024px (free)",
+      "in": 0,
+      "out": 0,
+      "note": "Keyless public service — costs nothing, so it bills nothing. Test instrument for the image transfer path."
+    },
+    "pollinations-1536": {
+      "label": "Pollinations 1536px (free)",
+      "in": 0,
+      "out": 0,
+      "note": "Keyless public service — costs nothing, so it bills nothing. Test instrument for the image transfer path."
+    },
+    "llama-3.3-70b-versatile": {
+      "label": "Llama 3.3 70B (groq, free tier)",
+      "in": 0,
+      "out": 0,
+      "note": "Free tier — costs us nothing, so it bills nothing. Add real rates here if you ever exceed the free allowance."
+    },
+    "llama-3.1-8b-instant": {
+      "label": "Llama 3.1 8B (groq, free tier)",
+      "in": 0,
+      "out": 0,
+      "note": "Free tier — costs us nothing, so it bills nothing. Add real rates here if you ever exceed the free allowance."
+    },
+    "flux-schnell": {
+      "label": "FLUX.1 schnell (cloudflare, free tier)",
+      "in": 0,
+      "out": 0,
+      "note": "Free tier — costs us nothing, so it bills nothing. Add real rates here if you ever exceed the free allowance."
+    },
+    "flux-2-klein": {
+      "label": "FLUX.2 klein 4B (cloudflare, free tier)",
+      "in": 0,
+      "out": 0,
+      "note": "Free tier — costs us nothing, so it bills nothing. Add real rates here if you ever exceed the free allowance."
+    },
+    "lucid-origin": {
+      "label": "Lucid Origin (cloudflare, free tier)",
+      "in": 0,
+      "out": 0,
+      "note": "Free tier — costs us nothing, so it bills nothing. Add real rates here if you ever exceed the free allowance."
+    }
+  }
+}

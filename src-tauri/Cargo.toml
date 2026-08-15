@@ -1,0 +1,47 @@
+[package]
+name = "scrambleai"
+version = "0.1.0"
+description = "ScrambleAI desktop"
+authors = ["ScrambleAI"]
+license = ""
+edition = "2021"
+rust-version = "1.87.0"
+
+[lib]
+name = "app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+# Used for production builds AND when no devUrl is set (our static frontend).
+# Without it, `tauri dev` cannot serve the bundled assets → blank window. DO NOT REMOVE.
+custom-protocol = ["tauri/custom-protocol"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+# preserve_order so signed request bodies serialise key-for-key like the TS client.
+serde_json = { version = "1.0", features = ["preserve_order"] }
+serde = { version = "1.0", features = ["derive"] }
+qrcode = "0.14"
+log = "0.4"
+tauri = { version = "2.11.3", features = [] }
+tauri-plugin-log = "2"
+
+# --- crypto core (byte-compatible with the TS client, so the same scrai-server
+#     verifies its accounts, sessions and ecash) ---
+bip39 = { version = "2", features = ["rand"] }
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+sha2 = "0.10"
+rand = "0.8"
+hex = "0.4"
+base64 = "0.22"
+k256 = { version = "0.13", features = ["arithmetic"] }
+# Embedded mixnet client — no external nym-client binary needed.
+nym-sdk = "1.21"
+tokio = { version = "1", features = ["sync", "time", "rt", "macros"] }
+futures = "0.3"
+# Direct (non-mixnet) fetch of the Nym directory to map gateway identity -> country.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# Native "save as…" dialog for downloading generated images (the webview can't).
+rfd = "0.15"

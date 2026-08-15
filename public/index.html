@@ -1,0 +1,1344 @@
+<!--
+  ScrambleAI — client UI (wired to the local dev backend + encrypted local vault)
+  Served by the server at GET / (same-origin with /chat, /api/*, and the JS modules).
+  Persistence & crypto live behind vault.js / handover.js — swappable for mobile.
+-->
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ScrambleAI</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+  :root{
+    --ink:#141210; --surface:#1C1917; --surface-2:#262220; --line:#332E2A;
+    --bone:#ECE6DC; --muted:#9C938A; --signal:#CBA14E; --mix:#8AA06B; --rust:#C15A43;
+    --radius:10px; --mono:'JetBrains Mono',ui-monospace,monospace; --body:'Hanken Grotesk',system-ui,sans-serif;
+    --display:'Fraunces',Georgia,serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{background:
+      radial-gradient(1200px 600px at 80% -10%, rgba(138,160,107,.06), transparent 60%),
+      radial-gradient(900px 500px at -10% 110%, rgba(203,161,78,.05), transparent 55%), var(--ink);
+    color:var(--bone);font-family:var(--body);-webkit-font-smoothing:antialiased;
+    display:flex;flex-direction:column;height:100vh;overflow:hidden;}
+  @media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important}}
+  .titlebar{height:38px;display:flex;align-items:center;gap:8px;padding:0 14px;
+    border-bottom:1px solid var(--line);background:rgba(18,15,12,.6);flex:0 0 auto}
+  .dot{width:11px;height:11px;border-radius:50%}
+  .dot.r{background:#C15A43}.dot.y{background:#CBA14E}.dot.g{background:#8AA06B}
+  .titlebar .wordmark{margin-left:10px;font-family:var(--display);font-weight:600;letter-spacing:.005em;font-size:16px}
+  .titlebar .wordmark b{color:var(--mix)}
+  .titlebar .env{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--muted);display:flex;align-items:center;gap:7px}
+  .titlebar .env .cdot{width:7px;height:7px;border-radius:50%;background:var(--muted)}
+  .titlebar .env.ok .cdot{background:var(--mix);box-shadow:0 0 7px rgba(138,160,107,.7)}
+  .titlebar .env.bad .cdot{background:#C15A43;box-shadow:0 0 7px rgba(193,90,67,.7)}
+  .app{flex:1 1 auto;display:grid;grid-template-columns:248px 1fr;min-height:0}
+  .rail{border-right:1px solid var(--line);background:var(--surface);display:flex;flex-direction:column;min-height:0}
+  .rail .pad{padding:16px 14px;display:flex;flex-direction:column;gap:8px}
+  .newbtn{width:100%;border:1px solid var(--line);background:var(--surface-2);color:var(--bone);
+    font-family:var(--body);font-weight:600;font-size:13px;padding:10px 12px;border-radius:var(--radius);
+    cursor:pointer;text-align:left;display:flex;align-items:center;gap:9px;transition:border-color .15s,background .15s}
+  .newbtn:hover{border-color:var(--mix);background:#2A2521}
+  .newbtn .plus{color:var(--mix);font-size:16px;line-height:1}
+  .importbtn{width:100%;border:1px dashed var(--line);background:transparent;color:var(--muted);
+    font-family:var(--mono);font-size:11px;padding:8px 12px;border-radius:var(--radius);cursor:pointer;
+    text-align:center;transition:border-color .15s,color .15s}
+  .importbtn:hover{border-color:var(--mix);color:var(--mix)}
+  .railhead{font-family:var(--mono);font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--muted);padding:6px 14px;margin-top:6px}
+  .sessions{overflow-y:auto;flex:1 1 auto;min-height:0;padding:0 8px}
+  .session{padding:9px 10px;border-radius:8px;cursor:pointer;margin-bottom:2px;display:flex;
+    flex-direction:column;gap:2px;border:1px solid transparent;position:relative}
+  .session:hover{background:var(--surface-2)}
+  .session.active{background:var(--surface-2);border-color:var(--line)}
+  .session .t{font-size:13px;color:var(--bone);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-right:18px}
+  .session .m{font-family:var(--mono);font-size:10px;color:var(--muted)}
+  .session .m .lock{color:var(--mix)}
+  .session .del{position:absolute;top:8px;right:8px;color:var(--muted);font-size:13px;line-height:1;
+    opacity:0;transition:opacity .12s,color .12s}
+  .session:hover .del{opacity:1}
+  .session .del:hover{color:var(--rust)}
+  .empty-rail{padding:14px;font-family:var(--mono);font-size:10.5px;color:var(--muted);line-height:1.5}
+  .ticket{border-top:1px solid var(--line);padding:14px;background:rgba(18,15,12,.4)}
+  .ticket .row{display:flex;align-items:baseline;justify-content:space-between}
+  .ticket .lbl{font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+  .ticket .bal{font-family:var(--display);font-weight:700;font-size:22px;color:var(--signal)}
+  .ticket .bal small{font-size:12px;color:var(--muted);font-weight:500;font-family:var(--mono)}
+  .ticket .meta{font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:6px;display:flex;align-items:center;gap:6px}
+  .ticket .meta .d{width:5px;height:5px;border-radius:50%;background:var(--mix)}
+  .bar{height:4px;border-radius:2px;background:var(--surface-2);margin-top:9px;overflow:hidden}
+  .bar>i{display:block;height:100%;background:linear-gradient(90deg,var(--signal),var(--rust));width:62%;transition:width .5s}
+  .ticket .refill{width:100%;margin-top:10px;border:1px dashed var(--line);background:transparent;color:var(--muted);
+    font-family:var(--mono);font-size:10px;padding:6px 10px;border-radius:8px;cursor:pointer;
+    transition:border-color .15s,color .15s}
+  .ticket .refill:hover{border-color:var(--signal);color:var(--signal)}
+  .main{display:flex;flex-direction:column;min-height:0;position:relative}
+  .dropz{position:absolute;inset:0;z-index:40;display:none;align-items:center;justify-content:center;
+    background:rgba(18,15,12,.72);backdrop-filter:blur(2px);pointer-events:none}
+  body.dragging .dropz{display:flex}
+  .dropz .dropcard{display:flex;flex-direction:column;align-items:center;gap:8px;padding:34px 46px;
+    border:2px dashed var(--mix);border-radius:16px;background:rgba(38,34,32,.85);color:var(--bone);text-align:center}
+  .dropz .dropcard .ic{font-size:34px;color:var(--mix);line-height:1}
+  .dropz .dropcard small{font-family:var(--mono);font-size:10.5px;color:var(--muted)}
+  .topbar{border-bottom:1px solid var(--line);padding:12px 20px;display:flex;align-items:center;gap:18px;flex:0 0 auto;background:rgba(28,25,23,.5)}
+  .model{position:relative}
+  .model .sel{display:flex;align-items:center;gap:10px;background:var(--surface-2);border:1px solid var(--line);
+    border-radius:var(--radius);padding:8px 12px;cursor:pointer;transition:border-color .15s}
+  .model .sel:hover{border-color:var(--mix)}
+  .model .sel .name{font-weight:600;font-size:13px}
+  .model .sel .vend{font-family:var(--mono);font-size:10px;color:var(--muted)}
+  .model .sel .chev{color:var(--muted);font-size:11px;margin-left:2px}
+  .badge{font-family:var(--mono);font-size:10px;padding:3px 7px;border-radius:5px;border:1px solid;
+    display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+  .badge.train{color:var(--rust);border-color:rgba(193,90,67,.4);background:rgba(193,90,67,.08)}
+  .badge.zr{color:var(--mix);border-color:rgba(138,160,107,.4);background:rgba(138,160,107,.08)}
+  .badge.kind{color:var(--muted);border-color:var(--line);background:var(--surface-2)}
+  .badge.kind.txt{color:var(--mix);border-color:rgba(138,160,107,.45);background:rgba(138,160,107,.10)}
+  .badge.kind.img{color:var(--signal);border-color:rgba(203,161,78,.45);background:rgba(203,161,78,.10)}
+  .mfilter{display:flex;align-items:center;gap:6px;padding:9px 10px;margin:-6px -6px 6px -6px;border-bottom:1px solid var(--line);position:sticky;top:-6px;background:var(--surface-2);z-index:2}
+  .mfilter .mfsp{flex:1}
+  .mchip{font-family:var(--mono);font-size:10px;letter-spacing:.03em;padding:4px 9px;border-radius:6px;cursor:pointer;
+    border:1px solid var(--line);background:transparent;color:var(--muted);transition:.12s}
+  .mchip:hover{color:var(--bone)}
+  .mchip.on{color:var(--ink);background:var(--bone);border-color:var(--bone)}
+  .mchip.txt.on{background:var(--mix);border-color:var(--mix);color:var(--ink)}
+  .mchip.img.on{background:var(--signal);border-color:var(--signal);color:var(--ink)}
+  .mchip.lat.on{background:var(--rust);border-color:var(--rust);color:var(--bone)}
+  .menu{position:absolute;top:46px;left:0;width:300px;max-height:72vh;overflow-y:auto;background:var(--surface-2);border:1px solid var(--line);
+    border-radius:var(--radius);padding:6px;z-index:20;box-shadow:0 18px 40px rgba(0,0,0,.5);display:none}
+  .menu.open{display:block}
+  .mi{padding:9px 10px;border-radius:7px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:8px}
+  .mi:hover{background:var(--surface)}
+  .mi.disabled{opacity:.45;cursor:not-allowed}
+  .mi .l{display:flex;flex-direction:column;gap:2px}
+  .mi .l .n{font-size:13px;font-weight:600}
+  .mi .l .v{font-family:var(--mono);font-size:10px;color:var(--muted)}
+  .mi .soon{font-family:var(--mono);font-size:9.5px;color:var(--muted);border:1px solid var(--line);padding:2px 6px;border-radius:4px}
+  .mix{margin-left:auto;display:flex;align-items:center;gap:14px}
+  .path{display:flex;align-items:center;gap:0}
+  .hop{display:flex;flex-direction:column;align-items:center;gap:5px;position:relative}
+  .hop .node{width:9px;height:9px;border-radius:50%;background:var(--surface-2);border:1.5px solid var(--line)}
+  .hop .cap{font-family:var(--mono);font-size:8.5px;color:var(--muted);letter-spacing:.04em}
+  .hop .gw{position:absolute;top:calc(100% + 3px);left:50%;transform:translateX(-50%);font-size:14px;line-height:1;cursor:default}
+  .path.on .hop.pick{cursor:pointer}
+  .path.on .hop.pick:hover .node{box-shadow:0 0 10px rgba(203,161,78,.85)}
+  .path.on .hop.pick:hover .cap{color:var(--signal)}
+  .path.off .hop.pick{cursor:default}
+  .gwrow{display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:var(--surface-2);
+    border:1px solid var(--line);border-radius:9px;padding:9px 12px;cursor:pointer;color:var(--bone);font:inherit}
+  .gwrow:hover{border-color:var(--mix)}
+  .gwrow.sel{border-color:var(--signal);background:rgba(203,161,78,.08)}
+  .gwrow .fl{font-size:18px;line-height:1;flex:0 0 auto}
+  .gwrow .cc{font-family:var(--mono);font-size:11px;color:var(--muted);width:26px;flex:0 0 auto}
+  .gwrow .hn{flex:1 1 auto;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .gwrow .idc{font-family:var(--mono);font-size:10px;color:var(--muted);flex:0 0 auto}
+  .gwrow .on{font-family:var(--mono);font-size:10px;color:var(--signal);flex:0 0 auto;margin-left:6px}
+  ul.terms{list-style:none;margin:12px 0;padding:0;display:flex;flex-direction:column;gap:8px}
+  ul.terms li{background:var(--surface-2);border:1px solid var(--line);border-radius:9px;padding:10px 13px}
+  ul.terms li a{color:var(--mix);text-decoration:none;font-weight:600;font-size:13.5px}
+  ul.terms li a:hover{color:var(--signal);text-decoration:underline}
+  .pmlabel{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:16px 0 8px}
+  .paymethods{display:flex;gap:10px;flex-wrap:wrap}
+  .pm{display:flex;flex-direction:column;align-items:center;gap:6px;flex:1 1 92px;min-width:92px;
+    padding:13px 8px;border:1px solid var(--line);border-radius:11px;background:var(--surface-2)}
+  .pm .pmlogo{width:26px;height:26px;display:flex;align-items:center;justify-content:center}
+  .pm .pmname{font-size:12.5px;font-weight:600;color:var(--bone)}
+  .pm .pmtag{font-family:var(--mono);font-size:9px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}
+  .pm.active{border-color:var(--mix)}
+  .pm.active .pmtag{color:var(--mix)}
+  .pm.soon{opacity:.5}
+  .pm.soon .pmtag{color:var(--signal)}
+  .link{width:22px;height:1.5px;background:var(--line);margin:0 1px;position:relative;top:-8px}
+  .path.on .hop.mixhop .node{background:var(--mix);border-color:var(--mix);box-shadow:0 0 8px rgba(138,160,107,.6)}
+  .path.on .hop.endhop .node{background:var(--signal);border-color:var(--signal)}
+  .path.on .link{background:var(--mix)}
+  .path.on .link::after{content:"";position:absolute;top:0;left:-6px;width:6px;height:100%;background:var(--bone);opacity:.7;animation:flow 1.8s linear infinite}
+  @keyframes flow{to{left:100%}}
+  .path.off .hop.mixhop{display:none}
+  .path.off .link.mixlink{display:none}
+  .path.off .hop.endhop .node{background:var(--muted);border-color:var(--muted)}
+  .mixtoggle{display:flex;flex-direction:column;align-items:flex-end;gap:3px;cursor:pointer}
+  .mixtoggle .state{font-family:var(--display);font-weight:700;font-size:12px}
+  .mixtoggle.on .state{color:var(--mix)}.mixtoggle.off .state{color:var(--muted)}
+  .mixtoggle .sub{font-family:var(--mono);font-size:9px;color:var(--muted)}
+  .thread{flex:1 1 auto;overflow-y:auto;min-height:0;padding:28px 0}
+  .wrap{max-width:720px;margin:0 auto;padding:0 24px}
+  .empty{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:14px;padding:0 40px}
+  .empty .mark{font-family:var(--display);font-weight:600;font-size:44px;letter-spacing:.005em}
+  .empty .mark b{color:var(--mix)}
+  .empty p{color:var(--muted);max-width:420px;line-height:1.55;font-size:14px;margin:0}
+  .empty .note{font-family:var(--mono);font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:8px;padding:9px 13px;display:flex;gap:8px;align-items:center}
+  .empty .note .d{width:6px;height:6px;border-radius:50%;background:var(--mix);flex:0 0 auto}
+  .msg{margin-bottom:22px;display:flex;gap:13px}
+  .msg .who{font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);width:52px;flex:0 0 auto;padding-top:3px}
+  .msg.you .who{color:var(--signal)}.msg.ai .who{color:var(--mix)}
+  .msg .who .viamodel{display:block;margin-top:4px;font-size:9px;letter-spacing:.02em;text-transform:none;color:var(--muted);opacity:.8;line-height:1.25;word-break:break-word}
+  .msg .body{font-size:14.5px;line-height:1.62;color:var(--bone);white-space:pre-wrap}
+  .msg.err .body{color:var(--rust)}
+  .cursor{display:inline-block;width:7px;height:15px;background:var(--mix);vertical-align:-2px;margin-left:2px;animation:blink 1s steps(2) infinite}
+  .imgs{display:flex;flex-wrap:wrap;gap:12px;margin-top:10px}
+  .genimg{position:relative;margin:0;max-width:min(420px,100%);border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--surface-2)}
+  .genimg img{display:block;width:100%;height:auto}
+  .genimg .dl{position:absolute;bottom:8px;right:8px;font-family:var(--mono);font-size:11px;text-decoration:none;cursor:pointer;
+    color:#141210;background:rgba(236,230,220,.92);border:1px solid rgba(0,0,0,.15);border-radius:7px;padding:4px 8px;opacity:0;transition:opacity .15s}
+  .genimg:hover .dl{opacity:1}
+  @keyframes blink{50%{opacity:0}}
+  .composer{flex:0 0 auto;border-top:1px solid var(--line);padding:16px 24px 20px;background:rgba(18,15,12,.6)}
+  .composer .wrap2{max-width:720px;margin:0 auto}
+  .inputrow{display:flex;gap:10px;align-items:flex-end;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:10px 10px 10px 14px;transition:border-color .15s}
+  .inputrow:focus-within{border-color:var(--mix)}
+  textarea{flex:1 1 auto;background:transparent;border:none;color:var(--bone);resize:none;font-family:var(--body);font-size:14.5px;line-height:1.5;max-height:150px;outline:none;padding:5px 0}
+  textarea::placeholder{color:var(--muted)}
+  .send{flex:0 0 auto;width:38px;height:38px;border-radius:10px;border:none;cursor:pointer;background:var(--mix);color:var(--ink);font-size:17px;display:grid;place-items:center;transition:transform .1s,opacity .15s}
+  .send:hover{transform:translateY(-1px)}
+  .send:disabled{opacity:.4;cursor:not-allowed;transform:none}
+  .attach{flex:0 0 auto;width:38px;height:38px;border-radius:10px;border:1px solid var(--line);cursor:pointer;
+    background:var(--surface-2);color:var(--muted);font-size:20px;line-height:1;display:grid;place-items:center;transition:.12s}
+  .attach:hover{color:var(--mix);border-color:var(--mix)}
+  .attach:disabled{opacity:.4;cursor:not-allowed}
+  .attachrow{margin-bottom:8px}
+  .att{display:flex;align-items:center;gap:11px;background:var(--surface);border:1px solid var(--line);border-radius:11px;padding:8px 11px}
+  .att .thumb{width:44px;height:44px;border-radius:7px;object-fit:cover;flex:0 0 auto;background:var(--surface-2)}
+  .att .meta{flex:1 1 auto;min-width:0}
+  .att .fn{font-size:12.5px;color:var(--bone);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .att .sub{font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:2px}
+  .att .sub.warn{color:var(--signal)}
+  .att .rm{flex:0 0 auto;background:none;border:none;color:var(--muted);cursor:pointer;font-size:15px;padding:2px 4px}
+  .att .rm:hover{color:var(--rust)}
+  .att .pbar{height:4px;border-radius:2px;background:var(--surface-2);margin-top:6px;overflow:hidden}
+  .att .pbar > i{display:block;height:100%;background:var(--mix);width:0;transition:width .15s}
+  .att .thumb.doc{display:grid;place-items:center;font-size:22px;color:var(--muted)}
+  .docatt{display:inline-flex;align-items:center;gap:9px;margin-top:10px;max-width:100%;
+    background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:9px 12px}
+  .docatt .di{font-size:20px;flex:0 0 auto;line-height:1}
+  .docatt .dn{font-size:13px;color:var(--bone);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .docatt .dt{font-family:var(--mono);font-size:10px;color:var(--muted);flex:0 0 auto}
+  .uprog{margin-top:10px;max-width:360px}
+  .uprog .upbar{height:5px;border-radius:3px;background:var(--surface-2);overflow:hidden}
+  .uprog .upbar > i{display:block;height:100%;background:var(--mix);width:0;transition:width .12s}
+  .uprog .uptxt{display:block;margin-top:5px;font-family:var(--mono);font-size:10.5px;color:var(--mix)}
+  .composer .foot{display:flex;align-items:center;justify-content:space-between;margin-top:10px;font-family:var(--mono);font-size:10.5px;color:var(--muted)}
+  .composer .foot .l{display:flex;gap:14px;align-items:center}
+  .composer .foot a{color:var(--muted);text-decoration:none;border-bottom:1px dotted var(--line);cursor:pointer}
+  .composer .foot a:hover{color:var(--mix);border-color:var(--mix)}
+  .composer .foot .cost{display:flex;align-items:baseline;gap:9px;justify-content:flex-end;flex-wrap:wrap}
+  .composer .foot .cost .price{color:var(--signal);font-weight:600;font-variant-numeric:tabular-nums}
+  .composer .foot .cost .tok{color:var(--muted);font-size:9.5px;font-variant-numeric:tabular-nums}
+  .composer .foot .cost .note{color:var(--rust);font-size:9.5px}
+  .scrim{position:fixed;inset:0;background:rgba(10,8,6,.72);display:none;align-items:center;justify-content:center;z-index:40;padding:30px}
+  .scrim.open{display:flex}
+  .modal{width:640px;max-width:100%;max-height:82vh;background:var(--surface);border:1px solid var(--line);border-radius:14px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 30px 70px rgba(0,0,0,.6)}
+  .modal .mh{padding:16px 20px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between}
+  .modal .mh .ttl{font-family:var(--display);font-weight:700;font-size:16px}
+  .modal .mh .ttl b{color:var(--mix)}
+  .modal .mh .x{cursor:pointer;color:var(--muted);font-size:20px;line-height:1}
+  .modal .mb{padding:16px 20px;overflow-y:auto}
+  .modal .mb p{margin:0 0 14px;color:var(--muted);font-size:13px;line-height:1.55}
+  .modal pre{background:var(--ink);border:1px solid var(--line);border-radius:10px;padding:14px;font-family:var(--mono);font-size:11.5px;line-height:1.6;color:var(--bone);overflow-x:auto;white-space:pre-wrap;margin:0}
+  .modal .passrow{display:flex;gap:8px;align-items:center;margin:14px 0 4px}
+  .modal .passrow input{flex:1 1 auto;background:var(--ink);border:1px solid var(--line);border-radius:8px;padding:9px 12px;color:var(--bone);font-family:var(--mono);font-size:12px;outline:none}
+  .modal .passrow input:focus{border-color:var(--mix)}
+  .modal .hint{font-family:var(--mono);font-size:10.5px;color:var(--muted);margin:0 0 8px}
+  .modal .mf{padding:14px 20px;border-top:1px solid var(--line);display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap}
+  .btn{font-family:var(--body);font-weight:600;font-size:13px;padding:9px 16px;border-radius:9px;cursor:pointer;border:1px solid var(--line);background:var(--surface-2);color:var(--bone)}
+  .btn:hover{border-color:var(--mix)}
+  .btn.primary{background:var(--mix);color:var(--ink);border-color:var(--mix)}
+  .btnrow{display:flex;gap:10px;flex-wrap:wrap;margin-top:4px}
+  .k{color:var(--mix)}.kk{color:var(--signal)}.kc{color:var(--muted)}
+  .qrbox{background:#fff;border-radius:12px;padding:12px;width:216px;max-width:100%;margin:12px auto}
+  .qrbox svg{display:block;width:100%;height:auto}
+  /* In the native app the OS draws the window controls (overlay titlebar), so
+     hide our decorative dots and clear space for the real traffic lights. */
+  body.tauri .dot{display:none}
+  body.tauri .titlebar{padding-left:82px}
+  /* Make the whole title bar a window-drag handle (macOS convention). Its
+     children carry no click handlers, so passing their clicks through lets a
+     mousedown anywhere on the bar hit the data-tauri-drag-region element. */
+  .titlebar[data-tauri-drag-region]{cursor:default}
+  .titlebar[data-tauri-drag-region] > *{pointer-events:none}
+</style>
+
+<div class="titlebar" data-tauri-drag-region>
+  <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+  <span class="wordmark">Scramble<b>AI</b></span>
+  <span class="env" id="env"><span class="cdot"></span><span id="envText">connecting…</span></span>
+</div>
+
+<div class="app">
+  <aside class="rail">
+    <div class="pad">
+      <button class="newbtn" onclick="newChat()"><span class="plus">+</span> New conversation</button>
+      <button class="importbtn" onclick="pickImport()">⤒ Import handover.md</button>
+      <input type="file" id="importFile" accept=".md,.enc,.txt,text/markdown" style="display:none" onchange="importHandover(event)">
+    </div>
+    <div class="railhead">On this device <span id="saveStatus" style="color:var(--mix);opacity:0;transition:opacity .2s">· saved ✓</span></div>
+    <div class="sessions" id="sessions"></div>
+    <div class="ticket">
+      <div class="row"><span class="lbl">Balance</span><span class="bal" id="bal">0<small> SCRAI</small></span></div>
+      <div class="bar"><i id="balbar"></i></div>
+      <div class="meta"><span class="d"></span> <span id="acctLine">no account</span></div>
+      <div class="meta" id="heldLine" style="display:none"><span class="d" style="background:var(--signal)"></span> <span id="heldText"></span></div>
+      <button class="refill" id="buyBtn" onclick="openBuy()">+ Buy credit</button>
+      <button class="refill" id="acctBtn" onclick="openAccount()" style="margin-top:6px">Account &amp; recovery</button>
+    </div>
+  </aside>
+
+  <section class="main" id="main">
+    <div class="dropz" id="dropz"><div class="dropcard"><span class="ic">＋</span><span>Drop a file to attach</span><small>image, PDF or text · max 10&nbsp;MB · analysed with a Gemini model</small></div></div>
+    <div class="topbar">
+      <div class="model">
+        <div class="sel" onclick="toggleMenu()">
+          <div><div class="name" id="mName">—</div><div class="vend" id="mVend">loading…</div></div>
+          <span class="chev">▾</span>
+        </div>
+        <div class="menu" id="menu"></div>
+      </div>
+      <span class="badge train" id="privBadge" style="display:none">trains on input</span>
+      <div class="mix">
+        <div class="path off" id="path">
+          <div class="hop endhop"><span class="node"></span><span class="cap">you</span></div>
+          <div class="link"></div>
+          <div class="hop mixhop pick" id="entryHop" onclick="openEntryPicker()" title="choose entry gateway"><span class="node"></span><span class="cap">entry</span><span class="gw" id="entryGw"></span></div>
+          <div class="link mixlink"></div>
+          <div class="hop mixhop"><span class="node"></span><span class="cap">mix</span></div>
+          <div class="link mixlink"></div>
+          <div class="hop mixhop"><span class="node"></span><span class="cap">mix</span></div>
+          <div class="link mixlink"></div>
+          <div class="hop mixhop"><span class="node"></span><span class="cap">mix</span></div>
+          <div class="link mixlink"></div>
+          <div class="hop mixhop pick" id="exitHop" onclick="showExitInfo()" title="the server's gateway"><span class="node"></span><span class="cap">exit</span><span class="gw" id="exitGw"></span></div>
+          <div class="link"></div>
+          <div class="hop endhop"><span class="node"></span><span class="cap">model</span></div>
+        </div>
+        <div class="mixtoggle off" id="mixToggle" onclick="toggleMix()" title="v1 ships direct; mixnet arrives in v2">
+          <span class="state" id="mixState">Direct</span><span class="sub" id="mixSub">mixnet off · v1</span>
+        </div>
+      </div>
+    </div>
+    <div class="thread" id="thread"></div>
+    <div class="composer">
+      <div class="wrap2">
+        <div id="attachRow" class="attachrow" style="display:none"></div>
+        <div class="inputrow">
+          <button class="attach" id="attachBtn" onclick="pickImage()" title="Attach a file — image, PDF or text (max 10 MB)">+</button>
+          <input type="file" id="imgFile" accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,text/plain,text/markdown,text/csv,application/json,.pdf,.md,.markdown,.csv,.txt,.json" style="display:none" onchange="onImagePicked(event)">
+          <textarea id="input" rows="1" placeholder="Ask anything — nothing here is stored on a server" oninput="autogrow(this)" onkeydown="onKey(event)"></textarea>
+          <button class="send" id="send" onclick="sendMsg()" disabled>↑</button>
+        </div>
+        <div class="foot">
+          <div class="l">
+            <a onclick="showHandover()">⤓ Export handover.md</a>
+            <span>history is local &amp; encrypted at rest</span>
+          </div>
+          <span class="cost" id="cost">
+            <span class="price" id="price">ready</span>
+            <span class="tok" id="tok"></span>
+            <span class="note" id="billNote"></span>
+          </span>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<div class="scrim" id="scrim" onclick="if(event.target===this)closeHandover()">
+  <div class="modal">
+    <div class="mh"><span class="ttl">handover<b>.md</b></span><span class="x" onclick="closeHandover()">✕</span></div>
+    <div class="mb">
+      <p>The whole conversation lives only on this device. Export a portable file you can archive or move
+      between machines. Add a passphrase to encrypt it (openable anywhere with that passphrase), or save
+      plaintext for reading. The server never sees any of this.</p>
+      <div class="passrow"><input type="password" id="expPass" placeholder="passphrase (optional — leave blank for plaintext)"></div>
+      <p class="hint">Encrypted export uses PBKDF2 + AES-256-GCM. Lose the passphrase and the file is unrecoverable — that is the point.</p>
+      <pre id="handoverText"></pre>
+    </div>
+    <div class="mf">
+      <button class="btn" onclick="closeHandover()">Close</button>
+      <button class="btn" onclick="downloadHandover(false)">Save plaintext .md</button>
+      <button class="btn primary" onclick="downloadHandover(true)">Save encrypted</button>
+    </div>
+  </div>
+</div>
+
+<div class="scrim" id="buyScrim" onclick="if(event.target===this)closeBuy()">
+  <div class="modal">
+    <div class="mh"><span class="ttl">Buy <b>credit</b></span><span class="x" onclick="closeBuy()">✕</span></div>
+    <div class="mb">
+      <p>Fixed amounts only — everyone buys the same, so a purchase reveals no per-user
+      fingerprint. In dev mode this settles instantly and no real money moves; the real
+      app pays over Bitcoin/Lightning.</p>
+      <div id="tierRow" style="display:flex;gap:10px;flex-wrap:wrap"></div>
+      <p class="hint" id="buyStatus"></p>
+
+      <div class="pmlabel">Pay with</div>
+      <div class="paymethods">
+        <div class="pm active" title="Bitcoin on-chain or Lightning (testnet)">
+          <span class="pmlogo"><svg viewBox="0 0 32 32" width="26" height="26"><circle cx="16" cy="16" r="16" fill="#F7931A"/><path fill="#fff" d="M23 14.1c.3-2-1.3-3-3.4-3.8l.7-2.7-1.7-.4-.7 2.6c-.4-.1-.9-.2-1.3-.3l.7-2.7-1.6-.4-.7 2.7-1.1-.3-2.3-.6-.4 1.8s1.2.3 1.2.3c.7.2.8.6.8.9l-.8 3.1v.2l-1.2 4.6c-.1.2-.3.5-.7.4 0 0-1.2-.3-1.2-.3l-.8 1.9 2.1.6 1.2.3-.7 2.7 1.6.4.7-2.7c.5.1.9.2 1.4.3l-.7 2.7 1.7.4.7-2.7c2.8.5 4.9.3 5.8-2.2.7-2 0-3.2-1.5-3.9 1.1-.3 1.9-1 2.1-2.5zm-3.7 5.2c-.5 2-3.9.9-5 .6l.9-3.6c1.2.3 4.7.8 4.1 3zm.5-5.2c-.5 1.8-3.3.9-4.2.6l.8-3.3c.9.2 3.9.7 3.4 2.7z"/></svg></span>
+          <span class="pmname">Bitcoin</span>
+          <span class="pmtag">on-chain · LN</span>
+        </div>
+        <div class="pm soon" title="Monero — coming soon">
+          <span class="pmlogo"><svg viewBox="0 0 32 32" width="26" height="26"><circle cx="16" cy="16" r="16" fill="#FF6600"/><path fill="none" stroke="#fff" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" d="M9.5 23V10l6.5 6.5L22.5 10v13"/></svg></span>
+          <span class="pmname">Monero</span>
+          <span class="pmtag">coming soon</span>
+        </div>
+        <div class="pm soon" title="NYM (native on the Nyx chain) — coming soon">
+          <span class="pmlogo"><svg viewBox="0 0 32 32" width="26" height="26"><circle cx="16" cy="16" r="15" fill="none" stroke="var(--bone)" stroke-width="1.5"/><path fill="none" stroke="var(--bone)" stroke-width="2.6" stroke-linejoin="round" stroke-linecap="round" d="M11 22V10l10 12V10"/></svg></span>
+          <span class="pmname">NYM</span>
+          <span class="pmtag">coming soon</span>
+        </div>
+      </div>
+    </div>
+    <div class="mf"><button class="btn" onclick="closeBuy()">Close</button></div>
+  </div>
+</div>
+
+<div class="scrim" id="acctScrim" onclick="if(event.target===this)closeAccount()">
+  <div class="modal">
+    <div class="mh"><span class="ttl">Your <b>account</b></span><span class="x" onclick="closeAccount()">✕</span></div>
+    <div class="mb" id="acctBody"></div>
+    <div class="mf"><button class="btn" onclick="closeAccount()">Close</button></div>
+  </div>
+</div>
+
+<div class="scrim" id="gwScrim" onclick="if(event.target===this)closeGw()">
+  <div class="modal">
+    <div class="mh"><span class="ttl" id="gwTitle">Entry <b>gateway</b></span><span class="x" onclick="closeGw()">✕</span></div>
+    <div class="mb" id="gwBody"></div>
+    <div class="mf"><button class="btn" onclick="closeGw()">Close</button></div>
+  </div>
+</div>
+
+<div class="scrim" id="termsScrim">
+  <div class="modal">
+    <div class="mh"><span class="ttl">Provider <b>terms</b></span></div>
+    <div class="mb" id="termsBody"></div>
+    <div class="mf">
+      <button class="btn" onclick="declineTerms()">Decline</button>
+      <button class="btn primary" onclick="acceptTerms()">I accept &amp; continue</button>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  import { Vault, PassphraseCrypto } from "./vault.js";
+  import { Handover } from "./handover.js";
+  import { Backend, isTauri } from "./backend.js";
+  import { formatScrai, formatTokens, billingNotes, billingDetail } from "./billing.js";
+
+  // --- app state (mirrors what the backend reports; the backend is the truth) ---
+  let models = [];                       // [{model,vendor,kind,trainsOnInput,rate}]
+  let tiers = [];                        // fixed purchase amounts, USD
+  let currentModel = null, modelVendor = "", modelTrains = false, modelRate = null, modelAcceptsImages = false;
+  let account = null;                    // { fingerprint, sessionIndex } | null
+  let balance = 0, held = 0;             // SCRAI: funded session, and held ecash
+  let fakePayments = true;               // dev fake gateway vs real BTCPay
+  let server = null;                     // scrai-server Nym address (native app)
+  let busy = false;
+  let pendingFile = null;                // { mimeType, size, name, bytes:Uint8Array, isImage, thumb?, url? } | null
+  let vaultOk = false;                   // did the encrypted local store come up?
+  let sessions = [];                     // sidebar metadata from Vault.list()
+  let current = null;                    // active full session {id,title,model,created,messages}
+  let messages = [];                     // === current.messages
+
+  // How many messages a conversation keeps after it ends. The full transcript is
+  // downloaded on the way out; only this tail is retained, so re-opening it costs
+  // far fewer tokens than resending the whole history every turn.
+  const PRUNE_KEEP = 6;
+
+  const $ = id => document.getElementById(id);
+  const esc = s => (s||"").replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+  const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now())+Math.random());
+  const usd = scrai => (scrai/100000);
+  function scraiLine(n){ return `${formatScrai(n)} SCRAI · $${usd(n).toFixed(usd(n)<0.01?5:2)}`; }
+
+  // ---------- backend state ----------
+  async function refreshState(){
+    if(isTauri()){ $("env").className="env"; $("envText").textContent = "connecting over the mixnet…"; }
+    try{
+      const s = await Backend.state();
+      models = s.models || []; tiers = s.tiers || [];
+      account = s.account; balance = s.balance||0; held = s.held||0;
+      fakePayments = s.fakePayments !== false;   // default to fake if unknown
+      server = s.server || null;
+      if(isTauri() && !server){
+        $("env").className="env bad"; $("envText").textContent="app · no server set";
+        $("mName").textContent="set a server"; $("mVend").textContent="Account & recovery";
+        renderBal(); return;
+      }
+      $("env").className="env ok"; $("envText").textContent = (isTauri()?"app":"dev")+" · connected";
+      renderMenu();
+      // Default to a chatbot (text) model, not an image-generation one — the
+      // dynamic catalog's registry order is not chat-first.
+      if((!currentModel || !models.some(m=>m.model===currentModel)) && models.length) selectModel(models.find(m=>(m.kind||'text')!=='image')||models[0]);
+      if(!models.length){ $("mName").textContent="no models yet"; $("mVend").textContent = isTauri()?"mixnet transport pending":"—"; }
+      renderBal();
+    }catch(err){
+      $("env").className="env bad";
+      $("envText").textContent = (isTauri()?"core":"web")+" · "+((err&&err.message)||err||"error");
+      $("mName").textContent="no backend"; $("mVend").textContent="see status ↗";
+    }
+  }
+  function rateHint(rate){
+    if(!rate) return "";
+    if(!rate.in && !rate.out) return "free";
+    const per1k = v => (v/1000<1 ? (v/1000).toFixed(2) : Math.round(v/1000).toLocaleString());
+    return `${per1k(rate.in)} / ${per1k(rate.out)} SCRAI / 1k`;
+  }
+  let menuKind = "all";        // "all" | "text" | "image"
+  let menuLatestOnly = true;   // collapse to the newest version of each family
+  // Split a model id into a family key + numeric version, so "gemini-3.6-flash"
+  // and "gemini-3.5-flash" collapse to one family (newest wins). "…-latest"
+  // aliases sort highest so they always survive.
+  function modelFamilyVersion(id){
+    const mm = id.match(/(\d+(?:\.\d+)?)/);
+    const version = mm ? parseFloat(mm[1]) : (/latest/i.test(id)?9999:0);
+    const family = id.replace(/\d+(?:\.\d+)?/, "#");
+    return { family, version };
+  }
+  function latestPerFamily(list){
+    const best = new Map();
+    for(const x of list){
+      const {family,version} = modelFamilyVersion(x.m.model);
+      const cur = best.get(family);
+      if(!cur || version > cur.version) best.set(family, {version, x});
+    }
+    return [...best.values()].map(v=>v.x);
+  }
+  function setMenuKind(k){ menuKind=k; renderMenu(); }
+  function toggleLatest(){ menuLatestOnly=!menuLatestOnly; renderMenu(); }
+  function renderMenu(){
+    const chip=(k,label,extra)=>`<button class="mchip ${extra||''} ${((k==='latest'?menuLatestOnly:menuKind===k))?'on':''}" onclick="event.stopPropagation();${k==='latest'?'toggleLatest()':`setMenuKind('${k}')`}">${label}</button>`;
+    const chips=`<div class="mfilter">${chip('all','All')}${chip('text','Chatbot','txt')}${chip('image','Image gen','img')}<span class="mfsp"></span>${chip('latest','Latest','lat')}</div>`;
+    let list = models.map((m,i)=>({m,i}));
+    if(menuKind!=='all') list=list.filter(x=>(x.m.kind||'text')===menuKind);
+    if(menuLatestOnly) list=latestPerFamily(list);
+    list.sort((a,b)=> (a.m.vendor||'').localeCompare(b.m.vendor||'') || a.m.model.localeCompare(b.m.model));
+    const rows = list.map(({m,i})=>`
+      <div class="mi" onclick='selectModelIdx(${i});toggleMenu()'>
+        <div class="l"><span class="n">${esc(m.model)}</span><span class="v">${esc(m.vendor)}${m.rate?(' · '+rateHint(m.rate)):''}</span></div>
+        <span class="badge kind ${m.kind==='image'?'img':'txt'}">${m.kind==='image'?'Image generation':'Chatbot'}</span>
+      </div>`).join("");
+    $("menu").innerHTML = chips + (rows || `<div class="mi" style="cursor:default;color:var(--muted)">no models match this filter</div>`);
+  }
+  function selectModelIdx(i){ if(models[i]) chooseModel(models[i]); }
+  function selectModel(m){
+    currentModel=m.model; modelVendor=m.vendor; modelTrains=m.trainsOnInput; modelRate=m.rate||null; modelAcceptsImages=!!m.acceptsImages;
+    $("mName").textContent=m.model; $("mVend").textContent=m.vendor+(m.rate?(' · '+rateHint(m.rate)):'');
+    $("privBadge").style.display = m.trainsOnInput?"inline-flex":"none";
+    $("privBadge").className="badge "+(m.trainsOnInput?"train":"zr");
+    $("privBadge").textContent=m.trainsOnInput?"trains on input":"zero-retention";
+    if(typeof pendingFile!=="undefined" && pendingFile) renderAttach();  // refresh the file hint
+  }
+
+  // ---------- provider terms & conditions ----------
+  // The mixnet hides WHO is asking; it does not change that the prompt is handled
+  // by a third-party provider under THEIR terms. Acceptance is required per model
+  // before it can be used (and re-surfaced when switching to one not yet accepted).
+  const VENDOR_TERMS = {
+    groq: { name:"Groq", links:[
+      { label:"Groq Terms of Use", url:"https://groq.com/terms-of-use/" },
+      { label:"Groq Privacy Policy", url:"https://groq.com/privacy-policy/" } ] },
+    google: { name:"Google (Gemini API)", links:[
+      { label:"Gemini API Additional Terms", url:"https://ai.google.dev/gemini-api/terms" },
+      { label:"Google Privacy Policy", url:"https://policies.google.com/privacy" } ] },
+    cloudflare: { name:"Cloudflare (Workers AI)", links:[
+      { label:"Cloudflare Website Terms", url:"https://www.cloudflare.com/website-terms/" },
+      { label:"Developer Platform / Workers AI Terms", url:"https://www.cloudflare.com/service-specific-terms-developer-platform/" } ] },
+    pollinations: { name:"Pollinations", links:[
+      { label:"Pollinations.ai (public, keyless service)", url:"https://pollinations.ai/" } ] },
+  };
+  // Open external links in the OS browser (the webview won't follow target=_blank).
+  function openLink(url){ try{ Backend.openExternal(url); }catch(_){ try{ window.open(url,"_blank","noopener"); }catch(__){} } return false; }
+  let acceptedModels = new Set();
+  try{ acceptedModels = new Set(JSON.parse(localStorage.getItem("scrai.acceptedModels")||"[]")); }catch(_){}
+  function persistAccepted(){ try{ localStorage.setItem("scrai.acceptedModels", JSON.stringify([...acceptedModels])); }catch(_){} }
+  function modelByName(name){ return models.find(m=>m.model===name); }
+  let pendingTermsModel = null;
+  function closeTerms(){ pendingTermsModel=null; $("termsScrim").classList.remove("open"); }
+  function showTerms(m){
+    pendingTermsModel = m;
+    const t = VENDOR_TERMS[m.vendor] || { name:m.vendor, links:[] };
+    const links = t.links.length
+      ? t.links.map(l=>`<li><a href="${esc(l.url)}" onclick="return openLink('${esc(l.url)}')">${esc(l.label)} ↗</a></li>`).join("")
+      : `<li class="hint">This provider publishes no formal terms page.</li>`;
+    $("termsBody").innerHTML = `
+      <p>You're about to use <b>${esc(m.model)}</b>, served by <b>${esc(t.name)}</b>. ScrambleAI's mixnet
+      hides <i>who</i> is asking, but the prompt itself is processed by this third party under
+      <b>their</b> terms. Review and accept them before using this model:</p>
+      <ul class="terms">${links}</ul>
+      <p class="hint">${m.trainsOnInput
+        ? '⚠ Flagged “trains on input” — this provider may retain or train on what you send. Don’t paste anything you wouldn’t make public.'
+        : 'Flagged zero-retention for input by this provider.'}</p>`;
+    $("termsScrim").classList.add("open");
+  }
+  // Route model selections through here so terms are enforced before use.
+  function chooseModel(m){
+    if(!m) return;
+    if(acceptedModels.has(m.model)){ selectModel(m); return; }
+    showTerms(m);
+  }
+  function acceptTerms(){
+    const m = pendingTermsModel;
+    if(m){ acceptedModels.add(m.model); persistAccepted(); selectModel(m); }
+    closeTerms();
+  }
+  function declineTerms(){ closeTerms(); }   // selection unchanged; sending stays gated
+  // True once the active model's terms are accepted; otherwise re-surfaces the nag.
+  function ensureTermsForCurrent(){
+    if(!currentModel) return true;
+    if(acceptedModels.has(currentModel)) return true;
+    const m = modelByName(currentModel);
+    if(m) showTerms(m);
+    return false;
+  }
+  function toggleMenu(){ $("menu").classList.toggle("open"); }
+  document.addEventListener("click",e=>{ if(!e.target.closest(".model")) $("menu").classList.remove("open"); });
+
+  // ---------- render ----------
+  function renderSessions(){
+    const el=$("sessions");
+    if(!vaultOk){ el.innerHTML=`<div class="empty-rail" style="color:var(--rust)">Local vault unavailable in this browser — history won't persist this session. Chat still works. Open the console (⌥⌘I) to see the exact error.</div>`; return; }
+    if(sessions.length===0){ el.innerHTML=`<div class="empty-rail">No saved conversations yet. Your history is encrypted on this device — nothing leaves it.</div>`; return; }
+    el.innerHTML = sessions.map(s=>`
+      <div class="session ${current&&s.id===current.id?'active':''}" onclick="openSession('${s.id}')">
+        <span class="t">${esc(s.title)}</span>
+        <span class="m"><span class="lock">◆</span> ${s.count} msgs</span>
+        <span class="del" title="Delete" onclick="event.stopPropagation();deleteSession('${s.id}')">✕</span>
+      </div>`).join("");
+  }
+  function flashSaved(){
+    const s=$("saveStatus"); if(!s) return;
+    s.style.opacity="1"; clearTimeout(flashSaved._t);
+    flashSaved._t=setTimeout(()=>{ s.style.opacity="0"; },1400);
+  }
+  function renderBal(){
+    $("bal").innerHTML = formatScrai(balance)+'<small> SCRAI</small>';
+    $("balbar").style.width = Math.max(2,Math.min(100, balance/10000))+'%';
+    $("acctLine").textContent = account
+      ? `account ${account.fingerprint} · session #${account.sessionIndex}`
+      : "no account — open Account & recovery";
+    if(held>0){ $("heldLine").style.display="flex"; $("heldText").textContent = `${formatScrai(held)} SCRAI held — redeems on your next message`; }
+    else $("heldLine").style.display="none";
+  }
+  // The footer's right side shows either a status word or the price of the last
+  // turn. Both write through here, so neither clobbers the other's markup.
+  function setStatus(text){
+    $("price").textContent=text; $("price").title="";
+    $("tok").textContent=""; $("billNote").textContent="";
+  }
+  function setPrice(usage){
+    const frame = usage && usage.billing;
+    if(!frame){ setStatus(usage ? formatTokens(usage) : "done"); return; }
+    $("price").textContent = frame.priceScrai===0 ? "free" : formatScrai(frame.priceScrai)+" SCRAI";
+    $("price").title = billingDetail(frame);   // model + price-table version
+    $("tok").textContent = formatTokens(usage);
+    $("billNote").textContent = billingNotes(frame);
+  }
+  const IMG_MIME = { "image/png":"png", "image/jpeg":"jpg", "image/jpg":"jpg", "image/webp":"webp", "image/gif":"gif" };
+  function imgSrc(im){
+    const mime = IMG_MIME[im.mimeType] ? im.mimeType : "image/jpeg";
+    return `data:${mime};base64,${im.data}`;
+  }
+  function imagesHtml(imgs, mi){
+    return `<div class="imgs">`+imgs.map((im,i)=>{
+      const src=imgSrc(im);
+      return `<figure class="genimg">
+        <img src="${src}" alt="generated image" loading="lazy">
+        <button class="dl" title="Save image" onclick="event.stopPropagation();saveImageAt(${mi},${i})">⬇ save</button>
+      </figure>`;
+    }).join("")+`</div>`;
+  }
+  // A user's input attachment: image → thumbnail, anything else → a file chip.
+  function attHtml(att){
+    if(att.thumb) return `<div class="imgs"><figure class="genimg"><img src="data:image/jpeg;base64,${att.thumb}" alt="attachment" loading="lazy"></figure></div>`;
+    const kb = att.size>=1048576 ? (att.size/1048576).toFixed(1)+" MB" : Math.round((att.size||0)/1024)+" KB";
+    const ic = att.mimeType==="application/pdf" ? "📄" : (/^image\//.test(att.mimeType)?"🖼":"📝");
+    return `<div class="docatt"><span class="di">${ic}</span><span class="dn">${esc(att.name||"file")}</span><span class="dt">${esc(att.mimeType)} · ${kb}</span></div>`;
+  }
+  // Live upload progress rendered INSIDE the sent message (not the composer).
+  function uploadHtml(u){
+    const pct=Math.round((u.pct||0)*100);
+    return `<div class="uprog"><div class="upbar"><i style="width:${pct}%"></i></div>
+      <span class="uptxt">↑ uploading over the mixnet · ${pct}% · ${(u.kbps||0).toFixed(0)} KB/s</span></div>`;
+  }
+  async function saveImageAt(mi, ii){
+    const m = messages[mi]; const im = m && m.images && m.images[ii];
+    if(!im) return;
+    const ext = IMG_MIME[im.mimeType]||"jpg";
+    const name = `scrai-image-${ii+1}.${ext}`;
+    try{
+      const r = await Backend.saveImage(im.data, name, im.mimeType);
+      if(r) setStatus("saved: "+r);
+    }catch(e){ setStatus("save failed: "+((e&&e.message)||e)); }
+  }
+  function renderThread(){
+    const t=$("thread");
+    if(messages.length===0){
+      t.innerHTML=`<div class="empty">
+        <div class="mark">Scramble<b>AI</b></div>
+        <p>A crowd of voices, none of them traceable to you. Ask anything —
+        the conversation stays on this device until you choose to export it.</p>
+        <div class="note"><span class="d"></span> ${mixOn?'Routing through the mixnet · 5 hops':'Direct connection · mixnet ships in v2'}</div>
+      </div>`; return;
+    }
+    // Preserve the scroll position across the innerHTML rebuild (which would
+    // otherwise reset it to the top), so a streaming answer growing BELOW the
+    // prompt never yanks the view. The one deliberate move is scrollPromptIntoView
+    // on send, which anchors the prompt near the top.
+    const prevTop = t.scrollTop;
+    t.innerHTML=`<div class="wrap">`+messages.map((m,mi)=>`
+      <div class="msg ${m.role}">
+        <div class="who">${m.role==='you'?'you':(m.role==='err'?'error':'scrai')}${m.role==='ai'&&m.model?`<span class="viamodel">${esc(m.model)}</span>`:''}</div>
+        <div class="body">${esc(m.text)}${m.streaming?'<span class="cursor"></span>':''}${m.att?attHtml(m.att):''}${m.uploading?uploadHtml(m.uploading):''}${m.images&&m.images.length?imagesHtml(m.images,mi):''}</div>
+      </div>`).join("")+`</div>`;
+    t.scrollTop = prevTop;
+  }
+  // On send, pin the user's own prompt to just below the top of the thread, so
+  // the answer streams beneath it and the question stays visible.
+  function scrollPromptIntoView(){
+    const t=$("thread");
+    const you=t.querySelectorAll(".msg.you");
+    const el=you[you.length-1];
+    if(!el) return;
+    const r=el.getBoundingClientRect(), tr=t.getBoundingClientRect();
+    t.scrollTop += (r.top - tr.top) - 24;
+  }
+
+  // ---------- sessions (Vault-backed) ----------
+  async function refreshSessions(){ sessions = await Vault.list(); renderSessions(); }
+  function newSession(){ return { id:uuid(), title:"", model:currentModel, created:new Date().toISOString(), messages:[] }; }
+  async function newChat(){ await endSession(current); current=newSession(); messages=current.messages; renderSessions(); renderThread(); $("input").focus(); }
+  async function openSession(id){
+    if(current && current.id!==id) await endSession(current);
+    const s = await Vault.load(id); if(!s) return;
+    current=s; messages=current.messages; renderSessions(); renderThread();
+  }
+  async function deleteSession(id){
+    await Vault.remove(id);
+    if(current && current.id===id) newChat();
+    await refreshSessions();
+  }
+  async function persist(firstPrompt){
+    if(!current) return;
+    if(!vaultOk){ setStatus("not saved — vault unavailable"); return; }
+    try{
+      if(!current.title) current.title=(firstPrompt||"").slice(0,40)||"untitled";
+      current.model=currentModel;
+      await Vault.save(current);
+      await refreshSessions();
+      flashSaved();
+    }catch(e){
+      console.error("save failed:", e);
+      setStatus("save failed — see console");
+    }
+  }
+
+  // ---------- mix toggle (visual placeholder) ----------
+  // Dev talks to the local backend directly; the real mixnet lives in the Rust
+  // core the Tauri build embeds. This just animates that future path.
+  let mixOn = false;
+  function toggleMix(){
+    mixOn=!mixOn;
+    $("path").className="path "+(mixOn?"on":"off");
+    $("mixToggle").className="mixtoggle "+(mixOn?"on":"off");
+    $("mixState").textContent=mixOn?"Mixnet":"Direct";
+    $("mixSub").textContent=mixOn?"via Rust core (Tauri)":"dev · local backend";
+    if(messages.length===0) renderThread();
+    if(mixOn) refreshRoute();
+  }
+
+  // ---------- mixnet route (entry/exit gateways + flags) ----------
+  // entry = this client's gateway (selectable); exit = the scrai-server's
+  // gateway (fixed). The two middle mix hops are re-randomised per packet by the
+  // Rust core, so they are deliberately not shown as fixed nodes.
+  let routeCache = { entry:null, exit:null, chosen:null };
+  function flagOf(cc){
+    if(!cc || cc.length!==2) return "";
+    return cc.toUpperCase().replace(/./g, c => String.fromCodePoint(0x1F1E6 + c.charCodeAt(0) - 65));
+  }
+  function edgeLabel(e){
+    if(!e || !e.id) return "";
+    const f = flagOf(e.country);
+    return f || "•";
+  }
+  function edgeTitle(kind, e){
+    if(!e || !e.id) return kind+": not connected yet";
+    const loc = e.country ? e.country : "location unknown";
+    const host = e.host ? " · "+e.host : "";
+    return `${kind}: ${loc}${host}\n${e.id}`;
+  }
+  async function refreshRoute(){
+    if(!isTauri()) return;
+    try{
+      const r = await Backend.mixnetRoute();
+      routeCache = r || routeCache;
+      const eg=$("entryGw"), xg=$("exitGw");
+      if(eg){ eg.textContent = edgeLabel(r.entry); }
+      if(xg){ xg.textContent = edgeLabel(r.exit); }
+      const eh=$("entryHop"), xh=$("exitHop");
+      if(eh) eh.title = edgeTitle("entry", r.entry) + "  (click to choose)";
+      if(xh) xh.title = edgeTitle("exit", r.exit) + "  (fixed — the server's gateway)";
+    }catch(_){}
+  }
+
+  // ---- entry gateway picker ----
+  let gwAll = [];
+  function closeGw(){ $("gwScrim").classList.remove("open"); }
+  function shortId(id){ return id ? id.slice(0,6)+"…"+id.slice(-4) : ""; }
+  function gwChosen(){ return routeCache.chosen || null; }
+  function renderGwList(filter){
+    const chosen = gwChosen();
+    const f = (filter||"").trim().toLowerCase();
+    const list = f ? gwAll.filter(g=>(g.country||"").toLowerCase().includes(f)||(g.host||"").toLowerCase().includes(f)||(g.id||"").toLowerCase().includes(f)) : gwAll;
+    const rows = list.slice(0,300).map(g=>{
+      const sel = g.id===chosen;
+      return `<button class="gwrow${sel?' sel':''}" onclick="chooseGateway('${g.id}')">
+        <span class="fl">${flagOf(g.country)||'🏳️'}</span>
+        <span class="cc">${esc(g.country||'??')}</span>
+        <span class="hn">${esc(g.host||shortId(g.id))}</span>
+        <span class="idc">${esc(shortId(g.id))}</span>
+        ${sel?'<span class="on">● active</span>':''}
+      </button>`;
+    }).join("");
+    const auto = `<button class="gwrow${!chosen?' sel':''}" onclick="chooseGateway('')">
+        <span class="fl">🎲</span><span class="cc">AUTO</span>
+        <span class="hn">let the network pick a gateway</span><span class="idc"></span>
+        ${!chosen?'<span class="on">● active</span>':''}
+      </button>`;
+    $("gwList").innerHTML = auto + rows;
+    const shown = Math.min(list.length,300);
+    $("gwStatus").textContent = `${gwAll.length} entry gateways${f?` · ${list.length} match “${filter}”`:""}${list.length>300?` · showing first ${shown}`:""}`;
+  }
+  async function openEntryPicker(){
+    if(!isTauri() || !mixOn) return;
+    $("gwTitle").innerHTML = "Entry <b>gateway</b>";
+    $("gwScrim").classList.add("open");
+    $("gwBody").innerHTML = `<p>Pick the gateway your traffic <b>enters</b> the mixnet through. Changing it
+      reconnects the Rust core on your next request. The two middle mix hops stay
+      randomised per packet — that reshuffling is the anonymity, not something you set.
+      The <b>exit</b> hop is the server's own gateway and can't be chosen here.</p>
+      <input id="gwFilter" placeholder="filter by country (e.g. CH), host, or paste an identity key…" oninput="filterGw(this.value)"
+        style="width:100%;padding:9px 12px;border:1px solid var(--line);border-radius:9px;background:var(--surface-2);color:var(--bone);font:inherit;margin-bottom:8px">
+      <p class="hint" id="gwStatus">loading gateways from the Nym directory…</p>
+      <div id="gwList" style="display:flex;flex-direction:column;gap:6px;margin-top:6px"></div>`;
+    try{
+      gwAll = await Backend.listEntryGateways();
+      renderGwList("");
+    }catch(e){
+      const s=$("gwStatus"); if(s) s.textContent = "could not load the directory: "+(e.message||e);
+    }
+  }
+  function filterGw(v){ renderGwList(v); }
+  async function chooseGateway(id){
+    const st=$("gwStatus"); if(st) st.textContent = id?("switching to "+shortId(id)+"…"):"switching to automatic…";
+    try{
+      await Backend.setEntryGateway(id||null);
+      routeCache.chosen = id||null;
+      closeGw();
+      // The client reconnects on the next request; reflect the choice now and
+      // refresh the real gateway once a request has re-established the route.
+      await refreshRoute();
+      setStatus(id?("entry gateway set — reconnects on next message"):("entry gateway set to automatic"));
+    }catch(e){ if(st) st.textContent = "failed: "+(e.message||e); }
+  }
+  function showExitInfo(){
+    if(!isTauri() || !mixOn) return;
+    const e = routeCache.exit;
+    $("gwTitle").innerHTML = "Exit <b>gateway</b>";
+    $("gwScrim").classList.add("open");
+    $("gwBody").innerHTML = `<p>The <b>exit</b> hop is the gateway the scrai-server itself is attached to —
+      it is read from the server's Nym address, not chosen by this app. To change it,
+      the server operator would move the server to a different gateway.</p>
+      ${e&&e.id?`<div class="gwrow sel" style="cursor:default">
+        <span class="fl">${flagOf(e.country)||'🏳️'}</span>
+        <span class="cc">${esc(e.country||'??')}</span>
+        <span class="hn">${esc(e.host||'unknown host')}</span>
+        <span class="idc">${esc(shortId(e.id))}</span>
+      </div>`:`<p class="hint">No server set yet, so there is no exit gateway to show.</p>`}`;
+  }
+
+  // ---------- composer ----------
+  function updateSendEnabled(){ $("send").disabled = busy || ($("input").value.trim()==="" && !pendingFile); }
+  function autogrow(el){ el.style.height="auto"; el.style.height=Math.min(150,el.scrollHeight)+"px"; updateSendEnabled(); }
+  function onKey(e){ if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); sendMsg(); } }
+
+  // ---------- image attachment (vision) ----------
+  const MAX_IMG = 10*1024*1024;
+  // Per-model capability (from the catalog), not a vendor guess — so any model
+  // that advertises file input (Gemini today; a Llama-4 vision model if added) works.
+  function isVisionModel(){ return modelAcceptsImages; }
+  // Coarse client gate; mirrors the server allowlist. The provider is final authority.
+  const ACCEPT_RE = /^(image\/(png|jpe?g|webp|heic|heif|gif)|application\/(pdf|json)|text\/)/i;
+  function fileIcon(m){ if(m==="application/pdf") return "📄"; if(/^image\//.test(m)) return "🖼"; return "📝"; }
+  function bytesToB64(u8){ let bin=""; const CH=0x8000; for(let i=0;i<u8.length;i+=CH){ bin+=String.fromCharCode.apply(null,u8.subarray(i,i+CH)); } return btoa(bin); }
+  function pickImage(){ if(busy) return; $("imgFile").click(); }
+  // A small display thumbnail (base64 JPEG) so the thread stays light and history
+  // doesn't store megabytes — the FULL image is what gets uploaded to the server.
+  function makeThumb(url, maxEdge){
+    return new Promise((res)=>{
+      const im=new Image();
+      im.onload=()=>{ const s=Math.min(1, maxEdge/Math.max(im.width,im.height));
+        const cw=Math.max(1,Math.round(im.width*s)), ch=Math.max(1,Math.round(im.height*s));
+        const c=document.createElement("canvas"); c.width=cw; c.height=ch;
+        c.getContext("2d").drawImage(im,0,0,cw,ch);
+        res(c.toDataURL("image/jpeg",0.82).split(",")[1]); };
+      im.onerror=()=>res(null); im.src=url;
+    });
+  }
+  async function attachFile(f){
+    if(!f) return;
+    if(busy){ setStatus("finish the current message first"); return; }
+    if(!ACCEPT_RE.test(f.type||"")){ setStatus("unsupported file — images, PDF or text only"); return; }
+    if(f.size>MAX_IMG){ setStatus(`file too large — max 10 MB (this is ${(f.size/1048576).toFixed(1)} MB)`); return; }
+    try{
+      const bytes=new Uint8Array(await f.arrayBuffer());
+      const isImage=/^image\//.test(f.type);
+      let thumb=null, url=null;
+      if(isImage){ url=URL.createObjectURL(f); thumb=await makeThumb(url, 640); }
+      if(pendingFile&&pendingFile.url) URL.revokeObjectURL(pendingFile.url);
+      pendingFile={ mimeType:f.type, size:f.size, name:f.name, bytes, isImage, thumb, url };
+      renderAttach(); updateSendEnabled(); $("input").focus();
+    }catch(e){ setStatus("could not read file: "+((e&&e.message)||e)); }
+  }
+  function onImagePicked(ev){ const f=ev.target.files&&ev.target.files[0]; ev.target.value=""; attachFile(f); }
+
+  // ---- drag & drop (an alternative to the "+") ----
+  let dragDepth=0;
+  function dtHasFiles(e){ const dt=e.dataTransfer; return !!dt && (Array.prototype.includes.call(dt.types||[], "Files")); }
+  function onDragEnter(e){ if(busy||!dtHasFiles(e)) return; e.preventDefault(); dragDepth++; document.body.classList.add("dragging"); }
+  function onDragOver(e){ if(busy||!dtHasFiles(e)) return; e.preventDefault(); e.dataTransfer.dropEffect="copy"; }
+  function onDragLeave(e){ if(!dtHasFiles(e)) return; dragDepth=Math.max(0,dragDepth-1); if(dragDepth===0) document.body.classList.remove("dragging"); }
+  function onDrop(e){
+    e.preventDefault(); dragDepth=0; document.body.classList.remove("dragging");
+    if(busy) return;
+    const files=(e.dataTransfer&&e.dataTransfer.files)||[];
+    const file=Array.prototype.find.call(files, x=>ACCEPT_RE.test(x.type||""))||files[0];
+    if(file) attachFile(file); else setStatus("drop a file (image, PDF or text)");
+  }
+  function clearImage(){ if(pendingFile&&pendingFile.url) URL.revokeObjectURL(pendingFile.url); pendingFile=null; renderAttach(); updateSendEnabled(); }
+  function renderAttach(prog){
+    const row=$("attachRow");
+    if(!pendingFile){ row.style.display="none"; row.innerHTML=""; return; }
+    row.style.display="block";
+    const sz = pendingFile.size>=1048576 ? (pendingFile.size/1048576).toFixed(1)+" MB" : Math.round(pendingFile.size/1024)+" KB";
+    let sub;
+    if(prog){ sub = `<span class="sub">uploading over the mixnet · ${Math.round(prog.pct*100)}% · ${prog.kbps.toFixed(0)} KB/s</span><div class="pbar"><i style="width:${(prog.pct*100).toFixed(1)}%"></i></div>`; }
+    else if(!isVisionModel()){ sub = `<span class="sub warn">${sz} — this model can’t read files; pick one that can (e.g. Gemini) above</span>`; }
+    else { sub = `<span class="sub">${sz} · add a note (e.g. “summarise this PDF”), then send</span>`; }
+    const thumbHtml = pendingFile.isImage && pendingFile.url
+      ? `<img class="thumb" src="${pendingFile.url}" alt="attachment">`
+      : `<span class="thumb doc">${fileIcon(pendingFile.mimeType)}</span>`;
+    row.innerHTML = `<div class="att">
+      ${thumbHtml}
+      <div class="meta"><div class="fn">${esc(pendingFile.name||"file")}</div>${sub}</div>
+      ${prog?'':'<button class="rm" onclick="clearImage()" title="Remove">✕</button>'}
+    </div>`;
+  }
+  // Chunked, acked upload over the mixnet — reliable (retries lost chunks) and
+  // gives a real % + speed from the bytes the server confirms.
+  async function uploadImageChunked(pi, onProgress){
+    const total=pi.bytes.length, t0=performance.now();
+    // Adaptive: small files use small chunks (a visible, moving bar); large files
+    // use big chunks (fewer mixnet round trips). Each chunk is one round trip.
+    const CHUNK = total>1_500_000 ? 512*1024 : 128*1024;
+    if(onProgress) onProgress({ pct:0, kbps:0, sent:0, total });
+    const begin=await Backend.uploadBegin(pi.mimeType, total);
+    const uploadId=begin&&begin.uploadId;
+    if(!uploadId) throw new Error("server did not accept the upload");
+    let sent=0, seq=0;
+    for(let off=0; off<total; off+=CHUNK){
+      const slice=pi.bytes.subarray(off, Math.min(off+CHUNK,total));
+      const b64=bytesToB64(slice);
+      let attempt=0; for(;;){ try{ await Backend.uploadChunk(uploadId, seq, b64); break; }catch(e){ if(++attempt>=3) throw e; } }
+      sent+=slice.length; seq++;
+      const secs=(performance.now()-t0)/1000;
+      if(onProgress) onProgress({ pct: sent/total, kbps: secs>0?(sent/1024)/secs:0, sent, total });
+    }
+    return uploadId;
+  }
+
+  async function sendMsg(){
+    const el=$("input"); const text=el.value.trim();
+    if(busy||!currentModel) return;
+    if(!text && !pendingFile) return;
+    if(!ensureTermsForCurrent()) return;               // must accept the provider's terms first
+    if(!account){ openAccount(); return; }             // must have an account to spend
+    if(pendingFile && !isVisionModel()){ setStatus("this model can’t read files — pick one that can (e.g. Gemini)"); renderAttach(); return; }
+    if(!current){ current=newSession(); messages=current.messages; }
+
+    const file=pendingFile;                            // capture (may be null)
+    const displayAtt = file ? { mimeType:file.mimeType, name:file.name, size:file.size, thumb:file.thumb } : undefined;
+    // History is sent text-only; a prior attachment is not re-uploaded in v1.
+    const apiMessages = messages.filter(m=>m.role==="you"||m.role==="ai")
+      .map(m=>({ role:m.role==="you"?"user":"assistant", content:m.text }));
+
+    const youMsg={role:"you",text,att:displayAtt}; if(file) youMsg.uploading={pct:0,kbps:0,name:file.name};
+    messages.push(youMsg); el.value=""; autogrow(el);
+    const ai={role:"ai",text:"",streaming:true,model:currentModel}; messages.push(ai);
+    busy=true; updateSendEnabled(); renderThread(); scrollPromptIntoView();
+
+    // Stage the file (chunked over the mixnet) before the chat references it. The
+    // progress shows ON the sent message so it doesn't get lost in the composer.
+    let apiAtts;
+    try{
+      if(file){
+        if(isTauri()){
+          setStatus("uploading over the mixnet…");
+          const uploadId=await uploadImageChunked(file, (p)=>{ youMsg.uploading={pct:p.pct, kbps:p.kbps, name:file.name}; renderThread(); });
+          apiAtts=[{mimeType:file.mimeType, uploadId}];
+        } else { apiAtts=[{mimeType:file.mimeType, data:bytesToB64(file.bytes)}]; }   // dev: inline full file
+      }
+    }catch(e){
+      busy=false; ai.streaming=false; youMsg.uploading=null;
+      messages[messages.length-1]={role:"err",text:"file upload failed: "+((e&&e.message)||e)};
+      clearImage(); renderThread(); updateSendEnabled(); setStatus("upload failed");
+      return;
+    }
+    youMsg.uploading=null;                             // upload done → show the answer stream
+    clearImage();                                      // the attachment lives on in the sent message
+    setStatus("streaming…"); renderThread();
+    const outMsg={ role:"user", content:text }; if(apiAtts) outMsg.attachments=apiAtts;
+    apiMessages.push(outMsg);
+
+    // The backend redeems any held credit into the session first, then prices and
+    // debits the turn. We only display the finished number it sends back.
+    Backend.chat({ model: currentModel, messages: apiMessages, maxTokens: 4096 }, {
+      onDelta:(delta)=>{ ai.text+=delta; renderThread(); },
+      onDone: async (evt)=>{
+        ai.streaming=false; busy=false;
+        if(typeof evt.balance==="number"){ balance=evt.balance; held=0; renderBal(); }
+        if(Array.isArray(evt.images) && evt.images.length) ai.images=evt.images;
+        if(!ai.text && !(ai.images&&ai.images.length)) ai.text="(the model returned no content)";
+        renderThread();
+        setPrice(evt.usage);
+        await persist(text);
+        updateSendEnabled();
+      },
+      onError: async (err)=>{
+        ai.streaming=false; busy=false;
+        // Self-heal: if the provider says this model is gone (deprecated / not
+        // available to this key), drop it from the picker and switch to a working
+        // chatbot model, so the dead model can't be picked again.
+        if(/no longer available|NOT_FOUND|not found|\b404\b/i.test(String(err||""))){
+          const dead=currentModel;
+          models=models.filter(m=>m.model!==dead);
+          const alt=models.find(m=>(m.kind||'text')!=='image')||models[0];
+          if(alt) selectModel(alt);
+          renderMenu();
+          err=`“${dead}” is no longer available from the provider — removed it and switched to ${alt?alt.model:'no model'}. Please resend.`;
+        }
+        messages[messages.length-1]={role:"err",text:err};
+        renderThread(); setStatus("error"); await persist(text);
+        updateSendEnabled();
+      }
+    });
+  }
+
+  // ---------- export / import ----------
+  function sessionForExport(){ return current && current.messages.length ? current : { model:currentModel, messages:[] }; }
+  function showHandover(){
+    const md=Handover.serialize(sessionForExport());
+    $("handoverText").innerHTML = md
+      .replace(/^---$/gm,'<span class="kc">---</span>')
+      .replace(/^(schema|created|model|title):/gm,'<span class="k">$1</span>:');
+    $("expPass").value="";
+    $("scrim").classList.add("open");
+  }
+  async function downloadHandover(encrypt){
+    const md=Handover.serialize(sessionForExport());
+    let blob, name;
+    if(encrypt){
+      const pass=$("expPass").value;
+      if(!pass){ $("expPass").focus(); return; }
+      blob=new Blob([await PassphraseCrypto.encrypt(md,pass)],{type:"application/octet-stream"});
+      name="handover.md.enc";
+    }else{ blob=new Blob([md],{type:"text/markdown"}); name="handover.md"; }
+    const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=name; a.click();
+    URL.revokeObjectURL(a.href); closeHandover();
+  }
+  function closeHandover(){ $("scrim").classList.remove("open"); }
+
+  function pickImport(){ $("importFile").click(); }
+  async function importHandover(ev){
+    const file=ev.target.files&&ev.target.files[0]; if(!file) return;
+    ev.target.value="";
+    let text=await file.text();
+    if(PassphraseCrypto.isEnvelope(text)){
+      const pass=prompt("This handover is encrypted. Enter passphrase:");
+      if(pass===null) return;
+      try{ text=await PassphraseCrypto.decrypt(text,pass); }
+      catch(_){ alert("Wrong passphrase or corrupted file."); return; }
+    }
+    const parsed=Handover.parse(text);
+    if(!parsed.messages.length){ alert("No conversation found in that file."); return; }
+    current={ id:uuid(), title:parsed.title||(parsed.messages[0].text||"imported").slice(0,40),
+      model:parsed.model||currentModel, created:parsed.created||new Date().toISOString(), messages:parsed.messages };
+    messages=current.messages;
+    await Vault.save(current); await refreshSessions(); renderThread();
+  }
+
+  // ---------- session end: export + prune ----------
+  function toHandoverSession(sess){
+    return { id:sess.id, title:sess.title, model:sess.model, created:sess.created,
+      messages:(sess.messages||[]).filter(m=>m.role==="you"||m.role==="ai") };
+  }
+  function downloadBlob(blob, name){
+    const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=name; a.click();
+    URL.revokeObjectURL(a.href);
+  }
+  function sessionFilename(sess){
+    const t=(sess.title||"chat").replace(/[^a-z0-9]+/gi,"-").replace(/^-+|-+$/g,"").slice(0,40)||"chat";
+    return `${t}-${(sess.created||new Date().toISOString()).slice(0,10)}.md`;
+  }
+  // When a conversation ends, download the FULL transcript and keep only its tail,
+  // so re-opening it later resends far fewer tokens. Fires only when there is
+  // enough history that pruning actually drops something.
+  async function endSession(sess){
+    if(!sess) return;
+    const turns=(sess.messages||[]).filter(m=>m.role==="you"||m.role==="ai");
+    if(turns.length<=PRUNE_KEEP) return;
+    try{ downloadBlob(new Blob([Handover.serialize(toHandoverSession(sess))],{type:"text/markdown"}), sessionFilename(sess)); }catch(_){}
+    sess.messages = sess.messages.slice(-PRUNE_KEEP);
+    if(vaultOk){ try{ await Vault.save(sess); await refreshSessions(); }catch(_){} }
+  }
+
+  // ---------- account (in-app dialogs — prompt/confirm/alert are no-ops in the
+  // Tauri webview, so everything is rendered inside the modal) ----------
+  let acctPhrase = null;   // revealed 24 words to show, or null
+  let acctView = null;     // null | "restore" | "confirmNew"
+  function openAccount(){ acctPhrase=null; acctView=null; renderAccount(); $("acctScrim").classList.add("open"); }
+  function closeAccount(){ $("acctScrim").classList.remove("open"); }
+  function acctStatus(m){ const s=$("acctStatus"); if(s) s.textContent=m||""; }
+  function serverBlock(){
+    if(!isTauri()) return "";
+    return `<div style="margin:6px 0 14px">
+      <div class="hint">scrai-server Nym address ${server?`· <span class="k">set</span>`:`· <span style="color:var(--rust)">not set</span>`}</div>
+      <input id="srvInput" placeholder="id.enc@gateway — from your scrai-server" value="${esc(server||'')}"
+        style="width:100%;background:var(--ink);border:1px solid var(--line);border-radius:8px;color:var(--bone);font-family:var(--mono);font-size:11px;padding:8px;outline:none;margin-top:6px">
+      <div class="btnrow"><button class="btn" onclick="saveServer()">Save server</button></div>
+    </div>`;
+  }
+  async function saveServer(){
+    const v=$("srvInput")?$("srvInput").value.trim():"";
+    try{ await Backend.setServer(v); await refreshState(); renderAccount(); acctStatus(v?"server saved ✓":"server cleared"); }
+    catch(e){ acctStatus("failed: "+(e.message||e)); }
+  }
+  function focusRestore(){ if(acctView==="restore") setTimeout(()=>{ const t=$("restorePhrase"); if(t) t.focus(); },0); }
+  function restoreForm(){
+    return `<div style="margin:12px 0">
+      <textarea id="restorePhrase" rows="3" placeholder="Enter your 24-word recovery phrase"
+        style="width:100%;background:var(--ink);border:1px solid var(--line);border-radius:8px;color:var(--bone);font-family:var(--mono);font-size:12px;padding:10px;resize:vertical;outline:none"></textarea>
+      <div class="btnrow"><button class="btn primary" onclick="doAccountRestore()">Restore</button>
+        <button class="btn" onclick="cancelAcctView()">Cancel</button></div></div>`;
+  }
+  function renderAccount(){
+    const b=$("acctBody");
+    if(!account){
+      b.innerHTML=`${serverBlock()}<p>You need an account to buy credit and chat. It is a 24-word recovery phrase —
+        the only thing you must keep. Write it down: it is the only way back to your balance.</p>
+        <div class="btnrow">
+          <button class="btn primary" onclick="doAccountNew()">Create new account</button>
+          <button class="btn" onclick="showRestore()">Restore from phrase</button>
+        </div>
+        ${acctView==="restore"?restoreForm():""}
+        <p class="hint" id="acctStatus"></p>`;
+      focusRestore();
+      return;
+    }
+    b.innerHTML=`${serverBlock()}<p>Account <b class="k">${esc(account.fingerprint)}</b> · session #${account.sessionIndex}<br>
+      Balance ${esc(scraiLine(balance))}${held>0?` · held ${esc(formatScrai(held))} SCRAI`:""}</p>
+      ${acctPhrase?`<p class="hint">Write these 24 words down. Anyone with them can spend your balance.</p><pre>${esc(acctPhrase)}</pre>`:""}
+      ${acctView==="confirmNew"?`<p class="hint" style="color:var(--rust)">A new account ABANDONS any balance on the current one. Sure?</p>
+        <div class="btnrow"><button class="btn primary" onclick="doAccountNew(true)">Yes, overwrite</button>
+          <button class="btn" onclick="cancelAcctView()">Cancel</button></div>`:""}
+      ${acctView==="restore"?restoreForm():""}
+      ${!acctView?`<div class="btnrow">
+        <button class="btn" onclick="doAccountReveal()">Show recovery phrase</button>
+        <button class="btn" onclick="showRestore()">Restore another</button>
+        <button class="btn" onclick="checkCredit()">Check for credit</button>
+        ${held>0?`<button class="btn" onclick="doRedeem()">Redeem ${esc(formatScrai(held))} held</button>`:""}
+        <button class="btn" onclick="askNew()">New account</button>
+      </div>`:""}
+      <p class="hint" id="acctStatus"></p>`;
+    focusRestore();
+  }
+  function showRestore(){ acctView="restore"; acctPhrase=null; renderAccount(); }
+  function askNew(){ acctView="confirmNew"; acctPhrase=null; renderAccount(); }
+  function cancelAcctView(){ acctView=null; renderAccount(); }
+  async function doAccountNew(confirmed){
+    if(account && !confirmed){ askNew(); return; }
+    try{ const r=await Backend.accountNew(); await refreshState(); acctView=null; acctPhrase=r.mnemonic; renderAccount(); }
+    catch(e){ acctStatus("Could not create account: "+(e.message||e)); }
+  }
+  async function doAccountReveal(){
+    try{ const r=await Backend.accountReveal(); acctPhrase=r.mnemonic; acctView=null; renderAccount(); }
+    catch(e){ acctStatus(e.message||String(e)); }
+  }
+  async function doAccountRestore(){
+    const t=$("restorePhrase"); const phrase=t?t.value.trim():"";
+    if(!phrase){ acctStatus("Enter a phrase first."); return; }
+    try{ await Backend.accountRestore(phrase); await refreshState(); acctView=null; acctPhrase=null; renderAccount(); acctStatus("restored ✓"); }
+    catch(e){ acctStatus("Restore failed: "+(e.message||e)); }
+  }
+  async function doRedeem(){
+    try{ const r=await Backend.redeem(); balance=r.balance; held=0; renderBal(); renderAccount(); }
+    catch(e){ acctStatus("Redeem failed: "+(e.message||e)); }
+  }
+  // Sweep any settled-but-uncollected payment (entitlement) into held credit.
+  async function checkCredit(){
+    acctStatus("checking the mixnet for settled payments…");
+    try{ const r=await Backend.collect(); await refreshState(); renderAccount();
+      acctStatus(r&&r.collected>0?`+${formatScrai(r.collected)} SCRAI collected — held, funds your next message.`:"no outstanding credit");
+    }catch(e){ acctStatus("failed: "+(e.message||e)); }
+  }
+
+  // ---------- buy credit ----------
+  let pollTimer=null, countdownTimer=null, pollBusy=false, payDests=[], activeInvoice=null;
+  function stopPoll(){ if(pollTimer){ clearInterval(pollTimer); pollTimer=null; } }
+  function stopCountdown(){ if(countdownTimer){ clearInterval(countdownTimer); countdownTimer=null; } }
+  function renderTiers(){
+    $("tierRow").innerHTML = tiers.map(t=>`<button class="btn primary" onclick="buyOrInvoice(${t})">$${t}</button>`).join("");
+  }
+  function openBuy(){
+    if(!account){ openAccount(); return; }
+    if(activeInvoice){ renderPay(activeInvoice); startCountdown(activeInvoice.expiresAt); setPayStatus("waiting"); }
+    else {
+      renderTiers();
+      $("buyStatus").textContent = fakePayments
+        ? "dev mode — settles instantly, no real money moves."
+        : "Pick an amount, then pay the invoice on Bitcoin/Lightning testnet.";
+    }
+    $("buyScrim").classList.add("open");
+  }
+  // Closing does NOT stop the poll — pay in your wallet, come back, and it will
+  // already be credited. Only the visible countdown is paused.
+  function closeBuy(){ stopCountdown(); $("buyScrim").classList.remove("open"); }
+  function buyOrInvoice(usd){ return fakePayments ? buyTier(usd) : startInvoice(usd); }
+
+  function setPayStatus(kind, extra){
+    const s=$("buyStatus"); if(!s) return;
+    if(kind==="waiting")        s.textContent="● Pending — waiting for payment (checking the mixnet every 10s)…";
+    else if(kind==="collecting")s.textContent="✓ Payment received — collecting your credit…";
+    else if(kind==="collected") s.textContent=`✓ +${formatScrai(extra||0)} SCRAI collected — held, funds your next message.`;
+    else if(kind==="expired")   s.textContent="Invoice expired — pick an amount to try again.";
+  }
+  function fmtCountdown(ms){
+    if(ms<=0) return "expired";
+    const s=Math.floor(ms/1000);
+    return `in ${Math.floor(s/60)}:${String(s%60).padStart(2,"0")}`;
+  }
+  function startCountdown(expiresAt){
+    stopCountdown();
+    const tick=()=>{ const el=$("payExpiry"); if(!el) return; el.textContent=fmtCountdown(expiresAt-Date.now()); };
+    tick(); countdownTimer=setInterval(tick,1000);
+  }
+
+  // Fake gateway (dev): instant.
+  async function buyTier(usd){
+    $("buyStatus").textContent="processing (dev: instant)…";
+    try{
+      const r=await Backend.credit(usd);
+      await refreshState();
+      $("buyStatus").textContent=`+${formatScrai(r.collected)} SCRAI collected — held, funds your next message.`;
+    }catch(e){ $("buyStatus").textContent=e.message||String(e); }
+  }
+
+  // Real gateway: raise an invoice, show pay options, poll until settled, collect.
+  async function startInvoice(usd){
+    stopPoll(); stopCountdown(); activeInvoice=null;
+    $("buyStatus").textContent="raising invoice…";
+    let inv;
+    try{ inv=await Backend.invoice(usd); }catch(e){ $("buyStatus").textContent=e.message||String(e); return; }
+    activeInvoice=inv;
+    renderPay(inv); startCountdown(inv.expiresAt); setPayStatus("waiting");
+    pollTimer=setInterval(async ()=>{
+      if(pollBusy) return; pollBusy=true;
+      try{
+        const st=await Backend.invoiceStatus(inv.invoiceId);
+        if(st.status==="paid"){
+          stopPoll(); stopCountdown(); activeInvoice=null; setPayStatus("collecting");
+          const r=await Backend.collect(); await refreshState(); renderTiers(); setPayStatus("collected", r.collected);
+        }else if(st.status==="expired"){
+          stopPoll(); stopCountdown(); activeInvoice=null; renderTiers(); setPayStatus("expired");
+        }
+      }catch(_){ /* transient mixnet hiccup — try again next tick */ }
+      finally{ pollBusy=false; }
+    }, 10000);
+  }
+  function renderPay(inv){
+    // On-chain only in the UI. Lightning still comes from the backend.
+    const onchain = (inv.options||[]).filter(o=>!/ln|lightning/i.test(o.method));
+    payDests = onchain.map(o=>o.destination);   // the BARE address — for pasting into a wallet
+    const blocks = onchain.map((o,i)=>`
+      <div style="border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:10px">
+        <div style="font-family:var(--mono);font-size:11px;color:var(--mix);margin-bottom:10px">Bitcoin${o.amount?` · ${esc(o.amount)} ${esc(o.currency)}`:""}</div>
+        ${o.qr?`<div class="qrbox">${o.qr}</div>`:""}
+        <div style="font-family:var(--mono);font-size:11px;word-break:break-all;color:var(--muted)">${esc(o.destination)}</div>
+        <button class="btn" id="copyBtn${i}" style="margin-top:10px" onclick="copyUri(${i})">Copy address</button>
+      </div>`).join("") || '<div class="hint">No on-chain method returned — is a testnet wallet linked to the BTCPay store?</div>';
+    $("tierRow").innerHTML = `<div style="width:100%">
+      <div style="font-family:var(--mono);font-size:12px;margin-bottom:12px">
+        Pay $${inv.amountUsd.toFixed(2)} for ${formatScrai(inv.amountScrai)} SCRAI · expires <span id="payExpiry">…</span>
+      </div>
+      ${blocks}
+      ${inv.checkout?`<a class="btn" style="display:inline-block;margin:2px 0 4px" href="${esc(inv.checkout)}" onclick="return openLink('${esc(inv.checkout)}')">Open BTCPay checkout (dev shortcut)</a>`:""}
+    </div>`;
+  }
+  function copyUri(i){
+    const v=payDests[i]; if(!v) return;
+    navigator.clipboard?.writeText(v);
+    const b=$("copyBtn"+i);
+    if(b){ const t=b.textContent; b.textContent="Copied ✓"; setTimeout(()=>{ if(b) b.textContent=t; },1500); }
+  }
+
+  // expose for inline handlers
+  Object.assign(window,{ newChat, openSession, deleteSession, toggleMenu, selectModelIdx, toggleMix,
+    autogrow, onKey, sendMsg, showHandover, downloadHandover, closeHandover, pickImport, importHandover,
+    openBuy, closeBuy, buyTier, buyOrInvoice, copyUri, openAccount, closeAccount, doAccountNew, doAccountReveal, doAccountRestore, doRedeem,
+    showRestore, askNew, cancelAcctView, saveServer, checkCredit,
+    openEntryPicker, showExitInfo, chooseGateway, closeGw, filterGw,
+    acceptTerms, declineTerms, chooseModel, openLink, saveImageAt,
+    pickImage, onImagePicked, clearImage, setMenuKind, toggleLatest });
+
+  // ---------- init ----------
+  function setMixnetOn(){
+    mixOn=true;
+    $("path").className="path on";
+    $("mixToggle").className="mixtoggle on";
+    $("mixState").textContent="Mixnet";
+    $("mixSub").textContent="via Rust core (Tauri)";
+  }
+  (async ()=>{
+    if(isTauri()){ document.body.classList.add("tauri"); setMixnetOn(); }  // the app always routes through the mixnet
+    try{ await Vault.init(); vaultOk=true; }
+    catch(e){ vaultOk=false; console.error("vault init failed:", e); }
+    if(vaultOk) sessions = await Vault.list();
+    await refreshState();                 // models, balance, account, tiers
+    current=newSession(); messages=current.messages; renderSessions(); renderThread();
+    renderBal();
+    // Sweep any settled-but-uncollected payment into held credit on startup.
+    if(isTauri() && account){
+      try{ const r=await Backend.collect(); if(r&&r.collected>0){ await refreshState(); renderBal(); } }catch(_){}
+    }
+    // Show the real entry/exit gateways + flags once the route is up.
+    if(isTauri()) refreshRoute();
+    // Require acceptance of the active model's provider terms on startup.
+    ensureTermsForCurrent();
+    // Native app: bind Cmd/Ctrl+R to reload the frontend from the dev server, so
+    // frontend-only changes don't need a `tauri dev` restart (Rust changes still do).
+    if(isTauri()){
+      document.addEventListener("keydown",(e)=>{
+        if((e.metaKey||e.ctrlKey) && !e.shiftKey && e.key.toLowerCase()==="r"){ e.preventDefault(); location.reload(); }
+      });
+    }
+    // Drag & drop files anywhere in the chat column (alternative to the "+").
+    const mainEl=$("main");
+    if(mainEl){
+      mainEl.addEventListener("dragenter",onDragEnter);
+      mainEl.addEventListener("dragover",onDragOver);
+      mainEl.addEventListener("dragleave",onDragLeave);
+      mainEl.addEventListener("drop",onDrop);
+    }
+  })();
+</script>

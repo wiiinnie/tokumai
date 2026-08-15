@@ -1,0 +1,26 @@
+# secrets — never commit
+.env
+.env.*
+!.env.example
+
+# dependencies & build
+node_modules/
+dist/
+
+# Rust / Tauri build output (target is ~15GB) + generated bindings
+src-tauri/target/
+src-tauri/gen/
+
+# nym-client binary — platform-specific, installed per host (npm run nym:install)
+bin/
+
+# Claude Code local state
+.claude/
+
+# logs / os cruft
+*.log
+.DS_Store
+
+# generated images
+images/
+data/
