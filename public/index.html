@@ -669,14 +669,21 @@
   // scrolled back immediately.
   if (window.visualViewport && /iPhone|iPad|iPod/.test(navigator.userAgent)) {
     const vv = window.visualViewport;
+    // Shrink ONLY while a field is focused AND the viewport clearly lost
+    // height to the keyboard; in every other state the explicit height is
+    // cleared. A near-equal comparison here once left the app stuck short
+    // after the keyboard closed (composer floating above the bottom).
     const fit = () => {
-      const full = Math.round(vv.height * vv.scale) >= innerHeight - 1;
-      document.body.style.height = full ? "" : Math.round(vv.height) + "px";
+      const el = document.activeElement;
+      const focused = el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName);
+      const kbUp = focused && vv.height < innerHeight - 60;
+      document.body.style.height = kbUp ? Math.round(vv.height) + "px" : "";
       window.scrollTo(0, 0);
       if (document.scrollingElement) document.scrollingElement.scrollTop = 0;
     };
     vv.addEventListener("resize", fit);
     vv.addEventListener("scroll", fit);
+    addEventListener("focusout", () => setTimeout(fit, 250), true);
   }
 
   // iOS-style swipe-to-delete in the session list (phones only — the hover ✕
