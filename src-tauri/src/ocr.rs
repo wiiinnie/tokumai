@@ -24,11 +24,11 @@ pub struct TextBox {
 /// Recognise text in an encoded image (PNG/JPEG bytes) WITH per-line boxes, so
 /// the guard can highlight/redact exactly where a match is.
 pub fn recognize(image: &[u8]) -> Result<Vec<TextBox>, String> {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
     {
-        macos::recognize_image(image)
+        apple::recognize_image(image)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
     {
         let _ = image;
         Err("ocr-unsupported-platform".to_string())
@@ -37,11 +37,11 @@ pub fn recognize(image: &[u8]) -> Result<Vec<TextBox>, String> {
 
 /// Recognise text in a scanned/image-only PDF by rendering its pages and OCR'ing.
 pub fn recognize_pdf(pdf: &[u8]) -> Result<String, String> {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
     {
-        macos::recognize_pdf(pdf)
+        apple::recognize_pdf(pdf)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
     {
         let _ = pdf;
         Err("ocr-unsupported-platform".to_string())
@@ -57,19 +57,19 @@ pub struct PdfPage {
 
 /// Render each PDF page to a PNG and recognise its text boxes (for redaction).
 pub fn recognize_pdf_pages(pdf: &[u8]) -> Result<Vec<PdfPage>, String> {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
     {
-        macos::recognize_pdf_pages(pdf)
+        apple::recognize_pdf_pages(pdf)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
     {
         let _ = pdf;
         Err("ocr-unsupported-platform".to_string())
     }
 }
 
-#[cfg(target_os = "macos")]
-mod macos {
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+mod apple {
     use objc2::rc::Retained;
     use objc2::AnyThread;
     use objc2_foundation::{NSArray, NSData, NSDictionary, NSString};

@@ -9,9 +9,11 @@
 /* Begin PBXBuildFile section */
 		0CC2E8978C44030AA006E306 /* WebKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 65E7AC03D40A497A970FCD2A /* WebKit.framework */; };
 		0D0CC856FCFE144AB5FE4F58 /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E79CCDA485FA5C6855ADAED3 /* UIKit.framework */; };
+		217E87572BBDFDEAE2E48F83 /* Vision.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E0C52BE112A327326FF28ED4 /* Vision.framework */; };
 		3219341E9AFAF67632AD94F6 /* libapp.a in Resources */ = {isa = PBXBuildFile; fileRef = FE1AEEB64AEF8C830CA250D7 /* libapp.a */; };
 		4BA1404BDE50F310A0BEAAB9 /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 90A8019BC3124F6F0AA7B1C5 /* MetalKit.framework */; };
 		53001D7A32430B02B3C4908D /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 12F7E3508AA983CDD727E2C0 /* SystemConfiguration.framework */; };
+		5DE2D67F80A2091D0E8860F4 /* CoreFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C6939631A7749C49A610DBAA /* CoreFoundation.framework */; };
 		6997ADCA36943E2F19F37757 /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E5BBCCB254FD9C364E06E74F /* QuartzCore.framework */; };
 		6E3DA8460A1AB1F2E5EED167 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 492F7FAC854AA3511E0F322A /* Assets.xcassets */; };
 		88DDEDAC42AAED9676F6B685 /* libapp.a in Frameworks */ = {isa = PBXBuildFile; fileRef = C695C9FBFEDE1F5A1140EC3B /* libapp.a */; };
@@ -43,7 +45,9 @@
 		9BA8878B646D9F7D9C11CCE9 /* bindings.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = bindings.h; sourceTree = "<group>"; };
 		A91E2677231FB2801A235D54 /* account.rs */ = {isa = PBXFileReference; path = account.rs; sourceTree = "<group>"; };
 		B09074B5C7C275B4172D704F /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
+		C6939631A7749C49A610DBAA /* CoreFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreFoundation.framework; path = System/Library/Frameworks/CoreFoundation.framework; sourceTree = SDKROOT; };
 		C695C9FBFEDE1F5A1140EC3B /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
+		E0C52BE112A327326FF28ED4 /* Vision.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Vision.framework; path = System/Library/Frameworks/Vision.framework; sourceTree = SDKROOT; };
 		E53C1FD07A30618C2744264A /* main.rs */ = {isa = PBXFileReference; path = main.rs; sourceTree = "<group>"; };
 		E564EBA9A0C427D1E60434C5 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
 		E5BBCCB254FD9C364E06E74F /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
@@ -63,6 +67,8 @@
 				6997ADCA36943E2F19F37757 /* QuartzCore.framework in Frameworks */,
 				EFA90F62CA2B7798790A5F1B /* Security.framework in Frameworks */,
 				53001D7A32430B02B3C4908D /* SystemConfiguration.framework in Frameworks */,
+				217E87572BBDFDEAE2E48F83 /* Vision.framework in Frameworks */,
+				5DE2D67F80A2091D0E8860F4 /* CoreFoundation.framework in Frameworks */,
 				0D0CC856FCFE144AB5FE4F58 /* UIKit.framework in Frameworks */,
 				0CC2E8978C44030AA006E306 /* WebKit.framework in Frameworks */,
 			);
@@ -161,6 +167,7 @@
 		F888F45BAA4E6C084C09EF95 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
+				C6939631A7749C49A610DBAA /* CoreFoundation.framework */,
 				3757F2914276233C58F4D5E8 /* CoreGraphics.framework */,
 				C695C9FBFEDE1F5A1140EC3B /* libapp.a */,
 				524B989885E779B65C57C958 /* Metal.framework */,
@@ -169,6 +176,7 @@
 				B09074B5C7C275B4172D704F /* Security.framework */,
 				12F7E3508AA983CDD727E2C0 /* SystemConfiguration.framework */,
 				E79CCDA485FA5C6855ADAED3 /* UIKit.framework */,
+				E0C52BE112A327326FF28ED4 /* Vision.framework */,
 				65E7AC03D40A497A970FCD2A /* WebKit.framework */,
 			);
 			name = Frameworks;
@@ -183,7 +191,7 @@
 			path = scrambleai_iOS;
 			sourceTree = "<group>";
 		};
-		"TEMP_BFE1C1EE-CD91-480B-8556-29BF85AA6F3E" /* x86_64 */ = {
+		"TEMP_DA32753F-F491-4645-A099-61CECDCC902C" /* x86_64 */ = {
 			isa = PBXGroup;
 			children = (
 			);
@@ -382,7 +390,7 @@
 				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				PRODUCT_BUNDLE_IDENTIFIER = com.scrambleai.app;
-				PRODUCT_NAME = "ScrambleAI";
+				PRODUCT_NAME = ScrambleAI;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALID_ARCHS = "arm64  x86_64";
@@ -471,7 +479,7 @@
 				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				PRODUCT_BUNDLE_IDENTIFIER = com.scrambleai.app;
-				PRODUCT_NAME = "ScrambleAI";
+				PRODUCT_NAME = ScrambleAI;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALID_ARCHS = "arm64  x86_64";
