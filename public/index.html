@@ -1187,20 +1187,14 @@
   // The status line follows the REAL lifecycle of the request — no blind timers:
   //   "Sending to mixnet…"  until the request (incl. any file upload) has fully
   //                          left the device (Rust emits chat-sent; dev: fetch ok)
-  //   "Thinking…"           the provider is working — ends when the reply arrives
-  //   "Receiving answer…"   answer data is coming in; the streaming text takes over
-  // Each line types out, then holds with the blinking cursor until the NEXT real
-  // signal (Backend.chat's onPhase) advances it. Phases only ever move forward.
-  const MIX_STEPS=["Sending to mixnet","Thinking","Receiving answer"];
+  //   "Thinking…"           the provider is working — the answer text takes over
+  // (No "receiving" phase: the reply replaces the status the moment data lands,
+  // so it was never readable.) Each line types out, then holds with the blinking
+  // cursor until the NEXT real signal (Backend.chat's onPhase) advances it.
+  const MIX_STEPS=["Sending to mixnet","Thinking"];
   const MIX_TICK=26;   // ~26ms/char typing speed
-  let mixTimer=null, mixShown="", mixStep=-1, mixDelay=null;
+  let mixTimer=null, mixShown="", mixStep=-1;
   function startMixPhase(){ stopMixPhase(); setMixPhase(0); }
-  // Show a phase only if it lasts long enough to read: if the next real signal
-  // (the answer itself) lands within the grace period, the phase is skipped
-  // entirely instead of flashing for a frame. Text replies over the mixnet
-  // arrive in one piece right after "receiving", so this hits exactly there;
-  // multi-fragment replies (images) still show "Receiving answer" for real.
-  function delayMixPhase(step,ms){ clearTimeout(mixDelay); mixDelay=setTimeout(()=>setMixPhase(step),ms); }
   function setMixPhase(step){
     if(step<=mixStep) return;                     // forward only — never regress
     mixStep=step;
@@ -1215,7 +1209,7 @@
       if(i>=word.length){ clearInterval(mixTimer); mixTimer=null; }  // hold, cursor blinks
     }, MIX_TICK);
   }
-  function stopMixPhase(){ if(mixTimer){ clearInterval(mixTimer); mixTimer=null; } clearTimeout(mixDelay); mixDelay=null; mixShown=""; mixStep=-1; }
+  function stopMixPhase(){ if(mixTimer){ clearInterval(mixTimer); mixTimer=null; } mixShown=""; mixStep=-1; }
 
   // ---------- sessions (Vault-backed) ----------
   async function refreshSessions(){ sessions = await Vault.list(); renderSessions(); }
@@ -1620,8 +1614,8 @@
     // budget; text chats ride with the small one (fewer request fragments).
     Backend.chat({ model: currentModel, messages: sendMessages, maxTokens: 4096, free: isFree, bigReply: modelKind === "image" }, {
       // Real lifecycle signals drive the status line: request fully sent →
-      // "Thinking…"; first answer data back → "Receiving answer…".
-      onPhase:(p)=>{ if(p==="sent") setMixPhase(1); else if(p==="receiving") delayMixPhase(2,400); },
+      // "Thinking…", which holds until the answer itself takes over.
+      onPhase:(p)=>{ if(p==="sent") setMixPhase(1); },
       onDelta:(delta)=>{ stopMixPhase(); ai.text+=delta; renderThread(); },
       onDone: async (evt)=>{
         stopMixPhase();
