@@ -332,6 +332,14 @@
   .titlebar[data-tauri-drag-region]{cursor:default}
   .titlebar[data-tauri-drag-region] > *{pointer-events:none}
 
+  /* ---------- boot splash ----------
+     Pure splash until the wordmark has settled (+2s): the chrome is invisible
+     but keeps its layout, so the centred connecting/scramble screen never
+     jumps — then everything fades in together. The class is set on <html>
+     before first paint and removed by endBoot(). */
+  html.boot .titlebar,html.boot .rail,html.boot .topbar,html.boot .composer{opacity:0;pointer-events:none}
+  .titlebar,.rail,.topbar,.composer{transition:opacity .6s ease}
+
   /* ---------- mobile (≤700px): phone layout, additive only ----------
      The desktop rail becomes an off-canvas drawer (hamburger in the title
      bar), the mixnet path collapses to the toggle, and every modal becomes
@@ -350,7 +358,7 @@
     .titlebar .wordmark{margin-left:2px}
     .app{grid-template-columns:1fr}
     .rail{position:fixed;top:0;bottom:0;left:0;width:min(320px,85vw);z-index:60;
-      transform:translateX(-105%);transition:transform .22s ease;
+      transform:translateX(-105%);transition:transform .22s ease,opacity .6s ease;
       box-shadow:20px 0 40px rgba(0,0,0,.45);padding-top:env(safe-area-inset-top,0px)}
     body.railopen .rail{transform:none}
     .railscrim{position:fixed;inset:0;z-index:55;background:rgba(10,8,6,.6)}
@@ -398,6 +406,9 @@
       background:var(--rust);color:var(--bone);font-family:var(--body);font-weight:600;font-size:13px;cursor:pointer}
   }
 </style>
+
+<!-- Set before the chrome exists in the DOM, so the splash never flashes it. -->
+<script>document.documentElement.classList.add("boot");</script>
 
 <div class="titlebar" data-tauri-drag-region>
   <button class="mburger" onclick="toggleRail()" aria-label="Conversations">☰</button>
@@ -1048,9 +1059,11 @@
       }
       stopConnType();
       t.innerHTML=emptyLogoHTML();
+      endBoot(600);                            // direct path: no scramble, short hold
       return;
     }
     t.classList.remove("threadEmpty");
+    endBoot(0);                                // a conversation is showing — no splash
     // Scroll model: "stick to bottom". While the reader is at (or near) the end
     // of the thread, every rebuild pins the view to the bottom, so a streaming
     // answer rolls in typewriter-style and the view follows along. A manual
@@ -1082,6 +1095,18 @@
       followStream = (t.scrollHeight - t.scrollTop - t.clientHeight) < 80;
     });
   }
+
+  // ---------- boot splash ----------
+  // The chrome stays hidden (html.boot) until the start screen has settled:
+  // scramble path holds the finished wordmark 2s, the direct path fades in
+  // quickly. First scheduled end wins; a 20s backstop means a dead backend
+  // can never strand the user on the splash.
+  let bootTimer=null, bootEnded=false;
+  function endBoot(delay){
+    if(bootEnded || bootTimer) return;
+    bootTimer=setTimeout(()=>{ bootEnded=true; document.documentElement.classList.remove("boot"); }, delay);
+  }
+  setTimeout(()=>{ if(!bootEnded && !bootTimer) endBoot(0); }, 20000);
 
   // ---------- empty screen: mixnet "connecting" → scramble → logo ----------
   let connTimer=null;
@@ -1170,6 +1195,7 @@
     if(messages.length!==0) return;            // a message arrived mid-animation
     t.classList.add("threadEmpty");
     t.innerHTML=emptyLogoHTML(true);           // wordmark settles; tagline fades in
+    endBoot(2000);                             // hold the splash 2s, then fade in the chrome
   }
   // Called from refreshRoute whenever the mixnet connection state flips.
   function onMixConnectChange(wasConnected){
