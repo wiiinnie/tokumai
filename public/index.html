@@ -1707,17 +1707,31 @@
     $("expPass").value="";
     openScrim("scrim");
   }
+  // One export path for every platform: encryption (when chosen) happens HERE
+  // in the webview (PBKDF2 + AES-256-GCM via PassphraseCrypto), so the file
+  // that leaves is opaque regardless of where it lands. On iOS an anchor
+  // download is a no-op in WKWebView, so the finished text goes through the
+  // native share sheet instead (Files, AirDrop, …).
+  const onPhone = () => /iPhone|iPad|iPod/.test(navigator.userAgent);
+  async function exportTextFile(name, text){
+    if(isTauri() && onPhone()){ await Backend.shareText(name, text); return; }
+    const a=document.createElement("a");
+    a.href=URL.createObjectURL(new Blob([text],{type:"application/octet-stream"}));
+    a.download=name; a.click();
+    URL.revokeObjectURL(a.href);
+  }
   async function downloadHandover(encrypt){
     const md=Handover.serialize(sessionForExport());
-    let blob, name;
+    let text, name;
     if(encrypt){
       const pass=$("expPass").value;
       if(!pass){ $("expPass").focus(); return; }
-      blob=new Blob([await PassphraseCrypto.encrypt(md,pass)],{type:"application/octet-stream"});
+      text=await PassphraseCrypto.encrypt(md,pass);
       name="handover.md.enc";
-    }else{ blob=new Blob([md],{type:"text/markdown"}); name="handover.md"; }
-    const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=name; a.click();
-    URL.revokeObjectURL(a.href); closeHandover();
+    }else{ text=md; name="handover.md"; }
+    try{ await exportTextFile(name, text); }
+    catch(e){ setStatus("export failed: "+((e&&e.message)||e)); return; }
+    closeHandover();
   }
   function closeHandover(){ $("scrim").classList.remove("open"); }
 
@@ -1779,6 +1793,10 @@
   // enough history that pruning actually drops something.
   async function endSession(sess){
     if(!sess) return;
+    // Phones: no silent downloads exist and popping a share sheet uninvited
+    // would be hostile — keep the full session in the encrypted vault instead
+    // of export+prune. Manual export stays available any time.
+    if(onPhone()) return;
     const turns=(sess.messages||[]).filter(m=>m.role==="you"||m.role==="ai");
     if(turns.length<=PRUNE_KEEP) return;
     try{ downloadBlob(new Blob([Handover.serialize(toHandoverSession(sess))],{type:"text/markdown"}), sessionFilename(sess)); }catch(_){}

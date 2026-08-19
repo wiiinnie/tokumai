@@ -66,9 +66,17 @@ gline-rs = { version = "1", optional = true }
 orp = { version = "1", optional = true }
 
 # Native "save as…" dialog for downloading generated images (the webview can't).
-# No iOS backend — image saves there go through the share sheet instead (TODO).
 [target.'cfg(not(target_os = "ios"))'.dependencies]
 rfd = "0.15"
+
+# iOS: generated images go straight to the Photos library, handover exports
+# through the native share sheet (Files, AirDrop, …).
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2-ui-kit = { version = "0.3", features = [
+  "UIImage", "UIImagePickerController", "UIActivityViewController",
+  "UIViewController", "UIResponder", "UIView", "UIWindow", "UIApplication",
+  "UIPopoverPresentationController", "UIPresentationController",
+] }
 
 # --- on-device OCR for the privacy guard (macOS + iOS via Apple Vision;
 #     other platforms fall back to the bundled Tesseract-WASM frontend) ---

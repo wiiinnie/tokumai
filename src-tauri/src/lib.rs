@@ -967,13 +967,96 @@ async fn save_image(data: String, filename: String) -> Result<Option<String>, St
     }
 }
 
-// iOS has no rfd backend; saving routes through the share sheet once that
-// lands. Until then the command exists (same signature) but reports why.
+// iOS: generated images land in the Photos library (UIKit must run on the
+// main thread; the command hops there and reports back over a oneshot).
 #[cfg(target_os = "ios")]
 #[tauri::command]
-async fn save_image(data: String, filename: String) -> Result<Option<String>, String> {
-    let _ = (data, filename);
-    Err("saving images on iOS is not wired up yet (share sheet pending)".into())
+async fn save_image(app: AppHandle, data: String, filename: String) -> Result<Option<String>, String> {
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+    let _ = filename;
+    let bytes = B64.decode(data.as_bytes()).map_err(|e| format!("bad image data: {e}"))?;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.run_on_main_thread(move || {
+        let _ = tx.send(ios_share::save_image_to_photos(&bytes));
+    })
+    .map_err(|e| e.to_string())?;
+    rx.await.map_err(|e| e.to_string())??;
+    Ok(Some("Photos".into()))
+}
+
+/// Export a text file (handover.md / .md.enc) through the OS. On iOS this
+/// writes to a temp file and presents the native share sheet — the user picks
+/// Files, AirDrop, another app… Encryption (when chosen) already happened in
+/// the webview (PBKDF2 + AES-256-GCM), so the file is opaque here either way.
+#[cfg(target_os = "ios")]
+#[tauri::command]
+async fn share_text(app: AppHandle, filename: String, text: String) -> Result<(), String> {
+    // Basename only — the name came from the UI, not from a path.
+    let safe: String = filename
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '.' || c == '-' || c == '_' { c } else { '-' })
+        .collect();
+    let path = std::env::temp_dir().join(if safe.is_empty() { "handover.md".into() } else { safe });
+    std::fs::write(&path, text).map_err(|e| e.to_string())?;
+    let path_str = path.to_string_lossy().to_string();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.run_on_main_thread(move || {
+        let _ = tx.send(ios_share::present_share_sheet(&path_str));
+    })
+    .map_err(|e| e.to_string())?;
+    rx.await.map_err(|e| e.to_string())?
+}
+
+#[cfg(not(target_os = "ios"))]
+#[tauri::command]
+async fn share_text(filename: String, text: String) -> Result<(), String> {
+    let _ = (filename, text);
+    Err("share_text is the iOS export path — desktop saves via the browser download".into())
+}
+
+#[cfg(target_os = "ios")]
+mod ios_share {
+    use objc2::rc::Retained;
+    use objc2::runtime::AnyObject;
+    use objc2::{AnyThread, MainThreadMarker};
+    use objc2_foundation::{NSArray, NSData, NSString, NSURL};
+    use objc2_ui_kit::{UIActivityViewController, UIApplication, UIImage};
+
+    pub fn save_image_to_photos(bytes: &[u8]) -> Result<(), String> {
+        let _mtm = MainThreadMarker::new().ok_or("not on the main thread")?;
+        let data = NSData::with_bytes(bytes);
+        let img = UIImage::initWithData(UIImage::alloc(), &data)
+            .ok_or("could not decode the image data")?;
+        // Fire-and-forget: iOS shows its own permission prompt on first use
+        // (NSPhotoLibraryAddUsageDescription) and saves asynchronously.
+        unsafe { img.write_to_saved_photos_album(None, None, std::ptr::null_mut()) };
+        Ok(())
+    }
+
+    // keyWindow is deprecated for multi-scene apps; this app is single-scene.
+    #[allow(deprecated)]
+    pub fn present_share_sheet(path: &str) -> Result<(), String> {
+        let mtm = MainThreadMarker::new().ok_or("not on the main thread")?;
+        unsafe {
+            let url = NSURL::fileURLWithPath(&NSString::from_str(path));
+            let obj: Retained<AnyObject> = Retained::into_super(Retained::into_super(url));
+            let items = NSArray::from_retained_slice(&[obj]);
+            let avc = UIActivityViewController::initWithActivityItems_applicationActivities(
+                mtm.alloc(),
+                &items,
+                None,
+            );
+            let app = UIApplication::sharedApplication(mtm);
+            let window = app.keyWindow().ok_or("no key window")?;
+            let root = window.rootViewController().ok_or("no root view controller")?;
+            // iPad presents this as a popover and needs an anchor; iPhone ignores it.
+            if let Some(pop) = avc.popoverPresentationController() {
+                pop.setSourceView(Some(&window));
+            }
+            root.presentViewController_animated_completion(&avc, true, None);
+        }
+        Ok(())
+    }
 }
 
 /// Open an http(s) URL in the OS default browser. The webview itself won't
@@ -1028,7 +1111,7 @@ pub fn run() {
             invoice, invoice_status, invoice_cancel, ocr_scan, pdf_text, pdf_ocr, pdf_pages, collect, redeem, chat,
             smart_available, smart_detect, coconut_withdraw_test, coconut_withdraw, coconut_spend, coconut_redeem,
             mixnet_route, list_entry_gateways, set_entry_gateway, open_external, save_image,
-            upload_begin, upload_chunk
+            share_text, upload_begin, upload_chunk
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

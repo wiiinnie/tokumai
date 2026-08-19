@@ -114,6 +114,15 @@ const httpBackend = {
     document.body.appendChild(a); a.click(); a.remove();
     return Promise.resolve(filename);
   },
+  // Browser dev: exports are plain anchor downloads too.
+  shareText: (filename, text) => {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([text], { type: "application/octet-stream" }));
+    a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(a.href);
+    return Promise.resolve();
+  },
 };
 
 const tauriBackend = (invoke) => ({
@@ -139,6 +148,7 @@ const tauriBackend = (invoke) => ({
   setEntryGateway: (id) => invoke("set_entry_gateway", { id }),
   openExternal: (url) => invoke("open_external", { url }),
   saveImage: (dataB64, filename) => invoke("save_image", { data: dataB64, filename }),
+  shareText: (filename, text) => invoke("share_text", { filename, text }),
   uploadBegin: (mimeType, totalBytes) => invoke("upload_begin", { mimeType, totalBytes }),
   uploadChunk: (uploadId, seq, data) => invoke("upload_chunk", { uploadId, seq, data }),
   // Non-streaming over the mixnet: one reply carrying the whole answer. Phase
@@ -200,6 +210,7 @@ export const Backend = {
   setEntryGateway: (id) => pick("setEntryGateway", id),
   openExternal: (url) => pick("openExternal", url),
   saveImage: (dataB64, filename, mimeType) => pick("saveImage", dataB64, filename, mimeType),
+  shareText: (filename, text) => pick("shareText", filename, text),
   uploadBegin: (mimeType, totalBytes) => pick("uploadBegin", mimeType, totalBytes),
   uploadChunk: (uploadId, seq, data) => pick("uploadChunk", uploadId, seq, data),
   chat: (body, handlers) => pick("chat", body, handlers),
