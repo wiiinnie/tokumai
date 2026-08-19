@@ -22,6 +22,8 @@
 	<true/>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Saves AI-generated images from your chats to your photo library. Nothing is ever read from it.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Development builds load the UI from the dev server on your Mac. Release builds never use the local network.</string>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIRequiredDeviceCapabilities</key>

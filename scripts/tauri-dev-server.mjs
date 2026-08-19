@@ -12,6 +12,10 @@ import { extname } from "node:path";
 
 const ROOT = new URL("../public/", import.meta.url);
 const PORT = Number(process.env.TAURI_FRONTEND_PORT ?? 1421);
+// Simulator/desktop dev binds loopback. For a PHYSICAL device (`tauri ios dev
+// --host`) Tauri exports TAURI_DEV_HOST with the Mac's LAN address — bind that
+// so the phone can reach the frontend.
+const HOST = process.env.TAURI_DEV_HOST || "127.0.0.1";
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -53,4 +57,4 @@ server.on("error", (err) => {
   }
 });
 
-server.listen(PORT, "127.0.0.1", () => console.log(`[tauri-frontend] serving public/ on http://127.0.0.1:${PORT}`));
+server.listen(PORT, HOST, () => console.log(`[tauri-frontend] serving public/ on http://${HOST}:${PORT}`));
