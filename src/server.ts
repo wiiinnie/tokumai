@@ -34,7 +34,7 @@ import { warmPricing, pricingVersion } from "./pricing.js";
 import { MoneyStore } from "./money/store.js";
 import { Mint } from "./money/token.js";
 import { Issuer } from "./money/issuer.js";
-import { FakeGateway, selectGateway } from "./money/gateway.js";
+import { FakeGateway, selectGateway, selectNyxGateway, type PaymentGateway } from "./money/gateway.js";
 import { createAccount, fromMnemonic, accountIdFor, fingerprint, deriveSessionKeys } from "./money/account.js";
 import { blindPacket, unblindPacket, tierPackets } from "./money/ecash-client.js";
 import QRCode from "qrcode";
@@ -68,7 +68,10 @@ const mint = new Mint(
   process.env.SCRAI_ISSUER_SECRET ? Buffer.from(process.env.SCRAI_ISSUER_SECRET, "utf8") : money.getOrCreateMintSeed(),
 );
 const gateway = selectGateway();
-const issuer = new Issuer(money, gateway, mint);
+const devGateways: Record<string, PaymentGateway> = { btc: gateway };
+const devNyx = await selectNyxGateway();
+if (devNyx) { devGateways.nyx = devNyx; devNyx.warmup?.(); }
+const issuer = new Issuer(money, devGateways, mint);
 const fakePayments = issuer.isFake;
 
 // ---- dev wallet state (account + held ecash), persisted to one JSON file ---
@@ -274,19 +277,25 @@ const server = createServer(async (req, res) => {
     if (req.method === "POST" && url === "/api/invoice") {
       const w = loadWallet();
       if (!w.mnemonic) return void sendJson(res, 400, { error: "no account — create one first" });
-      const { usd } = await readJson<{ usd?: number }>(req);
+      const { usd, method } = await readJson<{ usd?: number; method?: string }>(req);
       if (!purchaseTiers().includes(Number(usd))) {
         return void sendJson(res, 400, { error: `fixed amounts only: ${purchaseTiers().map((t) => `$${t}`).join(", ")}` });
       }
       try {
         const account = fromMnemonic(w.mnemonic);
-        const inv = await issuer.createInvoice(account.accountId, Number(usd));
+        const inv = await issuer.createInvoice(account.accountId, Number(usd), method === "nyx" ? "nyx" : "btc");
         // A scannable QR per payment method, generated server-side (no browser QR
-        // lib, no CSP headache). The frontend renders whichever it shows.
+        // lib, no CSP headache). The frontend renders whichever it shows. NYM gets
+        // the Nym-purple treatment to match the branded QR the desktop app draws.
         const options = await Promise.all(
           inv.options.map(async (o) => ({
             ...o,
-            qr: await QRCode.toString(o.uri || o.destination, { type: "svg", margin: 1, width: 200 }),
+            qr: await QRCode.toString(o.uri || o.destination, {
+              type: "svg",
+              margin: 1,
+              width: 200,
+              ...(o.method === "NYM" ? { color: { dark: "#7A5FFF", light: "#ffffff" } } : {}),
+            }),
           })),
         );
         // Dev shortcut only — the real app never opens BTCPay's own page (IP leak).
@@ -302,6 +311,11 @@ const server = createServer(async (req, res) => {
       }
     }
     // Poll an invoice's status.
+    if (req.method === "POST" && url === "/api/invoice/cancel") {
+      const { id } = await readJson<{ id?: string }>(req);
+      if (!id) return void sendJson(res, 400, { error: "id required" });
+      return void sendJson(res, 200, { ok: issuer.cancel(id) });
+    }
     if (req.method === "GET" && url.startsWith("/api/invoice/")) {
       const id = decodeURIComponent(url.slice("/api/invoice/".length));
       try {

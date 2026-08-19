@@ -28,7 +28,7 @@ import { PROTOCOL_VERSION, parseRequest, errorResponse, type Response } from "..
 import { MoneyStore } from "../money/store.js";
 import { Mint } from "../money/token.js";
 import { Issuer } from "../money/issuer.js";
-import { selectGateway } from "../money/gateway.js";
+import { selectGateway, selectNyxGateway, type PaymentGateway } from "../money/gateway.js";
 import { accountIdFor } from "../money/account.js";
 import { createPublicKey, verify as verifySignature, randomBytes } from "node:crypto";
 import type { ChatMessage } from "../types.js";
@@ -81,7 +81,15 @@ const mint = new Mint(mintSeed);
 // server still serves paid sessions — it just cannot sell new SCRAI.
 let issuer: Issuer | null = null;
 try {
-  issuer = new Issuer(money, selectGateway(), mint);
+  const gateways: Record<string, PaymentGateway> = { btc: selectGateway() };
+  // NYM is additive: only wired up when NYX_RECEIVE_ADDRESS + NYX_RPC_WS are set.
+  const nyx = await selectNyxGateway();
+  if (nyx) {
+    gateways.nyx = nyx;
+    console.log("[issuer] NYM payments enabled (Nyx chain)");
+    nyx.warmup?.(); // connect + prefetch now, so the first invoice is snappy
+  }
+  issuer = new Issuer(money, gateways, mint);
 } catch (err) {
   console.warn(`[issuer] disabled: ${(err as Error).message}`);
 }
@@ -323,7 +331,7 @@ async function handle(raw: string, send: (r: Response) => void): Promise<string>
       return `invoice.throttled/${gate.scope}`;
     }
     try {
-      const inv = await issuer.createInvoice(invoiceAccount, req.usd);
+      const inv = await issuer.createInvoice(invoiceAccount, req.usd, req.method);
       send({
         v: PROTOCOL_VERSION,
         kind: "invoice.ok",
@@ -355,8 +363,19 @@ async function handle(raw: string, send: (r: Response) => void): Promise<string>
       send(errorResponse(req.id, "unknown invoice", "invoice-unknown"));
       return "status.unknown";
     }
-    send({ v: PROTOCOL_VERSION, kind: "invoice.state", id: req.id, status: st.status, entitlement: st.entitlement });
+    send({ v: PROTOCOL_VERSION, kind: "invoice.state", id: req.id, status: st.status, entitlement: st.entitlement, ...(st.watch ? { watch: st.watch } : {}) });
     return `invoice.${st.status}`;
+  }
+
+  if (req.kind === "invoice.cancel") {
+    if (!issuer) {
+      send(errorResponse(req.id, "no payment gateway configured", "payment-required"));
+      return "cancel.denied";
+    }
+    // Unauthenticated (see protocol.ts): only expires an unpaid invoice, no funds.
+    const ok = issuer.cancel(req.invoiceId);
+    send({ v: PROTOCOL_VERSION, kind: "invoice.cancelled", id: req.id, ok });
+    return ok ? "invoice.cancelled" : "invoice.cancel/noop";
   }
 
   if (req.kind === "entitlement") {
@@ -780,7 +799,7 @@ async function main(): Promise<void> {
   if (issuer) {
     const stale = issuer.expireStale();
     console.log(
-      `issuer: gateway=${issuer.gatewayName}` +
+      `issuer: gateway=${issuer.gatewayName} · methods=${issuer.availableMethods().join(",")}` +
         ` · ${ms.pendingInvoices} invoices pending · ${ms.owedScrai.toLocaleString("en-US")} SCRAI owed` +
         (stale ? ` · ${stale} expired` : ""),
     );

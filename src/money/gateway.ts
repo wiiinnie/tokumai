@@ -47,6 +47,11 @@ export interface PaymentOption {
   /** Amount in that method's own currency, as a string to avoid float drift. */
   amount: string;
   currency: string;
+  /**
+   * A destination tag the payment MUST carry to be credited — the Nyx-chain memo
+   * for NYM. Absent for Bitcoin, where the address alone identifies the invoice.
+   */
+  memo?: string;
 }
 
 export interface Invoice {
@@ -65,10 +70,25 @@ export interface Invoice {
   expiresAt: number;
 }
 
+/** Liveness of a chain-watching gateway (NYM). connected = we would hear a tx. */
+export interface WatchState {
+  connected: boolean;
+  height: number | null;
+  lastBlockAgoMs: number | null;
+  /** How the chain is being watched: live socket vs HTTP polling. */
+  mode: "websocket" | "polling" | null;
+}
+
 export interface PaymentGateway {
   readonly name: string;
   /** True when settlement happens by command rather than by money. */
   readonly isFake: boolean;
+  /** Live chain-watch health, for gateways that watch a chain (NYM). */
+  watchState?(): WatchState;
+  /** Optional: connect + pre-fetch at startup so the first invoice is fast. */
+  warmup?(): void;
+  /** Optional: stop watching a still-pending invoice (user cancelled it). */
+  cancel?(providerRef: string): void;
   /** Raise an invoice for this many USD. */
   createInvoice(amountUsd: number, reference: string): Promise<Omit<Invoice, "id" | "amountScrai">>;
   /**
@@ -327,4 +347,25 @@ export function selectGateway(): PaymentGateway {
     process.env.BTCPAY_STORE_ID ?? "",
     process.env.BTCPAY_API_KEY ?? "",
   );
+}
+
+/**
+ * The NYM gateway, or null when it isn't configured.
+ *
+ * NYM is additive: it only appears as a payment method when the operator has set
+ * a receive address and an RPC endpoint, so a server without them simply keeps
+ * offering Bitcoin and nothing breaks. Imported lazily so the CosmJS dependency
+ * only loads when NYM is actually switched on.
+ */
+export async function selectNyxGateway(): Promise<PaymentGateway | null> {
+  const address = process.env.NYX_RECEIVE_ADDRESS;
+  const ws = process.env.NYX_RPC_WS;
+  const http = process.env.NYX_RPC_HTTP;
+  // Need the address and at least one endpoint. WS is preferred (own node); HTTP
+  // is the fallback that works against public RPCs, whose /websocket is usually
+  // off. Either env alone is enough — the gateway derives the other.
+  if (!address || (!ws && !http)) return null;
+  const { NyxGateway } = await import("./nyx-gateway.js");
+  const ttlMs = process.env.NYX_INVOICE_TTL_MS ? Number(process.env.NYX_INVOICE_TTL_MS) : undefined;
+  return new NyxGateway(address, { ws, http }, { ttlMs });
 }

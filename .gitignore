@@ -9,8 +9,12 @@ dist/
 
 # Rust / Tauri build output (target is ~15GB) + generated bindings
 # gen/apple (iOS Xcode project) is tracked; it carries signing/project settings
+/target/
 src-tauri/target/
 src-tauri/gen/schemas/
+
+# GLiNER ONNX models (~570MB) — fetched via scripts/fetch-guard-model.sh
+src-tauri/models/
 
 # nym-client binary — platform-specific, installed per host (npm run nym:install)
 bin/

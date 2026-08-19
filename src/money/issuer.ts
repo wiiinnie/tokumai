@@ -26,21 +26,48 @@
 import { randomUUID } from "node:crypto";
 import { SCRAI_PER_USD, purchaseTiers } from "../billing.js";
 import type { MoneyStore } from "./store.js";
-import type { Invoice, InvoiceStatus, PaymentGateway } from "./gateway.js";
+import type { Invoice, InvoiceStatus, PaymentGateway, WatchState } from "./gateway.js";
 import type { Mint, BlindedOutput, SignedOutput } from "./token.js";
 
 export class Issuer {
+  private readonly gateways: Record<string, PaymentGateway>;
+  private readonly defaultMethod: string;
+
   constructor(
     private readonly store: MoneyStore,
-    private readonly gateway: PaymentGateway,
+    // A single gateway (the Bitcoin default) OR a method->gateway map. The map
+    // form is how NYM is added alongside Bitcoin: both are live at once, and each
+    // invoice remembers which one raised it via a "<method>:" prefix on its
+    // provider_ref, so status/sweep route back to the right chain with no schema
+    // change to the store.
+    gateway: PaymentGateway | Record<string, PaymentGateway>,
     private readonly mint: Mint,
-  ) {}
+  ) {
+    if (isGateway(gateway)) {
+      this.gateways = { btc: gateway };
+      this.defaultMethod = "btc";
+    } else {
+      this.gateways = gateway;
+      this.defaultMethod = gateway.btc ? "btc" : Object.keys(gateway)[0];
+    }
+  }
+
+  private gw(method: string): PaymentGateway {
+    const g = this.gateways[method];
+    if (!g) throw new Error(`payment method "${method}" is not available on this server`);
+    return g;
+  }
+
+  /** Which payment methods this server can raise invoices for ("btc", "nyx"). */
+  availableMethods(): string[] {
+    return Object.keys(this.gateways);
+  }
 
   get gatewayName(): string {
-    return this.gateway.name;
+    return this.gw(this.defaultMethod).name;
   }
   get isFake(): boolean {
-    return this.gateway.isFake;
+    return this.gw(this.defaultMethod).isFake;
   }
 
   /**
@@ -48,7 +75,7 @@ export class Issuer {
    * user always receives exactly what they were quoted regardless of what the
    * exchange rate does while they are paying.
    */
-  async createInvoice(accountId: string, amountUsd: number): Promise<Invoice> {
+  async createInvoice(accountId: string, amountUsd: number, method = this.defaultMethod): Promise<Invoice> {
     const tiers = purchaseTiers();
     if (!tiers.includes(amountUsd)) {
       // Fixed amounts only, so every purchase looks like everyone else's — see
@@ -56,9 +83,11 @@ export class Issuer {
       throw new Error(`purchases must be one of: ${tiers.map((t) => `$${t}`).join(", ")}`);
     }
     const id = randomUUID();
-    const raised = await this.gateway.createInvoice(amountUsd, id);
+    const raised = await this.gw(method).createInvoice(amountUsd, id);
     const amountScrai = Math.floor(amountUsd * SCRAI_PER_USD);
 
+    // provider_ref stays the gateway's OWN id; the method is recorded alongside
+    // it so status()/sweep() route each invoice back to the chain that raised it.
     this.store.createInvoice({
       id,
       providerRef: raised.providerRef,
@@ -66,6 +95,7 @@ export class Issuer {
       amountUsd,
       amountScrai,
       payTo: raised.payTo,
+      method,
       expiresAt: raised.expiresAt,
     });
 
@@ -79,22 +109,44 @@ export class Issuer {
    * must not leave a paying customer stuck, so polling can settle it too — and
    * because settlement is idempotent, both paths racing is harmless.
    */
-  async status(invoiceId: string): Promise<{ status: InvoiceStatus; entitlement: number } | null> {
+  async status(
+    invoiceId: string,
+  ): Promise<{ status: InvoiceStatus; entitlement: number; watch?: WatchState } | null> {
     const inv = this.store.getInvoice(invoiceId);
     if (!inv) return null;
 
+    const gateway = this.gw(inv.method);
     if (inv.status === "pending") {
-      const remote = await this.gateway.checkStatus(inv.provider_ref).catch(() => "pending" as const);
+      const remote = await gateway.checkStatus(inv.provider_ref).catch(() => "pending" as const);
       if (remote === "paid") this.store.settleInvoice(inv.provider_ref);
     }
 
     const now = this.store.getInvoice(invoiceId)!;
-    return { status: now.status, entitlement: this.store.entitlement(now.account_id) };
+    // Live chain-watch health, when the gateway watches a chain (NYM).
+    const watch = gateway.watchState?.();
+    return {
+      status: now.status,
+      entitlement: this.store.entitlement(now.account_id),
+      ...(watch ? { watch } : {}),
+    };
   }
 
   /** Called by the webhook, and by polling. Safe to call repeatedly. */
   settle(providerRef: string): { credited: number; alreadySettled: boolean } | null {
     return this.store.settleInvoice(providerRef);
+  }
+
+  /**
+   * Cancel a still-pending invoice the user abandoned. Marks it expired in the
+   * store and tells the gateway to stop watching it. Idempotent and safe: a paid
+   * invoice is left untouched (cancelInvoice only affects a pending row).
+   */
+  cancel(invoiceId: string): boolean {
+    const inv = this.store.getInvoice(invoiceId);
+    if (!inv || inv.status !== "pending") return false;
+    const ok = this.store.cancelInvoice(invoiceId);
+    if (ok) this.gw(inv.method).cancel?.(inv.provider_ref);
+    return ok;
   }
 
   entitlement(accountId: string): number {
@@ -155,7 +207,7 @@ export class Issuer {
     const pending = this.store.pendingInvoices();
     let settled = 0;
     for (const inv of pending) {
-      const remote = await this.gateway.checkStatus(inv.provider_ref).catch(() => "pending" as const);
+      const remote = await this.gw(inv.method).checkStatus(inv.provider_ref).catch(() => "pending" as const);
       if (remote === "paid") {
         const res = this.store.settleInvoice(inv.provider_ref);
         if (res && !res.alreadySettled) settled += 1;
@@ -168,4 +220,9 @@ export class Issuer {
   expireStale(): number {
     return this.store.expireInvoices();
   }
+}
+
+/** A PaymentGateway has a string `name`; a map of them does not. */
+function isGateway(g: PaymentGateway | Record<string, PaymentGateway>): g is PaymentGateway {
+  return typeof (g as PaymentGateway).name === "string";
 }

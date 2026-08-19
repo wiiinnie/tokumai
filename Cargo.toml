@@ -1,0 +1,5 @@
+# Cargo workspace: one shared `core` crate, the Tauri desktop client (src-tauri),
+# and the Rust server binary (server) — client and server share the SAME crypto core.
+[workspace]
+resolver = "2"
+members = ["core", "src-tauri", "server"]

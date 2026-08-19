@@ -35,6 +35,7 @@ export interface InvoiceRow {
   amount_scrai: number;
   status: "pending" | "paid" | "expired";
   pay_to: string;
+  method: string;
   created: number;
   expires_at: number;
 }
@@ -70,6 +71,7 @@ export class MoneyStore {
         amount_scrai INTEGER NOT NULL,
         status      TEXT NOT NULL,
         pay_to      TEXT NOT NULL,
+        method      TEXT NOT NULL DEFAULT 'btc',
         created     INTEGER NOT NULL,
         expires_at  INTEGER NOT NULL
       );
@@ -91,6 +93,14 @@ export class MoneyStore {
         value TEXT NOT NULL
       );
     `);
+    // Migration: older money.db files predate the payment-method column. ADD
+    // COLUMN with a default is non-destructive; existing invoices become 'btc',
+    // which is exactly what they were. Ignore the error when it already exists.
+    try {
+      this.db.exec("ALTER TABLE invoices ADD COLUMN method TEXT NOT NULL DEFAULT 'btc'");
+    } catch {
+      /* column already present */
+    }
   }
 
   // ---- mint seed ----------------------------------------------------------
@@ -144,12 +154,13 @@ export class MoneyStore {
     amountUsd: number;
     amountScrai: number;
     payTo: string;
+    method?: string;
     expiresAt: number;
   }): void {
     this.db
       .prepare(
-        "INSERT INTO invoices (id, provider_ref, account_id, amount_usd, amount_scrai, status, pay_to, created, expires_at) " +
-          "VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)",
+        "INSERT INTO invoices (id, provider_ref, account_id, amount_usd, amount_scrai, status, pay_to, method, created, expires_at) " +
+          "VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)",
       )
       .run(
         inv.id,
@@ -158,6 +169,7 @@ export class MoneyStore {
         inv.amountUsd,
         inv.amountScrai,
         inv.payTo,
+        inv.method ?? "btc",
         Date.now(),
         inv.expiresAt,
       );
@@ -251,6 +263,15 @@ export class MoneyStore {
     return this.db
       .prepare("UPDATE invoices SET status = 'expired' WHERE status = 'pending' AND expires_at < ?")
       .run(Date.now()).changes as number;
+  }
+
+  /** Cancel one still-pending invoice by id. Returns true if it was pending. */
+  cancelInvoice(id: string): boolean {
+    return (
+      (this.db
+        .prepare("UPDATE invoices SET status = 'expired' WHERE id = ? AND status = 'pending'")
+        .run(id).changes as number) > 0
+    );
   }
 
   // ---- sessions -----------------------------------------------------------

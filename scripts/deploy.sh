@@ -1,49 +1,166 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
-# deploy.sh — push the scrai-SERVER to the VPS, rebuild, restart.
+# deploy.sh — push the RUST scrai-server to the VPS, build there, restart.
 #
-# Only the server needs to ship — the Tauri desktop app (src-tauri/, public/)
-# is excluded. Runtime state on the VPS (.env, data/, node_modules/, dist/) is
-# preserved; everything else under /opt/scrai is replaced by the local source.
+# What ships: core/ + server/ + pricing.json + Cargo.lock (a minimal cargo
+# workspace is generated on the VPS — src-tauri stays home). The build runs as
+# the ADMIN user in ~/scrai-stage so the cargo cache survives between deploys;
+# only the finished binary is installed to /opt/scrai/bin/scrai-server, which
+# the rewritten scrai.service runs as user `scrai` with /opt/scrai as CWD
+# (.env and data/ live there and are never touched by a deploy).
 #
-# Usage:  scripts/deploy.sh <admin_user>@<vps-host>
-#         (admin_user = a SUDO user on the VPS; the service itself runs as `scrai`)
-#   e.g.  scripts/deploy.sh deploy@vps-2a46fb3c.example.net
+# First deploy on a box that still runs the TS version:
+#   - installs rustup + build tools if missing (build needs one sudo apt call)
+#   - REPLACES the systemd unit (node → binary) and removes the Node leftovers
+#     (node_modules, dist, src, …) from /opt/scrai
+#   - the server keeps .env and data/, but the RUST server stores its Nym
+#     identity under data/.nym-server → it comes up with a NEW Nym address.
+#     Read it from the logs and point the app at it (Account & recovery →
+#     server). Old TS state (money DB, .nym) is left in place, just unused.
+#
+# NOTE the first build compiles the whole nym-sdk: expect 10–30 min on a small
+# VPS. If the linker gets OOM-killed, add swap or retry with:
+#   ssh <target> 'cd ~/scrai-stage && ~/.cargo/bin/cargo build --release -p scrai-server -j 1'
+#
+# Usage:  scripts/deploy.sh <admin_user>@<vps-host> [--install-apply]
+#         (admin_user = a SUDO user on the VPS; the service runs as `scrai`)
+#
+# ── FEWER PASSWORD PROMPTS ────────────────────────────────────────────────
+# Out of the box this asks at most twice: once for SSH, once for sudo. For ZERO:
+#
+#   1. SSH key  → removes the SSH password prompt entirely:
+#        ssh-copy-id <admin_user>@<vps-host>
+#
+#   2. Passwordless sudo for JUST this deploy. On the VPS:
+#      `sudo visudo -f /etc/sudoers.d/scrai-deploy` and add exactly:
+#        <admin_user> ALL=(root) NOPASSWD: /opt/scrai/bin/deploy-apply.sh
+#      then (re)install the root-owned apply script once:
+#        scripts/deploy.sh <admin_user>@<vps-host> --install-apply
+#      (Re-run --install-apply after ANY change to this file's APPLY_BODY —
+#       the switch from the TS deploy is exactly such a change.)
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
 TARGET="${1:-${SCRAI_DEPLOY_TARGET:-}}"
+MODE="${2:-}"
 if [ -z "$TARGET" ]; then
-  echo "usage: scripts/deploy.sh <admin_user>@<vps-host>" >&2
+  echo "usage: scripts/deploy.sh <admin_user>@<vps-host> [--install-apply]" >&2
   exit 1
 fi
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-echo "→ 1/3  sync source → $TARGET:~/scrai-stage/"
-rsync -az --delete \
-  --exclude .git --exclude node_modules --exclude dist --exclude .env \
-  --exclude data --exclude images --exclude bin --exclude .claude \
-  --exclude src-tauri --exclude public --exclude '.DS_Store' \
+# One shared, authenticated SSH connection for every step (rsync + ssh), so SSH
+# asks for a password at most once instead of once per command.
+CM_SOCK="${TMPDIR:-/tmp}/scrai-cm-$$"
+SSH_OPTS=(-o ControlMaster=auto -o "ControlPath=${CM_SOCK}" -o ControlPersist=180)
+cleanup() { ssh "${SSH_OPTS[@]}" -O exit "$TARGET" >/dev/null 2>&1 || true; rm -f "$CM_SOCK"; }
+trap cleanup EXIT
+
+echo "→ opening SSH connection to $TARGET (auth once) …"
+ssh "${SSH_OPTS[@]}" "$TARGET" true
+
+# The privileged sequence, kept in ONE place so it can be run inline OR installed
+# once as a root-owned script that a single NOPASSWD sudoers line covers.
+# It installs the freshly built binary + pricing table, writes the systemd unit,
+# and clears the retired Node deployment out of /opt/scrai (state is kept).
+APPLY_BODY='set -e
+install -d -o scrai -g scrai /opt/scrai /opt/scrai/bin /opt/scrai/data
+install -o scrai -g scrai -m 755 \
+  "$SCRAI_ADMIN_HOME/scrai-stage/target/release/scrai-server" /opt/scrai/bin/scrai-server.new
+mv /opt/scrai/bin/scrai-server.new /opt/scrai/bin/scrai-server
+install -o scrai -g scrai -m 644 \
+  "$SCRAI_ADMIN_HOME/scrai-stage/pricing.json" /opt/scrai/pricing.json
+# retire the Node deployment (keep .env, data/, images/, and our bin/)
+rm -rf /opt/scrai/node_modules /opt/scrai/dist /opt/scrai/src /opt/scrai/scripts \
+  /opt/scrai/public /opt/scrai/package.json /opt/scrai/package-lock.json \
+  /opt/scrai/tsconfig.json /opt/scrai/.nym
+cat > /etc/systemd/system/scrai.service <<UNIT
+[Unit]
+Description=scrai-server (ScrambleAI mixnet service provider, Rust)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=scrai
+Group=scrai
+WorkingDirectory=/opt/scrai
+ExecStart=/opt/scrai/bin/scrai-server
+Restart=always
+RestartSec=5
+# dotenvy reads /opt/scrai/.env (CWD); data lands in /opt/scrai/data
+Environment=SCRAI_DATA=/opt/scrai/data
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl daemon-reload
+systemctl restart scrai
+systemctl --no-pager status scrai | head -6'
+
+# One-time: install the apply script as root so the NOPASSWD sudoers line applies.
+# The body is streamed verbatim (no local OR remote expansion) into a staging
+# file first, then installed with one sudo call (which may prompt — hence -t).
+if [ "$MODE" = "--install-apply" ]; then
+  echo "→ installing /opt/scrai/bin/deploy-apply.sh (root-owned) — sudo once …"
+  {
+    printf '#!/usr/bin/env bash\nSCRAI_ADMIN_HOME="${1:?admin home required}"\n'
+    printf '%s\n' "$APPLY_BODY"
+  } | ssh "${SSH_OPTS[@]}" "$TARGET" 'mkdir -p ~/scrai-stage && cat > ~/scrai-stage/deploy-apply.new'
+  ssh -t "${SSH_OPTS[@]}" "$TARGET" \
+    'sudo install -D -o root -g root -m 755 ~/scrai-stage/deploy-apply.new /opt/scrai/bin/deploy-apply.sh && echo installed'
+  echo "✓ apply script installed. Add the NOPASSWD sudoers line (see header) for zero prompts."
+  exit 0
+fi
+
+echo "→ 1/4  sync sources → $TARGET:~/scrai-stage/  (core/, server/, pricing.json)"
+# --delete prunes removed source files but leaves everything excluded ('*')
+# alone on the receiver — i.e. the VPS-generated Cargo.toml and the target/
+# build cache survive between deploys.
+rsync -az --delete -e "ssh ${SSH_OPTS[*]}" \
+  --include='/core/***' --include='/server/***' \
+  --include='/pricing.json' --include='/Cargo.lock' \
+  --exclude='*' \
   "$SRC/" "$TARGET:~/scrai-stage/"
 
-echo "→ 2/3  install into /opt/scrai + build   (sudo on the VPS — password prompt)"
-echo "→ 3/3  restart scrai.service"
-# Single-quoted: this whole block runs on the VPS. `~` expands to the admin's home
-# there; /opt/scrai + the scrai user are our fixed server-side convention.
-ssh -t "$TARGET" '
+echo "→ 2/4  toolchain check (rustup + build tools)"
+ssh -t "${SSH_OPTS[@]}" "$TARGET" '
   set -e
-  echo "   · sudo may prompt for your password now …"
-  sudo rsync -a --delete \
-    --exclude .env --exclude data --exclude images --exclude node_modules --exclude dist \
-    --exclude .nym --exclude bin \
-    ~/scrai-stage/ /opt/scrai/
-  sudo chown -R scrai:scrai /opt/scrai
-  echo "   · npm ci (this is silent for ~30-90s) …"
-  sudo -u scrai HOME=/opt/scrai bash -lc "cd /opt/scrai && npm ci --include=dev"
-  echo "   · building (tsc) …"
-  sudo -u scrai HOME=/opt/scrai bash -lc "cd /opt/scrai && npm run build"
-  echo "   · restarting scrai.service …"
-  sudo systemctl restart scrai
-  sudo systemctl --no-pager status scrai | head -6
+  if ! command -v cc >/dev/null 2>&1 || ! command -v pkg-config >/dev/null 2>&1; then
+    echo "   · installing build-essential + pkg-config (sudo apt) …"
+    sudo apt-get update -qq && sudo apt-get install -y -qq build-essential pkg-config curl
+  fi
+  if [ ! -x "$HOME/.cargo/bin/cargo" ]; then
+    echo "   · installing rustup (user-local, no sudo) …"
+    curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+  fi
+'
+
+echo "→ 3/4  build scrai-server on the VPS (first build compiles nym-sdk — be patient)"
+# The stage gets its own minimal workspace: src-tauri never leaves the Mac, so
+# the repo Cargo.toml (which lists it as a member) cannot be used remotely.
+ssh "${SSH_OPTS[@]}" "$TARGET" '
+  set -e
+  cd "$HOME/scrai-stage"
+  printf "%s\n" \
+    "# generated by deploy.sh — server-side workspace (no src-tauri here)" \
+    "[workspace]" \
+    "resolver = \"2\"" \
+    "members = [\"core\", \"server\"]" > Cargo.toml
+  "$HOME/.cargo/bin/cargo" build --release -p scrai-server
+'
+
+echo "→ 4/4  install binary + unit, restart scrai.service"
+# If the root-owned apply script exists, run it (one sudo call — NOPASSWD-able);
+# otherwise fall back to the inline block (still one shared SSH connection).
+ssh -t "${SSH_OPTS[@]}" "$TARGET" '
+  set -e
+  if [ -x /opt/scrai/bin/deploy-apply.sh ]; then
+    sudo /opt/scrai/bin/deploy-apply.sh "$HOME"
+  else
+    echo "   · (tip: run with --install-apply once + a NOPASSWD line for zero prompts)"
+    sudo env SCRAI_ADMIN_HOME="$HOME" bash -c '"'"''"$APPLY_BODY"''"'"'
+  fi
 '
 echo "✓ deployed. Follow logs:  ssh $TARGET 'journalctl -u scrai -f'"
+echo "  First start bootstraps a fresh authority and a NEW Nym address — grab it"
+echo "  from the logs (scrai-server: … address: …) and set it in the app."

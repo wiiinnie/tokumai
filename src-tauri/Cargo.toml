@@ -15,6 +15,13 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 # Used for production builds AND when no devUrl is set (our static frontend).
 # Without it, `tauri dev` cannot serve the bundled assets → blank window. DO NOT REMOVE.
 custom-protocol = ["tauri/custom-protocol"]
+# Semantic privacy-guard layer: compiles the GLiNER engine (gline-rs → ort/ONNX
+# Runtime) in src/detect.rs. OFF by default because it pulls a heavy native dep
+# (ONNX Runtime) and lengthens the build. With it off, detect.rs returns a clear
+# "not built" error and the guard falls back to its deterministic detectors.
+# Turn on with `--features smart-guard` (or `tauri dev --features smart-guard`)
+# once the model is in place, to build + test the semantic layer.
+smart-guard = ["dep:gline-rs", "dep:orp"]
 
 [build-dependencies]
 tauri-build = { version = "2.6.3", features = [] }
@@ -39,9 +46,38 @@ base64 = "0.22"
 k256 = { version = "0.13", features = ["arithmetic"] }
 # Embedded mixnet client — no external nym-client binary needed.
 nym-sdk = "1.21"
+# Shared crypto/protocol core (threshold ecash, quorum, federation protocol) —
+# the SAME code the server uses. The client's withdraw/redeem flow wires into this.
+scrai-core = { path = "../core" }
 tokio = { version = "1", features = ["sync", "time", "rt", "macros"] }
 futures = "0.3"
 # Direct (non-mixnet) fetch of the Nym directory to map gateway identity -> country.
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# PDF text extraction in the Rust core (the privacy guard reads a PDF's text
+# layer here, avoiding pdf.js's newer-JS requirements in the WKWebView).
+pdf-extract = "0.9"
+
+# --- semantic privacy-guard (optional, behind the `smart-guard` feature) -------
+# GLiNER zero-shot NER for open-class sensitive data (names, addresses, tax IDs)
+# that fixed-format detectors can't catch. gline-rs → ort → ONNX Runtime runs on
+# all target platforms (mac/Linux/Win/iOS/Android). Kept optional so the default
+# build stays light. See src/detect.rs.
+gline-rs = { version = "1", optional = true }
+orp = { version = "1", optional = true }
+
 # Native "save as…" dialog for downloading generated images (the webview can't).
+# No iOS backend — image saves there go through the share sheet instead (TODO).
+[target.'cfg(not(target_os = "ios"))'.dependencies]
 rfd = "0.15"
+
+# --- on-device OCR for the privacy guard (macOS via Apple Vision; other
+#     platforms fall back to the bundled Tesseract-WASM in the frontend) ---
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSData", "NSString", "NSArray", "NSDictionary"] }
+objc2-vision = { version = "0.3", features = ["VNRequest", "VNRecognizeTextRequest", "VNRequestHandler", "VNObservation", "VNTypes", "VNError", "alloc", "std"] }
+# Render scanned-PDF pages off-screen for OCR (CGPDFDocument → bitmap → CGImage).
+objc2-core-graphics = { version = "0.3", features = ["CGDataProvider", "CGPDFDocument", "CGPDFPage", "CGContext", "CGColorSpace", "CGImage", "CGBitmapContext"] }
+objc2-core-foundation = { version = "0.3", features = ["CFCGTypes", "CFData"] }
+# Encode rendered PDF pages to PNG (for the redaction preview in the webview).
+image = { version = "0.25", default-features = false, features = ["png"] }

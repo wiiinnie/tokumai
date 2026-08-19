@@ -19,26 +19,36 @@
     "server:setup": "tsx --env-file-if-exists=.env src/cli/server.ts setup",
     "server:gw": "tsx --env-file-if-exists=.env src/cli/server.ts",
     "issuer": "tsx --env-file-if-exists=.env src/cli/issuer.ts",
-    "test": "tsx test/billing.test.ts && tsx test/protocol.test.ts && tsx test/assembler.test.ts && tsx test/blind.test.ts && tsx test/money.test.ts",
+    "test": "tsx test/billing.test.ts && tsx test/protocol.test.ts && tsx test/assembler.test.ts && tsx test/blind.test.ts && tsx test/money.test.ts && tsx test/prune.test.ts && tsx test/guard.test.ts",
+    "prune:eval": "tsx --env-file=.env scripts/prune-eval.ts",
     "typecheck": "tsc -p tsconfig.check.json",
     "check": "npm run typecheck && npm test",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "guard:model": "bash scripts/fetch-guard-model.sh",
+    "tauri:dev:smart": "tauri dev --features smart-guard -c src-tauri/tauri.smart.conf.json",
+    "tauri:build:smart": "tauri build --features smart-guard -c src-tauri/tauri.smart.conf.json"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4",
     "@types/node": "^22.15.0",
     "@types/qrcode": "^1.5.6",
     "@types/qrcode-terminal": "^0.12.2",
+    "puppeteer-core": "^25.7.0",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   },
   "dependencies": {
+    "@cosmjs/encoding": "^0.39.0",
+    "@cosmjs/proto-signing": "^0.39.0",
+    "@cosmjs/tendermint-rpc": "^0.39.0",
     "@noble/curves": "^2.3.0",
     "@tauri-apps/api": "^2.11.1",
     "bip39": "^3.1.0",
+    "pdfjs-dist": "^6.2.108",
     "qrcode": "^1.5.4",
-    "qrcode-terminal": "^0.12.0"
+    "qrcode-terminal": "^0.12.0",
+    "tesseract.js": "^7.0.0"
   }
 }

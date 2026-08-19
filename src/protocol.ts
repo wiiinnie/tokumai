@@ -45,8 +45,9 @@ export type Request =
   // server can derive one from the other but cannot verify a signature from a
   // hash alone. `nonce` is single-use — without it a captured withdrawal
   // request could be replayed to drain an entitlement.
-  | { v: number; kind: "invoice.create"; id: string; publicKey: string; usd: number; nonce: string; sig: string }
+  | { v: number; kind: "invoice.create"; id: string; publicKey: string; usd: number; method: "btc" | "nyx"; nonce: string; sig: string }
   | { v: number; kind: "invoice.status"; id: string; invoiceId: string }
+  | { v: number; kind: "invoice.cancel"; id: string; invoiceId: string }
   // Read-only: how much has this account paid for but not yet withdrawn? Signed
   // so only the account holder can ask; used by `claim` to size a withdrawal.
   | { v: number; kind: "entitlement"; id: string; publicKey: string; nonce: string; sig: string }
@@ -109,6 +110,7 @@ export type Response =
       expiresAt: number;
     }
   | { v: number; kind: "invoice.state"; id: string; status: "pending" | "paid" | "expired"; entitlement: number }
+  | { v: number; kind: "invoice.cancelled"; id: string; ok: boolean }
   | { v: number; kind: "entitlement.ok"; id: string; entitlement: number }
   | { v: number; kind: "withdraw.ok"; id: string; keysetId: string; signatures: SignedOutput[] }
   | { v: number; kind: "session.ok"; id: string; sessionId: string; balance: number; counter?: number }
@@ -209,13 +211,16 @@ export function parseRequest(raw: string): { ok: true; req: Request } | { ok: fa
   if (m.kind === "keys") return { ok: true, req: { v: PROTOCOL_VERSION, kind: "keys", id } };
 
   if (m.kind === "invoice.create") {
-    const mm = m as { publicKey?: unknown; usd?: unknown; nonce?: unknown; sig?: unknown };
+    const mm = m as { publicKey?: unknown; usd?: unknown; method?: unknown; nonce?: unknown; sig?: unknown };
     if (typeof mm.publicKey !== "string" || typeof mm.sig !== "string" || typeof mm.nonce !== "string") {
       return { ok: false, error: "invoice.create needs publicKey, nonce and sig", id };
     }
     if (typeof mm.usd !== "number" || !Number.isFinite(mm.usd) || mm.usd <= 0) {
       return { ok: false, error: "invoice.create needs a positive usd amount", id };
     }
+    // method is optional for backward compatibility: an older client that omits
+    // it still gets the Bitcoin gateway it always got.
+    const method = mm.method === "nyx" ? "nyx" : "btc";
     return {
       ok: true,
       req: {
@@ -224,6 +229,7 @@ export function parseRequest(raw: string): { ok: true; req: Request } | { ok: fa
         id,
         publicKey: mm.publicKey,
         usd: mm.usd,
+        method,
         nonce: mm.nonce,
         sig: mm.sig,
       },
@@ -234,6 +240,14 @@ export function parseRequest(raw: string): { ok: true; req: Request } | { ok: fa
     const iv = (m as { invoiceId?: unknown }).invoiceId;
     if (typeof iv !== "string") return { ok: false, error: "invoice.status needs invoiceId", id };
     return { ok: true, req: { v: PROTOCOL_VERSION, kind: "invoice.status", id, invoiceId: iv } };
+  }
+
+  if (m.kind === "invoice.cancel") {
+    // Unauthenticated like invoice.status: the id is a random uuid the client
+    // holds, and cancelling only expires an UNPAID invoice — no funds, idempotent.
+    const iv = (m as { invoiceId?: unknown }).invoiceId;
+    if (typeof iv !== "string") return { ok: false, error: "invoice.cancel needs invoiceId", id };
+    return { ok: true, req: { v: PROTOCOL_VERSION, kind: "invoice.cancel", id, invoiceId: iv } };
   }
 
   if (m.kind === "entitlement") {

@@ -211,6 +211,7 @@ async function topUp(usd: number, onStep?: (msg: string) => void): Promise<numbe
     id: newId(),
     publicKey: account.publicKey,
     usd,
+    method: "btc",
     nonce: n1,
     sig: signAsAccount(account, `invoice:${usd}`, n1),
   })) as {

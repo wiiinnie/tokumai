@@ -1,0 +1,19 @@
+[package]
+name = "scrai-core"
+version = "0.1.0"
+edition = "2021"
+description = "ScrambleAI shared core — threshold ecash (Coconut), the double-spend quorum, and the federation protocol. Depended on by BOTH the desktop client (src-tauri) and the server binary."
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+# preserve_order: the chat signature covers the client's canonical JSON body, so
+# object key order must survive a parse → re-serialize round trip on the server.
+serde_json = { version = "1.0", features = ["preserve_order"] }
+hex = "0.4"
+# Account/session request signatures (auth.rs) — verify-only on the server side.
+ed25519-dalek = "2"
+sha2 = "0.10"
+base64 = "0.22"
+# Threshold anonymous ecash (Coconut / zk-nym) + its BLS12-381 curve.
+nym-compact-ecash = "=1.21.4"
+nym-bls12_381-fork = "=0.8.0-forked"

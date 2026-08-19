@@ -1,0 +1,661 @@
+<meta charset="utf-8">
+<title>ScrambleAI</title>
+<style>
+@font-face{font-family:'Fraunces';font-style:normal;font-weight:600 700;src:url(data:font/woff2;base64,{{FONT:fraunces}}) format('woff2')}
+@font-face{font-family:'Hanken Grotesk';font-style:normal;font-weight:400 600;src:url(data:font/woff2;base64,{{FONT:hanken}}) format('woff2')}
+@font-face{font-family:'JetBrains Mono';font-style:normal;font-weight:400 500;src:url(data:font/woff2;base64,{{FONT:jbmono}}) format('woff2')}
+
+:root{
+  --bg:#EFEAE0; --surface:#F7F3EB; --panel:#1C1917; --panel-2:#262220;
+  --ink:#221E1A; --muted:#6E655A; --line:#D9D1C2; --line-dark:#332E2A;
+  --mix:#5C7A3F; --mix-soft:#8AA06B; --signal:#96701F; --rust:#A84A36;
+  --bone:#ECE6DC; --panel-muted:#9C938A;
+  --display:'Fraunces',Georgia,serif; --body:'Hanken Grotesk',system-ui,sans-serif;
+  --mono:'JetBrains Mono',ui-monospace,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#141210; --surface:#1C1917; --panel:#1C1917; --panel-2:#262220;
+    --ink:#ECE6DC; --muted:#9C938A; --line:#332E2A; --line-dark:#332E2A;
+    --mix:#8AA06B; --mix-soft:#8AA06B; --signal:#CBA14E; --rust:#C15A43;
+    --bone:#ECE6DC; --panel-muted:#9C938A;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#141210; --surface:#1C1917; --panel:#1C1917; --panel-2:#262220;
+  --ink:#ECE6DC; --muted:#9C938A; --line:#332E2A; --line-dark:#332E2A;
+  --mix:#8AA06B; --mix-soft:#8AA06B; --signal:#CBA14E; --rust:#C15A43;
+  --bone:#ECE6DC; --panel-muted:#9C938A;
+}
+
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--body);
+  font-size:16px;line-height:1.6;-webkit-font-smoothing:antialiased}
+.page{max-width:880px;margin:0 auto;padding:0 28px 80px}
+
+/* ---- language switcher ---- */
+.langbar{position:fixed;top:14px;right:16px;z-index:40;display:flex;gap:6px;
+  background:color-mix(in srgb,var(--bg) 82%,transparent);backdrop-filter:blur(6px);
+  border:1px solid var(--line);border-radius:9px;padding:4px}
+.langbar button{font-family:var(--mono);font-size:11px;letter-spacing:.06em;border:0;
+  border-radius:6px;padding:5px 11px;cursor:pointer;background:transparent;color:var(--muted)}
+.langbar button.on{background:var(--mix);color:var(--bg)}
+.langbar button:focus-visible{outline:2px solid var(--mix);outline-offset:1px}
+
+/* ---- hero ---- */
+.hero{background:var(--panel);color:var(--bone);border-radius:16px;margin-top:36px;
+  padding:56px 52px 46px;position:relative;overflow:hidden;
+  background-image:radial-gradient(900px 420px at 85% -10%, rgba(138,160,107,.10), transparent 60%),
+                   radial-gradient(700px 380px at -5% 115%, rgba(203,161,78,.07), transparent 55%)}
+.hero .eyebrow{color:#9C938A}
+.hero h1{font-family:var(--display);font-weight:600;font-size:56px;line-height:1.05;
+  margin:14px 0 18px;letter-spacing:.003em;text-wrap:balance}
+.hero h1 b{color:var(--mix-soft);font-weight:600}
+.hero .claim{font-size:19px;line-height:1.55;max-width:34em;color:#CFC8BC;margin:0 0 30px}
+.hero .claim b{color:var(--bone)}
+.kpis{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+.kpi{border-radius:8px;padding:7px 11px;background:#8AA06B;border:1px solid #99AF7C}
+.kpi .n{font-family:var(--display);font-size:15px;font-weight:600;color:#16130F}
+.kpi .l{font-family:var(--mono);font-size:8.5px;letter-spacing:.08em;text-transform:uppercase;color:rgba(22,19,15,.72);margin-top:1px}
+.ipnote{margin-top:12px;text-align:center;font-family:var(--mono);font-size:8.5px;color:#8A8178;letter-spacing:.04em;line-height:1.5}
+.hero .heroShot{margin:6px 0 28px}
+.hero .heroShot .frame{border-color:#3A352F}
+.hero .heroShot img{display:block;width:100%;height:auto}
+.realnote{margin:26px auto 0;display:block;text-align:center;max-width:44em;
+  font-family:var(--mono);font-size:11.5px;color:#CBA14E;line-height:1.55;
+  border:1px solid rgba(203,161,78,.4);border-radius:8px;padding:9px 15px;background:rgba(203,161,78,.07)}
+
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--muted)}
+
+/* ---- chapters ---- */
+.chapter{margin-top:72px}
+.chapter>h2{font-family:var(--display);font-weight:600;font-size:33px;line-height:1.15;
+  margin:10px 0 16px;letter-spacing:.003em;text-wrap:balance}
+.chapter>h2 b{color:var(--mix);font-weight:600}
+.chapter p{max-width:44em;margin:0 0 14px}
+h3{font-family:var(--body);font-weight:600;font-size:17px;margin:22px 0 8px}
+.lead{font-size:17.5px}
+b{font-weight:600}
+mark{background:none;color:var(--mix);font-weight:600;padding:0}
+
+.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin:20px 0 8px;padding:0;list-style:none}
+.facts li{border:1px solid var(--line);border-radius:10px;padding:14px 16px;background:var(--surface)}
+.facts li .t{font-weight:600;display:block;margin-bottom:4px}
+.facts li .d{font-size:14.5px;color:var(--muted);line-height:1.5}
+
+.chip{font-family:var(--mono);font-size:11.5px;border:1px solid var(--line);border-radius:7px;
+  padding:2px 8px;color:var(--muted);background:var(--surface)}
+.chip.on{color:var(--mix);border-color:color-mix(in srgb,var(--mix) 45%,var(--line))}
+
+/* ---- screenshots ---- */
+.shots{display:grid;gap:18px;margin:26px 0 6px}
+.shots.two{grid-template-columns:1fr 1fr}
+@media(max-width:720px){.shots.two{grid-template-columns:1fr}}
+figure.shot{margin:0;min-width:0}
+figure.shot .frame{border:1px solid var(--line);border-radius:12px;overflow:hidden;
+  background:var(--panel);box-shadow:0 10px 30px -18px rgba(20,18,16,.45);cursor:zoom-in;
+  transition:transform .15s ease}
+figure.shot .frame:hover{transform:translateY(-2px)}
+figure.shot img{display:block;width:100%;height:auto}
+figure.shot figcaption{font-family:var(--mono);font-size:11.5px;color:var(--muted);
+  margin-top:9px;line-height:1.5;padding-left:2px}
+figure.shot figcaption b{color:var(--ink);font-weight:500}
+.shots .wide{grid-column:1/-1}
+
+/* ---- lightbox (click-through zoom: fit → 100% → 200%) ---- */
+#lightbox{position:fixed;inset:0;z-index:60;background:rgba(12,11,10,.94)}
+#lightbox[hidden]{display:none}
+#lightbox .scroll{position:absolute;inset:0;overflow:auto;display:flex;padding:34px 28px 46px}
+#lightbox img{margin:auto;border-radius:10px;border:1px solid #332E2A;
+  box-shadow:0 30px 80px -20px rgba(0,0,0,.8);cursor:zoom-in;flex:0 0 auto}
+#lightbox.z0 img{max-width:calc(100vw - 56px);max-height:calc(100vh - 80px)}
+#lightbox.z1 img,#lightbox.z2 img{max-width:none;max-height:none}
+#lightbox.z2 img{cursor:zoom-out}
+#lightbox .bar{position:fixed;top:12px;right:16px;z-index:61;display:flex;gap:8px;align-items:center}
+#lightbox .bar .zl{font-family:var(--mono);font-size:11px;color:#9C938A;background:rgba(38,34,32,.85);
+  border:1px solid #332E2A;border-radius:7px;padding:6px 10px}
+#lightbox .bar button{font-family:var(--mono);font-size:13px;line-height:1;color:#ECE6DC;
+  background:rgba(38,34,32,.85);border:1px solid #332E2A;border-radius:7px;padding:7px 11px;cursor:pointer}
+#lightbox .hint{position:fixed;bottom:12px;left:0;right:0;text-align:center;
+  font-family:var(--mono);font-size:11px;color:#9C938A;pointer-events:none}
+
+/* ---- diagram ---- */
+.diagram{border:1px solid var(--line);border-radius:12px;background:var(--surface);
+  padding:22px 18px 14px;margin:26px 0 6px;overflow-x:auto}
+.diagram svg{display:block;min-width:640px;width:100%;height:auto}
+.diagram .cap{font-family:var(--mono);font-size:11.5px;color:var(--muted);margin:10px 4px 0}
+.dg .bx{fill:var(--surface);stroke:var(--line)}
+.dg .bxd{fill:var(--panel);stroke:var(--line-dark)}
+.dg .lbl{font:600 14px var(--body);fill:var(--ink)}
+.dg .lbld{font:600 14px var(--body);fill:var(--bone)}
+.dg .sub{font:10.5px var(--mono);fill:var(--muted)}
+.dg .subd{font:10.5px var(--mono);fill:var(--panel-muted)}
+.dg .edge{stroke:var(--mix);stroke-width:1.6;fill:none}
+.dg .dot{fill:var(--mix)}
+.dg .note{font:11px var(--mono);fill:var(--mix)}
+
+/* ---- roadmap ---- */
+.steps{list-style:none;margin:22px 0 0;padding:0;display:flex;flex-direction:column;gap:14px}
+.steps li{border:1px solid var(--line);border-left:3px solid var(--mix);border-radius:10px;
+  padding:16px 18px;background:var(--surface)}
+.steps li .when{font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--mix)}
+.steps li .t{font-weight:600;display:block;margin:4px 0 4px;font-size:16.5px}
+.steps li p{font-size:14.5px;color:var(--muted);margin:0;max-width:none}
+
+.foot{margin-top:76px;border-top:1px solid var(--line);padding-top:20px;
+  font-family:var(--mono);font-size:11.5px;color:var(--muted);display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+
+/* ---- print ---- */
+@media print{
+  body{background:#fff}
+  .langbar,#lightbox{display:none!important}
+  .page{max-width:none;padding:0 8mm}
+  .hero{border-radius:8px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .chapter{break-before:page;margin-top:0;padding-top:10mm}
+  .chapter.flow{break-before:auto}
+  figure.shot,.diagram,.steps li,.facts li,.kpi{break-inside:avoid}
+  figure.shot .frame{box-shadow:none;cursor:default}
+  @page{margin:14mm 12mm}
+}
+</style>
+
+<nav class="langbar" aria-label="Language">
+  <button id="btn-en" class="on" type="button">EN</button>
+  <button id="btn-de" type="button">DE</button>
+</nav>
+
+<!-- ======================================================================= -->
+<!-- ENGLISH (master)                                                        -->
+<!-- ======================================================================= -->
+<div class="page" id="lang-en">
+
+<header class="hero">
+  <div class="eyebrow">Pitch · August 2026</div>
+  <h1>Scramble<b>AI</b></h1>
+  <p class="claim">Anonymous AI for everyone. Every question you ask a chatbot reveals two things:
+  <b>who</b> is asking and <b>what</b> is being asked. ScrambleAI separates the two — by engineering,
+  not by promise: questions travel through the <b>Nym mixnet</b>, payment happens with
+  blind-signed <b>Coconut credentials</b> (zk-nym), and your history never leaves the device.</p>
+  <figure class="shot heroShot"><div class="frame"><img data-img="logo" alt="ScrambleAI start screen — a crowd of voices, none of them traceable to you"></div></figure>
+  <div class="kpis">
+    <div class="kpi"><div class="n">5 hops</div><div class="l">Sphinx routing</div></div>
+    <div class="kpi"><div class="n">~1.1 s</div><div class="l">mixnet round-trip, measured</div></div>
+    <div class="kpi"><div class="n">−60 %</div><div class="l">token cost via pruning</div></div>
+    <div class="kpi"><div class="n">zk-nym</div><div class="l">Coconut credentials</div></div>
+    <div class="kpi"><div class="n">100 % Rust</div><div class="l">client core + server</div></div>
+  </div>
+  <div class="realnote">Every screenshot in this document is a real capture of the running MVP — no mockups. Click any image to view it full-size.</div>
+  <div class="ipnote">© 2026 Hermes Blockchain Ventures — all concepts, code and designs in this document are the intellectual property of Hermes Blockchain Ventures.</div>
+  <div class="ipnote">Built on open source: Nym SDK &amp; nym-compact-ecash (Apache-2.0) · Tauri (MIT/Apache-2.0) · Rust crate ecosystem incl. tokio, serde, reqwest (MIT/Apache-2.0) · ed25519-dalek (BSD-3-Clause) · SQLite (Public Domain) · BTCPay Server (MIT) · GLiNER &amp; Tesseract (Apache-2.0) · typefaces Fraunces, Hanken Grotesk, JetBrains Mono (SIL OFL 1.1).</div>
+</header>
+
+<section class="chapter flow">
+  <div class="eyebrow">01 · Why</div>
+  <h2>Every AI question is a <b>confession</b></h2>
+  <p class="lead">Health worries, contract drafts, job applications, relationship trouble — what people
+  confide to an AI is more intimate than any search history. Today all of it lands at a provider
+  under a real-name account, an IP address and a credit card, with permission to train on the content.</p>
+  <p>Existing "anonymous" routes solve only half the problem: a proxy sees everything itself, a VPN
+  vendor knows its customers, and in the end payment still runs on a card. ScrambleAI is built so that
+  <mark>no single party ever sees "who" and "what" at the same time</mark> — including us.
+  The operator <em>cannot</em> be curious.</p>
+  <h3>Why this matters for Nym</h3>
+  <p>Mixnet adoption has a chicken-and-egg problem: no traffic without applications, no applications
+  without traffic. ScrambleAI could become <mark>the first commercial consumer application on the Nym
+  mixnet</mark> — a system seller, to put it slightly immodestly: an app people install for the product
+  (private AI, the most confession-heavy workload there is), and that as a side effect generates real
+  Sphinx traffic, real SURB usage, and native demand for NYM on the Nyx chain with every top-up.</p>
+</section>
+
+<section class="chapter">
+  <div class="eyebrow">02 · Product</div>
+  <h2>A chat like any other — <b>over a path like no other</b></h2>
+  <p>ScrambleAI is a desktop app (mobile follows) with an embedded Nym client. Every message is packed
+  into Sphinx packets and routed across five stations: entry gateway, three foreign mix nodes, exit.
+  The server answers through anonymous reply blocks (SURBs) — it never learns a sender address it
+  could remember.</p>
+  <p>Attachments — images and PDFs — ride the same path: large files are unreliable as one mixnet
+  message, so the app splits them into <mark>acknowledged chunks</mark> with real per-chunk progress,
+  and the server reassembles them only for the request that references them. The conversation itself
+  lives only on the device, encrypted with AES-256-GCM; export and migration use an open, portable
+  format (<span class="chip on">handover.md</span>), passphrase-encrypted on request.</p>
+  <div class="shots">
+    <figure class="shot wide"><div class="frame"><img data-img="chat-mixnet" alt="Chat over the mixnet, the 5-hop chain top right"></div>
+      <figcaption><b>The chat.</b> Top right, the real route: you · entry · mix · mix · mix · exit · model. Left, the encrypted local history. Bottom right, the price of this answer — 138 in · 342 out · 2 SCRAI.</figcaption></figure>
+  </div>
+  <div class="shots two">
+    <figure class="shot"><div class="frame"><img data-img="chat-image" alt="Image attachment uploading in chunks, status line typing Sending to mixnet"></div>
+      <figcaption><b>A vision request in flight.</b> The attached image streams up in acked chunks ("uploading over the mixnet · 62% · 34 KB/s") while the status line types out the request's real lifecycle — "Sending to mixnet…" with the live cursor.</figcaption></figure>
+    <figure class="shot"><div class="frame"><img data-img="chat-vision" alt="Model answer about the attached chart"></div>
+      <figcaption><b>The answer, end to end.</b> The model reads the attached chart through the same anonymous path; the footer prices the multimodal request — 1,412 in · 233 out · 4 SCRAI.</figcaption></figure>
+    <figure class="shot"><div class="frame"><img data-img="handover" alt="handover.md export dialog"></div>
+      <figcaption><b>Your data, portable.</b> One click exports the conversation as open Markdown — plaintext for reading, or PBKDF2 + AES-256-GCM encrypted for moving between machines.</figcaption></figure>
+    <figure class="shot"><div class="frame"><img data-img="gateway" alt="Entry gateway picker"></div>
+      <figcaption><b>You choose where you enter.</b> The entry gateway is selectable by country and host; the middle mix hops stay re-randomised per packet — that reshuffling <em>is</em> the anonymity.</figcaption></figure>
+  </div>
+</section>
+
+<section class="chapter">
+  <div class="eyebrow">03 · Guarded before sending</div>
+  <h2>The app watches out <b>before</b> anything leaves the device</h2>
+  <p class="lead">Anonymous routing is worthless if your IBAN sits in the prompt. So ScrambleAI checks
+  every message and every attachment <b>entirely on-device</b> — none of it is ever sent, logged or stored.</p>
+  <ul class="facts">
+    <li><span class="t">Text scan</span><span class="d">Pattern checks for IBANs, card numbers, API keys, passwords, recovery phrases, phone numbers.</span></li>
+    <li><span class="t">Semantic scan (local model)</span><span class="d">A GLiNER model runs natively inside the app and catches open classes — names, addresses, employers — zero-shot, no cloud.</span></li>
+    <li><span class="t">File scan with OCR</span><span class="d">Images and PDFs are read locally (Apple Vision natively, Tesseract-WASM as fallback) and pushed through the same checks. Findings can be redacted right in the image.</span></li>
+    <li><span class="t">Manual redaction mode</span><span class="d">Detection boxes are a starting point, not the authority: dismiss false positives with a click, and drag your own black boxes across anything the scanner missed. The bars are burned into the image before it leaves.</span></li>
+    <li><span class="t">Smart pruning</span><span class="d">Before sending, the transcript is trimmed lexically to what this question needs — a measured −60 % tokens, without an extra model call.</span></li>
+  </ul>
+  <div class="shots two">
+    <figure class="shot"><div class="frame"><img data-img="guard" alt="Privacy guard warning"></div>
+      <figcaption><b>Privacy guard.</b> Warns about an IBAN, a name next to an address, a phone number — "nothing was sent, logged, or stored. You decide."</figcaption></figure>
+    <figure class="shot"><div class="frame"><img data-img="settings" alt="Settings: smart pruning and privacy guard"></div>
+      <figcaption><b>Settings.</b> Every check can be toggled; the topic decision is made locally, never via a model call.</figcaption></figure>
+    <figure class="shot"><div class="frame"><img data-img="guard-edit" alt="Attachment review: detected findings in red, one user-drawn black box"></div>
+      <figcaption><b>Attachment review, edit mode.</b> OCR reads the form on-device; the guard flags name, IBAN and phone (red). The black box over the amount was drawn by hand — the manual mode for everything the scanner can't know is sensitive.</figcaption></figure>
+    <figure class="shot"><div class="frame"><img data-img="guard-redacted" alt="Redacted preview with black bars burned in"></div>
+      <figcaption><b>The redacted result.</b> Preview before sending: the bars are burned into the image copy itself — the original never leaves the device.</figcaption></figure>
+  </div>
+</section>
+
+<section class="chapter">
+  <div class="eyebrow">04 · Paying</div>
+  <h2>Credit that <b>detaches from its buyer</b></h2>
+  <p class="lead">The account is a 24-word phrase (BIP39) — no name, no e-mail. Purchases come in fixed
+  tiers ($5/10/20/50) so every purchase looks like every other. Then the decisive step happens:
+  the credit is <b>decoupled</b> from the account.</p>
+  <h3>The money's path</h3>
+  <p><b>1 · Buy.</b> An invoice over Bitcoin/Lightning (BTCPay) or native NYM on the Nyx chain; Monero follows.
+  The account signs the order — here, linkage is still unavoidable, and honestly so.<br>
+  <b>2 · Blind withdrawal.</b> The paid credit is exchanged for <b>Coconut credentials</b>
+  (zk-nym / nym-compact-ecash, BLS12-381): the server signs ticketbooks whose contents it
+  <em>cannot read</em>. The account→coins link dies cryptographically at this step.<br>
+  <b>3 · Spend.</b> The app redeems coins into session credit time-decoupled, in uniform ~$1 chunks.
+  Every message is Ed25519-signed, its worst-case price reserved up front and settled exactly after
+  the answer — if the provider fails, it costs nothing.</p>
+  <p>Double-spends are accepted offline and detected by a quorum; sanctions happen
+  <mark>only on cryptographic proof</mark> (two conflicting payments that mathematically expose the key) —
+  never on suspicion.</p>
+  <div class="shots two">
+    <figure class="shot"><div class="frame"><img data-img="buy" alt="Buy credit: NYM, Bitcoin, Monero"></div>
+      <figcaption><b>Buying credit.</b> Fixed amounts, three rails: NYM (native · Nyx), Bitcoin (on-chain · LN), Monero (coming soon).</figcaption></figure>
+    <figure class="shot"><div class="frame"><img data-img="buy-nym" alt="NYM invoice with purple QR code, address and required memo"></div>
+      <figcaption><b>Paying in NYM, natively.</b> $5 → 500,000 SCRAI on the Nyx chain: purple QR, bare address, and the invoice memo as a first-class field — a transfer without it can't be matched, so the UI treats it that way. Rate locked, window counting down.</figcaption></figure>
+    <figure class="shot"><div class="frame"><img data-img="held" alt="Held credit under the balance"></div>
+      <figcaption><b>After settlement.</b> The paid credit sits as blind-signed books next to the balance — "500,000 SCRAI held — redeems on your next message". Buy and first spend stay time-decoupled on purpose.</figcaption></figure>
+    <figure class="shot"><div class="frame"><img data-img="account" alt="Account view"></div>
+      <figcaption><b>The account.</b> A fingerprint instead of a name; recovery through the phrase alone.</figcaption></figure>
+  </div>
+</section>
+
+<section class="chapter">
+  <div class="eyebrow">05 · Models & honesty</div>
+  <h2>An honest catalog instead of a <b>black box</b></h2>
+  <p>The model catalog comes live from the providers (Google Gemini, Groq — text and image) and is
+  filtered server-side against the price list: the price in the picker <b>is</b> the price on the bill,
+  shown in SCRAI per 1k tokens. Models that train on input carry a visible
+  <span class="chip" style="color:var(--rust);border-color:color-mix(in srgb,var(--rust) 45%,var(--line))">trains on input</span>
+  badge, and before first use the app shows the provider's terms — because the mixnet hides
+  <em>who</em> is asking, not <em>where</em> the answer is produced.</p>
+  <div class="shots two">
+    <figure class="shot"><div class="frame"><img data-img="picker" alt="Model picker"></div>
+      <figcaption><b>The catalog.</b> Filters: All · Chatbot · Image gen · Free · Latest — additively combinable.</figcaption></figure>
+    <figure class="shot"><div class="frame"><img data-img="picker-free" alt="Free filter active"></div>
+      <figcaption><b>Free filter.</b> Only models that cost nothing — and are billed exactly that way.</figcaption></figure>
+    <figure class="shot wide"><div class="frame"><img data-img="terms" alt="Provider terms dialog"></div>
+      <figcaption><b>Provider terms.</b> Consent per model, with a plain-language warning about what the provider may do with inputs.</figcaption></figure>
+  </div>
+</section>
+
+<section class="chapter">
+  <div class="eyebrow">06 · Under the hood</div>
+  <h2>One core, <b>Rust throughout</b></h2>
+  <p class="lead">The entire production path is Rust — one shared crypto core, used byte-compatibly
+  by the desktop client and the server.</p>
+  <div class="diagram">
+    {{SVG_DIAGRAM_EN}}
+    <div class="cap">No public HTTP, no fixed IP: the server itself is just another mixnet participant.</div>
+  </div>
+  <ul class="facts">
+    <li><span class="t">scrai-core</span><span class="d">Shared library: Coconut e-cash, double-spend quorum, price table, billing math, request signatures. One bug fix lands on both sides.</span></li>
+    <li><span class="t">Desktop app</span><span class="d">Tauri 2. A Rust process with the embedded Nym SDK, native OCR and a local NER model; the murmur UI runs as a web frontend in the webview — identical for the coming mobile builds.</span></li>
+    <li><span class="t">scrai-server</span><span class="d">A Rust binary acting as a Nym service provider. Persists sessions, quorum and paywall in SQLite; model catalog live from Gemini + Groq; vision uploads in acked chunks.</span></li>
+    <li><span class="t">Hardened</span><span class="d">Core paths unit-tested (billing, signatures, e-cash lifecycle, upload reassembly); verified end-to-end over the real mixnet.</span></li>
+  </ul>
+</section>
+
+<section class="chapter">
+  <div class="eyebrow">07 · Status & roadmap</div>
+  <h2>From one server to a <b>network nobody can switch off</b></h2>
+  <p class="lead">A clean split: what already runs, and what comes next.</p>
+  <h3>Running today</h3>
+  <ol class="steps">
+    <li><span class="when">Live</span><span class="t">The full anonymous loop</span>
+      <p>Chat, vision uploads and payments end-to-end over the real mixnet: account-signed purchases
+      (<b>native NYM on Nyx</b> with memo matching via our own chain watcher, plus Bitcoin/Lightning
+      through BTCPay), blind-signed Coconut ticketbooks, metered sessions with per-message
+      reserve → settle, and a paywalled model catalog served live from the providers.</p></li>
+    <li><span class="when">Live</span><span class="t">Federation-grade cryptography</span>
+      <p>The Coconut layer is <b>t-of-n from day one</b> — threshold issuance with one aggregated
+      verification key is implemented and tested in the shared core; the current deployment simply
+      runs it as 1-of-1. Scaling to many scrai-servers where <mark>one balance is valid
+      everywhere</mark> is deployment and key ceremony, not a rewrite. Double-spends are accepted
+      offline and caught by a majority quorum; sanctions only on identify() proof.</p></li>
+  </ol>
+  <h3>Next</h3>
+  <ol class="steps">
+    <li><span class="when">Next</span><span class="t">Server discovery that needs no permission</span>
+      <p>Each server announces itself with a <b>signed descriptor</b> — Nym address, federation key,
+      model list, signed price list — in a registry on the <b>Nyx chain</b> (announcing costs a small
+      fee: built-in spam protection), replicated via gossip between federation members. The app loads
+      the directory over the mixnet and verifies every entry against the federation key:
+      <mark>prices are client-verifiable</mark>, so a server can neither slip in per-customer pricing
+      nor silent increases.</p></li>
+    <li><span class="when">Next</span><span class="t">More rails, bigger replies</span>
+      <p>Monero as a third payment rail, ticketbooks sized to the purchase tiers, and image
+      generation over SURB budgets for megabyte-sized replies.</p></li>
+    <li><span class="when">Next</span><span class="t">Same core, every platform</span>
+      <p>iOS and Android via Tauri 2 with the same Rust core and the same UI; keys move into the OS
+      keychain.</p></li>
+  </ol>
+</section>
+
+<div class="foot">
+  <span>ScrambleAI · anonymous AI over the Nym mixnet</span>
+  <span>Figures: mixnet RTT and pruning savings measured for real · payments currently testnet</span>
+</div>
+
+</div><!-- /lang-en -->
+
+<!-- ======================================================================= -->
+<!-- DEUTSCH                                                                 -->
+<!-- ======================================================================= -->
+<div class="page" id="lang-de" hidden>
+
+<header class="hero">
+  <div class="eyebrow">Pitch · Stand August 2026</div>
+  <h1>Scramble<b>AI</b></h1>
+  <p class="claim">Anonyme KI für alle. Jede Frage an einen Chatbot verrät zwei Dinge: <b>wer</b> fragt und <b>was</b> gefragt wird.
+  ScrambleAI trennt beides — technisch, nicht per Versprechen: Fragen laufen durchs
+  <b>Nym-Mixnet</b>, bezahlt wird mit blind signierten <b>Coconut Credentials</b> (zk-nym), und die Historie
+  verlässt das Gerät nie.</p>
+  <figure class="shot heroShot"><div class="frame"><img data-img="logo" alt="ScrambleAI start screen — a crowd of voices, none of them traceable to you"></div></figure>
+  <div class="kpis">
+    <div class="kpi"><div class="n">5 Hops</div><div class="l">Sphinx-Routing</div></div>
+    <div class="kpi"><div class="n">~1,1 s</div><div class="l">Mixnet-Anlauf, real gemessen</div></div>
+    <div class="kpi"><div class="n">−60 %</div><div class="l">Tokenkosten durch Pruning</div></div>
+    <div class="kpi"><div class="n">zk-nym</div><div class="l">Coconut Credentials</div></div>
+    <div class="kpi"><div class="n">100 % Rust</div><div class="l">Client-Kern + Server</div></div>
+  </div>
+  <div class="realnote">Alle Screenshots in diesem Dokument sind echte Aufnahmen des laufenden MVP — keine Mockups. Jedes Bild lässt sich per Klick in voller Größe öffnen.</div>
+  <div class="ipnote">© 2026 Hermes Blockchain Ventures — sämtliche Konzepte, Code und Gestaltung in diesem Dokument sind geistiges Eigentum der Hermes Blockchain Ventures.</div>
+  <div class="ipnote">Genutzte Open-Source-Lizenzen: Nym SDK &amp; nym-compact-ecash (Apache-2.0) · Tauri (MIT/Apache-2.0) · Rust-Crate-Ökosystem u.&nbsp;a. tokio, serde, reqwest (MIT/Apache-2.0) · ed25519-dalek (BSD-3-Clause) · SQLite (Public Domain) · BTCPay Server (MIT) · GLiNER &amp; Tesseract (Apache-2.0) · Schriften Fraunces, Hanken Grotesk, JetBrains Mono (SIL OFL 1.1).</div>
+</header>
+
+<section class="chapter flow">
+  <div class="eyebrow">01 · Warum</div>
+  <h2>Jede KI-Frage ist ein <b>Geständnis</b></h2>
+  <p class="lead">Gesundheitsfragen, Vertragsentwürfe, Bewerbungen, Beziehungsprobleme — was Menschen
+  einer KI anvertrauen, ist intimer als jede Suchhistorie. Heute landet all das mit
+  Klarnamen-Account, IP-Adresse und Zahlungsdaten bei einem Anbieter, der auf den Inhalten
+  trainieren darf.</p>
+  <p>Bestehende „anonyme" Zugänge lösen nur die Hälfte: ein Proxy sieht selbst alles,
+  ein VPN-Anbieter kennt seine Kunden, und bezahlt wird am Ende doch mit Kreditkarte.
+  ScrambleAI ist so gebaut, dass <mark>keine einzelne Partei „wer" und „was" gleichzeitig sieht</mark> —
+  auch nicht wir selbst. Der Betreiber <em>kann</em> nicht neugierig sein.</p>
+  <h3>Warum das für Nym zählt</h3>
+  <p>Mixnet-Adoption hat ein Henne-Ei-Problem: kein Traffic ohne Anwendungen, keine Anwendungen ohne
+  Traffic. ScrambleAI könnte <mark>die erste kommerzielle Endkunden-App auf dem Nym-Mixnet</mark>
+  werden — ein System-Seller, leicht unbescheiden formuliert: eine App, die Menschen wegen des
+  Produkts installieren (private KI, die geständnisreichste Workload überhaupt) — und die als
+  Nebeneffekt echten Sphinx-Traffic, echte SURB-Nutzung und mit jedem Aufladen native NYM-Nachfrage
+  auf der Nyx-Chain erzeugt.</p>
+</section>
+
+<section class="chapter">
+  <div class="eyebrow">02 · Produkt</div>
+  <h2>Ein Chat wie jeder andere — <b>über einen Pfad wie kein anderer</b></h2>
+  <p>ScrambleAI ist eine Desktop-App (mobil folgt) mit eingebettetem Nym-Client. Jede Nachricht
+  wird in Sphinx-Pakete verpackt und über fünf Stationen geroutet: Entry-Gateway, drei fremde
+  Mix-Knoten, Exit. Der Server antwortet über anonyme Reply-Blöcke (SURBs) — er kennt keine
+  Absenderadresse, an die er sich erinnern könnte.</p>
+  <p>Anhänge — Bilder und PDFs — nehmen denselben Weg: Große Dateien sind als eine Mixnet-Nachricht
+  unzuverlässig, deshalb zerlegt die App sie in <mark>quittierte Chunks</mark> mit echtem Fortschritt
+  pro Chunk; der Server setzt sie erst für den Request zusammen, der sie referenziert. Die
+  Konversation selbst liegt ausschließlich lokal, verschlüsselt mit AES-256-GCM; Export und Umzug
+  laufen über ein offenes, portables Format (<span class="chip on">handover.md</span>), auf Wunsch
+  passphrase-verschlüsselt.</p>
+  <div class="shots">
+    <figure class="shot wide"><div class="frame"><img data-img="chat-mixnet" alt="Chat über das Mixnet, oben rechts die 5-Hop-Kette"></div>
+      <figcaption><b>Der Chat.</b> Oben rechts die echte Route: you · entry · mix · mix · mix · exit · model. Links die verschlüsselte lokale Historie. Unten rechts der Preis der Antwort — 138 in · 342 out · 2 SCRAI.</figcaption></figure>
+  </div>
+  <div class="shots two">
+    <figure class="shot"><div class="frame"><img data-img="chat-image" alt="Bild-Anhang lädt in Chunks, Statuszeile tippt Sending to mixnet"></div>
+      <figcaption><b>Ein Vision-Request unterwegs.</b> Das angehängte Bild streamt in quittierten Chunks hoch („uploading over the mixnet · 62% · 34 KB/s"), während die Statuszeile den echten Lebenszyklus tippt — „Sending to mixnet…" mit Live-Cursor.</figcaption></figure>
+    <figure class="shot"><div class="frame"><img data-img="chat-vision" alt="Modell-Antwort zum angehängten Chart"></div>
+      <figcaption><b>Die Antwort, Ende zu Ende.</b> Das Modell liest das angehängte Chart über denselben anonymen Pfad; der Footer bepreist den multimodalen Request — 1,412 in · 233 out · 4 SCRAI.</figcaption></figure>
+    <figure class="shot"><div class="frame"><img data-img="handover" alt="handover.md-Export-Dialog"></div>
+      <figcaption><b>Deine Daten, portabel.</b> Ein Klick exportiert die Konversation als offenes Markdown — im Klartext zum Lesen, oder PBKDF2 + AES-256-GCM-verschlüsselt für den Umzug.</figcaption></figure>
+    <figure class="shot"><div class="frame"><img data-img="gateway" alt="Entry-Gateway-Auswahl"></div>
+      <figcaption><b>Du wählst, wo du reingehst.</b> Das Entry-Gateway ist nach Land und Host wählbar; die mittleren Mix-Hops bleiben pro Paket neu gewürfelt — genau dieses Mischen <em>ist</em> die Anonymität.</figcaption></figure>
+  </div>
+</section>
+
+<section class="chapter">
+  <div class="eyebrow">03 · Schutz vor dem Absenden</div>
+  <h2>Die App passt auf, <b>bevor</b> etwas das Gerät verlässt</h2>
+  <p class="lead">Anonymes Routing nützt nichts, wenn im Prompt die eigene IBAN steht. Deshalb prüft
+  ScrambleAI jede Nachricht und jeden Anhang <b>vollständig auf dem Gerät</b> — nichts davon
+  wird gesendet, geloggt oder gespeichert.</p>
+  <ul class="facts">
+    <li><span class="t">Text-Scan</span><span class="d">Mustererkennung für IBANs, Kartennummern, API-Keys, Passwörter, Recovery-Phrasen, Telefonnummern.</span></li>
+    <li><span class="t">Semantischer Scan (lokales Modell)</span><span class="d">Ein GLiNER-Modell läuft nativ in der App und erkennt offene Klassen: Namen, Adressen, Arbeitgeber — Zero-Shot, ohne Cloud.</span></li>
+    <li><span class="t">Datei-Scan mit OCR</span><span class="d">Bilder und PDFs werden lokal gelesen (Apple Vision nativ, Tesseract-WASM als Fallback) und durch dieselben Prüfungen geschickt. Funde lassen sich direkt im Bild schwärzen.</span></li>
+    <li><span class="t">Manueller Markier-Modus</span><span class="d">Die erkannten Boxen sind Startpunkt, nicht Instanz: Fehltreffer per Klick verwerfen, und eigene schwarze Boxen über alles ziehen, was der Scanner nicht kennen kann. Die Balken werden vor dem Senden fest ins Bild eingebrannt.</span></li>
+    <li><span class="t">Smart Pruning</span><span class="d">Vor dem Senden wird die Historie lexikalisch auf das Nötige getrimmt — gemessene −60 % Tokens, ohne zusätzlichen Modell-Aufruf.</span></li>
+  </ul>
+  <div class="shots two">
+    <figure class="shot"><div class="frame"><img data-img="guard" alt="Privacy-Guard-Warnung"></div>
+      <figcaption><b>Privacy Guard.</b> Warnt vor IBAN, Name + Adresse, Telefonnummer — „nothing was sent, logged, or stored. You decide."</figcaption></figure>
+    <figure class="shot"><div class="frame"><img data-img="settings" alt="Einstellungen: Smart Pruning und Privacy Guard"></div>
+      <figcaption><b>Einstellungen.</b> Jede Prüfung einzeln schaltbar; die Topic-Entscheidung fällt lokal, nie per Modell-Aufruf.</figcaption></figure>
+    <figure class="shot"><div class="frame"><img data-img="guard-edit" alt="Anhang-Review: erkannte Funde in Rot, eine selbst gezogene schwarze Box"></div>
+      <figcaption><b>Anhang-Review, Edit-Modus.</b> OCR liest das Formular auf dem Gerät; der Guard markiert Name, IBAN und Telefon (rot). Die schwarze Box über dem Betrag ist von Hand gezogen — der manuelle Modus für alles, was der Scanner nicht als sensibel kennen kann.</figcaption></figure>
+    <figure class="shot"><div class="frame"><img data-img="guard-redacted" alt="Redigierte Vorschau mit eingebrannten schwarzen Balken"></div>
+      <figcaption><b>Das redigierte Ergebnis.</b> Vorschau vor dem Senden: die Balken sind fest in die Bildkopie eingebrannt — das Original verlässt das Gerät nie.</figcaption></figure>
+  </div>
+</section>
+
+<section class="chapter">
+  <div class="eyebrow">04 · Bezahlen</div>
+  <h2>Guthaben, das sich <b>von seinem Käufer trennt</b></h2>
+  <p class="lead">Das Konto ist eine 24-Wort-Phrase (BIP39) — kein Name, keine E-Mail. Gekauft wird in
+  festen Stufen ($5/10/20/50), damit jeder Kauf aussieht wie jeder andere. Und dann passiert der
+  entscheidende Schritt: das Guthaben wird vom Konto <b>abgekoppelt</b>.</p>
+  <h3>Der Weg des Geldes</h3>
+  <p><b>1 · Kauf.</b> Rechnung über Bitcoin/Lightning (BTCPay) oder NYM nativ auf der Nyx-Chain; Monero folgt.
+  Das Konto signiert die Bestellung — hier ist Verknüpfung noch unvermeidbar und ehrlich.<br>
+  <b>2 · Blind-Abhebung.</b> Das bezahlte Guthaben wird gegen <b>Coconut-Credentials</b> getauscht
+  (zk-nym / nym-compact-ecash, BLS12-381): der Server signiert Ticketbooks, deren Inhalt er
+  <em>nicht lesen kann</em>. Die Verbindung Konto → Coins stirbt kryptografisch an dieser Stelle.<br>
+  <b>3 · Ausgeben.</b> Die App löst Coins zeitentkoppelt und in uniformen ~$1-Blöcken in
+  Session-Guthaben ein. Jede Nachricht wird Ed25519-signiert, ihr Preis-Maximum vorab reserviert
+  und nach der Antwort exakt abgerechnet — schlägt der Provider fehl, kostet sie nichts.</p>
+  <p>Doppelausgaben werden offline akzeptiert und über ein Quorum erkannt; sanktioniert wird
+  <mark>nur auf kryptografischen Beweis</mark> (zwei widersprüchliche Zahlungen, die den Schlüssel
+  mathematisch enttarnen) — nie auf Verdacht.</p>
+  <div class="shots two">
+    <figure class="shot"><div class="frame"><img data-img="buy" alt="Buy credit: NYM, Bitcoin, Monero"></div>
+      <figcaption><b>Guthaben kaufen.</b> Feste Beträge, drei Rails: NYM (nativ · Nyx), Bitcoin (On-Chain · LN), Monero (coming soon).</figcaption></figure>
+    <figure class="shot"><div class="frame"><img data-img="buy-nym" alt="NYM-Invoice mit lila QR-Code, Adresse und Pflicht-Memo"></div>
+      <figcaption><b>Nativ in NYM bezahlen.</b> $5 → 500.000 SCRAI auf der Nyx-Chain: lila QR, Adresse, und das Invoice-Memo als eigenes Pflichtfeld — ein Transfer ohne Memo kann nicht zugeordnet werden, also behandelt die UI es genau so. Kurs fixiert, Fenster läuft.</figcaption></figure>
+    <figure class="shot"><div class="frame"><img data-img="held" alt="Held-Guthaben unter der Balance"></div>
+      <figcaption><b>Nach der Zahlung.</b> Das Guthaben liegt als blind signierte Bücher neben der Balance — „500,000 SCRAI held — redeems on your next message". Kauf und erste Ausgabe bleiben bewusst zeitlich entkoppelt.</figcaption></figure>
+    <figure class="shot"><div class="frame"><img data-img="account" alt="Account-Ansicht"></div>
+      <figcaption><b>Das Konto.</b> Ein Fingerprint statt eines Namens; Wiederherstellung allein über die Phrase.</figcaption></figure>
+  </div>
+</section>
+
+<section class="chapter">
+  <div class="eyebrow">05 · Modelle & Transparenz</div>
+  <h2>Ehrliche Auswahl statt <b>Blackbox</b></h2>
+  <p>Der Modellkatalog kommt live von den Providern (Google Gemini, Groq — Text und Bild) und wird
+  serverseitig gegen die Preisliste gefiltert: Der Preis im Picker <b>ist</b> der Preis der
+  Abrechnung, ausgewiesen in SCRAI pro 1k Tokens. Modelle, die auf Eingaben trainieren, tragen
+  ein sichtbares <span class="chip" style="color:var(--rust);border-color:color-mix(in srgb,var(--rust) 45%,var(--line))">trains on input</span>-Badge,
+  und vor der ersten Nutzung zeigt die App die Bedingungen des Providers — denn das Mixnet
+  versteckt <em>wer</em> fragt, nicht <em>bei wem</em> die Antwort entsteht.</p>
+  <div class="shots two">
+    <figure class="shot"><div class="frame"><img data-img="picker" alt="Modell-Picker"></div>
+      <figcaption><b>Der Katalog.</b> Filter: All · Chatbot · Image gen · Free · Latest — additiv kombinierbar.</figcaption></figure>
+    <figure class="shot"><div class="frame"><img data-img="picker-free" alt="Free-Filter aktiv"></div>
+      <figcaption><b>Free-Filter.</b> Nur Modelle, die nichts kosten — und genau so abgerechnet werden.</figcaption></figure>
+    <figure class="shot wide"><div class="frame"><img data-img="terms" alt="Provider-Terms-Dialog"></div>
+      <figcaption><b>Provider-Terms.</b> Zustimmung pro Modell, mit Klartext-Warnung, was der Anbieter mit Eingaben tun darf.</figcaption></figure>
+  </div>
+</section>
+
+<section class="chapter">
+  <div class="eyebrow">06 · Technik</div>
+  <h2>Ein Kern, <b>durchgehend Rust</b></h2>
+  <p class="lead">Der komplette Produktionspfad ist Rust — ein geteilter Krypto-Kern, den
+  Desktop-Client und Server byte-kompatibel benutzen.</p>
+  <div class="diagram">
+    {{SVG_DIAGRAM_DE}}
+    <div class="cap">Kein öffentliches HTTP, keine feste IP: der Server ist selbst nur ein Mixnet-Teilnehmer.</div>
+  </div>
+  <ul class="facts">
+    <li><span class="t">scrai-core</span><span class="d">Geteilte Bibliothek: Coconut-E-Cash, Double-Spend-Quorum, Preistabelle, Billing-Mathematik, Request-Signaturen. Ein Bug-Fix wirkt auf beiden Seiten.</span></li>
+    <li><span class="t">Desktop-App</span><span class="d">Tauri 2. Rust-Prozess mit eingebettetem Nym-SDK, nativer OCR und lokalem NER-Modell; die murmur-UI läuft als Web-Frontend im Webview — identisch für die kommenden Mobile-Builds.</span></li>
+    <li><span class="t">scrai-server</span><span class="d">Rust-Binary als Nym-Service-Provider. Persistiert Sessions, Quorum und Paywall in SQLite; Modellkatalog live von Gemini + Groq; Vision-Uploads in quittierten Chunks.</span></li>
+    <li><span class="t">Abgesichert</span><span class="d">Kernpfade unit-getestet (Billing, Signaturen, E-Cash-Lebenszyklus, Upload-Reassemblierung); Ende-zu-Ende real über das Mixnet verifiziert.</span></li>
+  </ul>
+</section>
+
+<section class="chapter">
+  <div class="eyebrow">07 · Status & Ausblick</div>
+  <h2>Vom einen Server zum <b>Netz, das niemand abschalten kann</b></h2>
+  <p class="lead">Sauber getrennt: was heute schon läuft — und was als Nächstes kommt.</p>
+  <h3>Läuft heute</h3>
+  <ol class="steps">
+    <li><span class="when">Live</span><span class="t">Der komplette anonyme Kreislauf</span>
+      <p>Chat, Vision-Uploads und Zahlungen Ende-zu-Ende über das echte Mixnet: kontosignierte Käufe
+      (<b>natives NYM auf Nyx</b> mit Memo-Zuordnung über den eigenen Chain-Watcher, dazu
+      Bitcoin/Lightning via BTCPay), blind signierte Coconut-Ticketbooks, getaktete Sessions mit
+      Reserve → Settle pro Nachricht, und ein bezahlschrankengesicherter Modellkatalog live von den
+      Providern.</p></li>
+    <li><span class="when">Live</span><span class="t">Föderationsreife Kryptografie</span>
+      <p>Die Coconut-Schicht ist <b>von Anfang an t-von-n</b> — Threshold-Issuance mit einem
+      aggregierten Verification Key ist im geteilten Kern implementiert und getestet; das aktuelle
+      Deployment fährt sie schlicht als 1-von-1. Die Skalierung auf viele scrai-server, bei der
+      <mark>ein Guthaben überall gilt</mark>, ist Deployment und Key-Zeremonie, kein Rewrite.
+      Double-Spends werden offline akzeptiert und vom Mehrheits-Quorum erkannt; sanktioniert wird nur
+      auf identify()-Beweis.</p></li>
+  </ol>
+  <h3>Als Nächstes</h3>
+  <ol class="steps">
+    <li><span class="when">Next</span><span class="t">Server-Discovery ohne Erlaubnis</span>
+      <p>Jeder Server announced sich mit einem <b>signierten Descriptor</b> — Nym-Adresse,
+      Föderations-Key, Modellliste, signierte Preisliste — in einer Registry auf der
+      <b>Nyx-Chain</b> (ein Announce kostet eine kleine Gebühr: eingebauter Spam-Schutz), repliziert
+      per Gossip zwischen den Föderationsmitgliedern. Die App lädt das Verzeichnis übers Mixnet und
+      verifiziert jeden Eintrag gegen den Föderations-Key: <mark>Preise sind clientseitig
+      beweisbar</mark> — ein Server kann weder Sonderpreise pro Kunde noch stille Erhöhungen
+      unterschieben.</p></li>
+    <li><span class="when">Next</span><span class="t">Mehr Rails, größere Antworten</span>
+      <p>Monero als dritter Zahlungsweg, Ticketbooks in Kaufstufen-Größe, und Bildgenerierung über
+      SURB-Budgets für megabytegroße Antworten.</p></li>
+    <li><span class="when">Next</span><span class="t">Gleicher Kern, jede Plattform</span>
+      <p>iOS und Android über Tauri 2 mit demselben Rust-Kern und derselben UI; Schlüssel wandern in
+      die OS-Keychain.</p></li>
+  </ol>
+</section>
+
+<div class="foot">
+  <span>ScrambleAI · anonyme KI über das Nym-Mixnet</span>
+  <span>Zahlen: Mixnet-RTT und Pruning-Ersparnis real gemessen · Zahlungen aktuell Testnet</span>
+</div>
+
+</div><!-- /lang-de -->
+
+<div id="lightbox" class="z0" hidden>
+  <div class="scroll"><img alt=""></div>
+  <div class="bar"><span class="zl" id="lbZoom">fit</span><button id="lbClose" type="button" aria-label="Close">✕</button></div>
+  <div class="hint" data-en="click the image to zoom in further · Esc or ✕ to close" data-de="Klick aufs Bild zoomt weiter rein · Esc oder ✕ schließt"></div>
+</div>
+
+<script>
+// Screenshots are embedded ONCE and injected into both language versions.
+const IMGS = {
+  "chat-mixnet": "data:image/jpeg;base64,{{IMG:chat-mixnet}}",
+  "logo": "data:image/jpeg;base64,{{IMG:logo}}",
+  "chat-image": "data:image/jpeg;base64,{{IMG:chat-image}}",
+  "chat-vision": "data:image/jpeg;base64,{{IMG:chat-vision}}",
+  "guard": "data:image/jpeg;base64,{{IMG:guard}}",
+  "settings": "data:image/jpeg;base64,{{IMG:settings}}",
+  "buy": "data:image/jpeg;base64,{{IMG:buy}}",
+  "account": "data:image/jpeg;base64,{{IMG:account}}",
+  "picker": "data:image/jpeg;base64,{{IMG:picker}}",
+  "picker-free": "data:image/jpeg;base64,{{IMG:picker-free}}",
+  "terms": "data:image/jpeg;base64,{{IMG:terms}}",
+  "handover": "data:image/jpeg;base64,{{IMG:handover}}",
+  "gateway": "data:image/jpeg;base64,{{IMG:gateway}}",
+  "buy-nym": "data:image/jpeg;base64,{{IMG:buy-nym}}",
+  "held": "data:image/jpeg;base64,{{IMG:held}}",
+  "guard-edit": "data:image/jpeg;base64,{{IMG:guard-edit}}",
+  "guard-redacted": "data:image/jpeg;base64,{{IMG:guard-redacted}}",
+};
+document.querySelectorAll("img[data-img]").forEach(img => {
+  const src = IMGS[img.dataset.img];
+  if (src) img.src = src;
+});
+
+// Language tabs — English is the master and the default.
+function setLang(l){
+  document.getElementById("lang-en").hidden = l !== "en";
+  document.getElementById("lang-de").hidden = l !== "de";
+  document.getElementById("btn-en").classList.toggle("on", l === "en");
+  document.getElementById("btn-de").classList.toggle("on", l === "de");
+  document.documentElement.lang = l;
+  const hint = document.querySelector("#lightbox .hint");
+  hint.textContent = hint.dataset[l];
+  try { localStorage.setItem("scrai.pitch.lang", l); } catch(e){}
+}
+document.getElementById("btn-en").addEventListener("click", () => setLang("en"));
+document.getElementById("btn-de").addEventListener("click", () => setLang("de"));
+setLang((()=>{ try { return localStorage.getItem("scrai.pitch.lang") || "en"; } catch(e){ return "en"; } })());
+
+// Lightbox with click-through zoom: fit → 100 % → 200 % → fit. The screenshots
+// are embedded at native (Retina) resolution, so 100 % is already sharper than
+// the page, and 200 % makes the UI text comfortably readable.
+const lb = document.getElementById("lightbox");
+const lbImg = lb.querySelector("img");
+const lbZoom = document.getElementById("lbZoom");
+let zoom = 0;
+function applyZoom(z){
+  zoom = z;
+  lb.className = "z" + z;
+  if (z === 0) { lbImg.style.width = ""; lbZoom.textContent = "fit"; }
+  else {
+    const f = z === 1 ? 1 : 2;
+    lbImg.style.width = (lbImg.naturalWidth * f) + "px";
+    lbZoom.textContent = (f * 100) + " %";
+  }
+}
+function openLb(src, alt){
+  lbImg.src = src; lbImg.alt = alt;
+  lb.hidden = false; applyZoom(0);
+}
+function closeLb(){ lb.hidden = true; }
+document.querySelectorAll("figure.shot .frame").forEach(f => {
+  f.addEventListener("click", () => {
+    const img = f.querySelector("img");
+    openLb(img.src, img.alt);
+  });
+});
+lbImg.addEventListener("click", e => { e.stopPropagation(); applyZoom((zoom + 1) % 3); });
+lb.querySelector(".scroll").addEventListener("click", closeLb);
+document.getElementById("lbClose").addEventListener("click", closeLb);
+addEventListener("keydown", e => { if (e.key === "Escape") closeLb(); });
+</script>

@@ -95,16 +95,20 @@
   .badge.kind{color:var(--muted);border-color:var(--line);background:var(--surface-2)}
   .badge.kind.txt{color:var(--mix);border-color:rgba(138,160,107,.45);background:rgba(138,160,107,.10)}
   .badge.kind.img{color:var(--signal);border-color:rgba(203,161,78,.45);background:rgba(203,161,78,.10)}
-  .mfilter{display:flex;align-items:center;gap:6px;padding:9px 10px;margin:-6px -6px 6px -6px;border-bottom:1px solid var(--line);position:sticky;top:-6px;background:var(--surface-2);z-index:2}
-  .mfilter .mfsp{flex:1}
-  .mchip{font-family:var(--mono);font-size:10px;letter-spacing:.03em;padding:4px 9px;border-radius:6px;cursor:pointer;
+  .mhead{position:sticky;top:-6px;margin:-6px -6px 6px -6px;border-bottom:1px solid var(--line);background:var(--surface-2);z-index:2}
+  .mfilter{display:flex;align-items:center;gap:6px;padding:9px 10px}
+  .mfilter.vrow{padding-top:0;flex-wrap:wrap}
+  .mfilter .mfsp{flex:1;min-width:18px}
+  .mchip{font-family:var(--mono);font-size:10px;letter-spacing:.03em;padding:4px 9px;border-radius:6px;cursor:pointer;white-space:nowrap;
     border:1px solid var(--line);background:transparent;color:var(--muted);transition:.12s}
   .mchip:hover{color:var(--bone)}
   .mchip.on{color:var(--ink);background:var(--bone);border-color:var(--bone)}
   .mchip.txt.on{background:var(--mix);border-color:var(--mix);color:var(--ink)}
   .mchip.img.on{background:var(--signal);border-color:var(--signal);color:var(--ink)}
   .mchip.lat.on{background:var(--rust);border-color:var(--rust);color:var(--bone)}
-  .menu{position:absolute;top:46px;left:0;width:300px;max-height:72vh;overflow-y:auto;background:var(--surface-2);border:1px solid var(--line);
+  .mchip.fre.on{background:var(--mix);border-color:var(--mix);color:var(--ink)}
+  .mchip.ftr.on{background:color-mix(in srgb,var(--mix) 40%,var(--surface-2));border-color:var(--mix);color:var(--bone)}
+  .menu{position:absolute;top:46px;left:0;width:max-content;min-width:300px;max-width:min(620px,calc(100vw - 32px));max-height:72vh;overflow-y:auto;background:var(--surface-2);border:1px solid var(--line);
     border-radius:var(--radius);padding:6px;z-index:20;box-shadow:0 18px 40px rgba(0,0,0,.5);display:none}
   .menu.open{display:block}
   .mi{padding:9px 10px;border-radius:7px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:8px}
@@ -112,7 +116,7 @@
   .mi.disabled{opacity:.45;cursor:not-allowed}
   .mi .l{display:flex;flex-direction:column;gap:2px}
   .mi .l .n{font-size:13px;font-weight:600}
-  .mi .l .v{font-family:var(--mono);font-size:10px;color:var(--muted)}
+  .mi .l .v{font-family:var(--mono);font-size:10px;color:var(--muted);white-space:nowrap}
   .mi .soon{font-family:var(--mono);font-size:9.5px;color:var(--muted);border:1px solid var(--line);padding:2px 6px;border-radius:4px}
   .mix{margin-left:auto;display:flex;align-items:center;gap:14px}
   .path{display:flex;align-items:center;gap:0}
@@ -134,26 +138,42 @@
   .gwrow .idc{font-family:var(--mono);font-size:10px;color:var(--muted);flex:0 0 auto}
   .gwrow .on{font-family:var(--mono);font-size:10px;color:var(--signal);flex:0 0 auto;margin-left:6px}
   ul.terms{list-style:none;margin:12px 0;padding:0;display:flex;flex-direction:column;gap:8px}
-  ul.terms li{background:var(--surface-2);border:1px solid var(--line);border-radius:9px;padding:10px 13px}
+  ul.terms li{background:color-mix(in srgb,var(--mix) 12%,var(--surface-2));border:1px solid color-mix(in srgb,var(--mix) 50%,var(--line));border-radius:9px;padding:10px 13px}
   ul.terms li a{color:var(--mix);text-decoration:none;font-weight:600;font-size:13.5px}
-  ul.terms li a:hover{color:var(--signal);text-decoration:underline}
+  ul.terms li a:hover{color:var(--bone);text-decoration:underline}
   .pmlabel{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:16px 0 8px}
   .paymethods{display:flex;gap:10px;flex-wrap:wrap}
-  .pm{display:flex;flex-direction:column;align-items:center;gap:6px;flex:1 1 92px;min-width:92px;
-    padding:13px 8px;border:1px solid var(--line);border-radius:11px;background:var(--surface-2)}
+  .pm{display:flex;flex-direction:column;align-items:center;gap:6px;flex:1 1 92px;min-width:92px;cursor:pointer;
+    padding:13px 8px;border:1px solid var(--line);border-radius:11px;background:var(--surface-2);transition:border-color .15s,background .15s}
+  .pm:not(.soon):hover{border-color:var(--mix)}
   .pm .pmlogo{width:26px;height:26px;display:flex;align-items:center;justify-content:center}
   .pm .pmname{font-size:12.5px;font-weight:600;color:var(--bone)}
   .pm .pmtag{font-family:var(--mono);font-size:9px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}
-  .pm.active{border-color:var(--mix)}
-  .pm.active .pmtag{color:var(--mix)}
-  .pm.soon{opacity:.5}
+  .pm.sel{border-color:var(--mix);background:color-mix(in srgb,var(--mix) 12%,var(--surface-2))}
+  .pm.sel .pmtag{color:var(--mix)}
+  .pm.soon{opacity:.5;cursor:not-allowed}
   .pm.soon .pmtag{color:var(--signal)}
-  .link{width:22px;height:1.5px;background:var(--line);margin:0 1px;position:relative;top:-8px}
+  .link{width:11px;height:1.5px;background:var(--line);margin:0 1px;position:relative;top:-8px;transition:background .3s}
+  /* connected (green) */
   .path.on .hop.mixhop .node{background:var(--mix);border-color:var(--mix);box-shadow:0 0 8px rgba(138,160,107,.6)}
   .path.on .hop.endhop .node{background:var(--signal);border-color:var(--signal)}
   .path.on .link{background:var(--mix)}
-  .path.on .link::after{content:"";position:absolute;top:0;left:-6px;width:6px;height:100%;background:var(--bone);opacity:.7;animation:flow 1.8s linear infinite}
-  @keyframes flow{to{left:100%}}
+  /* one glow "packet" travels you→model via staggered node pulses — smooth, no jump */
+  .path.on .hop .node{animation:hopwave 2.6s ease-in-out infinite}
+  .path.on .hop:nth-child(1) .node{animation-delay:0s}
+  .path.on .hop:nth-child(3) .node{animation-delay:.13s}
+  .path.on .hop:nth-child(5) .node{animation-delay:.26s}
+  .path.on .hop:nth-child(7) .node{animation-delay:.39s}
+  .path.on .hop:nth-child(9) .node{animation-delay:.52s}
+  .path.on .hop:nth-child(11) .node{animation-delay:.65s}
+  .path.on .hop:nth-child(13) .node{animation-delay:.78s}
+  @keyframes hopwave{0%,58%,100%{transform:scale(1);filter:brightness(1)}24%{transform:scale(1.45);filter:brightness(1.7)}}
+  /* connecting — mixnet on but not yet routed: topology shown, neutral, gentle pulse, NO green */
+  .path.connecting .hop .node{background:var(--surface-2);border-color:var(--line);animation:connpulse 1.3s ease-in-out infinite}
+  .path.connecting .link{background:var(--line)}
+  .path.connecting .hop .cap{color:var(--muted)}
+  @keyframes connpulse{0%,100%{opacity:.3}50%{opacity:.85}}
+  /* direct (off) — hide the mix hops entirely */
   .path.off .hop.mixhop{display:none}
   .path.off .link.mixlink{display:none}
   .path.off .hop.endhop .node{background:var(--muted);border-color:var(--muted)}
@@ -161,14 +181,29 @@
   .mixtoggle .state{font-family:var(--display);font-weight:700;font-size:12px}
   .mixtoggle.on .state{color:var(--mix)}.mixtoggle.off .state{color:var(--muted)}
   .mixtoggle .sub{font-family:var(--mono);font-size:9px;color:var(--muted)}
-  .thread{flex:1 1 auto;overflow-y:auto;min-height:0;padding:28px 0}
+  /* overflow-anchor off: WE own the scroll position (stick-to-bottom follow) —
+     the browser's anchoring would recentre on late-loading images instead. */
+  .thread{flex:1 1 auto;overflow-y:auto;min-height:0;padding:28px 0;overflow-anchor:none}
   .wrap{max-width:720px;margin:0 auto;padding:0 24px}
-  .empty{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:14px;padding:0 40px}
+  .thread.threadEmpty{display:flex;align-items:center;justify-content:center}
+  .empty{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:14px;padding:0 40px}
   .empty .mark{font-family:var(--display);font-weight:600;font-size:44px;letter-spacing:.005em}
   .empty .mark b{color:var(--mix)}
   .empty p{color:var(--muted);max-width:420px;line-height:1.55;font-size:14px;margin:0}
   .empty .note{font-family:var(--mono);font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:8px;padding:9px 13px;display:flex;gap:8px;align-items:center}
   .empty .note .d{width:6px;height:6px;border-radius:50%;background:var(--mix);flex:0 0 auto}
+  /* mixnet connecting screen: typed line + blinking cursor (same green as the
+     chat status line), then a "stir" transition — scrambled egg style — whisks
+     the letters around until they settle into the ScrambleAI logo. */
+  .empty.connecting .conntype{font-family:var(--mono);font-size:19px;letter-spacing:.02em;color:var(--mix);display:flex;align-items:center;min-height:1.4em}
+  .empty.connecting .conntype .cursor{height:18px}
+  .empty .scramble{font-family:var(--display);font-weight:600;font-size:44px;letter-spacing:.005em;color:var(--bone);min-height:1.1em;line-height:1;white-space:nowrap}
+  .empty .scramble .ch{display:inline-block;white-space:pre;will-change:transform}
+  .empty .scramble .src{color:var(--mix)}
+  .empty .scramble .dud{color:var(--mix)}
+  .empty .scramble .ai{color:var(--mix)}
+  .empty .fadein{animation:fadein .55s ease both}
+  @keyframes fadein{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
   .msg{margin-bottom:22px;display:flex;gap:13px}
   .msg .who{font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);width:52px;flex:0 0 auto;padding-top:3px}
   .msg.you .who{color:var(--signal)}.msg.ai .who{color:var(--mix)}
@@ -176,6 +211,7 @@
   .msg .body{font-size:14.5px;line-height:1.62;color:var(--bone);white-space:pre-wrap}
   .msg.err .body{color:var(--rust)}
   .cursor{display:inline-block;width:7px;height:15px;background:var(--mix);vertical-align:-2px;margin-left:2px;animation:blink 1s steps(2) infinite}
+  .mixphase{font-family:var(--mono);font-size:12.5px;letter-spacing:.02em;color:var(--mix);opacity:.9}
   .imgs{display:flex;flex-wrap:wrap;gap:12px;margin-top:10px}
   .genimg{position:relative;margin:0;max-width:min(420px,100%);border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--surface-2)}
   .genimg img{display:block;width:100%;height:auto}
@@ -247,6 +283,43 @@
   .k{color:var(--mix)}.kk{color:var(--signal)}.kc{color:var(--muted)}
   .qrbox{background:#fff;border-radius:12px;padding:12px;width:216px;max-width:100%;margin:12px auto}
   .qrbox svg{display:block;width:100%;height:auto}
+  .payopt{border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:10px}
+  .poh{font-family:var(--mono);font-size:11px;color:var(--mix);margin-bottom:2px;text-transform:uppercase;letter-spacing:.05em}
+  .pol{font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:10px 0 3px}
+  .poval{font-family:var(--mono);font-size:12px;word-break:break-all;color:var(--bone);border:1px solid var(--line);border-radius:8px;padding:8px 10px;background:var(--surface-2)}
+  .poval.memo{color:#b9a3ff;border-color:#7A5FFF;font-size:15px;letter-spacing:.06em}
+  .memowarn{margin-top:10px;font-size:11.5px;line-height:1.4;color:var(--signal);background:color-mix(in srgb,var(--signal) 10%,transparent);border-radius:8px;padding:8px 10px}
+  .setrow{display:flex;gap:11px;align-items:flex-start;padding:11px 12px;border:1px solid var(--line);border-radius:10px;margin-bottom:9px;cursor:pointer;background:var(--surface-2)}
+  .setrow input{margin-top:2px;width:16px;height:16px;accent-color:var(--mix);flex:0 0 auto;cursor:pointer}
+  .setrow span{display:flex;flex-direction:column;gap:3px}
+  .setrow b{font-size:13px;font-weight:600;color:var(--bone)}
+  .setrow small{font-size:11.5px;line-height:1.4;color:var(--muted)}
+  .glist{margin:10px 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px}
+  .glist li{font-family:var(--mono);font-size:13px;color:var(--signal);border:1px solid color-mix(in srgb,var(--signal) 40%,var(--line));background:color-mix(in srgb,var(--signal) 8%,transparent);border-radius:8px;padding:8px 11px}
+  .glist li::before{content:"⚠ ";}
+  .gi-modal{max-width:min(1120px,95vw)!important;width:95vw;display:flex;flex-direction:column;max-height:92vh}
+  .gi-modal.gi-full{max-width:100vw!important;width:100vw;height:100vh;max-height:100vh;border-radius:0}
+  .gi-modal .mb{flex:1 1 auto;min-height:0}
+  .gi-tool{padding:5px 10px;font-family:var(--mono);font-size:12px;min-width:34px}
+  #guardImgCanvas{cursor:crosshair}
+  .tier{font-family:var(--body);font-weight:600;font-size:14px;padding:12px 20px;border-radius:10px;cursor:pointer;border:1px solid var(--line);background:var(--surface-2);color:var(--bone);transition:border-color .15s,background .15s}
+  .tier:hover{border-color:var(--mix)}
+  .tier.sel{border-color:var(--mix);background:color-mix(in srgb,var(--mix) 14%,var(--surface-2))}
+  .pendlabel{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--signal);margin:18px 0 8px}
+  .pendrow{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;margin-bottom:8px;cursor:pointer;background:var(--surface-2);transition:border-color .15s}
+  .pendrow:hover{border-color:var(--mix)}
+  .pendrow .pcoin{font-weight:600;color:var(--bone);font-size:13px}
+  .pendrow .pamt{font-family:var(--mono);font-size:11px;color:var(--muted)}
+  .pendrow .pleft{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--signal)}
+  .pendrow .presume{font-family:var(--mono);font-size:10px;color:var(--mix);border:1px solid var(--line);border-radius:7px;padding:4px 8px}
+  .pendrow .pcancel{flex:0 0 auto;background:none;border:1px solid var(--line);color:var(--muted);border-radius:7px;width:26px;height:26px;cursor:pointer;font-size:13px;line-height:1;transition:.12s}
+  .pendrow .pcancel:hover{border-color:var(--rust);color:var(--rust)}
+  .watchrow{display:flex;align-items:center;gap:7px;font-family:var(--mono);font-size:11px;margin:10px 0 2px;color:var(--muted)}
+  .watchrow .wd{width:8px;height:8px;border-radius:50%;flex:0 0 auto;background:var(--muted)}
+  .watchrow.live .wd{background:#4ea36b;box-shadow:0 0 6px #4ea36b}
+  .watchrow.live{color:#7fbf97}
+  .watchrow.down .wd{background:var(--signal)}
+  .watchrow.down{color:var(--signal)}
   /* In the native app the OS draws the window controls (overlay titlebar), so
      hide our decorative dots and clear space for the real traffic lights. */
   body.tauri .dot{display:none}
@@ -280,6 +353,7 @@
       <div class="meta" id="heldLine" style="display:none"><span class="d" style="background:var(--signal)"></span> <span id="heldText"></span></div>
       <button class="refill" id="buyBtn" onclick="openBuy()">+ Buy credit</button>
       <button class="refill" id="acctBtn" onclick="openAccount()" style="margin-top:6px">Account &amp; recovery</button>
+      <button class="refill" id="setBtn" onclick="openSettings()" style="margin-top:6px">Settings</button>
     </div>
   </aside>
 
@@ -370,9 +444,15 @@
       <div id="tierRow" style="display:flex;gap:10px;flex-wrap:wrap"></div>
       <p class="hint" id="buyStatus"></p>
 
+      <div id="chooser">
       <div class="pmlabel">Pay with</div>
       <div class="paymethods">
-        <div class="pm active" title="Bitcoin on-chain or Lightning (testnet)">
+        <div class="pm sel" data-method="nyx" title="NYM — native on the Nyx chain" onclick="selectMethod('nyx')">
+          <span class="pmlogo"><svg viewBox="0 0 32 32" width="26" height="26"><circle cx="16" cy="16" r="15" fill="none" stroke="#7A5FFF" stroke-width="1.5"/><path fill="none" stroke="#7A5FFF" stroke-width="2.6" stroke-linejoin="round" stroke-linecap="round" d="M11 22V10l10 12V10"/></svg></span>
+          <span class="pmname">NYM</span>
+          <span class="pmtag">native · Nyx</span>
+        </div>
+        <div class="pm" data-method="btc" title="Bitcoin on-chain or Lightning (testnet)" onclick="selectMethod('btc')">
           <span class="pmlogo"><svg viewBox="0 0 32 32" width="26" height="26"><circle cx="16" cy="16" r="16" fill="#F7931A"/><path fill="#fff" d="M23 14.1c.3-2-1.3-3-3.4-3.8l.7-2.7-1.7-.4-.7 2.6c-.4-.1-.9-.2-1.3-.3l.7-2.7-1.6-.4-.7 2.7-1.1-.3-2.3-.6-.4 1.8s1.2.3 1.2.3c.7.2.8.6.8.9l-.8 3.1v.2l-1.2 4.6c-.1.2-.3.5-.7.4 0 0-1.2-.3-1.2-.3l-.8 1.9 2.1.6 1.2.3-.7 2.7 1.6.4.7-2.7c.5.1.9.2 1.4.3l-.7 2.7 1.7.4.7-2.7c2.8.5 4.9.3 5.8-2.2.7-2 0-3.2-1.5-3.9 1.1-.3 1.9-1 2.1-2.5zm-3.7 5.2c-.5 2-3.9.9-5 .6l.9-3.6c1.2.3 4.7.8 4.1 3zm.5-5.2c-.5 1.8-3.3.9-4.2.6l.8-3.3c.9.2 3.9.7 3.4 2.7z"/></svg></span>
           <span class="pmname">Bitcoin</span>
           <span class="pmtag">on-chain · LN</span>
@@ -382,11 +462,9 @@
           <span class="pmname">Monero</span>
           <span class="pmtag">coming soon</span>
         </div>
-        <div class="pm soon" title="NYM (native on the Nyx chain) — coming soon">
-          <span class="pmlogo"><svg viewBox="0 0 32 32" width="26" height="26"><circle cx="16" cy="16" r="15" fill="none" stroke="var(--bone)" stroke-width="1.5"/><path fill="none" stroke="var(--bone)" stroke-width="2.6" stroke-linejoin="round" stroke-linecap="round" d="M11 22V10l10 12V10"/></svg></span>
-          <span class="pmname">NYM</span>
-          <span class="pmtag">coming soon</span>
-        </div>
+      </div>
+      <div id="continueRow" style="margin-top:14px"></div>
+      <div id="pendingBox"></div>
       </div>
     </div>
     <div class="mf"><button class="btn" onclick="closeBuy()">Close</button></div>
@@ -398,6 +476,61 @@
     <div class="mh"><span class="ttl">Your <b>account</b></span><span class="x" onclick="closeAccount()">✕</span></div>
     <div class="mb" id="acctBody"></div>
     <div class="mf"><button class="btn" onclick="closeAccount()">Close</button></div>
+  </div>
+</div>
+
+<div class="scrim" id="setScrim" onclick="if(event.target===this)closeSettings()">
+  <div class="modal">
+    <div class="mh"><span class="ttl"><b>Settings</b></span><span class="x" onclick="closeSettings()">✕</span></div>
+    <div class="mb">
+      <div class="pmlabel">Smart pruning</div>
+      <p class="hint" style="margin:0 0 12px">Send the model less of the transcript when it isn’t needed — fewer tokens leave this device, so each message costs less. The topic decision is made locally, never by an extra model call.</p>
+      <label class="setrow"><input type="checkbox" id="prTopic"><span><b>Topic-shift trimming</b><small>Drop earlier turns that are unrelated to your new question (e.g. weather → football). Terse follow-ups keep their context.</small></span></label>
+      <label class="setrow"><input type="checkbox" id="prWhite"><span><b>Whitespace normalisation</b><small>Collapse redundant spaces and blank lines. Lossless — wording is never changed.</small></span></label>
+      <label class="setrow"><input type="checkbox" id="prReq"><span><b>Request de-fluffing</b><small>Strip leading/trailing filler (“could you please…”, “thanks!”) from your prompt. Meaning is preserved.</small></span></label>
+      <label class="setrow"><input type="checkbox" id="prHand"><span><b>Handover export trimming</b><small>Tidy whitespace and filler when exporting a session — lossless, no turns dropped, so re-imports stay lean without losing anything.</small></span></label>
+
+      <div class="pmlabel" style="margin-top:22px">Privacy guard</div>
+      <p class="hint" style="margin:0 0 12px">Warns you before you send something that looks sensitive — a card number, IBAN, password, or your recovery phrase. Runs <b>100% on this device</b>: nothing is ever sent, logged, or stored, and it only warns — you always decide.</p>
+      <label class="setrow"><input type="checkbox" id="grEnabled"><span><b>Enable the guard</b><small>Master switch for the checks below.</small></span></label>
+      <label class="setrow"><input type="checkbox" id="grText"><span><b>Scan my messages</b><small>Check the prompt for sensitive data before it leaves the device.</small></span></label>
+      <label class="setrow"><input type="checkbox" id="grImages"><span><b>Scan attachments (images, PDFs, text)</b><small>On-device: OCR images, read a PDF's text (and OCR scanned pages), and read text files — warn if they contain sensitive data. No network.</small></span></label>
+      <p class="hint" id="setStatus" style="margin:12px 0 0"></p>
+    </div>
+    <div class="mf"><button class="btn" onclick="closeSettings()">Close</button></div>
+  </div>
+</div>
+
+<div class="scrim" id="guardScrim" onclick="if(event.target===this)closeGuardModal()">
+  <div class="modal">
+    <div class="mh"><span class="ttl">⚠ <b>Sensitive data?</b></span><span class="x" onclick="closeGuardModal()">✕</span></div>
+    <div class="mb" id="guardBody"></div>
+    <div class="mf"><button class="btn" id="guardCancel" onclick="closeGuardModal()">Cancel</button><button class="btn primary" id="guardConfirm" onclick="confirmGuard()">Send anyway</button></div>
+  </div>
+</div>
+
+<div class="scrim" id="guardImgScrim" onclick="if(event.target===this)closeGuardImg()">
+  <div class="modal gi-modal" id="guardImgModal">
+    <div class="mh">
+      <span class="ttl">⚠ <b id="guardImgTitle">Sensitive attachment</b></span>
+      <span style="display:flex;gap:8px;align-items:center;margin-left:auto">
+        <button class="btn gi-tool" onclick="giZoom(-1)" title="Zoom out">−</button>
+        <button class="btn gi-tool" id="giZoomLbl" onclick="giZoomReset()" title="Reset zoom">100%</button>
+        <button class="btn gi-tool" onclick="giZoom(1)" title="Zoom in">+</button>
+        <button class="btn gi-tool" id="giFullBtn" onclick="giToggleFull()" title="Fullscreen">⤢</button>
+        <span class="x" onclick="closeGuardImg()" style="margin-left:4px">✕</span>
+      </span>
+    </div>
+    <div class="mb" style="padding:0;display:flex;flex-direction:column;min-height:0">
+      <div id="guardImgScroll" style="overflow:auto;flex:1 1 auto;min-height:0;background:#0c0b0a;text-align:center;padding:14px">
+        <div id="guardImgWrap" style="position:relative;display:inline-block;line-height:0">
+          <img id="guardImg" style="display:block">
+          <canvas id="guardImgCanvas" style="position:absolute;left:0;top:0;touch-action:none"></canvas>
+        </div>
+      </div>
+      <p class="hint" id="guardImgHint" style="padding:9px 16px 0;margin:0"></p>
+    </div>
+    <div class="mf" id="guardImgFoot" style="justify-content:space-between"></div>
   </div>
 </div>
 
@@ -440,16 +573,19 @@
   import { Handover } from "./handover.js";
   import { Backend, isTauri } from "./backend.js";
   import { formatScrai, formatTokens, billingNotes, billingDetail } from "./billing.js";
+  import { pruneMessages, pruneForHandover, PRUNE_DEFAULTS } from "./prune.js";
+  import { scanText, GUARD_DEFAULTS } from "./guard.js";
 
   // --- app state (mirrors what the backend reports; the backend is the truth) ---
   let models = [];                       // [{model,vendor,kind,trainsOnInput,rate}]
   let tiers = [];                        // fixed purchase amounts, USD
-  let currentModel = null, modelVendor = "", modelTrains = false, modelRate = null, modelAcceptsImages = false;
+  let currentModel = null, modelVendor = "", modelTrains = false, modelRate = null, modelAcceptsImages = false, modelTier = "paid", modelKind = "text";
   let account = null;                    // { fingerprint, sessionIndex } | null
   let balance = 0, held = 0;             // SCRAI: funded session, and held ecash
   let fakePayments = true;               // dev fake gateway vs real BTCPay
   let server = null;                     // scrai-server Nym address (native app)
   let busy = false;
+  let scanning = false;         // true while an attachment is being guard-scanned → send is locked
   let pendingFile = null;                // { mimeType, size, name, bytes:Uint8Array, isImage, thumb?, url? } | null
   let vaultOk = false;                   // did the encrypted local store come up?
   let sessions = [];                     // sidebar metadata from Vault.list()
@@ -468,11 +604,17 @@
   function scraiLine(n){ return `${formatScrai(n)} SCRAI · $${usd(n).toFixed(usd(n)<0.01?5:2)}`; }
 
   // ---------- backend state ----------
+  let modelRetries = 0;
   async function refreshState(){
     if(isTauri()){ $("env").className="env"; $("envText").textContent = "connecting over the mixnet…"; }
     try{
       const s = await Backend.state();
-      models = s.models || []; tiers = s.tiers || [];
+      // Right after a reconnect (e.g. an entry-gateway switch) the model fetch can
+      // come back empty for a moment. Don't wipe a good list on a transient empty —
+      // keep what we had and let the retry below reload it.
+      const gotModels = s.models || [];
+      if(gotModels.length) models = gotModels;
+      tiers = s.tiers || tiers || [];
       account = s.account; balance = s.balance||0; held = s.held||0;
       fakePayments = s.fakePayments !== false;   // default to fake if unknown
       server = s.server || null;
@@ -486,7 +628,12 @@
       // Default to a chatbot (text) model, not an image-generation one — the
       // dynamic catalog's registry order is not chat-first.
       if((!currentModel || !models.some(m=>m.model===currentModel)) && models.length) selectModel(models.find(m=>(m.kind||'text')!=='image')||models[0]);
-      if(!models.length){ $("mName").textContent="no models yet"; $("mVend").textContent = isTauri()?"mixnet transport pending":"—"; }
+      if(!models.length){
+        $("mName").textContent="no models yet"; $("mVend").textContent = isTauri()?"mixnet transport pending":"—";
+        // Self-heal: a reconnect can return an empty catalogue for a moment.
+        // Retry a few times (bounded) until the transport settles.
+        if(isTauri() && server && modelRetries<6){ modelRetries++; setTimeout(refreshState, 3000); }
+      } else { modelRetries=0; }
       renderBal();
     }catch(err){
       $("env").className="env bad";
@@ -496,12 +643,16 @@
   }
   function rateHint(rate){
     if(!rate) return "";
+    if(rate.image) return `${rate.image} SCRAI / image`;
     if(!rate.in && !rate.out) return "free";
     const per1k = v => (v/1000<1 ? (v/1000).toFixed(2) : Math.round(v/1000).toLocaleString());
     return `${per1k(rate.in)} / ${per1k(rate.out)} SCRAI / 1k`;
   }
   let menuKind = "all";        // "all" | "text" | "image"
   let menuLatestOnly = true;   // collapse to the newest version of each family
+  let menuTiers = new Set();   // tier filter ("free" | "free-tier"); empty = all tiers
+  let menuVendors = new Set(); // additive vendor filter; empty = all vendors
+  let menuVendorList = [];     // vendors present in the current catalog (chip order)
   // Split a model id into a family key + numeric version, so "gemini-3.6-flash"
   // and "gemini-3.5-flash" collapse to one family (newest wins). "…-latest"
   // aliases sort highest so they always survive.
@@ -522,24 +673,52 @@
   }
   function setMenuKind(k){ menuKind=k; renderMenu(); }
   function toggleLatest(){ menuLatestOnly=!menuLatestOnly; renderMenu(); }
+  function toggleTier(t){ menuTiers.has(t)?menuTiers.delete(t):menuTiers.add(t); renderMenu(); }
+  function toggleVendorIdx(i){
+    const v=menuVendorList[i]; if(v===undefined) return;
+    menuVendors.has(v)?menuVendors.delete(v):menuVendors.add(v);
+    renderMenu();
+  }
   function renderMenu(){
-    const chip=(k,label,extra)=>`<button class="mchip ${extra||''} ${((k==='latest'?menuLatestOnly:menuKind===k))?'on':''}" onclick="event.stopPropagation();${k==='latest'?'toggleLatest()':`setMenuKind('${k}')`}">${label}</button>`;
-    const chips=`<div class="mfilter">${chip('all','All')}${chip('text','Chatbot','txt')}${chip('image','Image gen','img')}<span class="mfsp"></span>${chip('latest','Latest','lat')}</div>`;
+    // Left group: exclusive kind (All/Chatbot/Image gen). Right group: additive
+    // toggles — tier chips are a multi-select (none = all tiers: "Free" = costs
+    // nothing ever, "Free tier" = reduced price on a daily provider allowance),
+    // "Latest" ANDs on top.
+    const TOGGLES={
+      latest:{on:()=>menuLatestOnly, fn:'toggleLatest()'},
+      free:{on:()=>menuTiers.has('free'), fn:"toggleTier('free')"},
+      ftier:{on:()=>menuTiers.has('free-tier'), fn:"toggleTier('free-tier')"},
+    };
+    const chip=(k,label,extra)=>{
+      const t=TOGGLES[k];
+      return `<button class="mchip ${extra||''} ${(t?t.on():menuKind===k)?'on':''}" onclick="event.stopPropagation();${t?t.fn:`setMenuKind('${k}')`}">${label}</button>`;
+    };
+    // Second row: one chip per vendor in the live catalog (additive multi-select,
+    // none selected = all). The list is dynamic — vendors appear as the server
+    // offers them and stale selections are dropped when a vendor vanishes.
+    menuVendorList=[...new Set(models.map(m=>m.vendor||'?'))].sort();
+    for(const v of [...menuVendors]) if(!menuVendorList.includes(v)) menuVendors.delete(v);
+    const vrow = !menuVendorList.length ? '' :
+      `<div class="mfilter vrow">${menuVendorList.map((v,i)=>
+        `<button class="mchip ven ${menuVendors.has(v)?'on':''}" onclick="event.stopPropagation();toggleVendorIdx(${i})">${esc(v)}</button>`).join('')}</div>`;
+    const chips=`<div class="mhead"><div class="mfilter">${chip('all','All')}${chip('text','Chatbot','txt')}${chip('image','Image gen','img')}<span class="mfsp"></span>${chip('free','Free','fre')}${chip('ftier','Free tier','ftr')}${chip('latest','Latest','lat')}</div>${vrow}</div>`;
     let list = models.map((m,i)=>({m,i}));
     if(menuKind!=='all') list=list.filter(x=>(x.m.kind||'text')===menuKind);
+    if(menuTiers.size) list=list.filter(x=>menuTiers.has(x.m.tier||'paid'));
+    if(menuVendors.size) list=list.filter(x=>menuVendors.has(x.m.vendor||'?'));
     if(menuLatestOnly) list=latestPerFamily(list);
     list.sort((a,b)=> (a.m.vendor||'').localeCompare(b.m.vendor||'') || a.m.model.localeCompare(b.m.model));
     const rows = list.map(({m,i})=>`
       <div class="mi" onclick='selectModelIdx(${i});toggleMenu()'>
-        <div class="l"><span class="n">${esc(m.model)}</span><span class="v">${esc(m.vendor)}${m.rate?(' · '+rateHint(m.rate)):''}</span></div>
+        <div class="l"><span class="n">${esc(m.model)}</span><span class="v">${esc(m.vendor)}${m.rate?(' · '+rateHint(m.rate)):''}${m.tier==='free-tier'?' · free tier':''}</span></div>
         <span class="badge kind ${m.kind==='image'?'img':'txt'}">${m.kind==='image'?'Image generation':'Chatbot'}</span>
       </div>`).join("");
     $("menu").innerHTML = chips + (rows || `<div class="mi" style="cursor:default;color:var(--muted)">no models match this filter</div>`);
   }
   function selectModelIdx(i){ if(models[i]) chooseModel(models[i]); }
   function selectModel(m){
-    currentModel=m.model; modelVendor=m.vendor; modelTrains=m.trainsOnInput; modelRate=m.rate||null; modelAcceptsImages=!!m.acceptsImages;
-    $("mName").textContent=m.model; $("mVend").textContent=m.vendor+(m.rate?(' · '+rateHint(m.rate)):'');
+    currentModel=m.model; modelVendor=m.vendor; modelTrains=m.trainsOnInput; modelRate=m.rate||null; modelAcceptsImages=!!m.acceptsImages; modelTier=m.tier||"paid"; modelKind=m.kind||"text";
+    $("mName").textContent=m.model; $("mVend").textContent=m.vendor+(m.rate?(' · '+rateHint(m.rate)):'')+(m.tier==='free-tier'?' · free tier':'');
     $("privBadge").style.display = m.trainsOnInput?"inline-flex":"none";
     $("privBadge").className="badge "+(m.trainsOnInput?"train":"zr");
     $("privBadge").textContent=m.trainsOnInput?"trains on input":"zero-retention";
@@ -658,15 +837,19 @@
   function imagesHtml(imgs, mi){
     return `<div class="imgs">`+imgs.map((im,i)=>{
       const src=imgSrc(im);
+      // NO loading="lazy" here: a lazy image jumps from 0 to full height when it
+      // finally loads — on every innerHTML rebuild during streaming — and the
+      // browser's scroll anchoring then "centres" the view on it. Data URIs are
+      // local anyway; eager decode + the onload bottom re-pin keep the view calm.
       return `<figure class="genimg">
-        <img src="${src}" alt="generated image" loading="lazy">
+        <img src="${src}" alt="generated image" onload="imgSettled()">
         <button class="dl" title="Save image" onclick="event.stopPropagation();saveImageAt(${mi},${i})">⬇ save</button>
       </figure>`;
     }).join("")+`</div>`;
   }
   // A user's input attachment: image → thumbnail, anything else → a file chip.
   function attHtml(att){
-    if(att.thumb) return `<div class="imgs"><figure class="genimg"><img src="data:image/jpeg;base64,${att.thumb}" alt="attachment" loading="lazy"></figure></div>`;
+    if(att.thumb) return `<div class="imgs"><figure class="genimg"><img src="data:image/jpeg;base64,${att.thumb}" alt="attachment" onload="imgSettled()"></figure></div>`;
     const kb = att.size>=1048576 ? (att.size/1048576).toFixed(1)+" MB" : Math.round((att.size||0)/1024)+" KB";
     const ic = att.mimeType==="application/pdf" ? "📄" : (/^image\//.test(att.mimeType)?"🖼":"📝");
     return `<div class="docatt"><span class="di">${ic}</span><span class="dn">${esc(att.name||"file")}</span><span class="dt">${esc(att.mimeType)} · ${kb}</span></div>`;
@@ -690,35 +873,177 @@
   function renderThread(){
     const t=$("thread");
     if(messages.length===0){
-      t.innerHTML=`<div class="empty">
-        <div class="mark">Scramble<b>AI</b></div>
-        <p>A crowd of voices, none of them traceable to you. Ask anything —
-        the conversation stays on this device until you choose to export it.</p>
-        <div class="note"><span class="d"></span> ${mixOn?'Routing through the mixnet · 5 hops':'Direct connection · mixnet ships in v2'}</div>
-      </div>`; return;
+      t.classList.add("threadEmpty");
+      // App is still dialing into the mixnet → show a typed "Connecting…" line
+      // with a blinking cursor (built ONCE; repeated renders leave it running).
+      if(mixOn && !mixConnected){
+        if(!t.querySelector(".empty.connecting")){ t.innerHTML=emptyConnectingHTML(); startConnType(); }
+        return;
+      }
+      stopConnType();
+      t.innerHTML=emptyLogoHTML();
+      return;
     }
-    // Preserve the scroll position across the innerHTML rebuild (which would
-    // otherwise reset it to the top), so a streaming answer growing BELOW the
-    // prompt never yanks the view. The one deliberate move is scrollPromptIntoView
-    // on send, which anchors the prompt near the top.
+    t.classList.remove("threadEmpty");
+    // Scroll model: "stick to bottom". While the reader is at (or near) the end
+    // of the thread, every rebuild pins the view to the bottom, so a streaming
+    // answer rolls in typewriter-style and the view follows along. A manual
+    // scroll UP detaches the view (position is then preserved across rebuilds);
+    // scrolling back near the bottom re-attaches. The prompt itself never jumps.
     const prevTop = t.scrollTop;
     t.innerHTML=`<div class="wrap">`+messages.map((m,mi)=>`
       <div class="msg ${m.role}">
         <div class="who">${m.role==='you'?'you':(m.role==='err'?'error':'scrai')}${m.role==='ai'&&m.model?`<span class="viamodel">${esc(m.model)}</span>`:''}</div>
-        <div class="body">${esc(m.text)}${m.streaming?'<span class="cursor"></span>':''}${m.att?attHtml(m.att):''}${m.uploading?uploadHtml(m.uploading):''}${m.images&&m.images.length?imagesHtml(m.images,mi):''}</div>
+        <div class="body">${esc(m.text)}${m.streaming?(m.text?'<span class="cursor"></span>':'<span id="mixphase" class="mixphase">'+esc(mixShown)+'<span class="cursor"></span></span>'):''}${m.att?attHtml(m.att):''}${m.uploading?uploadHtml(m.uploading):''}${m.images&&m.images.length?imagesHtml(m.images,mi):''}</div>
       </div>`).join("")+`</div>`;
-    t.scrollTop = prevTop;
+    t.scrollTop = followStream ? t.scrollHeight : prevTop;
   }
-  // On send, pin the user's own prompt to just below the top of the thread, so
-  // the answer streams beneath it and the question stays visible.
-  function scrollPromptIntoView(){
+
+  // Follow state for the thread view: true while the reader sits near the end.
+  // Updated from the scroll position itself, so programmatic bottom-pins keep
+  // it true and only a real scroll away from the end turns it off.
+  let followStream = true;
+  // An image finished decoding after the rebuild pinned the scroll — its height
+  // just changed the layout, so re-pin the bottom if we're in follow mode.
+  function imgSettled(){
+    if(!followStream) return;
     const t=$("thread");
-    const you=t.querySelectorAll(".msg.you");
-    const el=you[you.length-1];
-    if(!el) return;
-    const r=el.getBoundingClientRect(), tr=t.getBoundingClientRect();
-    t.scrollTop += (r.top - tr.top) - 24;
+    t.scrollTop = t.scrollHeight;
   }
+  function threadFollowInit(){
+    const t=$("thread");
+    t.addEventListener("scroll", ()=>{
+      followStream = (t.scrollHeight - t.scrollTop - t.clientHeight) < 80;
+    });
+  }
+
+  // ---------- empty screen: mixnet "connecting" → scramble → logo ----------
+  let connTimer=null;
+  function emptyLogoHTML(fade){
+    const f = fade ? " fadein" : "";
+    return `<div class="empty">
+        <div class="mark">Scramble<b>AI</b></div>
+        <p class="${f.trim()}">A crowd of voices, none of them traceable to you. Ask anything —
+        the conversation stays on this device until you choose to export it.</p>
+        <div class="note${f}"><span class="d"></span> ${mixOn?'Routing through the mixnet · 5 hops':'Direct connection · mixnet ships in v2'}</div>
+      </div>`;
+  }
+  function emptyConnectingHTML(){
+    return `<div class="empty connecting">
+        <div class="conntype"><span id="connText"></span><span class="cursor"></span></div>
+      </div>`;
+  }
+  // Type "Connecting to mixnet..." one char at a time, then leave the cursor
+  // blinking at the end (via CSS) so the wait reads as "something is happening".
+  function startConnType(){
+    stopConnType();
+    const target="Connecting to mixnet...";
+    let i=0;
+    connTimer=setInterval(()=>{
+      const node=document.getElementById("connText");
+      if(!node){ stopConnType(); return; }   // screen changed → stop
+      i++; node.textContent=target.slice(0,i);
+      if(i>=target.length) stopConnType();    // done — cursor keeps blinking
+    }, 55);
+  }
+  function stopConnType(){ if(connTimer){ clearInterval(connTimer); connTimer=null; } }
+
+  // On connect, don't hard-cut: STIR the connecting line — scrambled egg style.
+  // Every letter is whisked on its own little elliptical orbit (amplitude swells,
+  // whirls, then dies away) while its glyph churns through noise, and the whole
+  // thing settles into the ScrambleAI wordmark.
+  function scrambleToLogo(){
+    stopConnType();
+    const t=$("thread");
+    t.classList.add("threadEmpty");
+    t.innerHTML=`<div class="empty"><div class="scramble" id="scrHost"></div></div>`;
+    const to="ScrambleAI", from="Connecting to mixnet...";
+    const noise="!<>-_\\/[]{}=+*^?#§$%&@abcdefghijklmnopqrstuvwxyz0123456789";
+    const dur=1400, len=Math.max(from.length, to.length);
+    const q=[];
+    for(let i=0;i<len;i++){
+      const start=Math.floor(Math.random()*dur*0.3);
+      q.push({
+        from:from[i]||"", to:to[i]||"",
+        start, end:start+Math.floor(dur*0.35+Math.random()*dur*0.3), ch:null,
+        phase:Math.random()*Math.PI*2,          // where on its orbit this letter starts
+        turns:1.2+Math.random(),                // how often it goes around the pan
+        r:5+Math.random()*13,                   // stir radius (px)
+        dir:Math.random()<0.5?-1:1,             // stirred clockwise or counter
+      });
+    }
+    const glyph=(g)=> g===" " ? "&nbsp;" : esc(g);
+    const t0=performance.now();
+    (function frame(now){
+      const el=document.getElementById("scrHost");
+      if(!el) return;                          // thread re-rendered → abort
+      const tt=now-t0; const p=Math.min(tt/dur,1);
+      let out="", done=0;
+      for(let i=0;i<q.length;i++){
+        const c=q[i];
+        let g, cls;
+        if(tt>=c.end){ done++; g=c.to; cls=(i>=8?"ai":""); }     // settled ("AI" in green)
+        else if(tt>=c.start){ if(!c.ch||Math.random()<0.3) c.ch=noise[Math.floor(Math.random()*noise.length)]; g=c.ch; cls="dud"; }
+        else { g=c.from; cls="src"; }                            // not yet churned
+        if(tt>=c.end && !g) continue;                            // dissolved tail char
+        // The whisk: amplitude eases in, whirls, and is forced to zero once the
+        // glyph locks — letters visibly come to rest one by one.
+        const amp = tt>=c.end ? 0 : c.r*Math.sin(Math.PI*p);
+        const a = c.phase + c.dir*c.turns*2*Math.PI*p;
+        const x = amp*Math.cos(a), y = amp*Math.sin(a)*0.6;      // flat ellipse = pan, not orbit
+        const rot = amp*c.dir*1.3;
+        out+=`<span class="ch ${cls}" style="transform:translate(${x.toFixed(1)}px,${y.toFixed(1)}px) rotate(${rot.toFixed(1)}deg)">${glyph(g)}</span>`;
+      }
+      el.innerHTML=out;
+      if(done>=q.length){ finishLogo(); return; }
+      requestAnimationFrame(frame);
+    })(t0);
+  }
+  function finishLogo(){
+    const t=$("thread");
+    if(messages.length!==0) return;            // a message arrived mid-animation
+    t.classList.add("threadEmpty");
+    t.innerHTML=emptyLogoHTML(true);           // wordmark settles; tagline fades in
+  }
+  // Called from refreshRoute whenever the mixnet connection state flips.
+  function onMixConnectChange(wasConnected){
+    // Transport just came (back) up → re-sync everything that depends on it.
+    // The boot-time fetch retries only 6× and then gives up for good, so a slow
+    // first connect used to strand the app on "no models yet" forever.
+    if(mixConnected && !wasConnected && (!models.length || !account)){ modelRetries=0; refreshState(); }
+    if(messages.length!==0) return;            // only the empty screen animates
+    if(mixConnected && !wasConnected){ scrambleToLogo(); }        // connected → logo
+    else if(!mixConnected && wasConnected){ renderThread(); }     // dropped → connecting
+  }
+
+
+  // ---------- mixnet phase status ----------
+  // The status line follows the REAL lifecycle of the request — no blind timers:
+  //   "Sending to mixnet…"  until the request (incl. any file upload) has fully
+  //                          left the device (Rust emits chat-sent; dev: fetch ok)
+  //   "Thinking…"           the provider is working — ends when the reply arrives
+  //   "Receiving answer…"   answer data is coming in; the streaming text takes over
+  // Each line types out, then holds with the blinking cursor until the NEXT real
+  // signal (Backend.chat's onPhase) advances it. Phases only ever move forward.
+  const MIX_STEPS=["Sending to mixnet","Thinking","Receiving answer"];
+  const MIX_TICK=26;   // ~26ms/char typing speed
+  let mixTimer=null, mixShown="", mixStep=-1;
+  function startMixPhase(){ stopMixPhase(); setMixPhase(0); }
+  function setMixPhase(step){
+    if(step<=mixStep) return;                     // forward only — never regress
+    mixStep=step;
+    if(mixTimer){ clearInterval(mixTimer); mixTimer=null; }
+    const word=MIX_STEPS[step]+"...";
+    let i=0; mixShown="";
+    mixTimer=setInterval(()=>{
+      const node=document.getElementById("mixphase");
+      if(!node){ stopMixPhase(); return; }        // bubble gone → answer arrived
+      i++; mixShown=word.slice(0,i);
+      node.innerHTML=esc(mixShown)+'<span class="cursor"></span>';
+      if(i>=word.length){ clearInterval(mixTimer); mixTimer=null; }  // hold, cursor blinks
+    }, MIX_TICK);
+  }
+  function stopMixPhase(){ if(mixTimer){ clearInterval(mixTimer); mixTimer=null; } mixShown=""; mixStep=-1; }
 
   // ---------- sessions (Vault-backed) ----------
   async function refreshSessions(){ sessions = await Vault.list(); renderSessions(); }
@@ -752,10 +1077,17 @@
   // ---------- mix toggle (visual placeholder) ----------
   // Dev talks to the local backend directly; the real mixnet lives in the Rust
   // core the Tauri build embeds. This just animates that future path.
-  let mixOn = false;
+  let mixOn = false, mixConnected = false, routeRetry = null;
+  // The path only turns green once we're ACTUALLY routed. Until then it shows the
+  // topology in a neutral "connecting" pulse — never a green line we aren't on yet.
+  function applyPathState(){
+    const p=$("path"); if(!p) return;
+    p.className = "path " + (!mixOn ? "off" : (mixConnected ? "on" : "connecting"));
+  }
   function toggleMix(){
     mixOn=!mixOn;
-    $("path").className="path "+(mixOn?"on":"off");
+    if(!mixOn){ mixConnected=false; clearTimeout(routeRetry); }
+    applyPathState();
     $("mixToggle").className="mixtoggle "+(mixOn?"on":"off");
     $("mixState").textContent=mixOn?"Mixnet":"Direct";
     $("mixSub").textContent=mixOn?"via Rust core (Tauri)":"dev · local backend";
@@ -784,7 +1116,9 @@
     return `${kind}: ${loc}${host}\n${e.id}`;
   }
   async function refreshRoute(){
-    if(!isTauri()) return;
+    const wasConnected = mixConnected;
+    // Dev browser has no real mixnet — show it as connected so the toggle reads on.
+    if(!isTauri()){ mixConnected=true; applyPathState(); onMixConnectChange(wasConnected); return; }
     try{
       const r = await Backend.mixnetRoute();
       routeCache = r || routeCache;
@@ -794,7 +1128,16 @@
       const eh=$("entryHop"), xh=$("exitHop");
       if(eh) eh.title = edgeTitle("entry", r.entry) + "  (click to choose)";
       if(xh) xh.title = edgeTitle("exit", r.exit) + "  (fixed — the server's gateway)";
-    }catch(_){}
+      // Connected once the client is actually LIVE on an entry gateway — the
+      // `live` flag distinguishes a real connection from a merely chosen
+      // gateway (a dead client must not keep the route showing green).
+      mixConnected = !!(r && r.entry && r.entry.id && r.live !== false);
+    }catch(_){ mixConnected=false; }
+    applyPathState();
+    onMixConnectChange(wasConnected);   // connecting-screen → scramble → logo
+    // Keep trying until the client finishes connecting.
+    clearTimeout(routeRetry);
+    if(mixOn && !mixConnected) routeRetry=setTimeout(refreshRoute, 2500);
   }
 
   // ---- entry gateway picker ----
@@ -874,7 +1217,7 @@
   }
 
   // ---------- composer ----------
-  function updateSendEnabled(){ $("send").disabled = busy || ($("input").value.trim()==="" && !pendingFile); }
+  function updateSendEnabled(){ $("send").disabled = busy || scanning || ($("input").value.trim()==="" && !pendingFile); }
   function autogrow(el){ el.style.height="auto"; el.style.height=Math.min(150,el.scrollHeight)+"px"; updateSendEnabled(); }
   function onKey(e){ if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); sendMsg(); } }
 
@@ -914,7 +1257,56 @@
       if(pendingFile&&pendingFile.url) URL.revokeObjectURL(pendingFile.url);
       pendingFile={ mimeType:f.type, size:f.size, name:f.name, bytes, isImage, thumb, url };
       renderAttach(); updateSendEnabled(); $("input").focus();
-    }catch(e){ setStatus("could not read file: "+((e&&e.message)||e)); }
+      // Privacy guard: read text inside the image ON-DEVICE (OCR) and warn if it
+      // looks like an ID / card / document. Non-blocking; the image attaches first.
+      const g=getGuardOpts();
+      if(g.enabled && g.scanImages){
+        const captured=pendingFile; const myGen=++scanGen;
+        const cancelled=()=>scanGen!==myGen || pendingFile!==captured;   // removed/replaced → abort
+        setStatus("scanning attachment on-device…");
+        scanning=true; updateSendEnabled();          // lock send until the scan finishes
+        let res;
+        try{
+          res=await Promise.race([
+            scanFileForSensitive(captured, cancelled),
+            new Promise(r=>setTimeout(()=>r({findings:[],chars:0,ok:false,engine:"timeout"}), 30000)),
+          ]);
+        }catch(_){ res={findings:[],chars:0,ok:false,engine:"none"}; }
+        if(cancelled()){
+          /* attachment was removed or swapped mid-scan — clearImage already reset the status */
+        } else if(res.findings.length && res.page){
+          // PDF: show the flagged page as an image with the regions boxed + brush.
+          // Approving replaces the PDF attachment with the redacted page PNG.
+          setStatus("⚠ sensitive data found — review & redact");
+          showGuardImage(captured, res.page.boxes, res.findings, {
+            imgUrl: res.page.png,
+            title: `Sensitive PDF · page ${res.page.index}/${res.page.total}`,
+            replace:(redacted)=>{ if(pendingFile===captured){ if(pendingFile.url) URL.revokeObjectURL(pendingFile.url); pendingFile=redacted; } },
+          });
+        } else if(res.findings.length && res.boxes && res.boxes.length){
+          // We know WHERE — show the image with the regions boxed + a brush to redact.
+          setStatus("⚠ sensitive data found — review & redact");
+          showGuardImage(captured, res.boxes, res.findings);
+        } else if(res.findings.length){
+          setStatus("⚠ sensitive data found — see the dialog");
+          showGuard(res.findings, {
+            intro:"This file appears to contain sensitive data:",
+            confirmLabel:"Keep it", cancelLabel:"Remove file",
+            onConfirm:()=>setStatus("ready"),
+            onCancel:()=>{ if(pendingFile===captured) clearImage(); else setStatus("ready"); },
+          });
+        } else if(res.engine==="timeout"){
+          setStatus("scan took too long — attached without a full check");
+        } else if(!res.ok){
+          setStatus("⚠ scan unavailable: " + String(res.error||"unknown").slice(0,90));
+        } else {
+          setStatus(`attachment scanned on-device · nothing flagged (${res.chars} chars)`);
+        }
+        // Scan finished → unlock send (unless a newer scan superseded this one,
+        // which now owns the lock).
+        if(scanGen===myGen){ scanning=false; updateSendEnabled(); }
+      }
+    }catch(e){ scanning=false; updateSendEnabled(); setStatus("could not read file: "+((e&&e.message)||e)); }
   }
   function onImagePicked(ev){ const f=ev.target.files&&ev.target.files[0]; ev.target.value=""; attachFile(f); }
 
@@ -931,7 +1323,7 @@
     const file=Array.prototype.find.call(files, x=>ACCEPT_RE.test(x.type||""))||files[0];
     if(file) attachFile(file); else setStatus("drop a file (image, PDF or text)");
   }
-  function clearImage(){ if(pendingFile&&pendingFile.url) URL.revokeObjectURL(pendingFile.url); pendingFile=null; renderAttach(); updateSendEnabled(); }
+  function clearImage(){ scanGen++; scanning=false; if(pendingFile&&pendingFile.url) URL.revokeObjectURL(pendingFile.url); pendingFile=null; renderAttach(); updateSendEnabled(); if(/scann/i.test($("price")?.textContent||"")) setStatus("ready"); }
   function renderAttach(prog){
     const row=$("attachRow");
     if(!pendingFile){ row.style.display="none"; row.innerHTML=""; return; }
@@ -976,22 +1368,46 @@
   async function sendMsg(){
     const el=$("input"); const text=el.value.trim();
     if(busy||!currentModel) return;
+    if(scanning){ setStatus("scanning attachment on-device — one moment…"); return; }   // don't send until the guard scan finishes
     if(!text && !pendingFile) return;
     if(!ensureTermsForCurrent()) return;               // must accept the provider's terms first
     if(!account){ openAccount(); return; }             // must have an account to spend
     if(pendingFile && !isVisionModel()){ setStatus("this model can’t read files — pick one that can (e.g. Gemini)"); renderAttach(); return; }
+    // Privacy guard — local scan of the prompt before it leaves the device.
+    if(!guardBypass && text){
+      const g=getGuardOpts();
+      if(g.enabled && g.scanText){
+        const findings=scanText(text);
+        const smart=await smartScanBatch([text]);        // + open-class entities (names, addresses…)
+        if(smart && smart[0]){ const seen=new Set(findings.map(f=>f.type)); smart[0].forEach(x=>{ if(!seen.has(x.type)){ seen.add(x.type); findings.push(x); } }); }
+        if(findings.length){
+          showGuard(findings, { intro:"This message looks like it contains sensitive data:", confirmLabel:"Send anyway", cancelLabel:"Let me edit", onConfirm:()=>{ guardBypass=true; sendMsg(); } });
+          return;
+        }
+      }
+    }
+    guardBypass=false;
     if(!current){ current=newSession(); messages=current.messages; }
 
     const file=pendingFile;                            // capture (may be null)
     const displayAtt = file ? { mimeType:file.mimeType, name:file.name, size:file.size, thumb:file.thumb } : undefined;
     // History is sent text-only; a prior attachment is not re-uploaded in v1.
-    const apiMessages = messages.filter(m=>m.role==="you"||m.role==="ai")
+    // Empty turns stay out: a failed send leaves an answerless assistant shell.
+    const apiMessages = messages.filter(m=>(m.role==="you"||m.role==="ai") && (m.text||"").trim())
       .map(m=>({ role:m.role==="you"?"user":"assistant", content:m.text }));
 
     const youMsg={role:"you",text,att:displayAtt}; if(file) youMsg.uploading={pct:0,kbps:0,name:file.name};
     messages.push(youMsg); el.value=""; autogrow(el);
     const ai={role:"ai",text:"",streaming:true,model:currentModel}; messages.push(ai);
-    busy=true; updateSendEnabled(); renderThread(); scrollPromptIntoView();
+    // Sending re-attaches the view to the end: the prompt lands at the bottom
+    // (no jump) and the answer types in right below it.
+    followStream=true;
+    busy=true; updateSendEnabled(); renderThread();
+
+    // Start the phased status: "Sending to mixnet…" holds (cursor blinking) until
+    // the backend reports the request really left — a chunked upload simply keeps
+    // us in this phase for its actual duration.
+    startMixPhase();
 
     // Stage the file (chunked over the mixnet) before the chat references it. The
     // progress shows ON the sent message so it doesn't get lost in the composer.
@@ -1005,6 +1421,7 @@
         } else { apiAtts=[{mimeType:file.mimeType, data:bytesToB64(file.bytes)}]; }   // dev: inline full file
       }
     }catch(e){
+      stopMixPhase();
       busy=false; ai.streaming=false; youMsg.uploading=null;
       messages[messages.length-1]={role:"err",text:"file upload failed: "+((e&&e.message)||e)};
       clearImage(); renderThread(); updateSendEnabled(); setStatus("upload failed");
@@ -1016,11 +1433,26 @@
     const outMsg={ role:"user", content:text }; if(apiAtts) outMsg.attachments=apiAtts;
     apiMessages.push(outMsg);
 
+    // Smart pruning: trim the transcript down to what THIS question needs before
+    // it leaves the device. The new prompt (with any attachment) is always kept;
+    // topic-shift only drops unrelated earlier turns. See prune.js + prune-eval.
+    const sendMessages = pruneMessages(apiMessages, getPruneOpts());
+
     // The backend redeems any held credit into the session first, then prices and
     // debits the turn. We only display the finished number it sends back.
-    Backend.chat({ model: currentModel, messages: apiMessages, maxTokens: 4096 }, {
-      onDelta:(delta)=>{ ai.text+=delta; renderThread(); },
+    // tier "free" = genuinely free → the request skips account, session and
+    // signature entirely (the server re-checks its own price table). Free-TIER
+    // models bill (reduced) and go through the normal signed path.
+    const isFree = modelTier === "free";
+    // Image models answer with a ~MB reply → the transport packs the big SURB
+    // budget; text chats ride with the small one (fewer request fragments).
+    Backend.chat({ model: currentModel, messages: sendMessages, maxTokens: 4096, free: isFree, bigReply: modelKind === "image" }, {
+      // Real lifecycle signals drive the status line: request fully sent →
+      // "Thinking…"; first answer data back → "Receiving answer…".
+      onPhase:(p)=>{ if(p==="sent") setMixPhase(1); else if(p==="receiving") setMixPhase(2); },
+      onDelta:(delta)=>{ stopMixPhase(); ai.text+=delta; renderThread(); },
       onDone: async (evt)=>{
+        stopMixPhase();
         ai.streaming=false; busy=false;
         if(typeof evt.balance==="number"){ balance=evt.balance; held=0; renderBal(); }
         if(Array.isArray(evt.images) && evt.images.length) ai.images=evt.images;
@@ -1031,6 +1463,7 @@
         updateSendEnabled();
       },
       onError: async (err)=>{
+        stopMixPhase();
         ai.streaming=false; busy=false;
         // Self-heal: if the provider says this model is gone (deprecated / not
         // available to this key), drop it from the picker and switch to a working
@@ -1046,12 +1479,25 @@
         messages[messages.length-1]={role:"err",text:err};
         renderThread(); setStatus("error"); await persist(text);
         updateSendEnabled();
+        // Transport-level failure → the Rust core dropped its mixnet client.
+        // Flip the route to "connecting" and start the poll, which actively
+        // reconnects (mixnet_route → ensure_connected) until it's green again.
+        if(/mixnet|no reply|stream ended|not connected/i.test(String(err||""))) refreshRoute();
       }
     });
   }
 
   // ---------- export / import ----------
-  function sessionForExport(){ return current && current.messages.length ? current : { model:currentModel, messages:[] }; }
+  function sessionForExport(){
+    const s = current && current.messages.length ? current : { model:currentModel, messages:[] };
+    const opts = getPruneOpts();
+    if(!opts.handover || !s.messages.length) return s;
+    // Lossless tidy on export (whitespace + filler) — role/text shape in, same out.
+    const conv = s.messages.filter(m=>m.role==="you"||m.role==="ai")
+      .map(m=>({ role:m.role==="you"?"user":"assistant", content:m.text }));
+    const tidied = pruneForHandover(conv, opts);
+    return { ...s, messages: tidied.map(m=>({ role:m.role==="user"?"you":"ai", text:m.content })) };
+  }
   function showHandover(){
     const md=Handover.serialize(sessionForExport());
     $("handoverText").innerHTML = md
@@ -1137,6 +1583,438 @@
     try{ downloadBlob(new Blob([Handover.serialize(toHandoverSession(sess))],{type:"text/markdown"}), sessionFilename(sess)); }catch(_){}
     sess.messages = sess.messages.slice(-PRUNE_KEEP);
     if(vaultOk){ try{ await Vault.save(sess); await refreshSessions(); }catch(_){} }
+  }
+
+  // ---------- settings (smart pruning) ----------
+  // Persisted locally — pruning is a client-side act, so its config never leaves
+  // the device either. Defaults: everything on (see prune.js).
+  const PRUNE_KEY = "scrai.prune";
+  function getPruneOpts(){
+    try{ return { ...PRUNE_DEFAULTS, ...(JSON.parse(localStorage.getItem(PRUNE_KEY) || "{}")) }; }
+    catch(_){ return { ...PRUNE_DEFAULTS }; }
+  }
+  function savePruneOpts(o){ try{ localStorage.setItem(PRUNE_KEY, JSON.stringify(o)); }catch(_){} }
+  // Privacy guard settings — also local-only.
+  const GUARD_KEY = "scrai.guard";
+  function getGuardOpts(){
+    try{ return { ...GUARD_DEFAULTS, ...(JSON.parse(localStorage.getItem(GUARD_KEY) || "{}")) }; }
+    catch(_){ return { ...GUARD_DEFAULTS }; }
+  }
+  function saveGuardOpts(o){ try{ localStorage.setItem(GUARD_KEY, JSON.stringify(o)); }catch(_){} }
+  function openSettings(){
+    const o = getPruneOpts();
+    $("prTopic").checked = !!o.topicShift;
+    $("prWhite").checked = !!o.whitespace;
+    $("prReq").checked   = !!o.requestTrim;
+    $("prHand").checked  = !!o.handover;
+    const g = getGuardOpts();
+    $("grEnabled").checked = !!g.enabled;
+    $("grText").checked    = !!g.scanText;
+    $("grImages").checked  = !!g.scanImages;
+    $("setStatus").textContent = "";
+    ["prTopic","prWhite","prReq","prHand"].forEach(id=>{ $(id).onchange = persistSettings; });
+    ["grEnabled","grText","grImages"].forEach(id=>{ $(id).onchange = persistGuard; });
+    $("setScrim").classList.add("open");
+  }
+  function closeSettings(){ $("setScrim").classList.remove("open"); }
+  function persistSettings(){
+    const o = { topicShift:$("prTopic").checked, whitespace:$("prWhite").checked, requestTrim:$("prReq").checked, handover:$("prHand").checked };
+    savePruneOpts(o);
+    const anyOn = o.topicShift||o.whitespace||o.requestTrim||o.handover;
+    $("setStatus").textContent = anyOn ? "Saved. Applied from your next message." : "Pruning fully disabled — full history is sent.";
+  }
+  function persistGuard(){
+    saveGuardOpts({ enabled:$("grEnabled").checked, scanText:$("grText").checked, scanImages:$("grImages").checked });
+    $("setStatus").textContent = $("grEnabled").checked ? "Saved." : "Privacy guard disabled.";
+  }
+
+  // ---------- privacy guard (local-only nag) ----------
+  let guardBypass = false;      // set true when the user confirmed "send/attach anyway"
+  let guardOnConfirm = null, guardOnCancel = null;
+  let scanGen = 0;              // bumped whenever the attachment changes → cancels any in-flight scan
+  function showGuard(findings, opts){
+    const list = findings.map(f=>`<li>${esc(f.label)}</li>`).join("");
+    $("guardBody").innerHTML = `<p>${esc(opts.intro)}</p><ul class="glist">${list}</ul>`+
+      `<p class="hint">This check ran entirely on your device — nothing was sent, logged, or stored. You decide.</p>`;
+    $("guardConfirm").textContent = opts.confirmLabel;
+    $("guardCancel").textContent  = opts.cancelLabel;
+    guardOnConfirm = opts.onConfirm || null;
+    guardOnCancel  = opts.onCancel || null;
+    $("guardScrim").classList.add("open");
+  }
+  function confirmGuard(){ const cb=guardOnConfirm; guardOnConfirm=null; guardOnCancel=null; $("guardScrim").classList.remove("open"); if(cb) cb(); }
+  function closeGuardModal(){ const cb=guardOnCancel; guardOnConfirm=null; guardOnCancel=null; $("guardScrim").classList.remove("open"); if(cb) cb(); }
+
+  // ---------- image/PDF-page review: highlight, edit boxes, redact (blackout) --
+  // giFile: the attachment. giBoxes: auto-detected (red, removable). giManual:
+  // user-drawn (black, removable). giMode: "edit" | "preview". For a scanned PDF
+  // page, giReplace holds how to swap the attachment after approval.
+  let giFile=null, giBoxes=[], giManual=[], giMode="edit", giZoomLevel=1, giBaseW=0;
+  let giOrigSrc="", giRedactCanvas=null, giReplace=null, giFindings=[];
+  const GI_PAD=0.006;
+  function showGuardImage(file, boxes, findings, opts){
+    opts=opts||{};
+    giFile=file; giBoxes=(boxes||[]).map(b=>({...b})); giManual=[]; giMode="edit"; giZoomLevel=1; giBaseW=0;
+    giFindings=findings||[]; giReplace=opts.replace||null;
+    $("guardImgTitle").textContent = opts.title || "Sensitive image";
+    giOrigSrc = opts.imgUrl || file.url || URL.createObjectURL(new Blob([file.bytes],{type:file.mimeType}));
+    const img=$("guardImg");
+    img.onload=giOnImgLoad;
+    img.src=giOrigSrc;
+    setupGiBrush();
+    renderGiFoot();
+    $("guardImgScrim").classList.add("open");
+  }
+  function giOnImgLoad(){
+    const img=$("guardImg");
+    if(!giBaseW){ const maxW=($("guardImgScroll").clientWidth||900)-30; giBaseW=Math.min(img.naturalWidth||maxW, maxW); }
+    applyZoom();
+  }
+  function applyZoom(){
+    const img=$("guardImg"), c=$("guardImgCanvas");
+    if(!img.naturalWidth){ return; }
+    const w=Math.round(giBaseW*giZoomLevel), h=Math.round(w*(img.naturalHeight/img.naturalWidth));
+    img.style.width=w+"px"; img.style.height=h+"px";
+    c.width=w; c.height=h; c.style.width=w+"px"; c.style.height=h+"px";
+    $("giZoomLbl").textContent=Math.round(giZoomLevel*100)+"%";
+    if(giMode==="edit") drawGiOverlay(); else clearGiOverlay();
+  }
+  function giZoom(d){ giZoomLevel=Math.min(5, Math.max(0.4, giZoomLevel + d*0.25)); applyZoom(); }
+  function giZoomReset(){ giZoomLevel=1; applyZoom(); }
+  function giToggleFull(){ const m=$("guardImgModal"); m.classList.toggle("gi-full"); giBaseW=0; setTimeout(()=>{ giOnImgLoad(); },30); }
+  function clearGiOverlay(){ const c=$("guardImgCanvas"); if(c) c.getContext("2d").clearRect(0,0,c.width,c.height); }
+  function drawGiOverlay(temp){
+    if(giMode!=="edit") return; const c=$("guardImgCanvas"); if(!c) return; const x=c.getContext("2d"); x.clearRect(0,0,c.width,c.height);
+    const box=(b,fill,stroke)=>{ const X=(b.x-GI_PAD)*c.width, Y=(b.y-GI_PAD)*c.height, W=(b.w+2*GI_PAD)*c.width, H=(b.h+2*GI_PAD)*c.height; x.fillStyle=fill; x.fillRect(X,Y,W,H); x.strokeStyle=stroke; x.lineWidth=2; x.strokeRect(X,Y,W,H); };
+    giBoxes.forEach(b=>box(b,"rgba(220,60,50,.28)","rgba(220,60,50,.95)"));
+    giManual.forEach(b=>box(b,"rgba(15,15,15,.62)","rgba(160,160,160,.9)"));
+    if(temp) box(temp,"rgba(15,15,15,.5)","rgba(160,160,160,.8)");
+  }
+  function hitBox(list,p){ for(let i=list.length-1;i>=0;i--){ const b=list[i]; if(p.x>=b.x-GI_PAD&&p.x<=b.x+b.w+GI_PAD&&p.y>=b.y-GI_PAD&&p.y<=b.y+b.h+GI_PAD) return i; } return -1; }
+  function setupGiBrush(){
+    const c=$("guardImgCanvas"); if(!c) return; let drawing=false, a=null, b=null, moved=0;
+    const pos=(e)=>{ const r=c.getBoundingClientRect(); return { x:Math.min(1,Math.max(0,(e.clientX-r.left)/c.width)), y:Math.min(1,Math.max(0,(e.clientY-r.top)/c.height)) }; };
+    c.onpointerdown=(e)=>{ if(giMode!=="edit")return; drawing=true; a=b=pos(e); moved=0; try{c.setPointerCapture(e.pointerId);}catch(_){} };
+    c.onpointermove=(e)=>{ if(!drawing) return; b=pos(e); moved=Math.max(moved,Math.abs(b.x-a.x)+Math.abs(b.y-a.y)); drawGiOverlay({x:Math.min(a.x,b.x),y:Math.min(a.y,b.y),w:Math.abs(b.x-a.x),h:Math.abs(b.y-a.y)}); };
+    c.onpointerup=()=>{ if(!drawing) return; drawing=false;
+      if(moved<0.02){ // a tap → remove a box under the cursor (manual first, then auto)
+        let i=hitBox(giManual,a); if(i>=0){ giManual.splice(i,1); } else { i=hitBox(giBoxes,a); if(i>=0) giBoxes.splice(i,1); }
+      }else{ const w=Math.abs(b.x-a.x), h=Math.abs(b.y-a.y); if(w>0.008&&h>0.008) giManual.push({x:Math.min(a.x,b.x),y:Math.min(a.y,b.y),w,h}); }
+      drawGiOverlay();
+    };
+  }
+  function buildRedactCanvas(){
+    const img=$("guardImg");
+    const c=document.createElement("canvas"); c.width=img.naturalWidth; c.height=img.naturalHeight;
+    const x=c.getContext("2d"); x.drawImage(img,0,0,c.width,c.height);
+    x.fillStyle="#000";
+    [...giBoxes,...giManual].forEach(b=>{ x.fillRect((b.x-GI_PAD)*c.width,(b.y-GI_PAD)*c.height,(b.w+2*GI_PAD)*c.width,(b.h+2*GI_PAD)*c.height); });
+    return c;
+  }
+  function giProcess(){
+    if(giMode!=="edit") return;
+    if(!giBoxes.length && !giManual.length){ setStatus("nothing marked to black out"); return; }
+    giRedactCanvas=buildRedactCanvas();
+    clearGiOverlay();
+    $("guardImg").src=giRedactCanvas.toDataURL("image/png");   // giOnImgLoad re-applies zoom
+    giMode="preview"; renderGiFoot();
+  }
+  function giBack(){ giMode="edit"; $("guardImg").src=giOrigSrc; renderGiFoot(); }
+  async function giApprove(){
+    if(!giRedactCanvas){ return; }
+    const captured=giFile, n=giBoxes.length+giManual.length;
+    giRedactCanvas.toBlob(async (blob)=>{
+      try{
+        const bytes=new Uint8Array(await blob.arrayBuffer());
+        const url=URL.createObjectURL(blob);
+        const name=(captured.name||"file").replace(/\.[^.]+$/,"")+"-redacted.png";
+        const redacted={ mimeType:"image/png", size:bytes.length, name, bytes, isImage:true, thumb:await makeThumb(url,640), url };
+        if(giReplace){ giReplace(redacted); }                    // PDF page → replace however the opener wants
+        else if(pendingFile===captured){ if(pendingFile.url) URL.revokeObjectURL(pendingFile.url); pendingFile=redacted; }
+        renderAttach(); updateSendEnabled();
+        setStatus("redacted on-device · "+n+" area(s) blacked out");
+      }catch(_){}
+      closeGuardImg();
+    }, "image/png");
+  }
+  function renderGiFoot(){
+    const f=$("guardImgFoot"), hint=$("guardImgHint");
+    if(giMode==="edit"){
+      hint.innerHTML = "Detected: <b>"+(giFindings.map(x=>esc(x.label)).join(", ")||"sensitive data")+"</b>. Drag to mark extra areas · tap a box to remove it. Nothing leaves your device.";
+      f.innerHTML = `<button class="btn" onclick="guardImgRemove()">Remove file</button>
+        <span style="display:flex;gap:8px"><button class="btn" onclick="guardImgKeep()">Keep original</button>
+        <button class="btn primary" onclick="giProcess()">Process changes ▸</button></span>`;
+    }else{
+      hint.innerHTML = "This is the redacted result — check the black areas cover everything. Nothing has been sent.";
+      f.innerHTML = `<button class="btn" onclick="giBack()">◂ Back to edit</button>
+        <span style="display:flex;gap:8px"><button class="btn" onclick="guardImgKeep()">Keep original</button>
+        <button class="btn primary" onclick="giApprove()">Approve &amp; keep</button></span>`;
+    }
+  }
+  function guardImgKeep(){ const f=giFile; setStatus("kept original — flagged but not redacted"); closeGuardImg(); if(giReplace&&f) {/* PDF: keep original stays as-is */} }
+  function guardImgRemove(){ const f=giFile; closeGuardImg(); if(!giReplace && pendingFile===f) clearImage(); else if(giReplace && f) clearImage(); }
+  function closeGuardImg(){ giFile=null; giBoxes=[]; giManual=[]; giRedactCanvas=null; giReplace=null; giMode="edit"; $("guardImgModal").classList.remove("gi-full"); $("guardImgScrim").classList.remove("open"); }
+
+  // ---------- local OCR (lazy, offline) for the image guard ----------
+  let ocrWorker=null, ocrLoading=null;
+  async function ensureOcr(){
+    if(ocrWorker) return ocrWorker;
+    if(ocrLoading) return ocrLoading;
+    ocrLoading=(async()=>{
+      const T=await import("./vendor/tesseract/tesseract.esm.min.js");
+      const createWorker=T.createWorker||(T.default&&T.default.createWorker);
+      const w=await createWorker("eng",1,{
+        workerPath:"vendor/tesseract/worker.min.js",
+        corePath:"vendor/tesseract/tesseract-core-simd-lstm.wasm.js",
+        langPath:"vendor/tesseract/",           // eng.traineddata.gz lives here
+        gzip:true, cacheMethod:"none",
+      });
+      ocrWorker=w; return w;
+    })();
+    try{ return await ocrLoading; } finally{ ocrLoading=null; }
+  }
+  // Grayscale + contrast + upscale — embossed / low-contrast cards are otherwise
+  // nearly unreadable for OCR. Returns a dataURL, or the original src on failure.
+  async function preprocessForOcr(src){
+    try{
+      const img=await new Promise((res,rej)=>{ const i=new Image(); i.onload=()=>res(i); i.onerror=rej; i.src=src; });
+      const scale=Math.min(2.2, Math.max(1, 1500/Math.max(img.width||1,img.height||1)));
+      const c=document.createElement("canvas"); c.width=Math.round((img.width||1)*scale); c.height=Math.round((img.height||1)*scale);
+      const x=c.getContext("2d"); x.drawImage(img,0,0,c.width,c.height);
+      const im=x.getImageData(0,0,c.width,c.height), p=im.data;
+      for(let i=0;i<p.length;i+=4){
+        let g=0.299*p[i]+0.587*p[i+1]+0.114*p[i+2];
+        g=(g-128)*1.7+128;                    // contrast boost
+        p[i]=p[i+1]=p[i+2]=g<0?0:g>255?255:g;
+      }
+      x.putImageData(im,0,0);
+      return c.toDataURL("image/png");
+    }catch(_){ return src; }
+  }
+  // Best-effort: OCR the image locally, run the (lenient) detectors on the text.
+  // Returns { findings, chars, ok, engine } so the caller can show a clear status.
+  // Tries the OS-native engine first (macOS: Apple Vision — faster, far better on
+  // photos), then falls back to the bundled Tesseract-WASM everywhere else.
+  // ---- semantic guard (GLiNER, on-device) ----------------------------------
+  // Zero-shot NER for OPEN-CLASS sensitive data the deterministic detectors can't
+  // catch: person names, postal addresses, tax numbers, ID/passport numbers,
+  // dates of birth. Only active when the `smart-guard` engine is built AND a model
+  // is installed; otherwise smartReady() is false and every path below falls back
+  // to scanText alone. 100% on-device — texts never leave the machine.
+  const GUARD_ENTITY_LABELS = ["person","address","tax number","passport or id number","date of birth"];
+  const GUARD_ENTITY_MAP = {
+    "person":                { type:"name",    label:"a person’s name" },
+    "address":               { type:"address", label:"a postal address" },
+    "tax number":            { type:"taxid",   label:"a tax number" },
+    "passport or id number": { type:"idnum",   label:"an ID or passport number" },
+    "date of birth":         { type:"dob",     label:"a date of birth" },
+  };
+  const mapSmartEntity = (e)=> GUARD_ENTITY_MAP[e.label] || { type:"pii", label:e.label };
+  let _smartAvail;   // cached availability; reset to undefined after a model (un)install
+  function resetSmartAvail(){ _smartAvail=undefined; }
+  async function smartReady(){
+    if(_smartAvail===undefined){ try{ _smartAvail = await Backend.smartAvailable(); }catch(_){ _smartAvail=false; } }
+    return _smartAvail;
+  }
+  // Run the semantic layer over a BATCH of texts in ONE inference. Returns an array
+  // aligned to `texts` (each a list of {type,label}), or null if unavailable.
+  async function smartScanBatch(texts){
+    try{
+      if(!texts || !texts.length || !(await smartReady())) return null;
+      const res = await Backend.smartDetect(texts, GUARD_ENTITY_LABELS);
+      if(!Array.isArray(res)) return null;
+      return res.map(ents => (ents||[]).map(mapSmartEntity));
+    }catch(e){ console.log("[guard] semantic layer unavailable:", (e&&e.message)||e); return null; }
+  }
+
+  async function scanImageForSensitive(file){
+    // Native (macOS Apple Vision) returns per-line boxes → scan each line so we
+    // know exactly WHERE each finding sits (for highlighting + redaction).
+    if(isTauri()){
+      try{
+        const res = await Backend.ocr(bytesToB64(file.bytes));
+        if(Array.isArray(res)){
+          const texts = res.map(b => b.text||"");
+          const smart = await smartScanBatch(texts);   // per-box entities, or null
+          const found=new Map(); const flagged=[]; let chars=0;
+          for(let i=0;i<res.length;i++){
+            const b=res[i], t=texts[i]; chars+=t.length; let hit=false;
+            const f=scanText(t, {ocr:true});
+            if(f.length){ f.forEach(x=>{ if(!found.has(x.type)) found.set(x.type,x); }); hit=true; }
+            if(smart && smart[i] && smart[i].length){ smart[i].forEach(x=>{ if(!found.has(x.type)) found.set(x.type,x); }); hit=true; }
+            if(hit) flagged.push({x:b.x,y:b.y,w:b.w,h:b.h});
+          }
+          console.log("[guard] native OCR:", res.length, "lines,", flagged.length, "flagged", smart?"(+semantic)":"");
+          return { findings:[...found.values()], chars, ok:true, engine: smart?"native+smart":"native", boxes:flagged };
+        }
+      }catch(e){ console.log("[guard] native OCR unavailable → WASM:", (e&&e.message)||e); }
+    }
+    // WASM Tesseract fallback — full-text scan, no boxes (no per-region highlight).
+    try{
+      const w=await ensureOcr();
+      const src=(file&&file.url) || URL.createObjectURL(new Blob([file.bytes],{type:file.mimeType}));
+      const pre=await preprocessForOcr(src);
+      const { data }=await w.recognize(pre);
+      const text=(data&&data.text)||"";
+      console.log("[guard] WASM OCR read",text.length,"chars");
+      return { findings: scanText(text, {ocr:true}), chars:text.length, ok:true, engine:"tesseract", boxes:[] };
+    }catch(e){ console.warn("[guard] OCR unavailable:", e); return { findings:[], chars:0, ok:false, engine:"none", error:(e&&e.message)||String(e) }; }
+  }
+
+  // OCR a canvas (used for rendered PDF pages): native first, WASM fallback.
+  async function ocrCanvas(canvas){
+    if(isTauri()){
+      try{ const b64=canvas.toDataURL("image/png").split(",")[1]; const t=await Backend.ocr(b64); if(typeof t==="string") return t; }catch(_){}
+    }
+    try{ const w=await ensureOcr(); const { data }=await w.recognize(canvas); return (data&&data.text)||""; }catch(_){ return ""; }
+  }
+
+  // Lazy-load the locally-bundled pdf.js (offline, no CDN).
+  let pdfjsLib=null;
+  async function ensurePdfjs(){
+    if(pdfjsLib) return pdfjsLib;
+    const m=await import("/vendor/pdfjs/pdf.min.mjs");
+    m.GlobalWorkerOptions.workerSrc="/vendor/pdfjs/pdf.worker.min.mjs";
+    pdfjsLib=m; return m;
+  }
+  // Scan a PDF on-device: read the text layer of each page (digital invoices), and
+  // for pages with (almost) no extractable text — i.e. scanned images — render the
+  // page and OCR it. Nothing leaves the device.
+  // Render the PDF's pages natively (CoreGraphics → PNG + Vision boxes) and
+  // return the FIRST page that carries a sensitive box, ready for the redaction
+  // modal: { png:dataURL, boxes:[{x,y,w,h}], findings:[...], index, total }.
+  // Returns null if nothing renders or no page has a flagged box (→ list only).
+  async function pdfFlaggedPage(file, stop){
+    try{
+      const pages=await Backend.pdfPages(bytesToB64(file.bytes));
+      if(stop && stop()) return null;
+      if(!Array.isArray(pages)) return null;
+      for(let pi=0; pi<pages.length; pi++){
+        const pg=pages[pi]||{};
+        const bx = pg.boxes||[];
+        const texts = bx.map(b => b.text||"");
+        const smart = await smartScanBatch(texts);   // per-box entities, or null
+        const boxes=[]; const found=new Map();
+        for(let i=0;i<bx.length;i++){
+          const b=bx[i]; let hit=false;
+          const f=scanText(texts[i], {ocr:true});
+          if(f.length){ f.forEach(x=>{ if(!found.has(x.type)) found.set(x.type,x); }); hit=true; }
+          if(smart && smart[i] && smart[i].length){ smart[i].forEach(x=>{ if(!found.has(x.type)) found.set(x.type,x); }); hit=true; }
+          if(hit) boxes.push({ x:b.x, y:b.y, w:b.w, h:b.h });
+        }
+        if(boxes.length){
+          return { png:"data:image/png;base64,"+pg.png, boxes,
+                   findings:[...found.values()], index:pi+1, total:pages.length };
+        }
+      }
+    }catch(e){ console.log("[guard] pdf_pages unavailable:", (e&&e.message)||e); }
+    return null;
+  }
+
+  async function scanPdfForSensitive(file, cancelled){
+    const stop=()=> !!(cancelled && cancelled());
+    // 1) Native Rust text-layer extraction — robust in the app (no pdf.js in the
+    //    webview). Handles digital PDFs (invoices). Empty result → likely scanned.
+    if(isTauri()){
+      try{
+        const text=await Backend.pdfText(bytesToB64(file.bytes));
+        if(stop()) return { findings:[], chars:0, ok:false, engine:"cancelled" };
+        if(typeof text==="string"){
+          if(text.trim().length>=8){
+            console.log("[guard] native PDF text:", text.length, "chars");
+            const findings=scanText(text);
+            const smart=await smartScanBatch([text]);    // catch name-/address-only PDFs too
+            if(smart && smart[0]){ const seen=new Set(findings.map(f=>f.type)); smart[0].forEach(x=>{ if(!seen.has(x.type)){ seen.add(x.type); findings.push(x); } }); }
+            // Findings in a digital PDF → render pages so the user can review &
+            // redact the exact spot (same modal as images).
+            const page = findings.length ? await pdfFlaggedPage(file, stop) : null;
+            return { findings, chars:text.length, ok:true, engine: smart?"pdf-native+smart":"pdf-native", page };
+          }
+          // Empty text layer = scanned / image-only PDF → render pages natively
+          // (CoreGraphics) and OCR them with Vision.
+          try{
+            const ocr=await Backend.pdfOcr(bytesToB64(file.bytes));
+            if(stop()) return { findings:[], chars:0, ok:false, engine:"cancelled" };
+            if(typeof ocr==="string" && ocr.trim().length>=2){
+              console.log("[guard] scanned-PDF render+OCR:", ocr.length, "chars");
+              const findings=scanText(ocr, {ocr:true});
+              const smart=await smartScanBatch([ocr]);   // + open-class entities
+              if(smart && smart[0]){ const seen=new Set(findings.map(f=>f.type)); smart[0].forEach(x=>{ if(!seen.has(x.type)){ seen.add(x.type); findings.push(x); } }); }
+              const page = findings.length ? await pdfFlaggedPage(file, stop) : null;
+              return { findings, chars:ocr.length, ok:true, engine: smart?"pdf-ocr+smart":"pdf-ocr", page };
+            }
+          }catch(e){ console.log("[guard] pdf_ocr unavailable:", (e&&e.message)||e); }
+          return { findings:[], chars:0, ok:false, engine:"scanned",
+                   error:"scanned PDF — couldn’t read it (no text layer, OCR returned nothing)" };
+        }
+      }catch(e){ console.log("[guard] native PDF extract unavailable → pdf.js:", (e&&e.message)||e); }
+    }
+    // 2) Fallback: pdf.js (dev browser, or scanned PDFs needing render+OCR).
+    let loadingTask=null;
+    try{
+      const pdfjs=await ensurePdfjs();
+      if(stop()) return { findings:[], chars:0, ok:false, engine:"cancelled" };
+      loadingTask=pdfjs.getDocument({ data: file.bytes.slice() });   // slice → don't detach our upload buffer
+      const doc=await loadingTask.promise;
+      const found=new Map(); let chars=0, ocrPages=0;
+      const addAll=(arr)=>arr.forEach(f=>{ if(!found.has(f.type)) found.set(f.type,f); });
+      const pages=Math.min(doc.numPages, 25);
+      for(let i=1;i<=pages;i++){
+        if(stop()){ try{loadingTask.destroy();}catch(_){}; return { findings:[...found.values()], chars, ok:false, engine:"cancelled" }; }
+        const page=await doc.getPage(i);
+        const tc=await page.getTextContent();
+        const text=tc.items.map(it=>it.str||"").join(" ");
+        chars+=text.length;
+        addAll(scanText(text));                          // clean text layer → strict rules
+        // Only OCR pages that have (almost) no extractable text, and cap it — a
+        // rendered A4 page is a big image, so this is the slow part.
+        if(text.trim().length<24 && ocrPages<3){
+          ocrPages++;
+          const vp=page.getViewport({ scale: 1.4 });
+          const c=document.createElement("canvas"); c.width=vp.width; c.height=vp.height;
+          await page.render({ canvasContext:c.getContext("2d"), viewport:vp }).promise;
+          if(stop()){ try{loadingTask.destroy();}catch(_){}; return { findings:[...found.values()], chars, ok:false, engine:"cancelled" }; }
+          const ocr=await ocrCanvas(c); chars+=ocr.length;
+          addAll(scanText(ocr, {ocr:true}));             // OCR'd text → lenient rules
+        }
+      }
+      try{loadingTask.destroy();}catch(_){}
+      if(doc.numPages>pages) console.log("[guard] PDF scan capped at",pages,"of",doc.numPages,"pages");
+      return { findings:[...found.values()], chars, ok:true, engine:"pdf" };
+    }catch(e){ try{loadingTask&&loadingTask.destroy();}catch(_){}; console.warn("[guard] PDF scan failed:", e); return { findings:[], chars:0, ok:false, engine:"none", error:(e&&e.message)||String(e) }; }
+  }
+
+  // Detect the REAL file type from its magic bytes, not the name/extension — so a
+  // PDF renamed to .jpg is still handled as a PDF (and never handed to the image
+  // OCR, which would choke on non-image bytes).
+  function sniffKind(bytes, mt){
+    const b=bytes||new Uint8Array();
+    if(b.length>=4 && b[0]===0x25&&b[1]===0x50&&b[2]===0x44&&b[3]===0x46) return "pdf";                 // %PDF
+    if(b.length>=3 && b[0]===0xFF&&b[1]===0xD8&&b[2]===0xFF) return "image";                            // JPEG
+    if(b.length>=8 && b[0]===0x89&&b[1]===0x50&&b[2]===0x4E&&b[3]===0x47) return "image";               // PNG
+    if(b.length>=4 && b[0]===0x47&&b[1]===0x49&&b[2]===0x46) return "image";                            // GIF
+    if(b.length>=12 && b[8]===0x57&&b[9]===0x45&&b[10]===0x42&&b[11]===0x50) return "image";            // WEBP
+    if(mt==="application/pdf") return "pdf";
+    if(/^image\//.test(mt)) return "image";
+    if(/^text\//.test(mt) || /(json|csv|xml|yaml)/.test(mt)) return "text";
+    return "other";
+  }
+  // Dispatch a scan by REAL file type.
+  async function scanFileForSensitive(file, cancelled){
+    const kind=sniffKind(file&&file.bytes, (file&&file.mimeType)||"");
+    if(kind==="image") return scanImageForSensitive(file);
+    if(kind==="pdf") return scanPdfForSensitive(file, cancelled);
+    if(kind==="text"){
+      try{
+        const text=new TextDecoder().decode(file.bytes);
+        const findings=scanText(text);
+        const smart=await smartScanBatch([text]);        // + open-class entities
+        if(smart && smart[0]){ const seen=new Set(findings.map(f=>f.type)); smart[0].forEach(x=>{ if(!seen.has(x.type)){ seen.add(x.type); findings.push(x); } }); }
+        return { findings, chars:text.length, ok:true, engine: smart?"text+smart":"text" };
+      }
+      catch(_){ return { findings:[], chars:0, ok:false, engine:"none" }; }
+    }
+    return { findings:[], chars:0, ok:true, engine:"none" };
   }
 
   // ---------- account (in-app dialogs — prompt/confirm/alert are no-ops in the
@@ -1230,31 +2108,108 @@
   }
 
   // ---------- buy credit ----------
-  let pollTimer=null, countdownTimer=null, pollBusy=false, payDests=[], activeInvoice=null;
+  let pollTimer=null, countdownTimer=null, pollBusy=false, payDests=[], payMemos=[], activeInvoice=null, pendRefreshTimer=null;
+  // Invoices raised but not yet paid — so an abandoned payment (e.g. wrong coin)
+  // can be re-opened instead of vanishing. Persisted across app reloads; each entry
+  // drops off automatically once its timer runs out.
+  const PENDING_KEY = "scrai.pending";
+  let pendingList = loadPending();
+  function loadPending(){
+    try{ return (JSON.parse(localStorage.getItem(PENDING_KEY)||"[]")).filter(p=>p && p.expiresAt>Date.now()); }
+    catch(_){ return []; }
+  }
+  function savePending(){ try{ localStorage.setItem(PENDING_KEY, JSON.stringify(pendingList)); }catch(_){} }
+  function pruneExpired(){ const n=pendingList.length; pendingList=pendingList.filter(p=>p.expiresAt>Date.now()); if(pendingList.length!==n) savePending(); }
+  function addPending(inv){ pendingList=pendingList.filter(p=>p.invoiceId!==inv.invoiceId); pendingList.push(inv); savePending(); }
+  function removePending(id){ pendingList=pendingList.filter(p=>p.invoiceId!==id); savePending(); }
+  function coinOf(inv){ const o=(inv.options||[])[0]; return o&&/nym/i.test(o.method||"")?"NYM":"Bitcoin"; }
+
   function stopPoll(){ if(pollTimer){ clearInterval(pollTimer); pollTimer=null; } }
   function stopCountdown(){ if(countdownTimer){ clearInterval(countdownTimer); countdownTimer=null; } }
+  function stopPendRefresh(){ if(pendRefreshTimer){ clearInterval(pendRefreshTimer); pendRefreshTimer=null; } }
+  // Amounts are SELECTION items (like the coins) — clicking only highlights, it
+  // never starts a purchase. The explicit Continue button below does that, so a
+  // stray click can't raise an invoice (or two).
+  let selectedTier = null;
   function renderTiers(){
-    $("tierRow").innerHTML = tiers.map(t=>`<button class="btn primary" onclick="buyOrInvoice(${t})">$${t}</button>`).join("");
+    $("tierRow").innerHTML = tiers.map(t=>`<button class="tier${selectedTier===t?' sel':''}" onclick="selectTier(${t})">$${t}</button>`).join("");
   }
+  function selectTier(t){ selectedTier=t; renderTiers(); renderContinue(); }
+  function renderContinue(){
+    const el=$("continueRow"); if(!el) return;
+    const coin = selectedMethod==="nyx" ? "NYM" : "Bitcoin";
+    el.innerHTML = selectedTier
+      ? `<button class="btn primary" style="width:100%" onclick="startPurchase()">Continue — pay $${selectedTier} with ${coin} →</button>`
+      : `<button class="btn" style="width:100%;opacity:.5;cursor:not-allowed" disabled>Pick an amount above</button>`;
+  }
+  function startPurchase(){ if(selectedTier!=null) buyOrInvoice(selectedTier); }
+  function showChooser(on){ const c=$("chooser"); if(c) c.style.display = on ? "" : "none"; }
+
+  // The coin/amount picker is always the landing view; an in-flight payment is
+  // reached from "Pending payments", never sprung on the user.
   function openBuy(){
     if(!account){ openAccount(); return; }
-    if(activeInvoice){ renderPay(activeInvoice); startCountdown(activeInvoice.expiresAt); setPayStatus("waiting"); }
-    else {
-      renderTiers();
-      $("buyStatus").textContent = fakePayments
-        ? "dev mode — settles instantly, no real money moves."
-        : "Pick an amount, then pay the invoice on Bitcoin/Lightning testnet.";
-    }
+    stopPoll(); stopCountdown(); activeInvoice=null; selectedTier=null;
+    showChooser(true); renderTiers(); renderContinue(); renderPending();
+    $("buyStatus").textContent = fakePayments
+      ? "dev mode — settles instantly, no real money moves."
+      : "Pick an amount and a coin.";
+    stopPendRefresh(); pendRefreshTimer=setInterval(tickPending, 1000);
     $("buyScrim").classList.add("open");
   }
-  // Closing does NOT stop the poll — pay in your wallet, come back, and it will
-  // already be credited. Only the visible countdown is paused.
-  function closeBuy(){ stopCountdown(); $("buyScrim").classList.remove("open"); }
-  function buyOrInvoice(usd){ return fakePayments ? buyTier(usd) : startInvoice(usd); }
+  // Closing does NOT stop an open payment's poll — pay in your wallet, come back,
+  // and it's already credited. Only the visible timers pause.
+  function closeBuy(){ stopCountdown(); stopPendRefresh(); $("buyScrim").classList.remove("open"); }
+
+  function renderPending(){
+    pruneExpired();
+    const box=$("pendingBox"); if(!box) return;
+    if(!pendingList.length){ box.innerHTML=""; return; }
+    const rows = pendingList.slice().sort((a,b)=>a.expiresAt-b.expiresAt).map(p=>`
+      <div class="pendrow" data-id="${esc(p.invoiceId)}" onclick="resumePayment('${esc(p.invoiceId)}')">
+        <span class="pcoin">${esc(coinOf(p))}</span>
+        <span class="pamt">$${(p.amountUsd||0).toFixed(2)} · ${formatScrai(p.amountScrai||0)} SCRAI</span>
+        <span class="pleft">${fmtCountdown(p.expiresAt-Date.now())}</span>
+        <span class="presume">Resume ▸</span>
+        <button class="pcancel" title="Cancel this payment" onclick="event.stopPropagation();cancelPending('${esc(p.invoiceId)}')">✕</button>
+      </div>`).join("");
+    box.innerHTML = `<div class="pendlabel">Pending payments</div>${rows}`;
+  }
+  // Tick the countdowns IN PLACE — never rebuild the rows on the 1s timer, or a
+  // click on Resume/✕ lands on an element that was just replaced. Only a real
+  // change to the set (an expiry) triggers a full re-render.
+  function tickPending(){
+    const c=$("chooser"); if(!c || c.style.display==="none") return;
+    let expired=false;
+    for(const p of pendingList){
+      if(p.expiresAt<=Date.now()){ expired=true; continue; }
+      const el=document.querySelector(`.pendrow[data-id="${p.invoiceId}"] .pleft`);
+      if(el) el.textContent=fmtCountdown(p.expiresAt-Date.now());
+    }
+    if(expired) renderPending();   // rebuild once, only when something dropped off
+  }
+  function resumePayment(id){ const inv=pendingList.find(p=>p.invoiceId===id); if(inv) openPayment(inv); }
+  // Cancel a pending payment: gone from the UI at once, and told the server to stop
+  // watching it (best-effort — it would expire on its own regardless).
+  function cancelPending(id){
+    if(activeInvoice && activeInvoice.invoiceId===id){ stopPoll(); stopCountdown(); activeInvoice=null; }
+    removePending(id); renderPending();
+    Promise.resolve(Backend.invoiceCancel(id)).catch(()=>{});
+  }
+  function backToChooser(){ stopPoll(); stopCountdown(); activeInvoice=null; showChooser(true); renderTiers(); renderContinue(); renderPending(); $("buyStatus").textContent="Pick an amount and a coin."; }
+  // Which coin the tier buttons will raise an invoice for. NYM is the default —
+  // it leads the row. Bitcoin stays available; Monero is not selectable yet.
+  let selectedMethod = "nyx";
+  function selectMethod(m){
+    selectedMethod = m;
+    document.querySelectorAll('.pm[data-method]').forEach(el=>el.classList.toggle('sel', el.dataset.method===m));
+    renderContinue();
+  }
+  function buyOrInvoice(usd){ return fakePayments ? buyTier(usd) : startInvoice(usd, selectedMethod); }
 
   function setPayStatus(kind, extra){
     const s=$("buyStatus"); if(!s) return;
-    if(kind==="waiting")        s.textContent="● Pending — waiting for payment (checking the mixnet every 10s)…";
+    if(kind==="waiting")        s.textContent="● Pending — waiting for your payment. Detected automatically; you can close this and come back.";
     else if(kind==="collecting")s.textContent="✓ Payment received — collecting your credit…";
     else if(kind==="collected") s.textContent=`✓ +${formatScrai(extra||0)} SCRAI collected — held, funds your next message.`;
     else if(kind==="expired")   s.textContent="Invoice expired — pick an amount to try again.";
@@ -1280,53 +2235,101 @@
     }catch(e){ $("buyStatus").textContent=e.message||String(e); }
   }
 
-  // Real gateway: raise an invoice, show pay options, poll until settled, collect.
-  async function startInvoice(usd){
+  // Real gateway: raise an invoice, remember it as pending, open its payment view.
+  async function startInvoice(usd, method){
     stopPoll(); stopCountdown(); activeInvoice=null;
     $("buyStatus").textContent="raising invoice…";
     let inv;
-    try{ inv=await Backend.invoice(usd); }catch(e){ $("buyStatus").textContent=e.message||String(e); return; }
+    try{ inv=await Backend.invoice(usd, method); }catch(e){ $("buyStatus").textContent=e.message||String(e); return; }
+    addPending(inv);
+    openPayment(inv);
+  }
+  // Show a raised invoice's payment view and poll it to settlement. The status poll
+  // also carries the live chain-watch health (NYM) back for the indicator.
+  function openPayment(inv){
+    stopPoll(); stopCountdown();
     activeInvoice=inv;
-    renderPay(inv); startCountdown(inv.expiresAt); setPayStatus("waiting");
-    pollTimer=setInterval(async ()=>{
+    showChooser(false);
+    renderPay(inv); startCountdown(inv.expiresAt); setPayStatus("waiting"); updateWatch(null);
+    const tick=async ()=>{
       if(pollBusy) return; pollBusy=true;
       try{
         const st=await Backend.invoiceStatus(inv.invoiceId);
+        updateWatch(st.watch);
         if(st.status==="paid"){
-          stopPoll(); stopCountdown(); activeInvoice=null; setPayStatus("collecting");
-          const r=await Backend.collect(); await refreshState(); renderTiers(); setPayStatus("collected", r.collected);
+          stopPoll(); stopCountdown(); activeInvoice=null; removePending(inv.invoiceId); setPayStatus("collecting");
+          const r=await Backend.collect(); await refreshState(); showChooser(true); renderTiers(); renderPending(); setPayStatus("collected", r.collected);
         }else if(st.status==="expired"){
-          stopPoll(); stopCountdown(); activeInvoice=null; renderTiers(); setPayStatus("expired");
+          stopPoll(); stopCountdown(); activeInvoice=null; removePending(inv.invoiceId); showChooser(true); renderTiers(); renderPending(); setPayStatus("expired");
         }
       }catch(_){ /* transient mixnet hiccup — try again next tick */ }
       finally{ pollBusy=false; }
-    }, 10000);
+    };
+    tick();                                   // immediate, so the watch shows fast
+    pollTimer=setInterval(tick, 10000);
+  }
+  // Live NYM chain-watch indicator, fed by each status poll's `watch` field.
+  function updateWatch(watch){
+    const el=$("watchState"); if(!el) return;
+    if(!watch){ el.className="watchrow"; el.innerHTML='<span class="wd"></span> connecting to the Nyx chain…'; return; }
+    if(watch.connected){
+      const age = watch.lastBlockAgoMs!=null ? Math.max(0,Math.round(watch.lastBlockAgoMs/1000)) : "?";
+      const how = watch.mode==="polling" ? "polling the Nyx chain" : "watching the Nyx chain";
+      el.className="watchrow live";
+      el.innerHTML=`<span class="wd"></span> Live · ${how} · block #${watch.height??"?"} · ${age}s ago`;
+    }else{
+      el.className="watchrow down";
+      el.innerHTML='<span class="wd"></span> Chain watch offline — reconnecting… (payment still safe, it settles on reconnect)';
+    }
   }
   function renderPay(inv){
     // On-chain only in the UI. Lightning still comes from the backend.
     const onchain = (inv.options||[]).filter(o=>!/ln|lightning/i.test(o.method));
     payDests = onchain.map(o=>o.destination);   // the BARE address — for pasting into a wallet
-    const blocks = onchain.map((o,i)=>`
-      <div style="border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:10px">
-        <div style="font-family:var(--mono);font-size:11px;color:var(--mix);margin-bottom:10px">Bitcoin${o.amount?` · ${esc(o.amount)} ${esc(o.currency)}`:""}</div>
-        ${o.qr?`<div class="qrbox">${o.qr}</div>`:""}
-        <div style="font-family:var(--mono);font-size:11px;word-break:break-all;color:var(--muted)">${esc(o.destination)}</div>
+    payMemos = onchain.map(o=>o.memo||"");       // the Nyx memo, where the coin needs one
+    const blocks = onchain.map((o,i)=>{
+      const isNym = /nym/i.test(o.method||"");
+      const qr = o.qr?`<div class="qrbox">${o.qr}</div>`:"";
+      if(isNym){
+        // The memo is as important as the amount — a NYM transfer without it can't
+        // be matched to this invoice. So it gets its own emphasised field + warning.
+        return `<div class="payopt">
+          <div class="poh" style="color:#7A5FFF">NYM${o.amount?` · ${esc(o.amount)} NYM`:""}</div>
+          ${qr}
+          <div class="pol">Address</div>
+          <div class="poval">${esc(o.destination)}</div>
+          <button class="btn" id="copyBtn${i}" style="margin-top:8px" onclick="copyUri(${i})">Copy address</button>
+          <div class="pol" style="color:#7A5FFF">Memo — required</div>
+          <div class="poval memo">${esc(o.memo||"—")}</div>
+          <button class="btn" id="copyMemo${i}" style="margin-top:8px" onclick="copyMemo(${i})">Copy memo</button>
+          <div class="memowarn">⚠ Send exactly this amount <b>and include the memo</b>. A transfer without the memo cannot be credited automatically.</div>
+        </div>`;
+      }
+      return `<div class="payopt">
+        <div class="poh">Bitcoin${o.amount?` · ${esc(o.amount)} ${esc(o.currency)}`:""}</div>
+        ${qr}
+        <div class="poval">${esc(o.destination)}</div>
         <button class="btn" id="copyBtn${i}" style="margin-top:10px" onclick="copyUri(${i})">Copy address</button>
-      </div>`).join("") || '<div class="hint">No on-chain method returned — is a testnet wallet linked to the BTCPay store?</div>';
+      </div>`;
+    }).join("") || '<div class="hint">No payment method returned — is this coin’s gateway configured on the server?</div>';
+    const isNymInv = onchain.some(o=>/nym/i.test(o.method||""));
     $("tierRow").innerHTML = `<div style="width:100%">
+      <a class="foota" style="display:inline-block;margin:0 0 10px;color:var(--muted);cursor:pointer;font-size:12px" onclick="backToChooser()">← Choose a different amount / coin</a>
       <div style="font-family:var(--mono);font-size:12px;margin-bottom:12px">
         Pay $${inv.amountUsd.toFixed(2)} for ${formatScrai(inv.amountScrai)} SCRAI · expires <span id="payExpiry">…</span>
       </div>
       ${blocks}
+      ${isNymInv?`<div id="watchState" class="watchrow"><span class="wd"></span> connecting to the Nyx chain…</div>`:""}
       ${inv.checkout?`<a class="btn" style="display:inline-block;margin:2px 0 4px" href="${esc(inv.checkout)}" onclick="return openLink('${esc(inv.checkout)}')">Open BTCPay checkout (dev shortcut)</a>`:""}
     </div>`;
   }
-  function copyUri(i){
-    const v=payDests[i]; if(!v) return;
-    navigator.clipboard?.writeText(v);
-    const b=$("copyBtn"+i);
-    if(b){ const t=b.textContent; b.textContent="Copied ✓"; setTimeout(()=>{ if(b) b.textContent=t; },1500); }
+  function copyText(text, btn){
+    if(!text) return;
+    navigator.clipboard?.writeText(text);
+    if(btn){ const t=btn.textContent; btn.textContent="Copied ✓"; setTimeout(()=>{ if(btn) btn.textContent=t; },1500); }
   }
+  function copyUri(i){ copyText(payDests[i], $("copyBtn"+i)); }
+  function copyMemo(i){ copyText(payMemos[i], $("copyMemo"+i)); }
 
   // expose for inline handlers
   Object.assign(window,{ newChat, openSession, deleteSession, toggleMenu, selectModelIdx, toggleMix,
@@ -1335,19 +2338,24 @@
     showRestore, askNew, cancelAcctView, saveServer, checkCredit,
     openEntryPicker, showExitInfo, chooseGateway, closeGw, filterGw,
     acceptTerms, declineTerms, chooseModel, openLink, saveImageAt,
-    pickImage, onImagePicked, clearImage, setMenuKind, toggleLatest,
-    closeImport, decryptImport });
+    pickImage, onImagePicked, clearImage, setMenuKind, toggleLatest, toggleTier, toggleVendorIdx, imgSettled,
+    closeImport, decryptImport, selectMethod, copyMemo, openSettings, closeSettings,
+    resumePayment, backToChooser, selectTier, startPurchase, cancelPending,
+    confirmGuard, closeGuardModal, guardImgKeep, guardImgRemove, closeGuardImg,
+    giZoom, giZoomReset, giToggleFull, giProcess, giBack, giApprove });
 
   // ---------- init ----------
   function setMixnetOn(){
     mixOn=true;
-    $("path").className="path on";
+    mixConnected=false;
+    applyPathState();                 // starts "connecting" — refreshRoute flips it to green
     $("mixToggle").className="mixtoggle on";
     $("mixState").textContent="Mixnet";
     $("mixSub").textContent="via Rust core (Tauri)";
   }
   (async ()=>{
-    if(isTauri()){ document.body.classList.add("tauri"); setMixnetOn(); }  // the app always routes through the mixnet
+    threadFollowInit();               // stick-to-bottom follow for streaming answers
+    if(isTauri()){ document.body.classList.add("tauri"); setMixnetOn(); renderThread(); }  // app always routes through the mixnet → show the connecting screen at once
     try{ await Vault.init(); vaultOk=true; }
     catch(e){ vaultOk=false; console.error("vault init failed:", e); }
     if(vaultOk) sessions = await Vault.list();
