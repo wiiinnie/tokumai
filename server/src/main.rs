@@ -38,7 +38,21 @@ const TICKETBOOK_COINS: u64 = 500;
 
 #[tokio::main]
 async fn main() {
-    dotenvy::dotenv().ok(); // load GROQ_API_KEY / GEMINI_API_KEY from .env
+    dotenvy::dotenv().ok(); // load provider keys from .env
+
+    // Refuse to boot with an ambiguous Gemini key configuration: a testnet key
+    // AND a mainnet key both active means nobody knows which account is being
+    // billed. Exactly one must be uncommented in .env.
+    match crate::chat::gemini_api_key() {
+        Ok((_, network)) => eprintln!("scrai-server: Gemini key active: {network}"),
+        Err(e) => {
+            if e.contains("BOTH") {
+                eprintln!("scrai-server: FATAL: {e}");
+                std::process::exit(1);
+            }
+            eprintln!("scrai-server: note: {e} — Gemini models will be unavailable");
+        }
+    }
 
     // Install OUR log filter before the nym-sdk installs its own logger (first
     // one wins): the mixnet's "duplicate fragment received" warnings are normal

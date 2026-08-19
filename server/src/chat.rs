@@ -497,8 +497,34 @@ async fn groq(model: &str, mut messages: Value, max_tokens: Option<u64>) -> Resu
 
 const GEMINI_BASE: &str = "https://generativelanguage.googleapis.com/v1beta/models";
 
+/// Resolve the active Gemini key. Two named slots exist so the operator can
+/// keep both keys in .env and flip by (un)commenting — but EXACTLY ONE may be
+/// active: mixing a paid mainnet key and a free testnet key silently is how
+/// billing accidents happen, so both-set is a hard error, checked at boot.
+/// Legacy GEMINI_API_KEY still works when neither slot is set.
+pub fn gemini_api_key() -> Result<(String, &'static str), String> {
+    let get = |k: &str| {
+        std::env::var(k)
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    };
+    match (get("GEMINI_API_KEY_MAINNET"), get("GEMINI_API_KEY_TESTNET")) {
+        (Some(_), Some(_)) => Err(
+            "GEMINI_API_KEY_MAINNET and GEMINI_API_KEY_TESTNET are BOTH set — \
+             exactly one may be active; comment the other out in .env"
+                .into(),
+        ),
+        (Some(k), None) => Ok((k, "MAINNET")),
+        (None, Some(k)) => Ok((k, "testnet")),
+        (None, None) => get("GEMINI_API_KEY")
+            .map(|k| (k, "legacy GEMINI_API_KEY"))
+            .ok_or_else(|| "no Gemini key — set GEMINI_API_KEY_TESTNET or GEMINI_API_KEY_MAINNET".into()),
+    }
+}
+
 async fn gemini(model: &str, messages: &Value, max_tokens: Option<u64>) -> Result<(String, TokenUsage), String> {
-    let key = std::env::var("GEMINI_API_KEY").map_err(|_| "GEMINI_API_KEY not set".to_string())?;
+    let (key, _) = gemini_api_key()?;
     let body = to_gemini(messages, max_tokens.unwrap_or_else(default_max_tokens), thinking_budget());
 
     let res = crate::http::client()

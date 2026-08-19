@@ -13,12 +13,32 @@ use scrai_core::coconut::SCRAI_PER_USD;
 use scrai_core::pricing::PricingTable;
 use serde_json::{json, Value};
 
+/// Provider allowlist: SCRAI_PROVIDERS="gemini" (comma list) limits the
+/// catalog to those providers; unset/empty/"all" offers everything available.
+/// Trims the PICKER only — pricing still guards direct requests in chat.rs.
+pub fn provider_enabled(name: &str) -> bool {
+    match std::env::var("SCRAI_PROVIDERS") {
+        Err(_) => true,
+        Ok(v) => {
+            let v = v.trim().to_lowercase();
+            v.is_empty() || v == "all" || v.split(',').any(|p| p.trim() == name)
+        }
+    }
+}
+
 pub async fn handle(request: &[u8], pricing: &PricingTable, margin: f64) -> Vec<u8> {
     let v: Value = serde_json::from_slice(request).unwrap_or(Value::Null);
     let id = v.get("id").cloned().unwrap_or(Value::Null);
 
     // Gemini first — its models lead the picker (same provider order as the TS server).
-    let (gemini, groq) = tokio::join!(gemini_models(pricing, margin), groq_models(pricing, margin));
+    let (gemini, groq) = tokio::join!(
+        async {
+            if provider_enabled("gemini") { gemini_models(pricing, margin).await } else { Ok(Vec::new()) }
+        },
+        async {
+            if provider_enabled("groq") { groq_models(pricing, margin).await } else { Ok(Vec::new()) }
+        }
+    );
     let mut models = Vec::new();
     for (provider, result) in [("gemini", gemini), ("groq", groq)] {
         match result {
@@ -63,15 +83,17 @@ fn image_models(pricing: &PricingTable, margin: f64) -> Vec<Value> {
     };
     let cf_ready = std::env::var("CLOUDFLARE_API_TOKEN").is_ok_and(|v| !v.trim().is_empty())
         && std::env::var("CLOUDFLARE_ACCOUNT_ID").is_ok_and(|v| !v.trim().is_empty());
-    if cf_ready {
+    if cf_ready && provider_enabled("cloudflare") {
         for (id, _) in crate::chat::cf_model_path_all() {
             push(id, "Cloudflare", false);
         }
     }
     // Public, keyless, no contract — the prompt is visible to the operator, so
     // it carries the "trains on input" badge (assume the worst).
-    for id in ["pollinations-512", "pollinations-1024", "pollinations-1536"] {
-        push(id, "Pollinations", true);
+    if provider_enabled("pollinations") {
+        for id in ["pollinations-512", "pollinations-1024", "pollinations-1536"] {
+            push(id, "Pollinations", true);
+        }
     }
     out
 }
@@ -124,7 +146,7 @@ async fn groq_models(pricing: &PricingTable, margin: f64) -> Result<Vec<Value>, 
 }
 
 async fn gemini_models(pricing: &PricingTable, margin: f64) -> Result<Vec<Value>, String> {
-    let key = std::env::var("GEMINI_API_KEY").map_err(|_| "GEMINI_API_KEY not set".to_string())?;
+    let (key, _) = crate::chat::gemini_api_key()?;
     let res = crate::http::client()
         .get("https://generativelanguage.googleapis.com/v1beta/models?pageSize=200")
         .header("x-goog-api-key", key)

@@ -47,6 +47,24 @@ if (!process.env.BTCPAY_URL && process.env.SCRAI_FAKE_PAYMENTS !== "1") {
   process.env.SCRAI_FAKE_PAYMENTS = "1";
 }
 
+// Gemini key slots (same rule as the Rust server): keep both keys in .env,
+// flip by (un)commenting — exactly ONE may be active. The adapters read the
+// legacy GEMINI_API_KEY, so the winner is written back into it.
+{
+  const main = process.env.GEMINI_API_KEY_MAINNET?.trim();
+  const test = process.env.GEMINI_API_KEY_TESTNET?.trim();
+  if (main && test) {
+    console.error(
+      "GEMINI_API_KEY_MAINNET and GEMINI_API_KEY_TESTNET are BOTH set — exactly one may be active; comment the other out in .env",
+    );
+    process.exit(1);
+  }
+  if (main || test) {
+    process.env.GEMINI_API_KEY = main || test;
+    console.log(`gemini key active: ${main ? "MAINNET" : "testnet"}`);
+  }
+}
+
 const PORT = Number(process.env.PORT ?? 8787);
 const HOST = process.env.SCRAI_DEV_HOST ?? "127.0.0.1";
 const isLoopback = (h: string) => h === "127.0.0.1" || h === "::1" || h === "localhost";
