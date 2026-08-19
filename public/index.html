@@ -466,7 +466,7 @@
         <div class="inputrow">
           <button class="attach" id="attachBtn" onclick="pickImage()" title="Attach a file — image, PDF or text (max 10 MB)">+</button>
           <input type="file" id="imgFile" accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,text/plain,text/markdown,text/csv,application/json,.pdf,.md,.markdown,.csv,.txt,.json" style="display:none" onchange="onImagePicked(event)">
-          <textarea id="input" rows="1" placeholder="Ask anything — nothing here is stored on a server" oninput="autogrow(this)" onkeydown="onKey(event)"></textarea>
+          <textarea id="input" rows="1" placeholder="Ask anything — nothing here is stored on a server" autocorrect="off" autocapitalize="off" autocomplete="off" spellcheck="false" oninput="autogrow(this)" onkeydown="onKey(event)"></textarea>
           <button class="send" id="send" onclick="sendMsg()" disabled>↑</button>
         </div>
         <div class="foot">
@@ -2195,6 +2195,7 @@
     return `<div style="margin:6px 0 14px">
       <div class="hint">scrai-server Nym address ${server?`· <span class="k">set</span>`:`· <span style="color:var(--rust)">not set</span>`}</div>
       <input id="srvInput" placeholder="id.enc@gateway — from your scrai-server" value="${esc(server||'')}"
+        autocorrect="off" autocapitalize="off" autocomplete="off" spellcheck="false"
         style="width:100%;background:var(--ink);border:1px solid var(--line);border-radius:8px;color:var(--bone);font-family:var(--mono);font-size:11px;padding:8px;outline:none;margin-top:6px">
       <div class="btnrow"><button class="btn" onclick="saveServer()">Save server</button></div>
     </div>`;
@@ -2208,6 +2209,7 @@
   function restoreForm(){
     return `<div style="margin:12px 0">
       <textarea id="restorePhrase" rows="3" placeholder="Enter your 24-word recovery phrase"
+        autocorrect="off" autocapitalize="off" autocomplete="off" spellcheck="false"
         style="width:100%;background:var(--ink);border:1px solid var(--line);border-radius:8px;color:var(--bone);font-family:var(--mono);font-size:12px;padding:10px;resize:vertical;outline:none"></textarea>
       <div class="btnrow"><button class="btn primary" onclick="doAccountRestore()">Restore</button>
         <button class="btn" onclick="cancelAcctView()">Cancel</button></div></div>`;
