@@ -90,7 +90,8 @@ mark{background:none;color:var(--mix);font-weight:600;padding:0}
 /* ---- screenshots ---- */
 .shots{display:grid;gap:18px;margin:26px 0 6px}
 .shots.two{grid-template-columns:1fr 1fr}
-@media(max-width:720px){.shots.two{grid-template-columns:1fr}}
+.shots.phones{grid-template-columns:repeat(3,1fr)}
+@media(max-width:720px){.shots.two{grid-template-columns:1fr}.shots.phones{grid-template-columns:1fr 1fr}}
 figure.shot{margin:0;min-width:0}
 figure.shot .frame{border:1px solid var(--line);border-radius:12px;overflow:hidden;
   background:var(--panel);box-shadow:0 10px 30px -18px rgba(20,18,16,.45);cursor:zoom-in;
@@ -356,9 +357,31 @@ figure.shot figcaption b{color:var(--ink);font-weight:500}
       <p>Monero as a third payment rail, ticketbooks sized to the purchase tiers, and image
       generation over SURB budgets for megabyte-sized replies.</p></li>
     <li><span class="when">Next</span><span class="t">Same core, every platform</span>
-      <p>iOS and Android via Tauri 2 with the same Rust core and the same UI; keys move into the OS
-      keychain.</p></li>
+      <p>iOS already runs the full stack — see the chapter below. Android follows via the same
+      Tauri 2 setup with the same Rust core and the same UI; keys move into the OS keychain.</p></li>
   </ol>
+</section>
+
+<section class="chapter">
+  <div class="eyebrow">08 · Mobile</div>
+  <h2>The same app, <b>in your pocket</b></h2>
+  <p class="lead">Not a second codebase: the identical Rust core — Nym SDK, Coconut wallet, privacy
+  guard, native OCR — compiled for iOS with Tauri 2, running the same UI. Chat, payments and image
+  generation ride the mixnet from the phone today.</p>
+  <div class="shots phones">
+    <figure class="shot"><div class="frame"><img data-img="ios-connecting" alt="iPhone: building the route through the mixnet"></div>
+      <figcaption><b>Connecting.</b> The embedded Nym client builds its route on launch.</figcaption></figure>
+    <figure class="shot"><div class="frame"><img data-img="ios-home" alt="iPhone: start screen, routing through the mixnet over 5 hops"></div>
+      <figcaption><b>Ready.</b> Routing through the mixnet · 5 hops.</figcaption></figure>
+    <figure class="shot"><div class="frame"><img data-img="ios-chat-image" alt="iPhone: image generated over the mixnet"></div>
+      <figcaption><b>Image generation.</b> flux-schnell, a megabyte reply delivered through SURBs.</figcaption></figure>
+    <figure class="shot"><div class="frame"><img data-img="ios-drawer" alt="iPhone: conversations drawer with SCRAI balance"></div>
+      <figcaption><b>On this device.</b> Encrypted local history, the SCRAI balance below.</figcaption></figure>
+    <figure class="shot"><div class="frame"><img data-img="ios-buy" alt="iPhone: buy credit with NYM, Bitcoin, Monero"></div>
+      <figcaption><b>Buy credit.</b> Fixed tiers as a bottom sheet — NYM native, Bitcoin, Monero next.</figcaption></figure>
+    <figure class="shot"><div class="frame"><img data-img="ios-settings" alt="iPhone: smart pruning and privacy guard settings"></div>
+      <figcaption><b>Settings.</b> Smart pruning and the on-device privacy guard — identical switches, phone-sized.</figcaption></figure>
+  </div>
 </section>
 
 <div class="foot">
@@ -567,9 +590,32 @@ figure.shot figcaption b{color:var(--ink);font-weight:500}
       <p>Monero als dritter Zahlungsweg, Ticketbooks in Kaufstufen-Größe, und Bildgenerierung über
       SURB-Budgets für megabytegroße Antworten.</p></li>
     <li><span class="when">Next</span><span class="t">Gleicher Kern, jede Plattform</span>
-      <p>iOS und Android über Tauri 2 mit demselben Rust-Kern und derselben UI; Schlüssel wandern in
-      die OS-Keychain.</p></li>
+      <p>iOS läuft bereits mit dem vollen Stack — siehe das Kapitel unten. Android folgt über
+      dasselbe Tauri-2-Setup mit demselben Rust-Kern und derselben UI; Schlüssel wandern in die
+      OS-Keychain.</p></li>
   </ol>
+</section>
+
+<section class="chapter">
+  <div class="eyebrow">08 · Mobile</div>
+  <h2>Dieselbe App, <b>in der Hosentasche</b></h2>
+  <p class="lead">Keine zweite Codebase: der identische Rust-Kern — Nym SDK, Coconut-Wallet, Privacy
+  Guard, native OCR — für iOS kompiliert mit Tauri 2, mit derselben UI. Chat, Zahlungen und
+  Bildgenerierung laufen heute vom Telefon aus übers Mixnet.</p>
+  <div class="shots phones">
+    <figure class="shot"><div class="frame"><img data-img="ios-connecting" alt="iPhone: Route durchs Mixnet wird aufgebaut"></div>
+      <figcaption><b>Verbinden.</b> Der eingebettete Nym-Client baut beim Start seine Route.</figcaption></figure>
+    <figure class="shot"><div class="frame"><img data-img="ios-home" alt="iPhone: Startbildschirm, Routing durchs Mixnet über 5 Hops"></div>
+      <figcaption><b>Bereit.</b> Routing durchs Mixnet · 5 Hops.</figcaption></figure>
+    <figure class="shot"><div class="frame"><img data-img="ios-chat-image" alt="iPhone: über das Mixnet generiertes Bild"></div>
+      <figcaption><b>Bildgenerierung.</b> flux-schnell, eine Megabyte-Antwort über SURBs.</figcaption></figure>
+    <figure class="shot"><div class="frame"><img data-img="ios-drawer" alt="iPhone: Konversations-Drawer mit SCRAI-Guthaben"></div>
+      <figcaption><b>On this device.</b> Verschlüsselte lokale Historie, darunter das SCRAI-Guthaben.</figcaption></figure>
+    <figure class="shot"><div class="frame"><img data-img="ios-buy" alt="iPhone: Guthaben kaufen mit NYM, Bitcoin, Monero"></div>
+      <figcaption><b>Guthaben kaufen.</b> Feste Stufen als Bottom Sheet — NYM nativ, Bitcoin, Monero als Nächstes.</figcaption></figure>
+    <figure class="shot"><div class="frame"><img data-img="ios-settings" alt="iPhone: Smart-Pruning- und Privacy-Guard-Einstellungen"></div>
+      <figcaption><b>Einstellungen.</b> Smart Pruning und der On-Device-Privacy-Guard — dieselben Schalter, in Telefongröße.</figcaption></figure>
+  </div>
 </section>
 
 <div class="foot">
@@ -605,6 +651,12 @@ const IMGS = {
   "held": "data:image/jpeg;base64,{{IMG:held}}",
   "guard-edit": "data:image/jpeg;base64,{{IMG:guard-edit}}",
   "guard-redacted": "data:image/jpeg;base64,{{IMG:guard-redacted}}",
+  "ios-connecting": "data:image/jpeg;base64,{{IMG:ios-connecting}}",
+  "ios-home": "data:image/jpeg;base64,{{IMG:ios-home}}",
+  "ios-chat-image": "data:image/jpeg;base64,{{IMG:ios-chat-image}}",
+  "ios-drawer": "data:image/jpeg;base64,{{IMG:ios-drawer}}",
+  "ios-buy": "data:image/jpeg;base64,{{IMG:ios-buy}}",
+  "ios-settings": "data:image/jpeg;base64,{{IMG:ios-settings}}",
 };
 document.querySelectorAll("img[data-img]").forEach(img => {
   const src = IMGS[img.dataset.img];
