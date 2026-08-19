@@ -25,7 +25,7 @@
     "check": "npm run typecheck && npm test",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:ios": "tauri ios dev 'iPhone 17 Pro'",
+    "tauri:ios": "xcrun simctl boot 'iPhone 17 Pro' 2>/dev/null; open -a Simulator; tauri ios dev 'iPhone 17 Pro'",
     "tauri:build": "tauri build",
     "guard:model": "bash scripts/fetch-guard-model.sh",
     "tauri:dev:smart": "tauri dev --features smart-guard -c src-tauri/tauri.smart.conf.json",
