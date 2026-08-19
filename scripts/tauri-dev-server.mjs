@@ -27,7 +27,7 @@ const MIME = {
   ".woff": "font/woff",
 };
 
-createServer(async (req, res) => {
+const server = createServer(async (req, res) => {
   let path = decodeURIComponent((req.url || "/").split("?")[0]);
   if (path === "/" || path.endsWith("/")) path += "index.html";
   // Confine to public/: strip leading slashes and any traversal.
@@ -39,4 +39,18 @@ createServer(async (req, res) => {
   } catch {
     res.writeHead(404).end();
   }
-}).listen(PORT, "127.0.0.1", () => console.log(`[tauri-frontend] serving public/ on http://127.0.0.1:${PORT}`));
+});
+
+// A dev server from another `tauri dev` run may already hold the port. It
+// serves the same public/, so reuse it instead of crashing — just stay alive
+// so Tauri keeps treating the beforeDevCommand as running.
+server.on("error", (err) => {
+  if (err.code === "EADDRINUSE") {
+    console.log(`[tauri-frontend] port ${PORT} already serves public/ — reusing the running instance`);
+    setInterval(() => {}, 1 << 30);
+  } else {
+    throw err;
+  }
+});
+
+server.listen(PORT, "127.0.0.1", () => console.log(`[tauri-frontend] serving public/ on http://127.0.0.1:${PORT}`));

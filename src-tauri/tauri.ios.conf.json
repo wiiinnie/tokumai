@@ -1,0 +1,7 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "build": {
+    "devUrl": "http://127.0.0.1:1422",
+    "beforeDevCommand": "TAURI_FRONTEND_PORT=1422 node scripts/tauri-dev-server.mjs"
+  }
+}
