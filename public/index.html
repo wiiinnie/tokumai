@@ -850,7 +850,12 @@
     if(m) showTerms(m);
     return false;
   }
-  function toggleMenu(){ $("menu").classList.toggle("open"); }
+  function toggleMenu(){
+    // No server yet → the model menu is empty and the chip says "set a
+    // server": take the user straight to Account & recovery instead.
+    if(isTauri() && !server){ openAccount(); return; }
+    $("menu").classList.toggle("open");
+  }
   document.addEventListener("click",e=>{ if(!e.target.closest(".model")) $("menu").classList.remove("open"); });
 
   // ---------- render ----------
