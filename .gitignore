@@ -8,8 +8,9 @@ node_modules/
 dist/
 
 # Rust / Tauri build output (target is ~15GB) + generated bindings
+# gen/apple (iOS Xcode project) is tracked; it carries signing/project settings
 src-tauri/target/
-src-tauri/gen/
+src-tauri/gen/schemas/
 
 # nym-client binary — platform-specific, installed per host (npm run nym:install)
 bin/
