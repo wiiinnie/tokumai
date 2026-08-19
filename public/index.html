@@ -338,6 +338,8 @@
      a bottom sheet. Desktop rules above are untouched. */
   .mburger{display:none}
   .railscrim{display:none}
+  .swipe{position:relative}
+  .swipedel{display:none}
   @media (max-width:700px){
     .titlebar{height:auto;min-height:48px;padding:calc(env(safe-area-inset-top,0px) + 4px) 8px 4px 8px}
     .titlebar .dot{display:none}
@@ -382,6 +384,13 @@
     /* !important beats inline styles on dynamically-rendered inputs; 16px is
        the threshold below which iOS zooms into a focused field. */
     input,textarea,select{font-size:16px!important}
+    /* sessions: iOS-style swipe-to-delete replaces the hover ✕ */
+    .session .del{display:none}
+    .swipe{overflow:hidden;border-radius:8px;margin-bottom:2px}
+    .swipe .session{margin-bottom:0;background:var(--surface);transition:transform .18s ease;touch-action:pan-y}
+    .swipe .session.active{background:var(--surface-2)}
+    .swipedel{display:block;position:absolute;top:0;right:0;bottom:0;width:88px;border:none;
+      background:var(--rust);color:var(--bone);font-family:var(--body);font-weight:600;font-size:13px;cursor:pointer}
   }
 </style>
 
@@ -652,6 +661,60 @@
     vv.addEventListener("resize", fit);
     vv.addEventListener("scroll", fit);
   }
+
+  // iOS-style swipe-to-delete in the session list (phones only — the hover ✕
+  // stays on desktop). Swiping a row left reveals a Delete action behind it;
+  // tapping elsewhere or swiping back closes it again.
+  (() => {
+    const list = document.getElementById("sessions");
+    if (!list) return;
+    const W = 88;
+    let st = null, suppressClick = false;
+    const rowOf = (t) => t.closest && t.closest("#sessions .swipe");
+    const closeAll = (except) => list.querySelectorAll(".swipe.swopen").forEach((r) => {
+      if (r === except) return;
+      r.classList.remove("swopen");
+      r.querySelector(".session").style.transform = "";
+    });
+    list.addEventListener("touchstart", (e) => {
+      const row = rowOf(e.target); if (!row) return;
+      closeAll(row);
+      st = { row, card: row.querySelector(".session"),
+             x: e.touches[0].clientX, y: e.touches[0].clientY,
+             base: row.classList.contains("swopen") ? -W : 0, drag: false };
+    }, { passive: true });
+    list.addEventListener("touchmove", (e) => {
+      if (!st) return;
+      const dx = e.touches[0].clientX - st.x, dy = e.touches[0].clientY - st.y;
+      if (!st.drag) {
+        if (Math.abs(dx) < 8) return;
+        if (Math.abs(dy) > Math.abs(dx)) { st = null; return; } // vertical scroll wins
+        st.drag = true;
+      }
+      st.card.style.transition = "none";
+      st.card.style.transform = `translateX(${Math.min(0, Math.max(-W, st.base + dx))}px)`;
+    }, { passive: true });
+    list.addEventListener("touchend", () => {
+      if (!st) return;
+      const m = /translateX\((-?[\d.]+)px\)/.exec(st.card.style.transform);
+      const at = m ? parseFloat(m[1]) : st.base;
+      const open = at < -W / 2;
+      st.card.style.transition = "";
+      st.row.classList.toggle("swopen", open);
+      st.card.style.transform = open ? `translateX(${-W}px)` : "";
+      if (st.drag) { suppressClick = true; setTimeout(() => { suppressClick = false; }, 350); }
+      st = null;
+    });
+    // A tap right after a drag, or on a row whose Delete is showing, must not
+    // open the session — it closes the row instead.
+    list.addEventListener("click", (e) => {
+      if (e.target.closest(".swipedel")) return;
+      const row = rowOf(e.target);
+      if (suppressClick || (row && row.classList.contains("swopen"))) {
+        e.stopPropagation(); e.preventDefault(); closeAll();
+      }
+    }, true);
+  })();
 </script>
 
 <script type="module">
@@ -886,10 +949,13 @@
     if(!vaultOk){ el.innerHTML=`<div class="empty-rail" style="color:var(--rust)">Local vault unavailable in this browser — history won't persist this session. Chat still works. Open the console (⌥⌘I) to see the exact error.</div>`; return; }
     if(sessions.length===0){ el.innerHTML=`<div class="empty-rail">No saved conversations yet. Your history is encrypted on this device — nothing leaves it.</div>`; return; }
     el.innerHTML = sessions.map(s=>`
-      <div class="session ${current&&s.id===current.id?'active':''}" onclick="openSession('${s.id}')">
-        <span class="t">${esc(s.title)}</span>
-        <span class="m"><span class="lock">◆</span> ${s.count} msgs</span>
-        <span class="del" title="Delete" onclick="event.stopPropagation();deleteSession('${s.id}')">✕</span>
+      <div class="swipe">
+        <button class="swipedel" onclick="deleteSession('${s.id}')">Delete</button>
+        <div class="session ${current&&s.id===current.id?'active':''}" onclick="openSession('${s.id}')">
+          <span class="t">${esc(s.title)}</span>
+          <span class="m"><span class="lock">◆</span> ${s.count} msgs</span>
+          <span class="del" title="Delete" onclick="event.stopPropagation();deleteSession('${s.id}')">✕</span>
+        </div>
       </div>`).join("");
   }
   function flashSaved(){
