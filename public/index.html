@@ -4,7 +4,9 @@
   Persistence & crypto live behind vault.js / handover.js — swappable for mobile.
 -->
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<!-- maximum-scale=1 stops iOS from auto-zooming into focused inputs (the zoom
+     otherwise sticks after blur); pinch-zoom in Safari stays available. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
 <title>ScrambleAI</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
@@ -377,6 +379,9 @@
     .composer .foot .l span{display:none}
     .composer .foot{margin-top:8px;gap:10px}
     .composer .foot a{white-space:nowrap}
+    /* !important beats inline styles on dynamically-rendered inputs; 16px is
+       the threshold below which iOS zooms into a focused field. */
+    input,textarea,select{font-size:16px!important}
   }
 </style>
 
