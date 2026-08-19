@@ -636,23 +636,21 @@
     if (e.target.closest('.session, .newbtn')) toggleRail(false);
   }, true);
 
-  // iOS/WKWebView scrolls the whole page up to reveal a focused input above
-  // the keyboard and can leave that offset behind after the keyboard closes —
-  // the header then sits under the status bar. Snap back once focus leaves a
-  // field or the keyboard collapses.
-  const snapBack = () => setTimeout(() => {
-    window.scrollTo(0, 0);
-    if (document.scrollingElement) document.scrollingElement.scrollTop = 0;
-  }, 60);
-  addEventListener('focusout', (e) => {
-    if (e.target && e.target.matches && e.target.matches('input, textarea, select')) snapBack();
-  }, true);
-  if (window.visualViewport) {
-    let lastH = visualViewport.height;
-    visualViewport.addEventListener('resize', () => {
-      if (visualViewport.height > lastH) snapBack(); // keyboard just closed
-      lastH = visualViewport.height;
-    });
+  // iOS/WKWebView pans the whole page up to reveal a focused input above the
+  // keyboard — the header then slides under the status bar. Instead, shrink
+  // the layout to the visual viewport while the keyboard is up: the header
+  // stays put and the composer rides above the keyboard. Any leftover pan is
+  // scrolled back immediately.
+  if (window.visualViewport && /iPhone|iPad|iPod/.test(navigator.userAgent)) {
+    const vv = window.visualViewport;
+    const fit = () => {
+      const full = Math.round(vv.height * vv.scale) >= innerHeight - 1;
+      document.body.style.height = full ? "" : Math.round(vv.height) + "px";
+      window.scrollTo(0, 0);
+      if (document.scrollingElement) document.scrollingElement.scrollTop = 0;
+    };
+    vv.addEventListener("resize", fit);
+    vv.addEventListener("scroll", fit);
   }
 </script>
 
