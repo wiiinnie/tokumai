@@ -4,7 +4,7 @@
   Persistence & crypto live behind vault.js / handover.js — swappable for mobile.
 -->
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>ScrambleAI</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
@@ -329,13 +329,65 @@
      mousedown anywhere on the bar hit the data-tauri-drag-region element. */
   .titlebar[data-tauri-drag-region]{cursor:default}
   .titlebar[data-tauri-drag-region] > *{pointer-events:none}
+
+  /* ---------- mobile (≤700px): phone layout, additive only ----------
+     The desktop rail becomes an off-canvas drawer (hamburger in the title
+     bar), the mixnet path collapses to the toggle, and every modal becomes
+     a bottom sheet. Desktop rules above are untouched. */
+  .mburger{display:none}
+  .railscrim{display:none}
+  @media (max-width:700px){
+    .titlebar{height:auto;min-height:48px;padding:calc(env(safe-area-inset-top,0px) + 4px) 8px 4px 8px}
+    .titlebar .dot{display:none}
+    body.tauri .titlebar{padding-left:8px} /* no macOS traffic lights on phones */
+    .titlebar[data-tauri-drag-region] > .mburger{pointer-events:auto}
+    .mburger{display:grid;place-items:center;width:44px;height:44px;background:none;border:none;
+      color:var(--muted);font-size:19px;line-height:1;cursor:pointer;padding:0}
+    .titlebar .wordmark{margin-left:2px}
+    .app{grid-template-columns:1fr}
+    .rail{position:fixed;top:0;bottom:0;left:0;width:min(320px,85vw);z-index:60;
+      transform:translateX(-105%);transition:transform .22s ease;
+      box-shadow:20px 0 40px rgba(0,0,0,.45);padding-top:env(safe-area-inset-top,0px)}
+    body.railopen .rail{transform:none}
+    .railscrim{position:fixed;inset:0;z-index:55;background:rgba(10,8,6,.6)}
+    body.railopen .railscrim{display:block}
+    .rail .newbtn,.rail .importbtn,.ticket .refill{min-height:44px}
+    .ticket{padding-bottom:calc(env(safe-area-inset-bottom,0px) + 14px)}
+    .topbar{padding:8px 12px;gap:10px}
+    .model .sel{min-height:44px}
+    .mix{gap:8px}
+    .path{display:none} /* the toggle alone carries the mixnet state on phones */
+    .thread{padding:18px 0}
+    .wrap{padding:0 16px}
+    .msg{flex-direction:column;gap:5px;margin-bottom:18px}
+    .msg .who{width:auto;padding-top:0}
+    .empty .mark,.empty .scramble{font-size:32px}
+    .composer{padding:10px 12px calc(env(safe-area-inset-bottom,0px) + 12px)}
+    .attach,.send{width:44px;height:44px}
+    .menu{position:fixed;left:10px;right:10px;top:calc(env(safe-area-inset-top,0px) + 100px);
+      min-width:0;max-width:none;width:auto;max-height:64vh}
+    .scrim{align-items:flex-end;padding:0}
+    .modal{width:100%;max-width:100%;max-height:88vh;border-radius:18px 18px 0 0;
+      border-left:none;border-right:none;border-bottom:none;
+      padding-bottom:env(safe-area-inset-bottom,0px)}
+    .modal .mf .btn{min-height:44px}
+    .gi-modal{max-width:100%!important;width:100%}
+    .dropz{display:none!important} /* no drag&drop on touch */
+    /* composer footer: keep export + live cost, drop the static note */
+    .composer .foot .l span{display:none}
+    .composer .foot{margin-top:8px;gap:10px}
+    .composer .foot a{white-space:nowrap}
+  }
 </style>
 
 <div class="titlebar" data-tauri-drag-region>
+  <button class="mburger" onclick="toggleRail()" aria-label="Conversations">☰</button>
   <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
   <span class="wordmark">Scramble<b>AI</b></span>
   <span class="env" id="env"><span class="cdot"></span><span id="envText">connecting…</span></span>
 </div>
+
+<div class="railscrim" onclick="toggleRail(false)"></div>
 
 <div class="app">
   <aside class="rail">
@@ -567,6 +619,18 @@
     </div>
   </div>
 </div>
+
+<script>
+  // Mobile drawer (≤700px): the rail slides in over the chat. Selecting a
+  // session or starting a new chat closes it so the conversation is visible.
+  function toggleRail(force){
+    document.body.classList.toggle('railopen', force === undefined ? undefined : !!force);
+  }
+  addEventListener('click', (e) => {
+    if (!document.body.classList.contains('railopen')) return;
+    if (e.target.closest('.session, .newbtn')) toggleRail(false);
+  }, true);
+</script>
 
 <script type="module">
   import { Vault, PassphraseCrypto } from "./vault.js";
