@@ -332,7 +332,7 @@
   .titlebar[data-tauri-drag-region]{cursor:default}
   .titlebar[data-tauri-drag-region] > *{pointer-events:none}
 
-  /* ---------- boot splash ----------
+  /* ---------- boot splash (phones only — see the script below the styles) ----------
      Pure splash until the wordmark has settled (+2s): the chrome is invisible
      but keeps its layout, so the centred connecting/scramble screen never
      jumps — then everything fades in together. The class is set on <html>
@@ -407,8 +407,10 @@
   }
 </style>
 
-<!-- Set before the chrome exists in the DOM, so the splash never flashes it. -->
-<script>document.documentElement.classList.add("boot");</script>
+<!-- Set before the chrome exists in the DOM, so the splash never flashes it.
+     Phones only: on desktop the rail column keeps the splash off-centre, so
+     the desktop boots straight into the normal UI. -->
+<script>if (matchMedia("(max-width: 700px)").matches) document.documentElement.classList.add("boot");</script>
 
 <div class="titlebar" data-tauri-drag-region>
   <button class="mburger" onclick="toggleRail()" aria-label="Conversations">☰</button>
