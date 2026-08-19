@@ -358,8 +358,13 @@
     .rail .newbtn,.rail .importbtn,.ticket .refill{min-height:44px}
     .ticket{padding-bottom:calc(env(safe-area-inset-bottom,0px) + 14px)}
     .topbar{padding:8px 12px;gap:10px}
+    .model{flex:1 1 auto;min-width:0}
     .model .sel{min-height:44px}
-    .mix{gap:8px}
+    .model .sel > div:first-child{min-width:0}
+    .model .sel .name,.model .sel .vend{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .mix{flex:0 0 auto;gap:8px}
+    .mfilter{flex-wrap:wrap}
+    .menu{left:8px;right:8px}
     .path{display:none} /* the toggle alone carries the mixnet state on phones */
     .thread{padding:18px 0}
     .wrap{padding:0 16px}
@@ -746,6 +751,14 @@
   const PRUNE_KEEP = 6;
 
   const $ = id => document.getElementById(id);
+  // Exactly one modal at a time: opening a scrim closes every other one and
+  // the mobile drawer, so closing always lands back in the chat — never on a
+  // stale modal stacked underneath.
+  const openScrim = id => {
+    document.querySelectorAll(".scrim.open").forEach(s => s.classList.remove("open"));
+    if (typeof toggleRail === "function") toggleRail(false);
+    $(id).classList.add("open");
+  };
   const esc = s => (s||"").replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
   const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now())+Math.random());
   const usd = scrai => (scrai/100000);
@@ -909,7 +922,7 @@
       <p class="hint">${m.trainsOnInput
         ? '⚠ Flagged “trains on input” — this provider may retain or train on what you send. Don’t paste anything you wouldn’t make public.'
         : 'Flagged zero-retention for input by this provider.'}</p>`;
-    $("termsScrim").classList.add("open");
+    openScrim("termsScrim");
   }
   // Route model selections through here so terms are enforced before use.
   function chooseModel(m){
@@ -1324,7 +1337,7 @@
   async function openEntryPicker(){
     if(!isTauri() || !mixOn) return;
     $("gwTitle").innerHTML = "Entry <b>gateway</b>";
-    $("gwScrim").classList.add("open");
+    openScrim("gwScrim");
     $("gwBody").innerHTML = `<p>Pick the gateway your traffic <b>enters</b> the mixnet through. Changing it
       reconnects the Rust core on your next request. The two middle mix hops stay
       randomised per packet — that reshuffling is the anonymity, not something you set.
@@ -1357,7 +1370,7 @@
     if(!isTauri() || !mixOn) return;
     const e = routeCache.exit;
     $("gwTitle").innerHTML = "Exit <b>gateway</b>";
-    $("gwScrim").classList.add("open");
+    openScrim("gwScrim");
     $("gwBody").innerHTML = `<p>The <b>exit</b> hop is the gateway the scrai-server itself is attached to —
       it is read from the server's Nym address, not chosen by this app. To change it,
       the server operator would move the server to a different gateway.</p>
@@ -1657,7 +1670,7 @@
       .replace(/^---$/gm,'<span class="kc">---</span>')
       .replace(/^(schema|created|model|title):/gm,'<span class="k">$1</span>:');
     $("expPass").value="";
-    $("scrim").classList.add("open");
+    openScrim("scrim");
   }
   async function downloadHandover(encrypt){
     const md=Handover.serialize(sessionForExport());
@@ -1686,7 +1699,7 @@
     if(PassphraseCrypto.isEnvelope(text)){
       pendingImportText=text;
       $("importStatus").textContent=""; $("importPass").value="";
-      $("importScrim").classList.add("open");
+      openScrim("importScrim");
       setTimeout(()=>$("importPass").focus(),50);
       return;
     }
@@ -1767,7 +1780,7 @@
     $("setStatus").textContent = "";
     ["prTopic","prWhite","prReq","prHand"].forEach(id=>{ $(id).onchange = persistSettings; });
     ["grEnabled","grText","grImages"].forEach(id=>{ $(id).onchange = persistGuard; });
-    $("setScrim").classList.add("open");
+    openScrim("setScrim");
   }
   function closeSettings(){ $("setScrim").classList.remove("open"); }
   function persistSettings(){
@@ -1793,7 +1806,7 @@
     $("guardCancel").textContent  = opts.cancelLabel;
     guardOnConfirm = opts.onConfirm || null;
     guardOnCancel  = opts.onCancel || null;
-    $("guardScrim").classList.add("open");
+    openScrim("guardScrim");
   }
   function confirmGuard(){ const cb=guardOnConfirm; guardOnConfirm=null; guardOnCancel=null; $("guardScrim").classList.remove("open"); if(cb) cb(); }
   function closeGuardModal(){ const cb=guardOnCancel; guardOnConfirm=null; guardOnCancel=null; $("guardScrim").classList.remove("open"); if(cb) cb(); }
@@ -1816,7 +1829,7 @@
     img.src=giOrigSrc;
     setupGiBrush();
     renderGiFoot();
-    $("guardImgScrim").classList.add("open");
+    openScrim("guardImgScrim");
   }
   function giOnImgLoad(){
     const img=$("guardImg");
@@ -2174,7 +2187,7 @@
   // Tauri webview, so everything is rendered inside the modal) ----------
   let acctPhrase = null;   // revealed 24 words to show, or null
   let acctView = null;     // null | "restore" | "confirmNew"
-  function openAccount(){ acctPhrase=null; acctView=null; renderAccount(); $("acctScrim").classList.add("open"); }
+  function openAccount(){ acctPhrase=null; acctView=null; renderAccount(); openScrim("acctScrim"); }
   function closeAccount(){ $("acctScrim").classList.remove("open"); }
   function acctStatus(m){ const s=$("acctStatus"); if(s) s.textContent=m||""; }
   function serverBlock(){
@@ -2308,7 +2321,7 @@
       ? "dev mode — settles instantly, no real money moves."
       : "Pick an amount and a coin.";
     stopPendRefresh(); pendRefreshTimer=setInterval(tickPending, 1000);
-    $("buyScrim").classList.add("open");
+    openScrim("buyScrim");
   }
   // Closing does NOT stop an open payment's poll — pay in your wallet, come back,
   // and it's already credited. Only the visible timers pause.
