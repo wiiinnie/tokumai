@@ -433,7 +433,6 @@
         </div>
         <div class="menu" id="menu"></div>
       </div>
-      <span class="badge train" id="privBadge" style="display:none">trains on input</span>
       <div class="mix">
         <div class="path off" id="path">
           <div class="hop endhop"><span class="node"></span><span class="cap">you</span></div>
@@ -868,9 +867,6 @@
   function selectModel(m){
     currentModel=m.model; modelVendor=m.vendor; modelTrains=m.trainsOnInput; modelRate=m.rate||null; modelAcceptsImages=!!m.acceptsImages; modelTier=m.tier||"paid"; modelKind=m.kind||"text";
     $("mName").textContent=m.model; $("mVend").textContent=m.vendor+(m.rate?(' · '+rateHint(m.rate)):'')+(m.tier==='free-tier'?' · free tier':'');
-    $("privBadge").style.display = m.trainsOnInput?"inline-flex":"none";
-    $("privBadge").className="badge "+(m.trainsOnInput?"train":"zr");
-    $("privBadge").textContent=m.trainsOnInput?"trains on input":"zero-retention";
     if(typeof pendingFile!=="undefined" && pendingFile) renderAttach();  // refresh the file hint
   }
 
