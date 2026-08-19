@@ -564,7 +564,7 @@
       <p class="hint" style="margin:0 0 12px">Warns you before you send something that looks sensitive — a card number, IBAN, password, or your recovery phrase. Runs <b>100% on this device</b>: nothing is ever sent, logged, or stored, and it only warns — you always decide.</p>
       <label class="setrow"><input type="checkbox" id="grEnabled"><span><b>Enable the guard</b><small>Master switch for the checks below.</small></span></label>
       <label class="setrow"><input type="checkbox" id="grText"><span><b>Scan my messages</b><small>Check the prompt for sensitive data before it leaves the device.</small></span></label>
-      <label class="setrow"><input type="checkbox" id="grImages"><span><b>Scan attachments (images, PDFs, text)</b><small>On-device: OCR images, read a PDF's text (and OCR scanned pages), and read text files — warn if they contain sensitive data. No network.</small></span></label>
+      <label class="setrow"><input type="checkbox" id="grImages"><span><b>Scan attachments (images, PDFs, text)</b><small>On-device: OCR images, read a PDF's text (and OCR scanned pages), and read text files — warn if they contain sensitive data. No network.</small><small id="grIosNote" style="display:none;color:var(--signal)">On iPhone: images and text PDFs are scanned on-device; OCR of scanned (image-only) PDFs is desktop-only for now.</small></span></label>
       <p class="hint" id="setStatus" style="margin:12px 0 0"></p>
     </div>
     <div class="mf"><button class="btn" onclick="closeSettings()">Close</button></div>
@@ -1780,6 +1780,9 @@
     $("setStatus").textContent = "";
     ["prTopic","prWhite","prReq","prHand"].forEach(id=>{ $(id).onchange = persistSettings; });
     ["grEnabled","grText","grImages"].forEach(id=>{ $(id).onchange = persistGuard; });
+    // The guard itself runs everywhere; only scanned-PDF OCR (Apple Vision)
+    // is desktop-only — say so on the phone instead of greying anything out.
+    $("grIosNote").style.display = (isTauri() && /iPhone|iPad|iPod/.test(navigator.userAgent)) ? "block" : "none";
     openScrim("setScrim");
   }
   function closeSettings(){ $("setScrim").classList.remove("open"); }
