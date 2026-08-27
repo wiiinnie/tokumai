@@ -40,6 +40,19 @@ impl SessionStore {
         self.rev
     }
 
+    /// Aggregate read-outs (for server metrics/admin). No per-session data leaves here.
+    pub fn count(&self) -> usize {
+        self.sessions.len()
+    }
+    /// Total unspent, redeemed SCRAI sitting across all sessions.
+    pub fn total_balance(&self) -> u64 {
+        self.sessions.values().map(|s| s.balance).sum()
+    }
+    /// Total charges ever reserved across all live sessions (≈ chats billed).
+    pub fn total_charges(&self) -> u64 {
+        self.sessions.values().map(|s| s.counter).sum()
+    }
+
     /// Restore from a JSON snapshot (server boot); empty/invalid → a fresh store.
     pub fn from_snapshot(json: &str) -> Self {
         serde_json::from_str(json).unwrap_or_default()

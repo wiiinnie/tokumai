@@ -216,8 +216,9 @@ figure.shot figcaption b{color:var(--ink);font-weight:500}
   The server answers through anonymous reply blocks (SURBs) — it never learns a sender address it
   could remember.</p>
   <p>Attachments — images and PDFs — ride the same path: large files are unreliable as one mixnet
-  message, so the app splits them into <mark>acknowledged chunks</mark> with real per-chunk progress,
-  and the server reassembles them only for the request that references them. The conversation itself
+  message, so the app splits them into <mark>acknowledged chunks</mark> with real per-chunk progress
+  and live speed shown right on the image — cancelable mid-flight — and the server reassembles them
+  only for the request that references them. The conversation itself
   lives only on the device, encrypted with AES-256-GCM; export and migration use an open, portable
   format (<span class="chip on">handover.md</span>), passphrase-encrypted on request.</p>
   <div class="shots">
@@ -246,6 +247,7 @@ figure.shot figcaption b{color:var(--ink);font-weight:500}
     <li><span class="t">Semantic scan (local model)</span><span class="d">A GLiNER model runs natively inside the app and catches open classes — names, addresses, employers — zero-shot, no cloud.</span></li>
     <li><span class="t">File scan with OCR</span><span class="d">Images and PDFs are read locally (Apple Vision natively, Tesseract-WASM as fallback) and pushed through the same checks. Findings can be redacted right in the image.</span></li>
     <li><span class="t">Manual redaction mode</span><span class="d">Detection boxes are a starting point, not the authority: dismiss false positives with a click, and drag your own black boxes across anything the scanner missed. The bars are burned into the image before it leaves.</span></li>
+    <li><span class="t">Metadata stripped</span><span class="d">Before upload every image is re-encoded to drop EXIF/GPS and the embedded original — and downscaled to a vision-friendly size, so far fewer bytes cross the mixnet; PDFs lose their <span class="chip">/Info</span> dictionary and XMP stream. Nothing tells the model where a photo was taken.</span></li>
     <li><span class="t">Smart pruning</span><span class="d">Before sending, the transcript is trimmed lexically to what this question needs — a measured −60 % tokens, without an extra model call.</span></li>
   </ul>
   <div class="shots two">
@@ -402,7 +404,9 @@ figure.shot figcaption b{color:var(--ink);font-weight:500}
   <h2>The same app, <b>in your pocket</b></h2>
   <p class="lead">Not a second codebase: the identical Rust core — Nym SDK, Coconut wallet, privacy
   guard, native OCR — compiled for iOS with Tauri 2, running the same UI. Chat, payments and image
-  generation ride the mixnet from the phone today.</p>
+  generation ride the mixnet from the phone today. A first-run <b>tutorial</b> walks you through
+  account → server → credit → chat, the connect screen narrates each real step of the route as it
+  comes up, and four <b>appearance themes</b> restyle the whole app — connect screen included.</p>
   <div class="shots phones">
     <figure class="shot"><div class="frame"><img data-img="ios-connecting" alt="iPhone: building the route through the mixnet"></div>
       <figcaption><b>Connecting.</b> The embedded Nym client builds its route on launch.</figcaption></figure>
@@ -480,7 +484,8 @@ figure.shot figcaption b{color:var(--ink);font-weight:500}
   Absenderadresse, an die er sich erinnern könnte.</p>
   <p>Anhänge — Bilder und PDFs — nehmen denselben Weg: Große Dateien sind als eine Mixnet-Nachricht
   unzuverlässig, deshalb zerlegt die App sie in <mark>quittierte Chunks</mark> mit echtem Fortschritt
-  pro Chunk; der Server setzt sie erst für den Request zusammen, der sie referenziert. Die
+  pro Chunk und Live-Speed, direkt auf dem Bild angezeigt — jederzeit abbrechbar — der Server setzt
+  sie erst für den Request zusammen, der sie referenziert. Die
   Konversation selbst liegt ausschließlich lokal, verschlüsselt mit AES-256-GCM; Export und Umzug
   laufen über ein offenes, portables Format (<span class="chip on">handover.md</span>), auf Wunsch
   passphrase-verschlüsselt.</p>
@@ -511,6 +516,7 @@ figure.shot figcaption b{color:var(--ink);font-weight:500}
     <li><span class="t">Semantischer Scan (lokales Modell)</span><span class="d">Ein GLiNER-Modell läuft nativ in der App und erkennt offene Klassen: Namen, Adressen, Arbeitgeber — Zero-Shot, ohne Cloud.</span></li>
     <li><span class="t">Datei-Scan mit OCR</span><span class="d">Bilder und PDFs werden lokal gelesen (Apple Vision nativ, Tesseract-WASM als Fallback) und durch dieselben Prüfungen geschickt. Funde lassen sich direkt im Bild schwärzen.</span></li>
     <li><span class="t">Manueller Markier-Modus</span><span class="d">Die erkannten Boxen sind Startpunkt, nicht Instanz: Fehltreffer per Klick verwerfen, und eigene schwarze Boxen über alles ziehen, was der Scanner nicht kennen kann. Die Balken werden vor dem Senden fest ins Bild eingebrannt.</span></li>
+    <li><span class="t">Metadaten entfernt</span><span class="d">Vor dem Upload wird jedes Bild neu kodiert — EXIF/GPS und das eingebettete Original fallen weg — und auf eine vision-taugliche Größe herunterskaliert, sodass deutlich weniger Bytes durchs Mixnet gehen; PDFs verlieren ihr <span class="chip">/Info</span>-Dictionary und den XMP-Stream. Nichts verrät dem Modell, wo ein Foto entstand.</span></li>
     <li><span class="t">Smart Pruning</span><span class="d">Vor dem Senden wird die Historie lexikalisch auf das Nötige getrimmt — gemessene −60 % Tokens, ohne zusätzlichen Modell-Aufruf.</span></li>
   </ul>
   <div class="shots two">
@@ -671,7 +677,10 @@ figure.shot figcaption b{color:var(--ink);font-weight:500}
   <h2>Dieselbe App, <b>in der Hosentasche</b></h2>
   <p class="lead">Keine zweite Codebase: der identische Rust-Kern — Nym SDK, Coconut-Wallet, Privacy
   Guard, native OCR — für iOS kompiliert mit Tauri 2, mit derselben UI. Chat, Zahlungen und
-  Bildgenerierung laufen heute vom Telefon aus übers Mixnet.</p>
+  Bildgenerierung laufen heute vom Telefon aus übers Mixnet. Ein <b>Tutorial</b> beim ersten Start
+  führt durch Account → Server → Guthaben → Chat, der Verbinden-Screen benennt jeden echten Schritt
+  der Route, während er live steht, und vier <b>Themes</b> stylen die ganze App um — inklusive
+  Verbinden-Screen.</p>
   <div class="shots phones">
     <figure class="shot"><div class="frame"><img data-img="ios-connecting" alt="iPhone: Route durchs Mixnet wird aufgebaut"></div>
       <figcaption><b>Verbinden.</b> Der eingebettete Nym-Client baut beim Start seine Route.</figcaption></figure>

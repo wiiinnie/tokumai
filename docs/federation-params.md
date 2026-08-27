@@ -95,3 +95,56 @@ catches real attacks while keeping innocent bans near-zero.
 - Test (2 servers): trusted-dealer `ttp_keygen(t=2, n=2)` → 2 authority shares +
   aggregated `VerificationKey` (hardcoded/pinned in the client).
 - Before foreign gateways: real DKG (inject shares via `SecretKeyAuth::create_from_raw`).
+
+## Security roadmap — what t-of-n federation must also carry (audit 2026-08-20)
+
+Context: today there is ONE operator (currently the project owner themselves), so the
+"dishonest operator" findings are low current priority — but they only fully resolve
+with real multi-operator t-of-n. Track these so they land WITH the federation build,
+not after. Full details: `docs/security/audit-2026-08-20.md`.
+
+- **H3 — withdraw fair-exchange (real-money entitlement).** A single untrusted operator
+  can consume a paid ticketbook and issue garbage; atomic entitlement↔credential
+  exchange is *impossible* with one untrusted party. Interim shipped: client detects the
+  cheat via `verify_share` and quarantines the server (`flag_server`), capping loss to
+  one book. **Full fix = t-of-n:** no single authority can forge (needs t shares) or
+  consume entitlement alone → requires a **shared/replicated entitlement ledger** every
+  authority checks before issuing its share (so entitlement-consume is a quorum decision,
+  and a garbage share from one authority is routed around by using the other t valid ones).
+- **C3 — pricing tamper-proofing across foreign operators.** Client-side fair-price
+  recompute is shipped for the pinned single server; before foreign gateways serve their
+  own price list, add the SIGNED, versioned retail list with a pinned pubkey (see
+  `[[scrambleai-signed-pricing-todo]]`). Margin folded into the signed list.
+- **H9 — replace the 1-of-1 trusted-dealer with real DKG (t≥2)** before real money on
+  multiple operators; the server currently boot-gates 1-of-1 real-money issuance behind
+  `SCRAI_ALLOW_SINGLE_AUTHORITY=1`.
+- **Redeem-timing mixing (client privacy, crowd-gated — decided 2026-08-20).** Redeems
+  are the Session-side events; decouple them in time from the account-side Withdraw
+  (which happens at purchase). Design:
+  - **Uniform $1 chunks** (`REDEEM_CHUNK_COINS=100`), a GLOBAL constant for all users —
+    never variable (a distinctive amount is a fingerprint; fixed denominations are what
+    give the anonymity set, like a mixer).
+  - **First redeem:** default-on random delay within a traffic-scaled window (**~1 min
+    default**, make it adaptive) measured from payment confirmation, with an opt-out and a
+    small "initial redeem in ~Xs · skip" indicator. The natural time-to-first-chat is a
+    WEAK, uncontrolled version of this; the explicit default makes it controlled + uniform
+    (default-on matters: the anonymity set is "everyone who didn't skip", so opt-out, not
+    opt-in). Anchor is the on-chain payment (public/timestamped); the window must contain
+    enough other payment→redeem pairs to be ambiguous → sizing scales with traffic.
+  - **Remaining chunks:** redeem the rest in mix-windows while the session is open and the
+    user is idle (reading/typing) — FOREGROUND-idle, not a true background service (mobile
+    kills background; iOS especially). Idle redeems make $1's extra round-trips invisible
+    UX-wise, so $1 stays the privacy-preferred chunk; the only residual $1 cost is more
+    mixnet round-trips = battery/radio (tune per-platform later if needed).
+  - **Stronger later:** synchronized mix-rounds (all clients redeem at fixed intervals)
+    concentrate cover better than independent random delays.
+  - **ZERO benefit solo** — build the timing pieces once there's a user base. The
+    migration flow (`redeem_all`) is independent and useful now.
+- **M-crypto-1 — rotate the session pseudonym (client privacy, not federation-bound).**
+  `session_index` is hardwired to 0, so an operator can bundle ALL of a user's prompts
+  under one long-lived `sessionId`. It still cannot tie that pseudonym to the *buying
+  account* (blind ecash holds), but "all your prompts linked to each other" is a real
+  correlation. Fix: advance + persist `session_index` (e.g. a new session per app-session
+  or on export+prune) so usage spreads across pseudonyms; a rotated session redeems fresh
+  credit rather than carrying a balance across the rotation. Note: this only buys privacy
+  with an actual crowd (like lazy-redeem) — its value grows with the user base.

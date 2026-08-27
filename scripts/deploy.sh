@@ -68,6 +68,10 @@ install -d -o scrai -g scrai /opt/scrai /opt/scrai/bin /opt/scrai/data
 install -o scrai -g scrai -m 755 \
   "$SCRAI_ADMIN_HOME/scrai-stage/target/release/scrai-server" /opt/scrai/bin/scrai-server.new
 mv /opt/scrai/bin/scrai-server.new /opt/scrai/bin/scrai-server
+# read-only admin dashboard (htop-style) — same crate, installed alongside the server
+install -o scrai -g scrai -m 755 \
+  "$SCRAI_ADMIN_HOME/scrai-stage/target/release/scrai-admin" /opt/scrai/bin/scrai-admin.new
+mv /opt/scrai/bin/scrai-admin.new /opt/scrai/bin/scrai-admin
 install -o scrai -g scrai -m 644 \
   "$SCRAI_ADMIN_HOME/scrai-stage/pricing.json" /opt/scrai/pricing.json
 # retire the Node deployment (keep .env, data/, images/, and our bin/)

@@ -8,6 +8,11 @@ description = "ScrambleAI server — the mixnet service provider + t-of-n issuin
 name = "scrai-server"
 path = "src/main.rs"
 
+# htop-style read-only admin dashboard over the server's state.db (SSH on the box).
+[[bin]]
+name = "scrai-admin"
+path = "src/bin/scrai-admin.rs"
+
 [dependencies]
 scrai-core = { path = "../core" }
 # Embedded mixnet client — the server IS a Nym service provider (no public IP/DNS).
@@ -28,6 +33,9 @@ env_logger = "0.11"
 base64 = "0.22"
 # Durable session balances + double-spend records (bundled SQLite, no system dep).
 rusqlite = { version = "0.32", features = ["bundled"] }
+# scrai-admin: terminal dashboard (htop-style). Only used by that binary.
+ratatui = "0.28"
+crossterm = "0.28"
 
 [dev-dependencies]
 # pay.rs / chat.rs tests sign requests the way the real client does.

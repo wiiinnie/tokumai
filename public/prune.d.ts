@@ -4,6 +4,8 @@ export interface PruneOpts {
   whitespace: boolean;
   requestTrim: boolean;
   handover: boolean;
+  /** Guaranteed memory floor: the last N complete Q&A pairs are always sent. */
+  ctxPairs?: number;
 }
 export interface PruneMsg {
   role: string;
@@ -19,6 +21,6 @@ export function trimRequest(s: string): string;
 export function pruneMessages(
   messages: PruneMsg[],
   opts?: PruneOpts,
-  cfg?: { keepRecentPairs?: number; threshold?: number },
+  cfg?: { keepRecentPairs?: number; minRecentPairs?: number; threshold?: number },
 ): PruneMsg[];
 export function pruneForHandover(messages: PruneMsg[], opts?: PruneOpts): PruneMsg[];

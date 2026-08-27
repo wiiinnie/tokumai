@@ -1,11 +1,11 @@
 {
   "schema": "scrambler/pricing@1",
-  "version": "2026-08-17",
+  "version": "2026-08-27",
   "source": "https://ai.google.dev/gemini-api/docs/pricing",
   "tier": "paid-standard",
   "currency": "USD",
   "unit": "per_1m_tokens",
-  "note": "Standard (non-batch, non-flex, non-priority) paid-tier prices. Output prices include thinking tokens. Margin lives in MARGIN env, never here.",
+  "note": "Standard (non-batch, non-flex, non-priority) paid-tier prices. Output prices include thinking tokens. Image models: `out` is the IMAGE-token rate, `out_text` the text/thinking output rate (Google bills them separately). Margin lives in MARGIN env, never here.",
   "default": {
     "label": "unknown model (conservative fallback)",
     "in": 1.5,
@@ -17,9 +17,10 @@
   "models": {
     "gemini-3.6-flash": {
       "label": "Gemini 3.6 Flash",
-      "in": 1.5,
-      "out": 7.5,
-      "cached_in": 0.15,
+      "in": 0.75,
+      "out": 3.75,
+      "cached_in": 0.075,
+      "note": "Launch pricing through 2026-12-31 (Google lists 1.5 / 7.5 / 0.15 after that) — REVISIT before 2027-01-01. Verified 2026-08-27 vs ai.google.dev/gemini-api/docs/pricing.",
       "tier": "free-tier"
     },
     "gemini-3.5-flash": {
@@ -64,24 +65,25 @@
     },
     "gemini-3.1-flash-lite-image": {
       "label": "Nano Banana 2 Lite",
-      "in": 0.3,
+      "in": 0.25,
       "out": 30,
-      "cached_in": 0.03,
-      "note": "UNVERIFIED PLACEHOLDER. Image output bills as output tokens, but these rates were not confirmed against Google's price list. Priced high on purpose so we never undercharge — replace with real figures before charging anyone."
+      "out_text": 1.5,
+      "note": "Standard tier: input $0.25/1M (text/image/video), image output $30/1M (1K = 1120 tokens ≈ $0.034), text output $1.50/1M. No cached-input rate on standard tier. Verified 2026-08-27 vs ai.google.dev/gemini-api/docs/pricing."
     },
     "gemini-3.1-flash-image": {
       "label": "Nano Banana 2",
-      "in": 0.3,
-      "out": 30,
-      "cached_in": 0.03,
-      "note": "UNVERIFIED PLACEHOLDER. Image output bills as output tokens, but these rates were not confirmed against Google's price list. Priced high on purpose so we never undercharge — replace with real figures before charging anyone."
+      "in": 0.5,
+      "out": 60,
+      "out_text": 3,
+      "cached_in": 0.05,
+      "note": "Standard tier: input $0.50/1M, image output $60/1M (512px 747 tok ≈ $0.045, 1K 1120 tok ≈ $0.067, 2K 1680 ≈ $0.101, 4K 2520 ≈ $0.151), text output $3/1M. Verified 2026-08-27 vs ai.google.dev/gemini-api/docs/pricing."
     },
     "gemini-2.5-flash-image": {
       "label": "Nano Banana",
       "in": 0.3,
       "out": 30,
       "cached_in": 0.03,
-      "note": "UNVERIFIED PLACEHOLDER. Image output bills as output tokens, but these rates were not confirmed against Google's price list. Priced high on purpose so we never undercharge — replace with real figures before charging anyone."
+      "note": "Standard tier: input $0.30/1M, output $30/1M = ~$0.039/image (1290 tokens); Google lists no separate text-output rate for this model, so all output bills at 30. Verified 2026-08-27 vs ai.google.dev/gemini-api/docs/pricing."
     },
     "pollinations-512": {
       "label": "Pollinations 512px (free)",

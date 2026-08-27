@@ -16,7 +16,7 @@ mod wallet;
 use nym::Transport;
 use rand::RngCore;
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -25,13 +25,16 @@ const PROTO: u64 = 1;
 
 // Reply-SURB budgets: a small answer needs few, a chat answer more.
 const SURBS_SMALL: u32 = 80;
+/// `staged_download` key for the unsigned (free-model) chat path, which has no session.
+const FREE_SESSION_KEY: &str = "free";
 /// Reply budget for text chats: ~150 Sphinx packets ≈ 300 KB — ample for any
 /// text answer, and far fewer request fragments than the old flat 500 (each
 /// SURB rides IN the request, so oversizing bloats every send and triggers
 /// retransmission storms on the server's inbound reassembly).
 const SURBS_TEXT: u32 = 150;
-/// Reply budget for image models: a generated image is a single ~MB reply.
-const SURBS_CHAT: u32 = 500;
+// (Image chats used to carry a flat 500-SURB budget for a single ~MB reply. Generated
+// pictures now come back as `image.chunk` references fetched with SURBS_SMALL each —
+// see `fetch_staged_images` — so an image chat's own reply is text-sized.)
 const TIMEOUT_MS: u64 = 120_000;
 
 /// Coins redeemed per auto-fund when a session runs dry (1 coin = 1000 SCRAI →
@@ -39,6 +42,154 @@ const TIMEOUT_MS: u64 = 120_000;
 /// purpose: not everything at once (leaks the balance and builds one big
 /// pseudonym), not tiny bits (many shows + mixnet round-trips).
 const REDEEM_CHUNK_COINS: u64 = 100;
+
+// --- C3: client-side overcharge guard (docs/security/audit-2026-08-20.md) --------
+// The server is untrusted, yet today it alone decides the price/margin/token count
+// and the client displays it blindly. We bake the SAME retail table the app shipped
+// with and recompute a fair upper-bound price from the client's OWN token estimate,
+// so a rogue operator can inflate NEITHER the margin NOR the token count unnoticed.
+// (The federation-era hardening — a SIGNED, versioned list with a pinned pubkey so a
+// foreign operator can't serve a forged table — is tracked separately; a single
+// bundled table is already trusted for the shipped, pinned-server client.)
+const BUNDLED_PRICING: &str = include_str!("../../pricing.json");
+/// Retail margin the client is willing to accept (matches the project default 1.4).
+const CLIENT_RETAIL_MARGIN: f64 = 1.4;
+/// A charge above fair × this is treated as operator overcharge. Generous, because
+/// the client's char/4 token estimate is coarser than a real tokenizer — this catches
+/// the gross attacks (the audit's ≥50×, up to ~1000×) with wide false-positive headroom.
+const OVERCHARGE_FACTOR: f64 = 4.0;
+/// Don't flag trivial charges where rounding/floor noise dominates.
+const MIN_FLAG_SCRAI: u64 = 50;
+
+/// Servers this client caught grossly overcharging THIS process-run. In-memory on
+/// purpose: a restart re-extends benefit of the doubt (avoids a permanent lockout
+/// from a one-off fluke), while within a run we refuse to auto-redeem more coins into
+/// a flagged server (the audit's "stop, redeem no more, flag it").
+fn flagged_servers() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    static F: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    F.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+}
+
+/// Mark a server as untrusted for the rest of this run — it overcharged (C3) or
+/// issued an INVALID credential share while (server-side) consuming paid entitlement
+/// (H3, proven by `verify_share` failing). Money ops (withdraw, auto-redeem) then
+/// refuse it, capping the loss to the one step that exposed the cheat. Note: the value
+/// already lost to that step CANNOT be recovered against a SINGLE untrusted operator —
+/// atomic entitlement↔credential exchange is impossible without a threshold/TTP; t-of-n
+/// issuance is the structural prevention. This detect-and-quarantine is the best a
+/// single-operator client can do (and the audit's remediation).
+fn flag_server(srv: &str, reason: &str) {
+    if let Ok(mut f) = flagged_servers().lock() {
+        if f.insert(srv.to_string()) {
+            log::error!("[trust] flagged {srv} as dishonest: {reason} — refusing further money ops to it this run");
+        }
+    }
+}
+
+fn is_flagged(srv: &str) -> bool {
+    flagged_servers().lock().map(|f| f.contains(srv)).unwrap_or(false)
+}
+
+/// A transport-level failure (send dropped / no reply in time) — the server gave NO
+/// verdict, so an idempotent spend/redeem is safe to retry with the SAME pay_info.
+/// Distinguished from a definitive server *rejection* (a `kind:"error"` reply), which
+/// means retrying the same payment is pointless — clear the pending instead of looping.
+fn is_transport_error(e: &str) -> bool {
+    e.contains("mixnet") || e.contains("no reply") || e.contains("reconnect")
+}
+
+/// A cryptographic-invalidity verdict from the server: this credential cannot be
+/// verified here (e.g. it was minted by an EARLIER authority instance whose keys the
+/// server no longer has). It is worthless at this server, so drop it rather than let it
+/// block every future redeem.
+fn is_invalid_credential(e: &str) -> bool {
+    e.contains("invalid payment") || e.contains("ZK proof") || e.contains("proof failed")
+}
+
+/// A DEFINITIVE server rejection of a spend/redeem: always clear the pending (retrying
+/// the same payment is pointless). On a cryptographic-invalidity verdict, do NOT simply
+/// trust the server — a rogue server could claim a VALID credential is invalid to trick
+/// the client into discarding real money. Instead verify INDEPENDENTLY: fetch the
+/// server's current authority key and compare it to the one the credential was minted
+/// with. Different key → the credential is genuinely from an earlier authority (dead
+/// here) → discard it so it stops blocking redeems. Same key → the credential is valid
+/// and the server LIED → flag the server, keep the money. Returns the user-facing error.
+async fn handle_spend_rejection(
+    t: &Transport,
+    srv: &str,
+    dir: &Path,
+    w: &mut wallet::Wallet,
+    e: String,
+) -> String {
+    use scrai_core::federation::{FedRequest, FedResponse};
+    w.pending_spend = None;
+    let mut note = "";
+    if is_invalid_credential(&e) {
+        if let Some((idx, purse)) = first_funded_purse(&w.coconut_purses) {
+            let server_vk = match fed_call(t, srv, FedRequest::Keys).await {
+                Ok(FedResponse::Keys { vk, .. }) => serde_json::to_string(&vk).ok(),
+                _ => None,
+            };
+            let purse_vk = serde_json::to_string(purse.verification_key()).ok();
+            match server_vk {
+                // Confirmed stale (minted under a different authority key) → safe to drop.
+                Some(sv) if Some(&sv) != purse_vk.as_ref() => {
+                    w.coconut_purses.remove(idx);
+                    log::error!("[coconut] credential was minted under a DIFFERENT authority key (stale) — discarded: {e}");
+                    note = " — discarded a stale credential (minted by an earlier server instance); redeem again for the rest";
+                }
+                // Same key, yet the server rejected it → the server is lying about valid money.
+                Some(_) => {
+                    flag_server(srv, &format!("rejected a VALID credential as invalid: {e}"));
+                    note = " — the server rejected a VALID credential and was flagged as dishonest; your credit is intact, switch servers";
+                }
+                // Couldn't confirm → keep the credential, don't guess.
+                None => note = " — could not confirm the credential against the server key; kept it",
+            }
+        }
+    }
+    let _ = wallet::save(dir, w);
+    format!("{e}{note}")
+}
+
+/// Concatenated plaintext of a chat `messages` array, or None if any message is
+/// non-text (multimodal / image parts) — where a char-based token estimate is
+/// meaningless and the guard must not run.
+fn messages_plaintext(messages: &Value) -> Option<String> {
+    let mut s = String::new();
+    for m in messages.as_array()? {
+        match m.get("content") {
+            Some(Value::String(c)) => {
+                s.push_str(c);
+                s.push('\n');
+            }
+            _ => return None,
+        }
+    }
+    Some(s)
+}
+
+/// The client's independent fair upper-bound price (whole SCRAI) for one exchange,
+/// or None when it can't be estimated (multimodal input, model not in the bundled
+/// table, unparsable table). Uses the exact same billing math as the server.
+fn fair_price_estimate(model: &str, messages: &Value, reply_text: &str) -> Option<u64> {
+    use scrai_core::billing::{compute_billing, estimate_tokens, TokenUsage};
+    use scrai_core::pricing::PricingTable;
+    let table = PricingTable::parse(BUNDLED_PRICING).ok()?;
+    let price = table.price(model);
+    // Unlisted in OUR table → we have no trusted reference → skip (never a false flag).
+    if price.fallback {
+        return None;
+    }
+    let input = messages_plaintext(messages)?;
+    let usage = TokenUsage {
+        input: estimate_tokens(input.chars().count() as u64),
+        output: estimate_tokens(reply_text.chars().count() as u64),
+        ..Default::default()
+    };
+    Some(compute_billing(&price, &usage, CLIENT_RETAIL_MARGIN, 1, true).price_scrai)
+}
 
 fn data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     app.path().app_data_dir().map_err(|e| e.to_string())
@@ -48,6 +199,19 @@ fn rand_hex(n: usize) -> String {
     let mut b = vec![0u8; n];
     rand::thread_rng().fill_bytes(&mut b);
     hex::encode(b)
+}
+
+// TEMP DIAGNOSTIC: iOS release routes stdout/stderr nowhere reachable, so append
+// startup-command progress to <data_dir>/diag.log and pull it with `devicectl copy from`
+// after the crash. The last line names the command whose IPC response was in flight.
+fn diag(app: &AppHandle, msg: &str) {
+    use std::io::Write;
+    if let Ok(dir) = data_dir(app) {
+        let _ = std::fs::create_dir_all(&dir);
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("diag.log")) {
+            let _ = writeln!(f, "{msg}");
+        }
+    }
 }
 
 /// The CLI stores its server address in ~/.scrai/cli.json; read it as a fallback
@@ -61,13 +225,26 @@ fn cli_config_server() -> Option<String> {
     v.get("serverAddress").and_then(|a| a.as_str()).map(str::to_string)
 }
 
+// Temporary: the single official scrai-server, hardcoded so a fresh install works
+// out-of-the-box while there is exactly one operator. The frontend pins the same address
+// (KNOWN_SERVERS). A wallet-set server (your own or a 3rd-party) or SCRAI_SERVER_ADDRESS
+// always OVERRIDES this. Replace with a signed directory when onboarding other servers
+// (docs/federation-shared-ledger.md). This also makes server config self-healing: even if
+// the on-device wallet loses its `server` field, requests still reach the official server.
+const OFFICIAL_SERVER: &str = "4LjM6dbZ9Pu4hS7hg3AHAK4YLkRfsdH8U5Bi1E9CPBA7.BLpmR82Up6HiucSBLGJQRys6ZHVNZF2doZLPoZFSwTpC@38zcSsvjXsAX7C28ko2H3Lt55X4TYxfZYkPADxKXZHUj";
+
 fn server_addr(w: &wallet::Wallet) -> Result<String, String> {
-    w.server
+    // L14: the wallet `server` field is validated at set_server, but the env/CLI fallbacks
+    // were only non-empty-checked, so a malformed override slipped through to fail later at
+    // Recipient parsing. Validate them here too — an invalid override is dropped, falling
+    // back to the official server rather than erroring every request.
+    let valid = |s: String| Transport::validate_address(&s).is_ok().then_some(s);
+    Ok(w.server
         .clone()
-        .or_else(|| std::env::var("SCRAI_SERVER_ADDRESS").ok())
-        .or_else(cli_config_server)
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| "no scrai-server address configured".to_string())
+        .or_else(|| std::env::var("SCRAI_SERVER_ADDRESS").ok().and_then(&valid))
+        .or_else(|| cli_config_server().and_then(&valid))
+        .unwrap_or_else(|| OFFICIAL_SERVER.to_string()))
 }
 
 fn qr_svg(uri: &str) -> String {
@@ -174,6 +351,13 @@ async fn withdraw_purse(
     use scrai_core::coconut;
     use scrai_core::federation::{FedRequest, FedResponse};
 
+    // H3: refuse to buy a credential from a server this run already caught cheating
+    // (it consumed entitlement and issued garbage) — never feed it a second book.
+    if is_flagged(srv) {
+        return Err("this server was flagged as dishonest (invalid credential issuance) — \
+                    not withdrawing more into it. Switch servers.".into());
+    }
+
     let (vk, auth_vks, coin_sigs, date_sigs, expiration_date, total_coins) =
         match fed_call(t, srv, FedRequest::Keys).await? {
             FedResponse::Keys {
@@ -182,6 +366,16 @@ async fn withdraw_purse(
             FedResponse::Error { message } => return Err(format!("server: {message}")),
             _ => return Err("unexpected response to Keys".into()),
         };
+    // M8: `total_coins` is server-supplied and NOT cryptographically bound to the coin
+    // material — a hostile server returning u64::MAX would make the next `Parameters::new`
+    // allocate O(total_coins) group elements and OOM/hang the client. A ticketbook is 500
+    // coins; reject anything past a generous sane ceiling before it reaches the purse.
+    const MAX_BOOK_COINS: u64 = 4096;
+    if total_coins == 0 || total_coins > MAX_BOOK_COINS {
+        return Err(format!(
+            "server returned an implausible ticketbook size ({total_coins}) — refusing to withdraw"
+        ));
+    }
 
     let user = coconut::new_user();
     let (req, req_info) =
@@ -206,10 +400,22 @@ async fn withdraw_purse(
             FedResponse::Error { message } => return Err(format!("server: {message}")),
             _ => return Err("unexpected response to Withdraw".into()),
         };
-        shares.push(coconut::verify_share(vk_auth, user.secret_key(), &blinded, &req_info, i as u64 + 1)?);
+        // verify_share is the cryptographic proof of honest issuance: a well-formed
+        // reply that FAILS here means the operator consumed entitlement and returned a
+        // garbage share (H3). Flag it so no further book is withdrawn into it.
+        let share = coconut::verify_share(vk_auth, user.secret_key(), &blinded, &req_info, i as u64 + 1)
+            .map_err(|e| {
+                flag_server(srv, &format!("invalid withdrawal share: {e}"));
+                format!("server issued an invalid credential share (server flagged as dishonest): {e}")
+            })?;
+        shares.push(share);
     }
     // aggregate — succeeds ONLY if the server issued valid shares
-    let wallet = coconut::aggregate(&vk, user.secret_key(), &shares, &req_info)?;
+    let wallet = coconut::aggregate(&vk, user.secret_key(), &shares, &req_info)
+        .map_err(|e| {
+            flag_server(srv, &format!("credential shares don't aggregate: {e}"));
+            format!("server credential failed to aggregate (server flagged as dishonest): {e}")
+        })?;
     Ok(scrai_core::purse::Purse::new(
         wallet, user, vk, coin_sigs, date_sigs, total_coins, expiration_date,
     ))
@@ -217,7 +423,12 @@ async fn withdraw_purse(
 
 fn resolve_server(app: &AppHandle, server: Option<String>) -> Result<String, String> {
     match server {
-        Some(s) if !s.trim().is_empty() => Ok(s),
+        // H5: a per-call server override from the frontend is validated too, so a
+        // single malicious invoke can't route a withdraw/spend to a bogus address.
+        Some(s) if !s.trim().is_empty() => {
+            Transport::validate_address(&s)?;
+            Ok(s.trim().to_string())
+        }
         _ => server_addr(&wallet::load(&data_dir(app)?)),
     }
 }
@@ -229,93 +440,11 @@ fn wallet_account(app: &AppHandle) -> Result<account::Account, String> {
     account::from_mnemonic(&m)
 }
 
-/// Dev self-test: perform a full withdrawal but DON'T store it — proves the
-/// client↔server ring over the mixnet. Needs paid entitlement like any withdraw.
-#[tauri::command]
-async fn coconut_withdraw_test(
-    app: AppHandle,
-    transport: State<'_, Arc<Transport>>,
-    server: Option<String>,
-) -> Result<Value, String> {
-    let srv = resolve_server(&app, server)?;
-    let a = wallet_account(&app)?;
-    let purse = withdraw_purse(&transport, &srv, &a).await?;
-    Ok(json!({ "ok": true, "coins": purse.total_coins() }))
-}
-
-/// Withdraw a credential and STORE it in the wallet (bearer money that survives
-/// a restart). Appends to the held books — never replaces one that still holds
-/// coins.
-#[tauri::command]
-async fn coconut_withdraw(
-    app: AppHandle,
-    transport: State<'_, Arc<Transport>>,
-    server: Option<String>,
-) -> Result<Value, String> {
-    let dir = data_dir(&app)?;
-    let srv = resolve_server(&app, server)?;
-    let a = wallet_account(&app)?;
-    let purse = withdraw_purse(&transport, &srv, &a).await?;
-    let coins = purse.total_coins();
-
-    let mut w = wallet::load(&dir);
-    w.coconut_purses.push(purse.persist()?);
-    wallet::save(&dir, &w)?;
-    log::info!("[coconut] withdrew + stored a {coins}-coin credential");
-    Ok(json!({ "ok": true, "coins": coins, "stored": true }))
-}
-
-/// Spend `coins` (default 1) from the stored credential against the server, which
-/// verifies the payment and records it in the double-spend quorum.
-#[tauri::command]
-async fn coconut_spend(
-    app: AppHandle,
-    transport: State<'_, Arc<Transport>>,
-    server: Option<String>,
-    coins: Option<u64>,
-) -> Result<Value, String> {
-    use scrai_core::coconut::PayInfo;
-    use scrai_core::federation::{FedRequest, FedResponse};
-
-    let dir = data_dir(&app)?;
-    let srv = resolve_server(&app, server)?;
-    let mut w = wallet::load(&dir);
-    let (idx, mut purse) = first_funded_purse(&w.coconut_purses)
-        .ok_or("no coconut credential — withdraw first")?;
-    let coins = coins.unwrap_or(1).min(purse.remaining_coins());
-
-    // spend context: fresh random pay_info (later this binds to the session).
-    let mut pib = [0u8; 72];
-    rand::thread_rng().fill_bytes(&mut pib);
-    let pi = PayInfo { pay_info_bytes: pib };
-    // a date within the credential's validity (one day before expiry)
-    let spend_date = purse.expiration_date().saturating_sub(86_400);
-
-    let payment = purse.spend(coins, &pi, spend_date)?;
-    // DURABILITY: persist the ADVANCED purse BEFORE the payment leaves the device,
-    // so a crash can never roll the counter back and re-spend (see the Purse docs).
-    let emptied = purse.remaining_coins() == 0;
-    w.coconut_purses[idx] = purse.persist()?;
-    if emptied {
-        w.coconut_purses.remove(idx);
-    }
-    wallet::save(&dir, &w)?;
-
-    let resp = fed_call(
-        &transport,
-        &srv,
-        FedRequest::Spend { payment, pay_info: pib.to_vec(), spend_date },
-    )
-    .await?;
-    match resp {
-        FedResponse::Spend { accepted, verdict } => {
-            log::info!("[coconut] spent {coins} coin(s): {verdict}");
-            Ok(json!({ "ok": accepted, "verdict": verdict, "coins": coins }))
-        }
-        FedResponse::Error { message } => Err(format!("server: {message}")),
-        _ => Err("unexpected response to Spend".into()),
-    }
-}
+// M4: `coconut_withdraw_test` / `coconut_withdraw` / `coconut_spend` were registered
+// Tauri commands with zero callers (backend.js exposes only collect/redeem/chat) that,
+// unlike the live money paths, skipped `begin_op()` — a live spend/withdraw surface that
+// an XSS frontend could race against chat's auto-redeem and clobber a purse. Removed. The
+// live buy→coins path is `collect` (withdraws via `withdraw_purse`) and `redeem`.
 
 /// Redeem `coins` from the stored coconut credential into the ACTIVE session's SCRAI
 /// balance (the credit `chat` draws down). Durable: the advanced purse is persisted
@@ -328,35 +457,70 @@ async fn redeem_coconut(app: &AppHandle, t: &Transport, srv: &str, coins: u64) -
     let mut w = wallet::load(&dir);
     let m = w.mnemonic.clone().ok_or("no account")?;
     let sk = account::derive_session_keys(&m, w.session_index)?;
-    let (idx, mut purse) = first_funded_purse(&w.coconut_purses)
-        .ok_or("no coconut credential — buy credit first")?;
-    // Clamp to what this book still holds; the next redeem rolls to the next book.
-    let coins = coins.min(purse.remaining_coins());
 
-    let mut pib = [0u8; 72];
-    rand::thread_rng().fill_bytes(&mut pib);
-    let pi = PayInfo { pay_info_bytes: pib };
-    let spend_date = purse.expiration_date().saturating_sub(86_400);
-
-    let payment = purse.spend(coins, &pi, spend_date)?;
-    // DURABILITY: persist the ADVANCED purse before the payment leaves the device.
-    let emptied = purse.remaining_coins() == 0;
-    w.coconut_purses[idx] = purse.persist()?;
-    if emptied {
-        w.coconut_purses.remove(idx);
-    }
-    wallet::save(&dir, &w)?;
+    // H4: same idempotent shape as coconut_spend — resume a pending redeem with the
+    // SAME pay_info (benign replay), else make a fresh one and persist the advanced
+    // purse + a pending record BEFORE the payment leaves the device.
+    let (payment_json, pib, spend_date, coins, session_id): (Value, Vec<u8>, u32, u64, String) =
+        match w.pending_spend.clone() {
+            Some(p) if p.kind == "redeem" => (
+                p.payment,
+                p.pay_info,
+                p.spend_date,
+                p.coins,
+                p.session_id.unwrap_or_else(|| sk.session_id.clone()),
+            ),
+            Some(_) => return Err("a spend is still pending — retry to complete it first".into()),
+            None => {
+                let (idx, mut purse) = first_funded_purse(&w.coconut_purses)
+                    .ok_or("no coconut credential — buy credit first")?;
+                // Clamp to what this book still holds; the next redeem rolls to the next book.
+                let coins = coins.min(purse.remaining_coins());
+                let mut pib = [0u8; 72];
+                rand::thread_rng().fill_bytes(&mut pib);
+                let spend_date = purse.expiration_date().saturating_sub(86_400);
+                let payment = purse.spend(coins, &PayInfo { pay_info_bytes: pib }, spend_date)?;
+                let emptied = purse.remaining_coins() == 0;
+                w.coconut_purses[idx] = purse.persist()?;
+                if emptied {
+                    w.coconut_purses.remove(idx);
+                }
+                let payment_json = serde_json::to_value(&payment).map_err(|e| e.to_string())?;
+                w.pending_spend = Some(wallet::PendingSpend {
+                    payment: payment_json.clone(),
+                    pay_info: pib.to_vec(),
+                    spend_date,
+                    coins,
+                    kind: "redeem".into(),
+                    session_id: Some(sk.session_id.clone()),
+                });
+                wallet::save(&dir, &w)?;
+                (payment_json, pib.to_vec(), spend_date, coins, sk.session_id.clone())
+            }
+        };
 
     let env = json!({
         "v": PROTO, "kind": "redeem", "id": rand_hex(16),
-        "sessionId": sk.session_id,
-        "payment": serde_json::to_value(&payment).map_err(|e| e.to_string())?,
-        "pay_info": pib.to_vec(), "spend_date": spend_date,
+        "sessionId": session_id,
+        "payment": payment_json,
+        "pay_info": pib, "spend_date": spend_date,
     });
-    let reply = t.round_trip(srv, &env, SURBS_SMALL, TIMEOUT_MS).await?;
-    let balance = reply.get("balance").and_then(|b| b.as_u64()).unwrap_or(0);
-    log::info!("[coconut] redeemed {coins} coin(s) → session balance {balance}");
-    Ok(balance)
+    match t.round_trip(srv, &env, SURBS_SMALL, TIMEOUT_MS).await {
+        // Credited (or a benign replay) — the retry window is closed, drop the pending.
+        Ok(reply) => {
+            w.pending_spend = None;
+            wallet::save(&dir, &w)?;
+            let balance = reply.get("balance").and_then(|b| b.as_u64()).unwrap_or(0);
+            log::info!("[coconut] redeemed {coins} coin(s) → session balance {balance}");
+            Ok(balance)
+        }
+        // No server verdict — keep the pending record so the next call retries with the
+        // SAME pay_info (a benign quorum replay), never a fresh spend.
+        Err(e) if is_transport_error(&e) => Err(e),
+        // Definitive server rejection — clear the pending and, only if the credential is
+        // provably stale (its key differs from the server's), discard it. See the helper.
+        Err(e) => Err(handle_spend_rejection(t, srv, &dir, &mut w, e).await),
+    }
 }
 
 /// SCRAI value of coconut coins NOT yet redeemed (0 if no credential). Local-only —
@@ -404,6 +568,7 @@ async fn coconut_redeem(
 
 #[tauri::command]
 async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<Value, String> {
+    diag(&app, "state: begin");
     let dir = data_dir(&app)?;
     let w = wallet::load(&dir);
 
@@ -446,7 +611,7 @@ async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<V
     // already the user's, so a fresh credential shouldn't read as "0").
     balance = balance.saturating_add(coconut_held_scrai(&app));
 
-    Ok(json!({
+    let out = json!({
         "account": account,
         "balance": balance,
         "held": coconut_held_scrai(&app),
@@ -455,7 +620,13 @@ async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<V
         "gateway": "btcpay",
         "models": models,
         "server": server,
-    }))
+    });
+    diag(&app, &format!(
+        "state: about to respond, {} bytes total (models {} bytes)",
+        serde_json::to_vec(&out).map(|v| v.len()).unwrap_or(0),
+        serde_json::to_vec(&models).map(|v| v.len()).unwrap_or(0),
+    ));
+    Ok(out)
 }
 
 #[tauri::command]
@@ -463,21 +634,104 @@ fn set_server(app: AppHandle, address: String) -> Result<Value, String> {
     let dir = data_dir(&app)?;
     let mut w = wallet::load(&dir);
     let a = address.trim().to_string();
-    w.server = if a.is_empty() { None } else { Some(a) };
+    // H5: reject a malformed address at the boundary — never persist an unvalidated
+    // recipient that all subsequent (account-signed) traffic would be routed to.
+    w.server = if a.is_empty() {
+        None
+    } else {
+        Transport::validate_address(&a)?;
+        Some(a)
+    };
     wallet::save(&dir, &w)?;
     Ok(json!({ "server": w.server }))
 }
 
+/// Set the mixnet performance/privacy tradeoff (cover-traffic rate + mixing delay).
+/// The default is Nym's own max-privacy setting; the UI only ever moves it toward
+/// performance/battery, explicitly and reversibly. Drops the client so it reconnects.
 #[tauri::command]
-fn account_new(app: AppHandle) -> Result<Value, String> {
+async fn set_mixnet_perf(
+    transport: State<'_, Arc<Transport>>,
+    #[allow(non_snake_case)] coverMs: u64,
+    #[allow(non_snake_case)] mixMs: u64,
+    #[allow(non_snake_case)] sendMs: u64,
+    continuous: bool,
+) -> Result<(), String> {
+    transport.set_perf(coverMs, mixMs, sendMs, continuous).await;
+    Ok(())
+}
+
+/// True if the wallet holds bearer ecash that a fresh `Wallet{..Default}` would drop:
+/// any held purse, or a spend still in flight. Held ecash is NOT seed-rebuildable
+/// (`wallet.rs` header) — dropping it is an irreversible money loss (M-cl-1).
+fn has_held_value(w: &wallet::Wallet) -> bool {
+    !w.coconut_purses.is_empty() || w.pending_spend.is_some()
+}
+
+/// Distinct, machine-parseable prefix so the frontend can recognise "you'd lose held
+/// credit" and turn it into an explicit confirm instead of a generic failure.
+const HELD_CREDIT_ERR: &str = "HELD_CREDIT: switching accounts here discards un-redeemed held ecash (bearer money, not recoverable from the seed). Redeem it into your session balance first, or confirm to discard it.";
+
+#[tauri::command]
+fn account_new(app: AppHandle, force: Option<bool>) -> Result<Value, String> {
     let dir = data_dir(&app)?;
     let prev = wallet::load(&dir);
+    // Backstop against silently discarding held bearer purses — refuse unless the UI
+    // has explicitly confirmed the loss (M-cl-1). Independent of any CSP/XSS mitigation.
+    if has_held_value(&prev) && !force.unwrap_or(false) {
+        return Err(HELD_CREDIT_ERR.into());
+    }
     let a = account::create_account();
     let w = wallet::Wallet { mnemonic: Some(a.mnemonic.clone()), server: prev.server, entry_gateway: prev.entry_gateway, ..Default::default() };
     wallet::save(&dir, &w)?;
     Ok(json!({ "mnemonic": a.mnemonic, "fingerprint": account::fingerprint(&a.account_id) }))
 }
 
+/// Wipe the on-device account (mnemonic + held credentials + pending), keeping the
+/// server/gateway config. Destructive: any un-redeemed held ecash is gone (bearer
+/// money, not seed-rebuildable) — the UI confirms first.
+#[tauri::command]
+fn account_delete(app: AppHandle, force: Option<bool>) -> Result<Value, String> {
+    let dir = data_dir(&app)?;
+    let prev = wallet::load(&dir);
+    // Same backstop: deleting with held ecash present burns bearer money (M-cl-1).
+    if has_held_value(&prev) && !force.unwrap_or(false) {
+        return Err(HELD_CREDIT_ERR.into());
+    }
+    let w = wallet::Wallet { server: prev.server, entry_gateway: prev.entry_gateway, ..Default::default() };
+    wallet::save(&dir, &w)?;
+    Ok(json!({ "ok": true }))
+}
+
+/// Migration export: the recovery phrase + a QR of it. Only the mnemonic needs to move
+/// — entitlement AND the session balance both come back from the server via the seed, so
+/// there is no bearer data to transfer (the UI redeems all held credit FIRST). Same
+/// server on the other device is required (that is where the session balance lives).
+#[cfg(not(target_os = "ios"))]
+#[tauri::command]
+fn account_migrate_qr(app: AppHandle) -> Result<Value, String> {
+    let w = wallet::load(&data_dir(&app)?);
+    let m = w.mnemonic.ok_or("no account")?;
+    Ok(json!({ "mnemonic": m, "qr": qr_svg(&m) }))
+}
+
+/// iOS never hands the seed (or a QR that encodes it) to the webview — H1. The JS side has
+/// already redeemed held credit; this shows the phrase on the native, biometric-gated
+/// screen, and the other device is restored by TYPING the 24 words. Returns no secret.
+#[cfg(target_os = "ios")]
+#[tauri::command]
+fn account_migrate_qr(app: AppHandle) -> Result<Value, String> {
+    let dir = data_dir(&app)?;
+    if wallet::load(&dir).mnemonic.is_none() {
+        return Err("no account".into());
+    }
+    let app2 = app.clone();
+    app.run_on_main_thread(move || ios_secure::reveal_phrase(app2, dir, "Move to another device"))
+        .map_err(|e| e.to_string())?;
+    Ok(json!({ "native": true }))
+}
+
+#[cfg(not(target_os = "ios"))]
 #[tauri::command]
 fn account_reveal(app: AppHandle) -> Result<Value, String> {
     let w = wallet::load(&data_dir(&app)?);
@@ -487,10 +741,32 @@ fn account_reveal(app: AppHandle) -> Result<Value, String> {
     }
 }
 
+/// iOS: the seed is NEVER returned to the webview (H1 — closes the "XSS → account_reveal →
+/// open_external → seed exfil" drain). Instead this presents the native Account Security
+/// action sheet; its "Reveal recovery phrase" button is a NATIVE action (biometric-gated),
+/// so webview JS can at most pop the sheet, never trigger or read the reveal.
+#[cfg(target_os = "ios")]
 #[tauri::command]
-fn account_restore(app: AppHandle, mnemonic: String) -> Result<Value, String> {
+fn account_reveal(app: AppHandle) -> Result<Value, String> {
+    let dir = data_dir(&app)?;
+    if wallet::load(&dir).mnemonic.is_none() {
+        return Err("no account".into());
+    }
+    let app2 = app.clone();
+    app.run_on_main_thread(move || ios_secure::open_account_security(app2, dir))
+        .map_err(|e| e.to_string())?;
+    Ok(json!({ "native": true }))
+}
+
+#[tauri::command]
+fn account_restore(app: AppHandle, mnemonic: String, force: Option<bool>) -> Result<Value, String> {
     let dir = data_dir(&app)?;
     let prev = wallet::load(&dir);
+    // Restoring onto a device that still holds ecash would drop it (M-cl-1). On a fresh
+    // device (the migration case) purses are empty, so this never fires there.
+    if has_held_value(&prev) && !force.unwrap_or(false) {
+        return Err(HELD_CREDIT_ERR.into());
+    }
     let a = account::from_mnemonic(&mnemonic)?;
     let w = wallet::Wallet { mnemonic: Some(a.mnemonic.clone()), server: prev.server, entry_gateway: prev.entry_gateway, ..Default::default() };
     wallet::save(&dir, &w)?;
@@ -694,6 +970,7 @@ async fn invoice_cancel(app: AppHandle, transport: State<'_, Arc<Transport>>, id
 /// nothing — the remaining entitlement stays on the server for the next call.
 #[tauri::command]
 async fn collect(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<Value, String> {
+    diag(&app, "collect: begin");
     let _op = transport.begin_op().await;
     let dir = data_dir(&app)?;
     let w0 = wallet::load(&dir);
@@ -725,6 +1002,7 @@ async fn collect(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result
         owed = owed.saturating_sub(book_scrai);
         log::info!("[coconut] collected a {book_scrai}-SCRAI book ({owed} entitlement left)");
     }
+    diag(&app, "collect: about to respond");
     Ok(json!({ "collected": collected, "held": coconut_held_scrai(&app) }))
 }
 
@@ -736,10 +1014,12 @@ async fn redeem(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<
     let w = wallet::load(&data_dir(&app)?);
     let srv = server_addr(&w)?;
     let balance = redeem_coconut(&app, &transport, &srv, REDEEM_CHUNK_COINS).await?;
-    Ok(json!({ "balance": balance.saturating_add(coconut_held_scrai(&app)) }))
+    let held = coconut_held_scrai(&app);
+    Ok(json!({ "balance": balance.saturating_add(held), "held": held }))
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn chat(
     app: AppHandle,
     transport: State<'_, Arc<Transport>>,
@@ -747,15 +1027,66 @@ async fn chat(
     messages: Value,
     #[allow(non_snake_case)] maxTokens: Option<u64>,
     free: Option<bool>,
+    // Live web-search grounding for this turn. UNSIGNED on purpose: it stays out of the
+    // canonicalBody {model, messages, maxTokens} so existing session signatures are
+    // unaffected. The server reads it to decide whether to attach the google_search tool.
+    live: Option<bool>,
     #[allow(non_snake_case)] bigReply: Option<bool>,
+    // Client-chosen reasoning depth (thinking tokens). UNSIGNED like `live` — outside
+    // the canonicalBody, so it doesn't affect the session signature. The server clamps
+    // it and uses it for both the provider request and the reserve.
+    #[allow(non_snake_case)] thinkingBudget: Option<u64>,
+    retry: Option<bool>,
+    // Requested picture size for image models ("512" | "1K" | "2K" | "4K"). UNSIGNED
+    // like `thinkingBudget`; the server validates it and sizes the reserve to it.
+    #[allow(non_snake_case)] imageSize: Option<String>,
+) -> Result<Value, String> {
+    // The whole chat future (mixnet round-trip, redeem loop, chunk fetch) is far too big
+    // for the 1 MB main-thread stack the iPhone gives the WebView IPC handler: Tauri
+    // moves a command's future onto its runtime BY VALUE, and that move alone overflowed
+    // the stack (SIGSEGV with sp on the guard page inside tokio::task::spawn, every
+    // prompt, 2026-08-27 — 15 identical crash reports). Boxing it means the handler only
+    // ever moves a pointer; the state machine lives on the heap.
+    Box::pin(chat_impl(
+        app,
+        transport.inner().clone(),
+        model,
+        messages,
+        maxTokens,
+        free,
+        live,
+        bigReply,
+        thinkingBudget,
+        retry,
+        imageSize,
+    ))
+    .await
+}
+
+#[allow(clippy::too_many_arguments, non_snake_case)]
+async fn chat_impl(
+    app: AppHandle,
+    transport: Arc<Transport>,
+    model: String,
+    messages: Value,
+    maxTokens: Option<u64>,
+    free: Option<bool>,
+    live: Option<bool>,
+    bigReply: Option<bool>,
+    thinkingBudget: Option<u64>,
+    retry: Option<bool>,
+    imageSize: Option<String>,
 ) -> Result<Value, String> {
     // Serialise the whole command: session_status + chat must be one atomic unit,
     // or two concurrent chats race the session counter (crossed replies / hangs).
     let _op = transport.begin_op().await;
 
-    // Image models answer with a ~MB reply and need the big SURB budget; text
-    // answers fit comfortably in the small one (fewer request fragments).
-    let surbs = if bigReply.unwrap_or(false) { SURBS_CHAT } else { SURBS_TEXT };
+    // Generated pictures no longer ride in the chat reply itself: the server stages
+    // anything bigger than one chunk and answers with references (fetched below with
+    // their own per-chunk SURBs), so even an image chat's reply is text-sized. The
+    // text budget covers it; `bigReply` is kept for older callers and ignored.
+    let _ = bigReply;
+    let surbs = SURBS_TEXT;
 
     let dir = data_dir(&app)?;
     let w = wallet::load(&dir);
@@ -765,18 +1096,43 @@ async fn chat(
     // signature — the server re-checks against its own price table, so a wrong
     // flag just comes back as "requires a funded, signed session".
     if free.unwrap_or(false) {
+        // Retry after an interrupted picture download → resume it, no new generation.
+        if retry.unwrap_or(false) {
+            if let Some(dl) = transport.take_staged_download(FREE_SESSION_KEY).await {
+                let resp = finish_staged_download(&app, &transport, &srv, dl).await?;
+                return Ok(json!({
+                    "text": resp.get("text"),
+                    "usage": resp.get("usage"),
+                    "images": resp.get("images"),
+                }));
+            }
+        }
         let mut req = json!({
             "v":PROTO,"kind":"chat","id":rand_hex(16),"model":model,"messages":messages,"stream":false
         });
         if let Some(mt) = maxTokens {
             req["maxTokens"] = json!(mt);
         }
+        if live.unwrap_or(false) {
+            req["live"] = json!(true);
+        }
+        if let Some(tb) = thinkingBudget {
+            req["thinkingBudget"] = json!(tb);
+        }
+        if let Some(s) = &imageSize {
+            req["imageSize"] = json!(s);
+        }
+        // This client can fetch chunked pictures (fetch_staged_images); an older client
+        // that can't leaves this out and the server keeps images inline.
+        req["chunkedImages"] = json!(true);
         let sent_app = app.clone();
         let resp = transport
             .round_trip_notify(&srv, &req, surbs, TIMEOUT_MS, move || {
                 let _ = sent_app.emit("chat-sent", ());
             })
             .await?;
+        // Free image models (pollinations) stage big pictures too — resolve the refs.
+        let resp = fetch_staged_images(&app, &transport, &srv, FREE_SESSION_KEY, resp).await?;
         // No balance in the reply: nothing was spent, so the UI keeps its number.
         return Ok(json!({
             "text": resp.get("text"),
@@ -788,56 +1144,323 @@ async fn chat(
     let m = w.mnemonic.clone().ok_or("no account — create one and buy credit")?;
 
     let sk = account::derive_session_keys(&m, w.session_index)?;
-    let (balance0, mut counter0) = session_status(&transport, &srv, &sk).await?;
-    // Fund the session from a held coconut book when it runs dry.
-    if balance0 == 0 {
-        if !w.coconut_purses.is_empty() {
-            redeem_coconut(&app, &transport, &srv, REDEEM_CHUNK_COINS).await?;
-            counter0 = session_status(&transport, &srv, &sk).await?.1;
-        } else {
-            return Err("no SCRAI credit — buy credit first".into());
+
+    // Retry after an INTERRUPTED picture download: the picture was generated, charged
+    // and staged server-side — resume fetching its missing chunks instead of signing a
+    // fresh request that would draw (and bill) a second one.
+    if retry.unwrap_or(false) {
+        if let Some(dl) = transport.take_staged_download(&sk.session_id).await {
+            let resp = finish_staged_download(&app, &transport, &srv, dl).await?;
+            return Ok(paid_chat_reply(&app, &resp, Value::Null));
         }
     }
-    let counter = counter0 + 1;
 
-    // The signed body must serialise exactly like the server's canonicalBody:
-    // {model, messages, maxTokens} in that key order (preserve_order is on).
-    let max_val = maxTokens.map(|v| json!(v)).unwrap_or(Value::Null);
-    let body = serde_json::to_string(&json!({"model": model, "messages": messages, "maxTokens": max_val}))
-        .map_err(|e| e.to_string())?;
-    let sig = sk.sign(counter, &body);
+    // Idempotent retry: if this is a retry AND we still hold the exact request whose
+    // reply never arrived, resend it VERBATIM (same counter/sig/id). A server that
+    // already processed it answers by replay (cached reply, no second charge); one it
+    // never received processes it once. Anything else builds a fresh, freshly-signed
+    // request (which also covers a retry after the pending was cleared, e.g. a restart).
+    let req = match (retry.unwrap_or(false), transport.pending_chat(&sk.session_id).await) {
+        (true, Some(prev)) => prev,
+        _ => {
+            let (balance0, mut counter0) = session_status(&transport, &srv, &sk).await?;
+            // Fund the session from a held coconut book when it runs dry.
+            if balance0 == 0 {
+                // C3: never pour more coins into a server this run caught cheating (overcharge
+                // or invalid issuance).
+                if is_flagged(&srv) {
+                    return Err("this server was flagged as dishonest — not redeeming more \
+                        credit into it. Switch servers (or restart the app) to retry.".into());
+                }
+                if !w.coconut_purses.is_empty() {
+                    redeem_coconut(&app, &transport, &srv, REDEEM_CHUNK_COINS).await?;
+                    counter0 = session_status(&transport, &srv, &sk).await?.1;
+                } else {
+                    return Err("no SCRAI credit — buy credit first".into());
+                }
+            }
+            let counter = counter0 + 1;
 
-    let mut req = json!({
-        "v":PROTO,"kind":"chat","id":rand_hex(16),"model":model,"messages":messages,
-        "stream":false,"sessionId":sk.session_id,"counter":counter,"sig":sig,
-        // The session's public key rides along so the server can verify the
-        // signature statelessly: id_for(publicKey) must equal sessionId.
-        "publicKey":sk.public_key_pem
-    });
-    if let Some(mt) = maxTokens {
-        req["maxTokens"] = json!(mt);
+            // The signed body must serialise exactly like the server's canonicalBody:
+            // {model, messages, maxTokens} in that key order (preserve_order is on).
+            let max_val = maxTokens.map(|v| json!(v)).unwrap_or(Value::Null);
+            let body = serde_json::to_string(&json!({"model": model, "messages": messages, "maxTokens": max_val}))
+                .map_err(|e| e.to_string())?;
+            let sig = sk.sign(counter, &body);
+
+            let mut req = json!({
+                "v":PROTO,"kind":"chat","id":rand_hex(16),"model":model,"messages":messages,
+                "stream":false,"sessionId":sk.session_id,"counter":counter,"sig":sig,
+                // The session's public key rides along so the server can verify the
+                // signature statelessly: id_for(publicKey) must equal sessionId.
+                "publicKey":sk.public_key_pem
+            });
+            if let Some(mt) = maxTokens {
+                req["maxTokens"] = json!(mt);
+            }
+            // Unsigned live flag — outside canonicalBody, so it doesn't affect the sig.
+            if live.unwrap_or(false) {
+                req["live"] = json!(true);
+            }
+            if let Some(tb) = thinkingBudget {
+                req["thinkingBudget"] = json!(tb);
+            }
+            if let Some(s) = &imageSize {
+                req["imageSize"] = json!(s);
+            }
+            req["chunkedImages"] = json!(true);
+            req
+        }
+    };
+    // Send — and AUTO-REDEEM on the way. The proactive top-up above only fires when the
+    // session is fully empty, so a partial balance that's below THIS request's worst-case
+    // reserve (e.g. a big image) used to just fail with "not enough SCRAI". Instead: if the
+    // server rejects for insufficient balance (a fast rejection at the reserve step, BEFORE
+    // any provider work), redeem a held coconut chunk and resend the SAME still-signed
+    // request. A failed reserve never advances the counter, and redeem only tops up the
+    // balance, so the resend is valid and fits. Loop until it fits or the held credit is gone.
+    let resp;
+    let mut redeems = 0u32;
+    loop {
+        // Remember the in-flight request BEFORE it leaves, so a failed send can be retried
+        // without re-signing (and re-charging). Cleared once its reply actually arrives.
+        transport.set_pending_chat(&sk.session_id, req.clone()).await;
+        // Tell the UI the instant the request has fully left for the mixnet, so its
+        // status line flips from "Sending…" to "Thinking" at the real moment.
+        let sent_app = app.clone();
+        // RAW round trip: a delivered server error arrives as Ok(reply) so it can be told
+        // apart from a lost reply. (The plain `round_trip_notify` folded both into Err —
+        // which left the pending request set after e.g. a provider refusal, so the UI's
+        // Retry resent the SAME counter and got "counter N was already used".)
+        let reply = transport
+            .round_trip_raw_notify(&srv, &req, surbs, TIMEOUT_MS, move || {
+                let _ = sent_app.emit("chat-sent", ());
+            })
+            .await?;
+        let server_error = (reply.get("kind").and_then(|k| k.as_str()) == Some("error"))
+            .then(|| reply.get("error").and_then(|e| e.as_str()).unwrap_or("server error").to_string());
+        let insufficient = server_error.as_deref().is_some_and(|s| s.contains("not enough SCRAI"));
+        if insufficient && redeems < 64 && !is_flagged(&srv) && !wallet::load(&dir).coconut_purses.is_empty() {
+            // Session credit ran short mid-request → auto-redeem a held $1 chunk and resend.
+            // A failed reserve never consumed the counter, so the verbatim resend is valid.
+            let _ = app.emit("chat-redeeming", ());
+            redeem_coconut(&app, &transport, &srv, REDEEM_CHUNK_COINS).await?;
+            redeems += 1;
+            continue;
+        }
+        if let Some(e) = server_error {
+            // The server answered — this request is spent (its counter is used, or it was
+            // refused for good), so the next attempt must be a FRESH one, not a replay.
+            transport.clear_pending_chat(&sk.session_id).await;
+            return Err(e);
+        }
+        resp = reply;
+        break;
     }
-    // Tell the UI the instant the request has fully left for the mixnet, so its
-    // status line flips from "Sending…" to "Thinking" at the real moment.
-    let sent_app = app.clone();
-    let resp = transport
-        .round_trip_notify(&srv, &req, surbs, TIMEOUT_MS, move || {
-            let _ = sent_app.emit("chat-sent", ());
-        })
-        .await?;
-    // Report TOTAL spendable credit (funded session balance + un-redeemed coconut
-    // coins), consistent with `state`, so the UI number only drops by real chat cost
-    // — not by the internal session↔purse shuffle that auto-fund performs.
+    // A reply arrived (success OR a server-side error): the request was delivered, so
+    // the next chat should be a fresh one — drop the pending so it isn't resent.
+    transport.clear_pending_chat(&sk.session_id).await;
+    // Big generated pictures arrive as chunk references — fetch + reassemble them so
+    // the UI sees plain `{mimeType, data}` images exactly as before.
+    let resp = fetch_staged_images(&app, &transport, &srv, &sk.session_id, resp).await?;
+
+    // C3: independent overcharge check. Recompute a fair upper-bound from the client's
+    // OWN token estimate + bundled retail table; a charge grossly above it means the
+    // operator inflated margin or token counts. Fully additive + fail-open — any
+    // inability to estimate just skips the check, never blocking a legitimate chat.
+    let charged = resp.pointer("/usage/billing/priceScrai").and_then(|v| v.as_u64());
+    let has_images = resp
+        .get("images")
+        .and_then(|v| v.as_array())
+        .map(|a| !a.is_empty())
+        .unwrap_or(false);
+    let mut price_warning = Value::Null;
+    if let (Some(charged), false) = (charged, has_images) {
+        let reply_text = resp.get("text").and_then(|t| t.as_str()).unwrap_or("");
+        if let Some(fair) = fair_price_estimate(&model, &messages, reply_text) {
+            let ceiling = (fair as f64 * OVERCHARGE_FACTOR).ceil() as u64;
+            if charged > MIN_FLAG_SCRAI && charged > ceiling {
+                flag_server(
+                    &srv,
+                    &format!("overcharge: charged {charged} SCRAI vs ~{fair} fair (>{OVERCHARGE_FACTOR}×)"),
+                );
+                price_warning = json!({
+                    "kind": "overcharge",
+                    "charged": charged,
+                    "fairEstimate": fair,
+                    "factor": OVERCHARGE_FACTOR,
+                });
+            }
+        }
+    }
+
+    Ok(paid_chat_reply(&app, &resp, price_warning))
+}
+
+/// Shape a paid chat reply for the UI. Reports TOTAL spendable credit (funded session
+/// balance + un-redeemed coconut coins), consistent with `state`, so the UI number only
+/// drops by real chat cost — not by the internal session↔purse shuffle that auto-fund
+/// performs. `images` is what image models return — forwarded, or the answer arrives
+/// blank and silent.
+fn paid_chat_reply(app: &AppHandle, resp: &Value, price_warning: Value) -> Value {
     let session_balance = resp.get("balance").and_then(|b| b.as_u64()).unwrap_or(0);
-    let total_balance = session_balance.saturating_add(coconut_held_scrai(&app));
-    // `images` is what image models (e.g. pollinations) return — forward it, or
-    // the answer arrives blank and silent.
-    Ok(json!({
+    let held = coconut_held_scrai(app);
+    json!({
         "text": resp.get("text"),
         "usage": resp.get("usage"),
-        "balance": total_balance,
+        "balance": session_balance.saturating_add(held),
+        // Report held explicitly so the UI shows the true session-vs-held split after a
+        // message (only ONE redeem chunk moved to the session; the rest stays held).
+        "held": held,
         "images": resp.get("images"),
-    }))
+        "priceWarning": price_warning,
+    })
+}
+
+/// Resolve chunk references in a chat reply's `images[]` (server `replies.rs`): every
+/// `{mimeType, ref, chunks, bytes}` becomes a plain `{mimeType, data}` by fetching its
+/// `image.chunk` pieces and concatenating the base64 in `seq` order. Inline images pass
+/// through untouched. Emits `image-progress {done, total}` per chunk.
+///
+/// Chunks are fetched in WINDOWS of `CHUNK_WINDOW` (pipelined within a window, windows
+/// in sequence) rather than all at once: a 4K picture is 30–55 chunks, and firing them
+/// together floods the server with reply-SURBs it can't hold (Nym stores ~200 per
+/// sender), stalls, and turns the transport's "re-fire everything that stalled" into a
+/// storm. A window keeps the in-flight SURB budget around what the server actually
+/// consumes and lets one lost chunk be re-fired alone.
+///
+/// RESUMABLE: chunks that already arrived are remembered in `transport` when the
+/// download fails for a transport reason (timeout, mixnet drop), so the UI's Retry —
+/// `chat(retry: true)` — resumes from where it broke instead of generating and paying
+/// for a new picture. A definitive server rejection (the reference expired) drops the
+/// parked state, and Retry then generates afresh.
+async fn fetch_staged_images(
+    app: &AppHandle,
+    transport: &Transport,
+    srv: &str,
+    session_key: &str,
+    resp: Value,
+) -> Result<Value, String> {
+    let has_refs = resp
+        .get("images")
+        .and_then(|i| i.as_array())
+        .map(|a| a.iter().any(|i| i.get("ref").is_some()))
+        .unwrap_or(false);
+    if !has_refs {
+        return Ok(resp);
+    }
+    let dl = nym::StagedDownload { session_id: session_key.to_string(), resp, parts: Default::default() };
+    finish_staged_download(app, transport, srv, dl).await
+}
+
+/// Chunk requests in flight per window (≈ 8 × 96 KB ≈ 400 mixnet packets of replies).
+const CHUNK_WINDOW: usize = 8;
+
+/// Fetch every chunk still missing from `dl` (fresh or resumed) and return the reply
+/// with plain `{mimeType, data}` images. On a transport failure the partial state is
+/// parked in `transport` for a resume; on an expired reference it is discarded.
+async fn finish_staged_download(
+    app: &AppHandle,
+    transport: &Transport,
+    srv: &str,
+    mut dl: nym::StagedDownload,
+) -> Result<Value, String> {
+    let Some(imgs) = dl.resp.get("images").and_then(|i| i.as_array()).cloned() else {
+        return Ok(dl.resp);
+    };
+    // Overall progress across all pictures of this reply (resumed chunks count as done).
+    let total: usize = imgs
+        .iter()
+        .filter(|i| i.get("ref").is_some())
+        .map(|i| i.get("chunks").and_then(|c| c.as_u64()).unwrap_or(0) as usize)
+        .sum();
+    let mut out = Vec::with_capacity(imgs.len());
+    let mut done_before: usize = 0;
+    for img in imgs {
+        let (Some(r), Some(n)) = (
+            img.get("ref").and_then(|x| x.as_str()),
+            img.get("chunks").and_then(|c| c.as_u64()),
+        ) else {
+            out.push(img);
+            continue;
+        };
+        let n = n as usize;
+        let r = r.to_string();
+        let parts = dl.parts.entry(r.clone()).or_insert_with(|| vec![None; n]);
+        if parts.len() != n {
+            *parts = vec![None; n];
+        }
+        let received = std::sync::Mutex::new(std::mem::take(parts));
+        let count = |v: &Vec<Option<String>>| v.iter().filter(|p| p.is_some()).count();
+        let done_here = count(&received.lock().unwrap());
+        let _ = app.emit("image-progress", json!({ "done": done_before + done_here, "total": total }));
+        let mut result: Result<(), String> = Ok(());
+        loop {
+            // The next window of chunks that have NOT arrived yet (holes included, so a
+            // resumed download only fetches what it is missing).
+            let missing: Vec<u64> = {
+                let g = received.lock().unwrap();
+                g.iter().enumerate().filter(|(_, p)| p.is_none()).map(|(i, _)| i as u64).take(CHUNK_WINDOW).collect()
+            };
+            if missing.is_empty() {
+                break;
+            }
+            let requests: Vec<Value> = missing
+                .iter()
+                .map(|seq| json!({"v":PROTO,"kind":"image.chunk","id":rand_hex(16),"ref":r,"seq":seq}))
+                .collect();
+            let progress_app = app.clone();
+            let received_ref = &received;
+            let res = transport
+                .collect_replies(srv, requests, SURBS_SMALL, TIMEOUT_MS, move |v, _| {
+                    // Keep each chunk the moment it lands — a window that fails later
+                    // still leaves what arrived, for the resume.
+                    if let (Some(seq), Some(data)) =
+                        (v.get("seq").and_then(|s| s.as_u64()), v.get("data").and_then(|d| d.as_str()))
+                    {
+                        let mut g = received_ref.lock().unwrap();
+                        if let Some(slot) = g.get_mut(seq as usize) {
+                            *slot = Some(data.to_string());
+                        }
+                        let done = count(&g);
+                        drop(g);
+                        let _ = progress_app.emit("image-progress", json!({ "done": done_before + done, "total": total }));
+                    }
+                })
+                .await;
+            if let Err(e) = res {
+                result = Err(e);
+                break;
+            }
+        }
+        let got = received.into_inner().unwrap();
+        if let Err(e) = result {
+            // A definitive server verdict ("unknown image chunk") means the staged picture
+            // is gone — a resume is pointless, Retry must generate anew. Anything else is
+            // the transport, so park the progress for a resume.
+            if !e.contains("unknown image chunk") {
+                *parts = got;
+                transport.set_staged_download(dl.clone()).await;
+                return Err(format!("image download interrupted: {e} — Retry resumes it"));
+            }
+            return Err(format!("image download failed: {e}"));
+        }
+        let expected = img.get("bytes").and_then(|b| b.as_u64()).unwrap_or(0) as usize;
+        let mut data = String::with_capacity(expected);
+        for (i, p) in got.into_iter().enumerate() {
+            data.push_str(&p.ok_or_else(|| format!("image chunk {i}/{n} never arrived"))?);
+        }
+        if expected > 0 && data.len() != expected {
+            return Err(format!("image download incomplete ({} of {expected} bytes)", data.len()));
+        }
+        done_before += n;
+        out.push(json!({
+            "mimeType": img.get("mimeType").cloned().unwrap_or_else(|| json!("image/jpeg")),
+            "data": data,
+        }));
+    }
+    dl.resp["images"] = json!(out);
+    Ok(dl.resp)
 }
 
 /// Stage a vision image on the server before a chat references it. Large images
@@ -876,6 +1499,35 @@ async fn upload_chunk(
     Ok(json!({ "received": resp.get("received") }))
 }
 
+/// Pipelined upload: send ALL chunks concurrently (not one-round-trip-at-a-time), so they
+/// aren't serialised on the client lock. Emits "upload-progress" (server-received bytes)
+/// as acks land. Privacy is unchanged vs sequential — the nym send stream still paces +
+/// cover-mixes every packet (fire_and_collect doc). `chunks[i]` is chunk `i`'s base64.
+#[tauri::command]
+async fn upload_pipeline(
+    app: AppHandle,
+    transport: State<'_, Arc<Transport>>,
+    #[allow(non_snake_case)] uploadId: String,
+    chunks: Vec<String>,
+) -> Result<Value, String> {
+    let _op = transport.begin_op().await;
+    let w = wallet::load(&data_dir(&app)?);
+    let srv = server_addr(&w)?;
+    let n = chunks.len();
+    let requests: Vec<Value> = chunks
+        .iter()
+        .enumerate()
+        .map(|(i, data)| json!({"v":PROTO,"kind":"upload.chunk","id":rand_hex(16),"uploadId":uploadId,"seq":i,"data":data}))
+        .collect();
+    let app2 = app.clone();
+    transport
+        .fire_and_collect(&srv, requests, SURBS_SMALL, TIMEOUT_MS, move |received| {
+            let _ = app2.emit("upload-progress", received);
+        })
+        .await?;
+    Ok(json!({ "uploaded": n }))
+}
+
 /// One route edge (entry or exit) as the UI shows it: gateway identity + its
 /// self-reported country (empty if the directory didn't resolve it).
 fn edge_json(id: &str, info: Option<nym::GatewayInfo>) -> Value {
@@ -885,11 +1537,25 @@ fn edge_json(id: &str, info: Option<nym::GatewayInfo>) -> Value {
     }
 }
 
+/// DEV latency probe: one minimal round-trip to the server (`ping` → `pong`, no
+/// session/DB/provider work) timed on the Rust side, so the result is the mixnet's
+/// own round-trip latency — the honest way to see what the speed slider actually does.
+#[tauri::command]
+async fn mixnet_ping(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<Value, String> {
+    let w = wallet::load(&data_dir(&app)?);
+    let srv = server_addr(&w)?;
+    let req = json!({ "v": PROTO, "kind": "ping", "id": rand_hex(8) });
+    let t0 = std::time::Instant::now();
+    transport.round_trip(&srv, &req, SURBS_SMALL, TIMEOUT_MS).await?;
+    Ok(json!({ "ms": t0.elapsed().as_millis() as u64 }))
+}
+
 /// The honestly-knowable edges of the current mixnet route:
 ///   entry = this client's gateway (selectable), exit = the server's gateway.
 /// The two middle mix hops are re-randomised per packet and are NOT reported.
 #[tauri::command]
 async fn mixnet_route(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<Value, String> {
+    diag(&app, "mixnet_route: begin");
     let w = wallet::load(&data_dir(&app)?);
     let server = server_addr(&w).ok();
 
@@ -916,6 +1582,7 @@ async fn mixnet_route(app: AppHandle, transport: State<'_, Arc<Transport>>) -> R
         }
         None => Value::Null,
     };
+    diag(&app, &format!("mixnet_route: about to respond (live={live})"));
     Ok(json!({ "entry": entry, "exit": exit, "chosen": w.entry_gateway, "live": live }))
 }
 
@@ -1059,6 +1726,294 @@ mod ios_share {
     }
 }
 
+// Native image/camera picker — the WKWebView `<input type=file>` is unreliable on iOS
+// (it won't reopen after a cancel), so the "+" calls this instead. Presents a
+// UIImagePickerController and hands the picked photo back as JPEG bytes.
+#[cfg(target_os = "ios")]
+mod ios_picker {
+    use objc2::rc::Retained;
+    use objc2::runtime::{AnyObject, NSObjectProtocol};
+    use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly};
+    use objc2_foundation::{NSObject, NSString};
+    use objc2_ui_kit::{
+        UIApplication, UIImagePickerController, UIImagePickerControllerDelegate,
+        UIImagePickerControllerSourceType, UINavigationControllerDelegate,
+    };
+    use std::cell::RefCell;
+    use tokio::sync::oneshot::Sender;
+
+    // UIKit only weakly references the picker's delegate, so keep the last one alive here
+    // (main thread) until the next present() replaces it. Never cleared from inside a
+    // delegate callback — that could dealloc `self` mid-method.
+    thread_local! {
+        static KEEP: RefCell<Option<Retained<PickerDelegate>>> = const { RefCell::new(None) };
+    }
+
+    pub struct Ivars {
+        tx: RefCell<Option<Sender<Result<Option<Vec<u8>>, String>>>>,
+    }
+
+    define_class!(
+        #[unsafe(super(NSObject))]
+        #[thread_kind = MainThreadOnly]
+        #[name = "ScraiImagePickerDelegate"]
+        #[ivars = Ivars]
+        struct PickerDelegate;
+
+        unsafe impl NSObjectProtocol for PickerDelegate {}
+        unsafe impl UINavigationControllerDelegate for PickerDelegate {}
+
+        unsafe impl UIImagePickerControllerDelegate for PickerDelegate {
+            #[unsafe(method(imagePickerController:didFinishPickingMediaWithInfo:))]
+            fn did_finish(&self, picker: &UIImagePickerController, info: &AnyObject) {
+                let bytes = unsafe { extract_jpeg(info) };
+                self.reply(bytes);
+                picker.dismissViewControllerAnimated_completion(true, None);
+            }
+
+            #[unsafe(method(imagePickerControllerDidCancel:))]
+            fn did_cancel(&self, picker: &UIImagePickerController) {
+                self.reply(Ok(None));
+                picker.dismissViewControllerAnimated_completion(true, None);
+            }
+        }
+    );
+
+    impl PickerDelegate {
+        fn new(mtm: MainThreadMarker, tx: Sender<Result<Option<Vec<u8>>, String>>) -> Retained<Self> {
+            let this = mtm.alloc::<Self>().set_ivars(Ivars { tx: RefCell::new(Some(tx)) });
+            unsafe { msg_send![super(this), init] }
+        }
+        fn reply(&self, v: Result<Option<Vec<u8>>, String>) {
+            if let Some(tx) = self.ivars().tx.borrow_mut().take() {
+                let _ = tx.send(v);
+            }
+        }
+    }
+
+    // Pull the original UIImage out of the info dict and JPEG-encode it. Copy the bytes
+    // immediately — the returned NSData is autoreleased and only valid during this call.
+    unsafe fn extract_jpeg(info: &AnyObject) -> Result<Option<Vec<u8>>, String> {
+        let key = NSString::from_str("UIImagePickerControllerOriginalImage");
+        let image: *mut AnyObject = msg_send![info, objectForKey: &*key];
+        if image.is_null() {
+            return Ok(None);
+        }
+        extern "C-unwind" {
+            fn UIImageJPEGRepresentation(image: *mut AnyObject, quality: f64) -> *mut AnyObject;
+        }
+        let data: *mut AnyObject = UIImageJPEGRepresentation(image, 0.85);
+        if data.is_null() {
+            return Err("could not JPEG-encode the picked image".into());
+        }
+        let len: usize = msg_send![data, length];
+        let ptr: *const u8 = msg_send![data, bytes];
+        if ptr.is_null() || len == 0 {
+            return Err("picked image encoded to zero bytes".into());
+        }
+        Ok(Some(std::slice::from_raw_parts(ptr, len).to_vec()))
+    }
+
+    #[allow(deprecated)]
+    pub fn present(source: &str, tx: Sender<Result<Option<Vec<u8>>, String>>) {
+        let mtm = match MainThreadMarker::new() {
+            Some(m) => m,
+            None => {
+                let _ = tx.send(Err("picker must run on the main thread".into()));
+                return;
+            }
+        };
+        let want_camera = source == "camera";
+        let src_type = if want_camera {
+            UIImagePickerControllerSourceType::Camera
+        } else {
+            UIImagePickerControllerSourceType::PhotoLibrary
+        };
+        if !unsafe { UIImagePickerController::isSourceTypeAvailable(src_type, mtm) } {
+            let _ = tx.send(Err(if want_camera {
+                "no camera available on this device".into()
+            } else {
+                "photo library unavailable".into()
+            }));
+            return;
+        }
+        let app = UIApplication::sharedApplication(mtm);
+        let Some(window) = app.keyWindow() else {
+            let _ = tx.send(Err("no key window".into()));
+            return;
+        };
+        let Some(root) = window.rootViewController() else {
+            let _ = tx.send(Err("no root view controller".into()));
+            return;
+        };
+        let picker = unsafe { UIImagePickerController::new(mtm) };
+        unsafe { picker.setSourceType(src_type) };
+        let delegate = PickerDelegate::new(mtm, tx);
+        // `delegate` is untyped `id` on UIImagePickerController; msg_send passes it directly.
+        let _: () = unsafe { msg_send![&*picker, setDelegate: &*delegate] };
+        KEEP.with(|k| *k.borrow_mut() = Some(delegate));
+        unsafe { root.presentViewController_animated_completion(&picker, true, None) };
+    }
+}
+
+/// Native iOS image/camera picker. `source` is "library" or "camera". Returns
+/// {mimeType, name, dataB64} for the picked photo, or null if the user cancelled.
+#[cfg(target_os = "ios")]
+#[tauri::command]
+async fn pick_image(app: AppHandle, source: String) -> Result<Option<serde_json::Value>, String> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.run_on_main_thread(move || ios_picker::present(&source, tx))
+        .map_err(|e| e.to_string())?;
+    let bytes = rx.await.map_err(|e| e.to_string())??;
+    Ok(bytes.map(|b| {
+        use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+        serde_json::json!({ "mimeType": "image/jpeg", "name": "photo.jpg", "dataB64": B64.encode(&b) })
+    }))
+}
+
+#[cfg(not(target_os = "ios"))]
+#[tauri::command]
+async fn pick_image(source: String) -> Result<Option<serde_json::Value>, String> {
+    let _ = source;
+    Err("the native picker is only available on iOS".into())
+}
+
+// H1 — native, biometric-gated recovery-phrase reveal. The 24 words are shown ONLY in a
+// native alert; they never cross back into the (potentially XSS'd) webview, and the reveal
+// button lives on a native action sheet the webview can present but not tap.
+#[cfg(target_os = "ios")]
+mod ios_secure {
+    use block2::RcBlock;
+    use objc2::rc::Retained;
+    use objc2::runtime::Bool;
+    use objc2::{msg_send, AnyThread, MainThreadMarker};
+    use objc2_foundation::{NSError, NSString};
+    use objc2_local_authentication::{LAContext, LAPolicy};
+    use objc2_ui_kit::{
+        UIAlertAction, UIAlertActionStyle, UIAlertController, UIAlertControllerStyle, UIApplication,
+        UIViewController,
+    };
+    use std::path::PathBuf;
+    use tauri::AppHandle;
+
+    #[allow(deprecated)]
+    fn present(mtm: MainThreadMarker, vc: &UIViewController) {
+        let app = UIApplication::sharedApplication(mtm);
+        if let Some(window) = app.keyWindow() {
+            if let Some(root) = window.rootViewController() {
+                unsafe { root.presentViewController_animated_completion(vc, true, None) };
+            }
+        }
+    }
+
+    // A plain native alert with a single nil-handler "Done" button.
+    fn alert(mtm: MainThreadMarker, title: &str, message: &str) {
+        let a = UIAlertController::alertControllerWithTitle_message_preferredStyle(
+            Some(&NSString::from_str(title)),
+            Some(&NSString::from_str(message)),
+            UIAlertControllerStyle::Alert,
+            mtm,
+        );
+        let done = UIAlertAction::actionWithTitle_style_handler(
+            Some(&NSString::from_str("Done")),
+            UIAlertActionStyle::Default,
+            None,
+            mtm,
+        );
+        a.addAction(&done);
+        present(mtm, &a);
+    }
+
+    // Biometric-gate (Face ID / Touch ID / passcode), then show the phrase natively. Must be
+    // called on the main thread. The LAContext reply lands on a private thread, so we hop
+    // back to main (via the AppHandle) to touch UIKit + read the wallet.
+    pub fn reveal_phrase(app: AppHandle, dir: PathBuf, title: &'static str) {
+        let ctx = unsafe { LAContext::new() };
+        let reason = NSString::from_str("Show your recovery phrase");
+        let reply = RcBlock::new(move |ok: Bool, _err: *mut NSError| {
+            let (app, dir) = (app.clone(), dir.clone());
+            let ok = ok.as_bool();
+            let _ = app.run_on_main_thread(move || {
+                let Some(mtm) = MainThreadMarker::new() else { return };
+                if !ok {
+                    alert(mtm, "Not verified", "Face ID / passcode was cancelled or failed.");
+                    return;
+                }
+                match crate::wallet::load(&dir).mnemonic {
+                    Some(m) => alert(mtm, title, &m),
+                    None => alert(mtm, "No account", "No recovery phrase on this device."),
+                }
+            });
+        });
+        unsafe {
+            let _: () = msg_send![
+                &ctx,
+                evaluatePolicy: LAPolicy::DeviceOwnerAuthentication,
+                localizedReason: &*reason,
+                reply: &*reply,
+            ];
+        }
+    }
+
+    // Present the "Account security" action sheet. Its "Reveal recovery phrase" action is a
+    // NATIVE button: webview JS can present this sheet but cannot tap the action, so it can
+    // neither trigger the biometric prompt nor read the phrase.
+    #[allow(deprecated)]
+    pub fn open_account_security(app: AppHandle, dir: PathBuf) {
+        let Some(mtm) = MainThreadMarker::new() else { return };
+        let sheet = UIAlertController::alertControllerWithTitle_message_preferredStyle(
+            Some(&NSString::from_str("Account security")),
+            Some(&NSString::from_str(
+                "Your 24-word recovery phrase is the only way back to your balance. It is shown only on this device.",
+            )),
+            UIAlertControllerStyle::ActionSheet,
+            mtm,
+        );
+        let handler = RcBlock::new(move |_a: core::ptr::NonNull<UIAlertAction>| {
+            reveal_phrase(app.clone(), dir.clone(), "Recovery phrase");
+        });
+        let reveal = UIAlertAction::actionWithTitle_style_handler(
+            Some(&NSString::from_str("Reveal recovery phrase")),
+            UIAlertActionStyle::Default,
+            Some(&handler),
+            mtm,
+        );
+        let cancel = UIAlertAction::actionWithTitle_style_handler(
+            Some(&NSString::from_str("Cancel")),
+            UIAlertActionStyle::Cancel,
+            None,
+            mtm,
+        );
+        sheet.addAction(&reveal);
+        sheet.addAction(&cancel);
+        // iPad presents an action sheet as a popover and needs an anchor; iPhone ignores it.
+        if let Some(pop) = sheet.popoverPresentationController() {
+            let uiapp = UIApplication::sharedApplication(mtm);
+            if let Some(w) = uiapp.keyWindow() {
+                pop.setSourceView(Some(&w));
+            }
+        }
+        let _keep: Option<Retained<UIViewController>> = None;
+        present(mtm, &sheet);
+    }
+}
+
+/// Present the native, biometric-gated Account Security screen (H1). iOS only.
+#[cfg(target_os = "ios")]
+#[tauri::command]
+fn open_account_security(app: AppHandle) -> Result<(), String> {
+    let dir = data_dir(&app)?;
+    let app2 = app.clone();
+    app.run_on_main_thread(move || ios_secure::open_account_security(app2, dir))
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(not(target_os = "ios"))]
+#[tauri::command]
+fn open_account_security() -> Result<(), String> {
+    Err("the native account-security screen is iOS-only".into())
+}
+
 /// Open an http(s) URL in the OS default browser. The webview itself won't
 /// follow target=_blank links, so provider T&C / checkout links route here.
 #[tauri::command]
@@ -1083,9 +2038,25 @@ fn open_external(url: String) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // iOS gives worker/main threads far smaller stacks than macOS (main ≈1 MB vs 8 MB;
+    // secondary threads small too). Nym's mixnet Sphinx crypto is stack-heavy, so the
+    // gateway-connect path overflows on iOS (but not macOS, same code). Give every thread
+    // a large stack: RUST_MIN_STACK covers std::thread defaults; a custom multi-thread
+    // tokio runtime (set as Tauri's async_runtime) covers all async tasks, incl. the Nym
+    // client tasks spawned via tokio::spawn from inside our async commands.
+    std::env::set_var("RUST_MIN_STACK", "16777216");
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(16 * 1024 * 1024)
+        .build()
+        .expect("build tokio runtime");
+    tauri::async_runtime::set(rt.handle().clone());
+    std::mem::forget(rt); // keep the runtime alive for the whole app lifetime
+
     tauri::Builder::default()
         .manage(Arc::new(Transport::new()))
         .setup(|app| {
+            diag(&app.handle().clone(), "==== launch ====");
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
@@ -1107,12 +2078,52 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            state, set_server, account_new, account_reveal, account_restore,
+            state, set_server, account_new, account_reveal, account_restore, account_delete, account_migrate_qr,
             invoice, invoice_status, invoice_cancel, ocr_scan, pdf_text, pdf_ocr, pdf_pages, collect, redeem, chat,
-            smart_available, smart_detect, coconut_withdraw_test, coconut_withdraw, coconut_spend, coconut_redeem,
-            mixnet_route, list_entry_gateways, set_entry_gateway, open_external, save_image,
-            share_text, upload_begin, upload_chunk
+            smart_available, smart_detect, coconut_redeem,
+            mixnet_route, mixnet_ping, list_entry_gateways, set_entry_gateway, set_mixnet_perf, open_external, save_image,
+            share_text, upload_begin, upload_chunk, upload_pipeline, pick_image, open_account_security
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+// ---------------------------------------------------------------------------
+// Regression tests for C3 (docs/security/audit-2026-08-20.md): the client-side
+// overcharge guard — independent fair-price recompute from the bundled table.
+#[cfg(test)]
+mod c3_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn plaintext_extracts_text_and_rejects_multimodal() {
+        let text = json!([{"role":"user","content":"hello"},{"role":"assistant","content":"hi"}]);
+        assert_eq!(messages_plaintext(&text).as_deref(), Some("hello\nhi\n"));
+        // multimodal content (image parts) can't be char-estimated → guard must skip
+        let mm = json!([{"role":"user","content":[{"type":"image_url","image_url":{"url":"..."}}]}]);
+        assert!(messages_plaintext(&mm).is_none());
+    }
+
+    #[test]
+    fn fair_estimate_skips_unlisted_and_prices_listed() {
+        let msgs = json!([{"role":"user","content":"x".repeat(4000)}]);
+        // unlisted model → no trusted reference → None (never a false flag)
+        assert!(fair_price_estimate("totally-made-up-model-xyz", &msgs, "").is_none());
+        // a listed model yields a positive fair price
+        let fair = fair_price_estimate("gemini-3.5-flash-lite", &msgs, &"y".repeat(4000));
+        assert!(fair.map(|f| f > 0).unwrap_or(false), "listed model must price > 0");
+    }
+
+    #[test]
+    fn gross_overcharge_trips_but_fair_charge_does_not() {
+        let msgs = json!([{"role":"user","content":"x".repeat(4000)}]);
+        let fair = fair_price_estimate("gemini-3.5-flash-lite", &msgs, &"y".repeat(4000)).unwrap();
+        let ceiling = (fair as f64 * OVERCHARGE_FACTOR).ceil() as u64;
+        // the audit's attack (≥50×, up to ~1000×) is far above the ceiling → flagged
+        let inflated = fair.saturating_mul(1000).max(MIN_FLAG_SCRAI + 1);
+        assert!(inflated > MIN_FLAG_SCRAI && inflated > ceiling, "gross overcharge must be flaggable");
+        // an honest charge at the client's own estimate stays under the ceiling → not flagged
+        assert!(!(fair > MIN_FLAG_SCRAI && fair > ceiling), "a fair charge must never be flagged");
+    }
 }

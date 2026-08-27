@@ -1,0 +1,11 @@
+# Keep the build context small + avoid copying macOS/iOS build artifacts into the
+# Linux container (they're useless there and huge).
+.git
+target
+target-linux
+dist
+dist-linux
+node_modules
+src-tauri/gen/apple/build
+src-tauri/target
+**/*.log

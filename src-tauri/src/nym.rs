@@ -30,6 +30,23 @@ use tokio::sync::Mutex;
 /// mainnet, so this is the matching directory.
 const NYM_DIRECTORY: &str = "https://validator.nymtech.net/api/v1/nym-nodes/described";
 
+/// Build the mixnet `DebugConfig` for a performance/privacy setting. Extracted as a
+/// free function so the mapping is unit-testable without a live mixnet, and so the
+/// standalone `mixbench` diagnostic uses the EXACT same knobs the app does.
+///   cover_ms → cover-traffic rate (loop_cover_traffic_average_delay): battery
+///   mix_ms   → per-hop mixing delay (average_packet_delay): latency
+///   send_ms  → real-packet send rate (message_sending_average_delay): THROUGHPUT
+///   continuous → keep the loop cover-traffic stream (disable_loop_cover_traffic_stream)
+/// Nym's own defaults are (200, 15, 20, true) = maximum privacy.
+pub fn debug_config_for(cover_ms: u64, mix_ms: u64, send_ms: u64, continuous: bool) -> nym_sdk::DebugConfig {
+    let mut dbg = nym_sdk::DebugConfig::default();
+    dbg.traffic.average_packet_delay = Duration::from_millis(mix_ms.max(1));
+    dbg.traffic.message_sending_average_delay = Duration::from_millis(send_ms.max(1));
+    dbg.cover_traffic.loop_cover_traffic_average_delay = Duration::from_millis(cover_ms.max(1));
+    dbg.cover_traffic.disable_loop_cover_traffic_stream = !continuous;
+    dbg
+}
+
 #[derive(Clone, serde::Serialize)]
 pub struct GatewayInfo {
     pub id: String,
@@ -61,6 +78,31 @@ pub struct Transport {
     /// concurrent chats can't interleave their session_status+chat round trips and
     /// race the session counter (which crossed replies and hung the UI).
     op_lock: Mutex<()>,
+    /// Mixnet performance/privacy tradeoff: (cover_delay_ms, mix_delay_ms, send_delay_ms,
+    /// continuous_cover). Default (200, 15, 20, true) is Nym's own settings — full loop
+    /// cover traffic, standard mixing + send rate = maximum privacy. Higher cover_delay =
+    /// less cover traffic (battery); lower mix_delay = less per-hop mixing (latency); lower
+    /// send_delay = faster real-packet emission (THROUGHPUT — the upload-speed lever). All
+    /// trade anonymity for performance and are OPT-IN (the default keeps privacy primary).
+    perf: std::sync::Mutex<(u64, u64, u64, bool)>,
+    /// The last chat request that has NOT been acked with a reply, keyed by session id.
+    /// A retry resends this VERBATIM (same counter/sig/id) so a server that already
+    /// processed it replies by replay instead of charging a second time (idempotent retry).
+    pending_chat: Mutex<Option<(String, Value)>>,
+    /// A chat reply whose big pictures are still being fetched chunk by chunk (see
+    /// `fetch_staged_images` in lib.rs), kept across a FAILED download so the UI's Retry
+    /// resumes the fetch — the picture is already paid for and staged on the server —
+    /// instead of generating (and charging for) a brand-new one.
+    staged_download: Mutex<Option<StagedDownload>>,
+}
+
+/// The state of a chunked picture download: the chat reply holding the chunk
+/// references, plus every chunk that has already arrived (by image ref → seq).
+#[derive(Clone, Debug)]
+pub struct StagedDownload {
+    pub session_id: String,
+    pub resp: Value,
+    pub parts: HashMap<String, Vec<Option<String>>>,
 }
 
 impl Transport {
@@ -74,6 +116,23 @@ impl Transport {
             models: Mutex::new(None),
             geo: Mutex::new(None),
             op_lock: Mutex::new(()),
+            perf: std::sync::Mutex::new((200, 15, 20, true)),
+            pending_chat: Mutex::new(None),
+            staged_download: Mutex::new(None),
+        }
+    }
+
+    /// Park an unfinished picture download so a retry can resume it.
+    pub async fn set_staged_download(&self, dl: StagedDownload) {
+        *self.staged_download.lock().await = Some(dl);
+    }
+    /// Take the parked download for this session (if any) — the caller resumes it.
+    pub async fn take_staged_download(&self, session_id: &str) -> Option<StagedDownload> {
+        let mut g = self.staged_download.lock().await;
+        if g.as_ref().map(|d| d.session_id == session_id).unwrap_or(false) {
+            g.take()
+        } else {
+            None
         }
     }
 
@@ -83,12 +142,181 @@ impl Transport {
         self.op_lock.lock().await
     }
 
+    /// Set the mixnet performance/privacy tradeoff and drop the live client so the next
+    /// request reconnects with the new cover-traffic rate + mixing delay. No-op (and no
+    /// reconnect) if the values are unchanged, so the UI can push it freely on startup.
+    pub async fn set_perf(&self, cover_ms: u64, mix_ms: u64, send_ms: u64, continuous: bool) {
+        {
+            let mut p = self.perf.lock().unwrap();
+            if *p == (cover_ms, mix_ms, send_ms, continuous) {
+                return;
+            }
+            *p = (cover_ms, mix_ms, send_ms, continuous);
+        }
+        // Force a reconnect so the new DebugConfig takes effect.
+        self.mark_dead();
+        if let Some(c) = self.client.lock().await.take() {
+            c.disconnect().await;
+        }
+    }
+
+    /// Remember the just-built chat request so a retry can resend it verbatim.
+    pub async fn set_pending_chat(&self, session_id: &str, req: Value) {
+        *self.pending_chat.lock().await = Some((session_id.to_string(), req));
+    }
+    /// The pending (unacked) chat request for this session, if any — for an idempotent retry.
+    pub async fn pending_chat(&self, session_id: &str) -> Option<Value> {
+        self.pending_chat
+            .lock()
+            .await
+            .as_ref()
+            .filter(|(s, _)| s == session_id)
+            .map(|(_, r)| r.clone())
+    }
+    /// Clear the pending chat once its reply has arrived (or it's superseded).
+    pub async fn clear_pending_chat(&self, session_id: &str) {
+        let mut g = self.pending_chat.lock().await;
+        if g.as_ref().map(|(s, _)| s == session_id).unwrap_or(false) {
+            *g = None;
+        }
+    }
+
+    /// Pipelined multi-send: fire ALL `requests` concurrently through a split sender, then
+    /// collect their acks by request `id`. The split sender enqueues into the SAME nym send
+    /// stream that paces + cover-mixes every packet, so this is NOT a privacy change vs the
+    /// sequential path — only the app-level per-chunk round-trip serialisation is removed.
+    /// Used for uploads. `on_progress(received_bytes)` fires as each ack lands.
+    pub async fn fire_and_collect<F: Fn(u64)>(
+        &self,
+        server: &str,
+        requests: Vec<Value>,
+        surbs: u32,
+        timeout_ms: u64,
+        on_progress: F,
+    ) -> Result<(), String> {
+        self.collect_replies(server, requests, surbs, timeout_ms, |v, _| {
+            if let Some(recv) = v.get("received").and_then(|r| r.as_u64()) {
+                on_progress(recv);
+            }
+        })
+        .await
+        .map(|_| ())
+    }
+
+    /// Pipelined multi-request whose replies CARRY data (chunked image download): fires
+    /// every request, collects each reply by request `id`, re-fires stalled ones, and
+    /// returns `id → reply`. `on_progress(reply, replies_so_far)` fires per reply.
+    ///
+    /// Boxed: nym's send/receive futures are enormous, and this future is moved by value
+    /// into the Tauri command that awaits it — on iOS the IPC handler runs on the 1 MB
+    /// main thread, where that move alone overflowed the stack (see `chat` in lib.rs).
+    pub async fn collect_replies<F: Fn(&Value, usize)>(
+        &self,
+        server: &str,
+        requests: Vec<Value>,
+        surbs: u32,
+        timeout_ms: u64,
+        on_progress: F,
+    ) -> Result<HashMap<String, Value>, String> {
+        Box::pin(self.collect_replies_inner(server, requests, surbs, timeout_ms, on_progress)).await
+    }
+
+    async fn collect_replies_inner<F: Fn(&Value, usize)>(
+        &self,
+        server: &str,
+        requests: Vec<Value>,
+        surbs: u32,
+        timeout_ms: u64,
+        on_progress: F,
+    ) -> Result<HashMap<String, Value>, String> {
+        self.ensure_connected().await?;
+        let recipient = Recipient::try_from_base58_string(server)
+            .map_err(|e| format!("bad server address: {e}"))?;
+        let mut guard = self.client.lock().await;
+        let client = guard.as_mut().ok_or("mixnet not connected — please retry")?;
+        let sender = client.split_sender();
+
+        // Fire every chunk (concurrent at the nym send layer). Keep each request's bytes so
+        // a chunk whose ack never arrives can be re-fired.
+        let mut pending: std::collections::HashMap<String, Vec<u8>> = std::collections::HashMap::new();
+        let mut replies: HashMap<String, Value> = HashMap::new();
+        for req in &requests {
+            let bytes = serde_json::to_vec(req).map_err(|e| e.to_string())?;
+            if let Err(e) = sender.send_message(recipient, bytes.clone(), IncludedSurbs::new(surbs)).await {
+                *guard = None;
+                self.mark_dead();
+                return Err(format!("mixnet send failed: {e} — reconnecting on the next attempt"));
+            }
+            if let Some(id) = req.get("id").and_then(|x| x.as_str()) {
+                pending.insert(id.to_string(), bytes);
+            }
+        }
+
+        // Collect acks; re-fire any chunk that stalls (belt-and-suspenders over nym's own
+        // per-packet retransmission) so one lost chunk can't hang the whole upload.
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+        let mut last_progress = tokio::time::Instant::now();
+        let mut refires: u32 = 0;
+        while !pending.is_empty() {
+            let Some(remaining) = deadline.checked_duration_since(tokio::time::Instant::now())
+            else {
+                *guard = None;
+                self.mark_dead();
+                return Err("upload timed out — reconnecting on the next attempt".into());
+            };
+            let poll = remaining.min(Duration::from_secs(5));
+            let got = match tokio::time::timeout(poll, client.wait_for_messages()).await {
+                Ok(Some(b)) => Some(b),
+                Ok(None) => {
+                    *guard = None;
+                    self.mark_dead();
+                    return Err("mixnet stream ended — reconnecting on the next attempt".into());
+                }
+                Err(_) => None, // poll slice elapsed with no message — check the stall below
+            };
+            if let Some(batch) = got {
+                for m in batch {
+                    let Ok(v) = serde_json::from_slice::<Value>(&m.message) else { continue };
+                    let Some(id) = v.get("id").and_then(|x| x.as_str()) else { continue };
+                    if pending.remove(id).is_none() {
+                        continue; // not one of ours (stray/cover)
+                    }
+                    if let Some(err) = v.get("error").and_then(|e| e.as_str()) {
+                        return Err(format!("request rejected: {err}"));
+                    }
+                    let id = id.to_string();
+                    on_progress(&v, replies.len() + 1);
+                    replies.insert(id, v);
+                    last_progress = tokio::time::Instant::now();
+                }
+            }
+            // Stalled with chunks still open → re-fire them (a few times, then let the overall timeout win).
+            if !pending.is_empty() && last_progress.elapsed() >= Duration::from_secs(10) && refires < 4 {
+                for bytes in pending.values() {
+                    let _ = sender.send_message(recipient, bytes.clone(), IncludedSurbs::new(surbs)).await;
+                }
+                refires += 1;
+                last_progress = tokio::time::Instant::now();
+            }
+        }
+        Ok(replies)
+    }
+
     /// The gateway identity embedded in a Nym recipient address (the `@…` part).
     /// This is how the app learns the scrai-server's (exit) gateway.
     pub fn gateway_of(addr: &str) -> Option<String> {
         Recipient::try_from_base58_string(addr)
             .ok()
             .map(|r| r.gateway().to_base58_string())
+    }
+
+    /// Validate a scrai-server Nym recipient address (base58 `id.enc@gateway`) before
+    /// persisting or routing to it, so a malformed or malicious `set_server` value is
+    /// rejected at the boundary instead of being silently stored and used (H5).
+    pub fn validate_address(addr: &str) -> Result<(), String> {
+        Recipient::try_from_base58_string(addr.trim())
+            .map(|_| ())
+            .map_err(|e| format!("invalid scrai-server address: {e}"))
     }
 
     pub async fn cached_models(&self) -> Option<Value> {
@@ -119,6 +347,11 @@ impl Transport {
     /// AND from the UI's route poll, which makes it the background reconnect
     /// after a dropped client.
     pub async fn ensure_connected(&self) -> Result<(), String> {
+        // Boxed — the SDK's connect future is huge; see `collect_replies`.
+        Box::pin(self.ensure_connected_inner()).await
+    }
+
+    async fn ensure_connected_inner(&self) -> Result<(), String> {
         let mut guard = self.client.lock().await;
         if guard.is_some() {
             return Ok(());
@@ -139,9 +372,14 @@ impl Transport {
                 Some(gw) => Some(gw),
                 None => self.random_described_gateway().await,
             };
+            // Apply the user's performance/privacy tradeoff to the client's cover-traffic
+            // rate and per-hop mixing delay (default = Nym's max-privacy settings).
+            let (cover_ms, mix_ms, send_ms, continuous) = *self.perf.lock().unwrap();
+            let dbg = debug_config_for(cover_ms, mix_ms, send_ms, continuous);
             match gw {
                 Some(gw) => MixnetClientBuilder::new_ephemeral()
                     .request_gateway(gw)
+                    .debug_config(dbg)
                     .build()
                     .map_err(|e| format!("mixnet build failed: {e}"))?
                     .connect_to_mixnet()
@@ -301,6 +539,34 @@ impl Transport {
         timeout_ms: u64,
         on_sent: impl FnOnce(),
     ) -> Result<Value, String> {
+        // Boxed — nym's send + wait_for_messages futures are huge; see `collect_replies`.
+        Box::pin(self.round_trip_notify_inner(server, req, surbs, timeout_ms, on_sent, true)).await
+    }
+
+    /// Like `round_trip_notify`, but a DELIVERED server error (`kind: "error"`) comes
+    /// back as `Ok(reply)` instead of `Err` — so the caller can tell "the server answered
+    /// with an error" (request consumed, e.g. counter used, provider refused) apart from
+    /// "no reply at all" (retry the same request verbatim). `Err` is transport-only.
+    pub async fn round_trip_raw_notify(
+        &self,
+        server: &str,
+        req: &Value,
+        surbs: u32,
+        timeout_ms: u64,
+        on_sent: impl FnOnce(),
+    ) -> Result<Value, String> {
+        Box::pin(self.round_trip_notify_inner(server, req, surbs, timeout_ms, on_sent, false)).await
+    }
+
+    async fn round_trip_notify_inner(
+        &self,
+        server: &str,
+        req: &Value,
+        surbs: u32,
+        timeout_ms: u64,
+        on_sent: impl FnOnce(),
+        errors_as_err: bool,
+    ) -> Result<Value, String> {
         let recipient =
             Recipient::try_from_base58_string(server).map_err(|e| format!("bad server address: {e}"))?;
         let id = req.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
@@ -360,7 +626,7 @@ impl Transport {
             for m in messages {
                 if let Ok(v) = serde_json::from_slice::<Value>(&m.message) {
                     if v.get("id").and_then(|x| x.as_str()) == Some(id.as_str()) {
-                        if v.get("kind").and_then(|k| k.as_str()) == Some("error") {
+                        if errors_as_err && v.get("kind").and_then(|k| k.as_str()) == Some("error") {
                             let err = v.get("error").and_then(|e| e.as_str()).unwrap_or("server error");
                             return Err(err.to_string());
                         }
@@ -369,5 +635,39 @@ impl Transport {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_config_maps_perf_knobs_to_nym_fields() {
+        // performance end: fast send + low mixing, cover stream on
+        let d = debug_config_for(3000, 2, 3, true);
+        assert_eq!(d.traffic.average_packet_delay, Duration::from_millis(2));
+        assert_eq!(d.traffic.message_sending_average_delay, Duration::from_millis(3));
+        assert_eq!(
+            d.cover_traffic.loop_cover_traffic_average_delay,
+            Duration::from_millis(3000)
+        );
+        assert!(!d.cover_traffic.disable_loop_cover_traffic_stream);
+
+        // privacy end == Nym defaults, cover stream off toggles the disable flag
+        let p = debug_config_for(200, 15, 20, false);
+        assert_eq!(p.traffic.average_packet_delay, Duration::from_millis(15));
+        assert_eq!(p.traffic.message_sending_average_delay, Duration::from_millis(20));
+        assert_eq!(
+            p.cover_traffic.loop_cover_traffic_average_delay,
+            Duration::from_millis(200)
+        );
+        assert!(p.cover_traffic.disable_loop_cover_traffic_stream);
+
+        // zero is clamped to 1ms so a slider extreme can never produce a 0 delay
+        let z = debug_config_for(0, 0, 0, true);
+        assert_eq!(z.traffic.average_packet_delay, Duration::from_millis(1));
+        assert_eq!(z.traffic.message_sending_average_delay, Duration::from_millis(1));
+        assert_eq!(z.cover_traffic.loop_cover_traffic_average_delay, Duration::from_millis(1));
     }
 }

@@ -9,6 +9,7 @@ pub mod billing;
 pub mod coconut;
 pub mod federation;
 pub mod gateway;
+pub mod ledger;
 pub mod pricing;
 pub mod purse;
 pub mod quorum;

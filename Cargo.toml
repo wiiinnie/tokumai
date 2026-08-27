@@ -2,4 +2,11 @@
 # and the Rust server binary (server) — client and server share the SAME crypto core.
 [workspace]
 resolver = "2"
-members = ["core", "src-tauri", "server"]
+members = ["core", "src-tauri", "server", "ledger", "mixbench"]
+
+# opt-level 3 + aggressive inlining merged Nym's async mixnet frames large enough to
+# overflow iOS's small thread stacks at gateway connect (SIGSEGV, release-only; debug
+# and macOS were fine). opt-level 1 keeps most optimization but reins in the inlining
+# that produced the oversized stack frames. See memory: scrambleai-ios-embedded-release-crash.
+[profile.release]
+opt-level = 1

@@ -368,7 +368,7 @@ const server = createServer(async (req, res) => {
 
     // ---- chat (paid, streamed) ----
     if (req.method === "POST" && url === "/chat") {
-      let body: { model: string; messages: ChatMessage[]; maxTokens?: number; temperature?: number };
+      let body: { model: string; messages: ChatMessage[]; maxTokens?: number; temperature?: number; imageSize?: string };
       try {
         body = await readJson(req);
         if (!body.model || !Array.isArray(body.messages)) throw new Error("bad request");
@@ -412,7 +412,8 @@ const server = createServer(async (req, res) => {
         const adapter = resolve(body.model);
         const stream = adapter.stream(
           { model: body.model, messages: body.messages, maxTokens: answer, thinkingBudget: THINKING_BUDGET,
-            ...(body.temperature != null ? { temperature: body.temperature } : {}) },
+            ...(body.temperature != null ? { temperature: body.temperature } : {}),
+            ...(typeof body.imageSize === "string" ? { imageSize: body.imageSize } : {}) },
           keyFor(adapter),
         );
         for await (const chunk of meter.wrap(stream)) {

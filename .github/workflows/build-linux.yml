@@ -1,0 +1,51 @@
+# Build the Linux (x86_64) desktop app on a native Ubuntu runner — much faster than
+# the emulated local Docker build, and free. Produces an AppImage + .deb you can
+# download from the run's "Artifacts", or that get attached to a tag release.
+#
+# Trigger it manually (Actions tab → "Build Linux (x86_64)" → Run workflow) or by
+# pushing a version tag (git tag v0.1.2 && git push --tags).
+name: Build Linux (x86_64)
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Tauri system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
+            libayatana-appindicator3-dev libssl-dev build-essential file
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: linux-cargo-${{ hashFiles('Cargo.lock') }}
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "^2.0" --locked
+
+      - name: Build bundles
+        run: cargo tauri build --bundles appimage,deb
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: scrambleai-linux-x86_64
+          path: |
+            target/release/bundle/appimage/*.AppImage
+            target/release/bundle/deb/*.deb
+          if-no-files-found: error

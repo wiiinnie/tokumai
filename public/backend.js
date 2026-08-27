@@ -82,10 +82,13 @@ async function streamChat(body, { onDelta, onDone, onError, onPhase }) {
 const httpBackend = {
   state: () => jsonCall("GET", "/api/state"),
   setServer: () => Promise.resolve({}), // dev backend is in-process; no server address
-  accountNew: () => jsonCall("POST", "/api/account/new"),
+  accountNew: (force) => jsonCall("POST", "/api/account/new", { force }),
   accountReveal: () => jsonCall("GET", "/api/account/reveal"),
-  accountRestore: (mnemonic) => jsonCall("POST", "/api/account/restore", { mnemonic }),
+  accountRestore: (mnemonic, force) => jsonCall("POST", "/api/account/restore", { mnemonic, force }),
+  accountDelete: (force) => jsonCall("POST", "/api/account/delete", { force }),
+  accountMigrateQr: () => jsonCall("GET", "/api/account/migrate-qr"),
   credit: (usd) => jsonCall("POST", "/api/credit", { usd }),
+  pickImage: () => Promise.reject(new Error("native picker is iOS-only")),
   invoice: (usd, method) => jsonCall("POST", "/api/invoice", { usd, method }),
   invoiceStatus: (id) => jsonCall("GET", "/api/invoice/" + encodeURIComponent(id)),
   invoiceCancel: (id) => jsonCall("POST", "/api/invoice/cancel", { id }),
@@ -100,12 +103,15 @@ const httpBackend = {
   chat: (body, handlers) => streamChat(body, handlers),
   // No mixnet in the dev web backend — report an empty route.
   mixnetRoute: () => Promise.resolve({ entry: null, exit: null, chosen: null }),
+  mixnetPing: () => Promise.reject(new Error("mixnet ping is native-only")),
   listEntryGateways: () => Promise.resolve([]),
   setEntryGateway: () => Promise.resolve({ entry_gateway: null }),
+  setMixnetPerf: () => Promise.resolve({}), // dev backend has no mixnet
   openExternal: (url) => { window.open(url, "_blank", "noopener"); return Promise.resolve(); },
   // Dev has no mixnet: images ride inline in the chat instead of chunk-uploading.
   uploadBegin: () => Promise.reject(new Error("no chunked upload in dev")),
   uploadChunk: () => Promise.reject(new Error("no chunked upload in dev")),
+  uploadPipeline: () => Promise.reject(new Error("no chunked upload in dev")),
   // Browser dev: fall back to an anchor download (no native dialog available).
   saveImage: (dataB64, filename, mimeType) => {
     const a = document.createElement("a");
@@ -128,10 +134,13 @@ const httpBackend = {
 const tauriBackend = (invoke) => ({
   state: () => invoke("state"),
   setServer: (address) => invoke("set_server", { address }),
-  accountNew: () => invoke("account_new"),
+  accountNew: (force) => invoke("account_new", { force: !!force }),
   accountReveal: () => invoke("account_reveal"),
-  accountRestore: (mnemonic) => invoke("account_restore", { mnemonic }),
+  accountRestore: (mnemonic, force) => invoke("account_restore", { mnemonic, force: !!force }),
+  accountDelete: (force) => invoke("account_delete", { force: !!force }),
+  accountMigrateQr: () => invoke("account_migrate_qr"),
   credit: () => Promise.reject(new Error("this build uses real payments — pick an amount to raise an invoice")),
+  pickImage: (source) => invoke("pick_image", { source }),
   invoice: (usd, method) => invoke("invoice", { usd, method }),
   invoiceStatus: (id) => invoke("invoice_status", { id }),
   invoiceCancel: (id) => invoke("invoice_cancel", { id }),
@@ -144,22 +153,35 @@ const tauriBackend = (invoke) => ({
   collect: () => invoke("collect"),
   redeem: () => invoke("redeem"),
   mixnetRoute: () => invoke("mixnet_route"),
+  mixnetPing: () => invoke("mixnet_ping"),
   listEntryGateways: () => invoke("list_entry_gateways"),
   setEntryGateway: (id) => invoke("set_entry_gateway", { id }),
+  setMixnetPerf: (coverMs, mixMs, sendMs, continuous) => invoke("set_mixnet_perf", { coverMs, mixMs, sendMs, continuous }),
   openExternal: (url) => invoke("open_external", { url }),
   saveImage: (dataB64, filename) => invoke("save_image", { data: dataB64, filename }),
   shareText: (filename, text) => invoke("share_text", { filename, text }),
   uploadBegin: (mimeType, totalBytes) => invoke("upload_begin", { mimeType, totalBytes }),
   uploadChunk: (uploadId, seq, data) => invoke("upload_chunk", { uploadId, seq, data }),
+  uploadPipeline: async (uploadId, chunks, onProgress) => {
+    const ev = window.__TAURI__ && window.__TAURI__.event;
+    let unlisten = null;
+    if (onProgress && ev && ev.listen) unlisten = await ev.listen("upload-progress", (e) => { try { onProgress(e.payload); } catch (_) {} });
+    try { return await invoke("upload_pipeline", { uploadId, chunks }); }
+    finally { if (unlisten) try { unlisten(); } catch (_) {} }
+  },
   // Non-streaming over the mixnet: one reply carrying the whole answer. Phase
   // signals are REAL: Rust emits "chat-sent" the instant the request has fully
   // left for the mixnet, and the invoke resolving IS the reply arriving.
   chat: async (body, { onDelta, onDone, onError, onPhase }) => {
-    let unlisten = null;
+    const unlisten = [];
     try {
       const ev = window.__TAURI__ && window.__TAURI__.event;
-      if (onPhase && ev && ev.listen) unlisten = await ev.listen("chat-sent", () => onPhase("sent"));
-      const r = await invoke("chat", { model: body.model, messages: body.messages, maxTokens: body.maxTokens, free: !!body.free, bigReply: !!body.bigReply });
+      if (onPhase && ev && ev.listen) {
+        unlisten.push(await ev.listen("chat-sent", () => onPhase("sent")));
+        // Rust auto-redeems held credit when the session runs short mid-request.
+        unlisten.push(await ev.listen("chat-redeeming", () => onPhase("redeeming")));
+      }
+      const r = await invoke("chat", { model: body.model, messages: body.messages, maxTokens: body.maxTokens, free: !!body.free, live: !!body.live, thinkingBudget: (typeof body.thinkingBudget==="number"?body.thinkingBudget:null), bigReply: !!body.bigReply, retry: !!body.retry, imageSize: (typeof body.imageSize==="string"?body.imageSize:null) });
       if (onPhase) onPhase("receiving");
       if (r && r.text) {
         // The whole answer arrived in one mixnet reply — feed it out in slices so
@@ -175,7 +197,7 @@ const tauriBackend = (invoke) => ({
     } catch (e) {
       onError(e && e.message ? e.message : String(e));
     } finally {
-      if (unlisten) try { unlisten(); } catch (_) {}
+      unlisten.forEach((u) => { try { u(); } catch (_) {} });
     }
   },
 });
@@ -190,9 +212,12 @@ function pick(method, ...args) {
 export const Backend = {
   state: () => pick("state"),
   setServer: (address) => pick("setServer", address),
-  accountNew: () => pick("accountNew"),
+  accountNew: (force) => pick("accountNew", force),
   accountReveal: () => pick("accountReveal"),
-  accountRestore: (m) => pick("accountRestore", m),
+  accountRestore: (m, force) => pick("accountRestore", m, force),
+  accountDelete: (force) => pick("accountDelete", force),
+  accountMigrateQr: () => pick("accountMigrateQr"),
+  pickImage: (source) => pick("pickImage", source),
   credit: (usd) => pick("credit", usd),
   invoice: (usd, method) => pick("invoice", usd, method),
   invoiceStatus: (id) => pick("invoiceStatus", id),
@@ -206,12 +231,15 @@ export const Backend = {
   collect: () => pick("collect"),
   redeem: () => pick("redeem"),
   mixnetRoute: () => pick("mixnetRoute"),
+  mixnetPing: () => pick("mixnetPing"),
   listEntryGateways: () => pick("listEntryGateways"),
   setEntryGateway: (id) => pick("setEntryGateway", id),
+  setMixnetPerf: (coverMs, mixMs, sendMs, continuous) => pick("setMixnetPerf", coverMs, mixMs, sendMs, continuous),
   openExternal: (url) => pick("openExternal", url),
   saveImage: (dataB64, filename, mimeType) => pick("saveImage", dataB64, filename, mimeType),
   shareText: (filename, text) => pick("shareText", filename, text),
   uploadBegin: (mimeType, totalBytes) => pick("uploadBegin", mimeType, totalBytes),
   uploadChunk: (uploadId, seq, data) => pick("uploadChunk", uploadId, seq, data),
+  uploadPipeline: (uploadId, chunks, onProgress) => pick("uploadPipeline", uploadId, chunks, onProgress),
   chat: (body, handlers) => pick("chat", body, handlers),
 };

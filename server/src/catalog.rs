@@ -8,10 +8,21 @@
 // models get the conservative fallback price; unpriced Gemini models are dropped
 // (the live list is a zoo of previews we'd otherwise show at a surprise price).
 
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
 use scrai_core::billing::ceil_scrai;
 use scrai_core::coconut::SCRAI_PER_USD;
 use scrai_core::pricing::PricingTable;
 use serde_json::{json, Value};
+
+/// The catalog changes rarely (provider model lists rotate over hours/days), but an
+/// anonymous caller can spam `models` and turn each request into two upstream GETs
+/// (M-srv-1 amplification). Cache the assembled list process-wide for this long and
+/// serve repeats from memory. `pricing`/`margin` are fixed per process, so the cached
+/// list is valid for every caller; only the reply `id` is stitched in per request.
+const CATALOG_TTL: Duration = Duration::from_secs(60);
+static CATALOG_CACHE: Mutex<Option<(Instant, Vec<Value>)>> = Mutex::new(None);
 
 /// Provider allowlist: SCRAI_PROVIDERS="gemini" (comma list) limits the
 /// catalog to those providers; unset/empty/"all" offers everything available.
@@ -30,6 +41,28 @@ pub async fn handle(request: &[u8], pricing: &PricingTable, margin: f64) -> Vec<
     let v: Value = serde_json::from_slice(request).unwrap_or(Value::Null);
     let id = v.get("id").cloned().unwrap_or(Value::Null);
 
+    // Serve a fresh cached list without touching the providers. Never hold the lock
+    // across the await below.
+    if let Some(models) = cached_fresh() {
+        return serde_json::to_vec(&json!({ "id": id, "models": models })).unwrap_or_default();
+    }
+
+    let models = fetch_models(pricing, margin).await;
+    if let Ok(mut guard) = CATALOG_CACHE.lock() {
+        *guard = Some((Instant::now(), models.clone()));
+    }
+    serde_json::to_vec(&json!({ "id": id, "models": models })).unwrap_or_default()
+}
+
+/// A clone of the cached model list if it exists and is within its TTL, else `None`.
+fn cached_fresh() -> Option<Vec<Value>> {
+    let guard = CATALOG_CACHE.lock().ok()?;
+    let (at, models) = guard.as_ref()?;
+    (at.elapsed() < CATALOG_TTL).then(|| models.clone())
+}
+
+/// Assemble the live catalog from the providers (the uncached path).
+async fn fetch_models(pricing: &PricingTable, margin: f64) -> Vec<Value> {
     // Gemini first — its models lead the picker (same provider order as the TS server).
     let (gemini, groq) = tokio::join!(
         async {
@@ -47,7 +80,7 @@ pub async fn handle(request: &[u8], pricing: &PricingTable, margin: f64) -> Vec<
         }
     }
     models.append(&mut image_models(pricing, margin));
-    serde_json::to_vec(&json!({ "id": id, "models": models })).unwrap_or_default()
+    models
 }
 
 /// Retail rate in SCRAI per 1M tokens (provider USD price × peg × margin).
@@ -73,6 +106,7 @@ fn image_models(pricing: &PricingTable, margin: f64) -> Vec<Value> {
         }
         out.push(json!({
             "model": id,
+            "label": pricing.label(id).unwrap_or(id),
             "vendor": vendor,
             "kind": "image",
             "rate": rate,
@@ -93,6 +127,56 @@ fn image_models(pricing: &PricingTable, margin: f64) -> Vec<Value> {
     if provider_enabled("pollinations") {
         for id in ["pollinations-512", "pollinations-1024", "pollinations-1536"] {
             push(id, "Pollinations", true);
+        }
+    }
+    // Google (Gemini) native image generation — Nano Banana. Bills by TOKENS: the image
+    // itself is a fixed count of IMAGE output tokens at the `out` rate (1K: 1290 on Nano
+    // Banana, 1120 on Nano Banana 2 / 2 Lite), the model's text + thinking bill at
+    // `out_text` — `chat.rs`'s Gemini accounting charges exactly that split. We surface
+    // a per-image estimate (1K, image tokens only) for the picker on top of the token
+    // rates. Only shows on a real (non-fallback) price; paid tier → no training badge.
+    if provider_enabled("gemini") {
+        let trains = crate::chat::gemini_trains_on_input();
+        for (id, img_tokens) in [
+            ("gemini-2.5-flash-image", 1290.0),
+            ("gemini-3.1-flash-image", 1120.0),
+            ("gemini-3.1-flash-lite-image", 1120.0),
+        ] {
+            let price = crate::chat::effective_price(pricing.price(id));
+            if price.fallback {
+                continue;
+            }
+            let mut rate = json!({ "in": retail(price.input, margin), "out": retail(price.output, margin) });
+            if let Some(t) = price.output_text {
+                rate["outText"] = json!(retail(t, margin));
+            }
+            let per_tokens = |tokens: f64| (retail(price.output, margin) as f64 * tokens / 1_000_000.0).ceil() as u64;
+            let per_img = per_tokens(img_tokens);
+            if per_img > 0 {
+                rate["image"] = json!(per_img);
+            }
+            // Selectable sizes with their per-picture retail price (image tokens only —
+            // the model's text/thinking is a small extra at `outText`).
+            if crate::chat::model_takes_image_size(id) {
+                let supported = crate::chat::supported_image_sizes(id);
+                let sizes: serde_json::Map<String, Value> = crate::chat::image_sizes()
+                    .iter()
+                    .filter(|(s, _)| supported.contains(s))
+                    .map(|(s, t)| (s.to_string(), json!(per_tokens(*t as f64))))
+                    .collect();
+                rate["imageSizes"] = Value::Object(sizes);
+            }
+            out.push(json!({
+                "model": id,
+                "label": pricing.label(id).unwrap_or(id),
+                "vendor": "Google",
+                "kind": "image",
+                "rate": rate,
+                "tier": price.tier.as_str(),
+                "trainsOnInput": trains,
+                // Nano Banana is multimodal-in: it can edit a supplied image, so attachments help.
+                "acceptsImages": true,
+            }));
         }
     }
     out
@@ -134,6 +218,7 @@ async fn groq_models(pricing: &PricingTable, margin: f64) -> Result<Vec<Value>, 
         let price = crate::chat::effective_price(pricing.price(id));
         out.push(json!({
             "model": id,
+            "label": pricing.label(id).unwrap_or(id),
             "vendor": "Groq",
             "kind": "text",
             "rate": { "in": retail(price.input, margin), "out": retail(price.output, margin) },
@@ -208,12 +293,13 @@ async fn gemini_models(pricing: &PricingTable, margin: f64) -> Result<Vec<Value>
         }
         out.push(json!({
             "model": id,
+            "label": pricing.label(id).unwrap_or(id),
             "vendor": "Google",
             "kind": "text",
             "rate": { "in": retail(price.input, margin), "out": retail(price.output, margin) },
             "tier": price.tier.as_str(),
-            // Free-tier Gemini trains on input (outside EU/UK/EEA) — surfaced to the client.
-            "trainsOnInput": true,
+            // Paid (mainnet) Gemini does NOT train on prompts; free/testnet does — surfaced honestly.
+            "trainsOnInput": crate::chat::gemini_trains_on_input(),
             // Gemini reads images, PDFs and text via inlineData attachments.
             "acceptsImages": true,
         }));

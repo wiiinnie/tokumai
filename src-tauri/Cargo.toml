@@ -44,6 +44,12 @@ rand = "0.8"
 hex = "0.4"
 base64 = "0.22"
 k256 = { version = "0.13", features = ["arithmetic"] }
+# Wallet-at-rest encryption (H6): AES-256-GCM over the wallet JSON, keyed by a random
+# data key held in the OS keychain (macOS Keychain / Windows Credential Manager /
+# Linux keyutils via `keyring`). The mnemonic + bearer coconut purses are then
+# unreadable from disk/backups without the OS-protected key.
+aes-gcm = "0.10"
+keyring = { version = "3", features = ["apple-native", "windows-native", "linux-native"] }
 # Embedded mixnet client — no external nym-client binary needed.
 nym-sdk = "1.21"
 # Shared crypto/protocol core (threshold ecash, quorum, federation protocol) —
@@ -76,7 +82,14 @@ objc2-ui-kit = { version = "0.3", features = [
   "UIImage", "UIImagePickerController", "UIActivityViewController",
   "UIViewController", "UIResponder", "UIView", "UIWindow", "UIApplication",
   "UIPopoverPresentationController", "UIPresentationController",
+  # native image/camera picker (UIImagePickerControllerDelegate inherits UINavigationControllerDelegate)
+  "UINavigationController", "UIScrollView",
+  # H1: native, biometric-gated recovery-phrase reveal (seed never crosses into the webview)
+  "UIAlertController", "block2",
 ] }
+# H1: Face ID / Touch ID gate + Obj-C blocks for its async reply.
+block2 = "0.6"
+objc2-local-authentication = { version = "0.3", features = ["LAContext", "LAError"] }
 
 # --- on-device OCR for the privacy guard (macOS + iOS via Apple Vision;
 #     other platforms fall back to the bundled Tesseract-WASM frontend) ---

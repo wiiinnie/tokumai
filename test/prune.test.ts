@@ -36,6 +36,8 @@ assert.ok(!isFollowup("Who won the 2022 Champions League final in Paris?"), "sel
 // Anchor rule: a prompt is never sent naked while history exists — zero lexical
 // overlap is more often a rephrased follow-up than a true restart, and the
 // model must not visibly lose the thread. Only turns BEFORE the anchor drop.
+// ctxPairs:0 disables the guaranteed memory floor so this isolates the LEXICAL
+// topic-shift engine (the floor is exercised separately below).
 {
   const convo: Msg[] = [
     u("Give me a recipe for carbonara."),
@@ -44,7 +46,7 @@ assert.ok(!isFollowup("Who won the 2022 Champions League final in Paris?"), "sel
     a("Berlin is 18°C with light rain expected this afternoon."),
     u("Who won the last Champions League final?"),
   ];
-  const pruned = pruneMessages(convo, PRUNE_DEFAULTS) as Msg[];
+  const pruned = pruneMessages(convo, { ...PRUNE_DEFAULTS, ctxPairs: 0 }) as Msg[];
   assert.ok(
     !roles(pruned).some((c) => /carbonara|guanciale/i.test(c)),
     "older unrelated turn should be pruned when the new question is football",
@@ -116,9 +118,35 @@ assert.ok(!isFollowup("Who won the 2022 Champions League final in Paris?"), "sel
     a("Lima."),
     u("Back to the carbonara — can I use bacon instead of guanciale?"),
   ];
-  const pruned = pruneMessages(convo, PRUNE_DEFAULTS) as Msg[];
+  // ctxPairs:0 isolates the lexical engine (with the default floor the recent Peru
+  // pair would ride along; the floor's own behaviour is asserted in its own block).
+  const pruned = pruneMessages(convo, { ...PRUNE_DEFAULTS, ctxPairs: 0 }) as Msg[];
   assert.ok(roles(pruned).some((c) => /carbonara|guanciale/i.test(c)), "earlier related topic kept");
   assert.ok(!roles(pruned).some((c) => /Peru|Lima/i.test(c)), "unrelated Peru turn dropped");
+}
+
+/* ---- memory floor: the last N exchanges are ALWAYS kept, related or not --- */
+// The guaranteed floor (ctxPairs) is the fix for "context gets lost": lexical
+// overlap can't see a semantic follow-up, so a hard recent floor carries the
+// thread whatever topic-shift decides. With a floor of 2, an unrelated recent
+// turn survives that pure topic-shift (ctxPairs:0, above) would have dropped.
+{
+  const convo: Msg[] = [
+    u("Give me a recipe for carbonara."),
+    a("Carbonara: guanciale, eggs, pecorino, pepper, spaghetti."),
+    u("What's the weather in Berlin today?"),
+    a("Berlin is 18°C with light rain expected this afternoon."),
+    u("Who won the last Champions League final?"),
+  ];
+  const floored = pruneMessages(convo, { ...PRUNE_DEFAULTS, ctxPairs: 2 }) as Msg[];
+  assert.ok(
+    roles(floored).some((c) => /carbonara|guanciale/i.test(c)),
+    "a floor of 2 keeps the older carbonara pair that pure topic-shift dropped",
+  );
+  assert.equal(floored[floored.length - 1].content, "Who won the last Champions League final?");
+  // default floor (4) on a long chat keeps the recent exchanges verbatim
+  const dflt = pruneMessages(convo, PRUNE_DEFAULTS) as Msg[];
+  assert.ok(roles(dflt).some((c) => /weather|Berlin|rain/i.test(c)), "recent exchange always kept");
 }
 
 /* ---- disabling topicShift leaves history intact (only whitespace/trim) --- */

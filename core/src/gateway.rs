@@ -15,7 +15,9 @@ use serde_json::{json, Value};
 use crate::billing::ceil_scrai;
 use crate::coconut::{PayInfo, Payment, COIN_SCRAI, SCRAI_PER_USD};
 use crate::federation::{self, Authority};
+use crate::ledger::Ledger;
 use crate::quorum::{QuorumStore, ServerId, Verdict};
+#[cfg(test)]
 use crate::session::SessionStore;
 
 /// Retail margin applied to provider cost for the displayed rate.
@@ -27,10 +29,10 @@ const THIS_SERVER: ServerId = 1;
 /// Route one request. `request` is the raw envelope bytes; returns the reply bytes.
 /// `quorum` records coconut serials (double-spend); `sessions` holds redeemed SCRAI
 /// balances that `chat` draws down (charging lives in the async chat handler).
-pub fn handle(
+pub async fn handle(
     authority: &Authority,
     quorum: &mut QuorumStore,
-    sessions: &mut SessionStore,
+    sessions: &mut dyn Ledger,
     request: &[u8],
 ) -> Vec<u8> {
     let v: Value = serde_json::from_slice(request).unwrap_or(Value::Null);
@@ -40,11 +42,11 @@ pub fn handle(
         "models" => encode(&models_reply(id)),
         // Redeem coconut coins → session credit (verify the payment, record its
         // serials, then credit the session that will spend it via chat).
-        "redeem" => encode(&redeem_reply(authority, quorum, sessions, &v, id)),
+        "redeem" => encode(&redeem_reply(authority, quorum, sessions, &v, id).await),
         // Real session balance (0 for a session that has never been funded).
         "session.status" => {
             let sid = v.get("sessionId").and_then(|s| s.as_str()).unwrap_or("");
-            let (balance, counter) = sessions.status(sid);
+            let (balance, counter) = sessions.session_status(sid).await.unwrap_or((0, 0));
             encode(&json!({ "id": id, "balance": balance, "counter": counter }))
         }
         other => encode(&json!({
@@ -61,10 +63,10 @@ fn encode(v: &Value) -> Vec<u8> {
 /// payment offline, record it in the double-spend quorum, and on a fresh accept credit
 /// the session by `coins × COIN_SCRAI`. A benign replay (same pay_info) is idempotent —
 /// it was already credited, so we return the current balance without double-crediting.
-fn redeem_reply(
+async fn redeem_reply(
     authority: &Authority,
     quorum: &mut QuorumStore,
-    sessions: &mut SessionStore,
+    sessions: &mut dyn Ledger,
     v: &Value,
     id: Value,
 ) -> Value {
@@ -93,13 +95,19 @@ fn redeem_reply(
     }
     let coins = payment.ss.len() as u64;
     match quorum.submit(&payment, pi, THIS_SERVER) {
-        Verdict::Accepted => {
-            let balance = sessions.credit(session_id, coins * COIN_SCRAI);
-            json!({ "id": id, "accepted": true, "coins": coins, "balance": balance })
-        }
+        Verdict::Accepted => match sessions.session_credit(session_id, coins * COIN_SCRAI).await {
+            Ok(balance) => json!({ "id": id, "accepted": true, "coins": coins, "balance": balance }),
+            // Local `SessionStore` never fails here (credit is in-process, same store as the
+            // serial record — the H2 atomic-persist covers it). This arm only becomes live
+            // with a future MixnetLedger, where credit and the serial record sit in DIFFERENT
+            // stores; making credit idempotent-by-serial so a retry re-credits is part of THAT
+            // build (docs/federation-shared-ledger.md). For now: surface, never silently drop.
+            Err(e) => err(format!("credit failed after serial recorded: {e}")),
+        },
         // Idempotent retry: already credited on the first accept — don't credit twice.
         Verdict::Replay => {
-            json!({ "id": id, "accepted": true, "coins": 0, "balance": sessions.balance(session_id) })
+            let balance = sessions.session_balance(session_id).await.unwrap_or(0);
+            json!({ "id": id, "accepted": true, "coins": 0, "balance": balance })
         }
         Verdict::DoubleSpend { .. } => err("double-spend rejected".into()),
     }
@@ -142,8 +150,13 @@ mod tests {
     fn route(auth: &Authority, req: &Value) -> Value {
         let mut quorum = QuorumStore::default();
         let mut sessions = SessionStore::default();
-        serde_json::from_slice(&handle(auth, &mut quorum, &mut sessions, &serde_json::to_vec(req).unwrap()))
-            .unwrap()
+        let bytes = futures::executor::block_on(handle(
+            auth,
+            &mut quorum,
+            &mut sessions,
+            &serde_json::to_vec(req).unwrap(),
+        ));
+        serde_json::from_slice(&bytes).unwrap()
     }
 
     #[test]
@@ -231,8 +244,10 @@ mod tests {
                 "payment": serde_json::to_value(&payment).unwrap(),
                 "pay_info": pib.to_vec(), "spend_date": spend_date,
             });
-            serde_json::from_slice(&handle(&auth[0], quorum, sessions, &serde_json::to_vec(&env).unwrap()))
-                .unwrap()
+            let bytes = futures::executor::block_on(handle(
+                &auth[0], quorum, sessions, &serde_json::to_vec(&env).unwrap(),
+            ));
+            serde_json::from_slice(&bytes).unwrap()
         };
 
         let first = redeem(&mut quorum, &mut sessions);

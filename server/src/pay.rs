@@ -17,7 +17,7 @@
 // SCRAI_FAKE_PAYMENTS=1 — settles on first poll and says so loudly).
 // ---------------------------------------------------------------------------
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use scrai_core::auth;
@@ -30,6 +30,9 @@ use serde_json::{json, Value};
 // costly call).
 const INVOICE_PER_ACCT: usize = 5;
 const INVOICE_ACCT_WINDOW_MS: u64 = 600_000;
+/// H4: hard cap on the burned-nonce store (oldest evicted past this). Large enough that a
+/// legit client never bumps into it, small enough that a signed-nonce flood can't OOM.
+const MAX_NONCES: usize = 100_000;
 const INVOICE_GLOBAL_PER_MIN: usize = 30;
 
 pub fn now_ms() -> u64 {
@@ -71,6 +74,13 @@ pub struct Pay {
     invoices: HashMap<String, Inv>,
     entitlements: HashMap<String, u64>,
     nonces: HashSet<String>,
+    // H4: bound the burned-nonce store. `nonces` alone grew without limit (serialised into
+    // every snapshot → quadratic disk writes → OOM/disk-full under a signed-nonce flood).
+    // The FIFO records insertion order so the oldest are evicted past MAX_NONCES. Eviction
+    // only exposes VERY old nonces to replay (well past any legit window), and money moves
+    // are additionally guarded by entitlement consumption + burned ecash serials.
+    #[serde(default)]
+    nonce_fifo: VecDeque<String>,
     #[serde(default)]
     rev: u64,
     #[serde(skip)]
@@ -80,9 +90,6 @@ pub struct Pay {
 }
 
 impl Pay {
-    pub fn from_snapshot(json: &str) -> Self {
-        serde_json::from_str(json).unwrap_or_default()
-    }
     pub fn snapshot(&self) -> String {
         serde_json::to_string(self).unwrap_or_else(|_| "{}".into())
     }
@@ -90,16 +97,24 @@ impl Pay {
         self.rev
     }
 
-    /// Burn a nonce for an account-signed request. False = replay.
+    /// Burn a nonce for an account-signed request. False = replay. Bounded (H4): past
+    /// MAX_NONCES the oldest burned nonce is evicted so the store can't grow without limit.
     fn burn_nonce(&mut self, account_id: &str, nonce: &str) -> bool {
         if nonce.is_empty() {
             return false;
         }
-        let inserted = self.nonces.insert(format!("acct:{account_id}:{nonce}"));
-        if inserted {
-            self.rev += 1;
+        let key = format!("acct:{account_id}:{nonce}");
+        if !self.nonces.insert(key.clone()) {
+            return false; // already burned → replay
         }
-        inserted
+        self.nonce_fifo.push_back(key);
+        while self.nonce_fifo.len() > MAX_NONCES {
+            if let Some(old) = self.nonce_fifo.pop_front() {
+                self.nonces.remove(&old);
+            }
+        }
+        self.rev += 1;
+        true
     }
 
     /// Signature first, nonce burn last: a failed signature must not consume a
@@ -131,6 +146,10 @@ impl Pay {
         Ok(())
     }
 
+    /// Total unspent entitlement across all accounts (bought, not yet withdrawn to ecash).
+    pub fn total_entitlement(&self) -> u64 {
+        self.entitlements.values().sum()
+    }
     pub fn entitlement(&self, account_id: &str) -> u64 {
         *self.entitlements.get(account_id).unwrap_or(&0)
     }
@@ -164,12 +183,16 @@ impl Pay {
     /// money taken and never credited. Settlement is idempotent, so racing a
     /// polling client is harmless. Bounded to invoices younger than ~48h past
     /// their window so the sweep stays a handful of HTTP calls.
-    async fn sweep(&mut self, gateway: &Gateway) {
+    /// Catch late confirmations for ONE account's still-pending invoices (bounded outbound
+    /// work). Only ever called after that account's signature checked out (H3).
+    async fn sweep_account(&mut self, account: &str, gateway: &Gateway) {
         let now = now_ms();
         let candidates: Vec<Inv> = self
             .invoices
             .values()
-            .filter(|i| i.status != "paid" && now < i.expires_at + 48 * 3_600_000)
+            .filter(|i| {
+                i.status != "paid" && now < i.expires_at + 48 * 3_600_000 && i.account_id == account
+            })
             .cloned()
             .collect();
         for inv in candidates {
@@ -205,12 +228,16 @@ impl Pay {
             "invoice.create" => self.create(&v, &id, gateway).await,
             "invoice.status" => self.status(&v, &id, gateway).await,
             "invoice.cancel" => self.cancel(&v, &id),
-            // Catch any late confirmation FIRST, so "check for credit" finds a
-            // payment that confirmed after the client stopped polling.
-            "entitlement" => {
-                self.sweep(gateway).await;
-                self.entitlement_reply(&v, &id)
-            }
+            // H3: authenticate BEFORE any outbound work, then sweep ONLY this account's
+            // still-pending invoices. A bare/unsigned `entitlement` no longer forces N
+            // serial 20s gateway calls (which, via the sequential loop, wedged the server).
+            "entitlement" => match self.account_owns(&v, "entitlement") {
+                Some(account) => {
+                    self.sweep_account(&account, gateway).await;
+                    json!({ "id": id, "entitlement": self.entitlement(&account) })
+                }
+                None => err(&id, "account signature does not check out, or the nonce was reused"),
+            },
             other => err(&id, &format!("unknown kind: {other}")),
         };
         serde_json::to_vec(&reply).unwrap_or_default()
@@ -314,12 +341,6 @@ impl Pay {
         json!({ "id": id, "ok": ok })
     }
 
-    fn entitlement_reply(&mut self, v: &Value, id: &Value) -> Value {
-        let Some(account) = self.account_owns(v, "entitlement") else {
-            return err(id, "account signature does not check out, or the nonce was reused");
-        };
-        json!({ "id": id, "entitlement": self.entitlement(&account) })
-    }
 
     // ---- the coconut-withdraw gate ------------------------------------------
 
@@ -416,6 +437,13 @@ impl Gateway {
         }
     }
 
+    /// True only when NO real money can arrive: the fake dev rail AND no Nyx rail.
+    /// A single-authority issuer may run against this (dev); against real money it
+    /// must not (H9).
+    pub fn is_fake(&self) -> bool {
+        self.nyx.is_none() && matches!(self.rail, Rail::Fake)
+    }
+
     async fn create_invoice(&self, usd: u32, reference: &str, wanted: &str) -> Result<Raised, String> {
         if wanted == "nyx" {
             if let Some(nyx) = &self.nyx {
@@ -461,12 +489,13 @@ impl Rail {
             eprintln!("scrai-server: SCRAI_FAKE_PAYMENTS=1 — invoices settle on first poll. DEV ONLY.");
             return Rail::Fake;
         }
+        // Network-scoped (BTCPAY_URL_MAINNET / _TESTNET, legacy BTCPAY_URL fallback).
         match (
-            std::env::var("BTCPAY_URL"),
-            std::env::var("BTCPAY_STORE_ID"),
-            std::env::var("BTCPAY_API_KEY"),
+            crate::net_var("BTCPAY_URL"),
+            crate::net_var("BTCPAY_STORE_ID"),
+            crate::net_var("BTCPAY_API_KEY"),
         ) {
-            (Ok(u), Ok(s), Ok(k)) if !u.is_empty() && !s.is_empty() && !k.is_empty() => {
+            (Some(u), Some(s), Some(k)) => {
                 Rail::BtcPay { base_url: u.trim_end_matches('/').to_string(), store_id: s, api_key: k }
             }
             _ => Rail::None,
@@ -605,7 +634,7 @@ async fn btcpay(api_key: &str, req: reqwest::RequestBuilder) -> Result<Value, St
         return Err(match status.as_u16() {
             401 | 403 => "BTCPay rejected the API key — check BTCPAY_API_KEY and its store permissions".into(),
             404 => "BTCPay does not know this store or invoice — check BTCPAY_STORE_ID".into(),
-            s => format!("BTCPay {s}: {}", &msg[..msg.len().min(200)]),
+            s => format!("BTCPay {s}: {}", msg.chars().take(200).collect::<String>()),
         });
     }
     Ok(body)

@@ -16,13 +16,26 @@ pub struct TokenUsage {
     pub output: u64,
     pub cached_input: u64,
     pub audio_input: u64,
+    /// Output tokens that ARE a generated image (Gemini reports them under
+    /// `candidatesTokensDetails` with modality IMAGE). Billed at the model's image
+    /// output rate; `output` (text + thinking) bills at the (much cheaper) text rate.
+    pub output_image: u64,
+    /// Web-search queries the model executed for live grounding (Gemini). Billed
+    /// separately, per query — NOT a token count, so `cost_usd` ignores it.
+    pub grounding_queries: u64,
 }
 
 /// A model's provider price, in USD per 1,000,000 tokens.
 #[derive(Debug, Clone, Copy)]
 pub struct ModelPrice {
     pub input: f64,
+    /// Output rate. For image models this is the IMAGE-token rate (e.g. $60/1M on
+    /// Nano Banana 2) and `output_text` carries the text/thinking rate; for text
+    /// models it is simply the output rate and `output_text` is None.
     pub output: f64,
+    /// Rate for text + thinking output tokens on models whose `output` is an image
+    /// rate. None → text output bills at `output` (text models).
+    pub output_text: Option<f64>,
     /// Cheaper rate for cached input tokens; falls back to `input` if None.
     pub cached: Option<f64>,
     /// Rate for audio input tokens; falls back to `input` if None.
@@ -77,10 +90,12 @@ pub struct BillingFrame {
 pub fn cost_usd(usage: &TokenUsage, price: &ModelPrice) -> f64 {
     let cached_rate = price.cached.unwrap_or(price.input);
     let audio_rate = price.audio.unwrap_or(price.input);
+    let text_out_rate = price.output_text.unwrap_or(price.output);
     (usage.input as f64 * price.input
         + usage.cached_input as f64 * cached_rate
         + usage.audio_input as f64 * audio_rate
-        + usage.output as f64 * price.output)
+        + usage.output as f64 * text_out_rate
+        + usage.output_image as f64 * price.output)
         / 1_000_000.0
 }
 
@@ -121,7 +136,8 @@ pub fn compute_billing(
     estimated: bool,
 ) -> BillingFrame {
     let cost_scrai = ceil_scrai(cost_usd(usage, price) * SCRAI_PER_USD as f64);
-    let billable = usage.input + usage.cached_input + usage.audio_input + usage.output;
+    let billable =
+        usage.input + usage.cached_input + usage.audio_input + usage.output + usage.output_image;
     let price_scrai = if billable > 0 {
         ((cost_scrai * clamp_margin(margin)).ceil() as u64).max(min_charge)
     } else {
@@ -143,6 +159,7 @@ mod tests {
     const P: ModelPrice = ModelPrice {
         input: 0.10, // $0.10 / 1M input
         output: 0.40,
+        output_text: None,
         cached: None,
         audio: None,
         fallback: false,
@@ -214,6 +231,29 @@ mod tests {
         let u = TokenUsage { cached_input: 1_000_000, audio_input: 1_000_000, ..Default::default() };
         // both fall back to the $0.10 input rate → 0.10 + 0.10 = $0.20 → 20_000 SCRAI
         assert_eq!(cost_usd(&u, &P), 0.20);
+    }
+
+    #[test]
+    fn image_models_bill_text_and_thinking_at_the_text_rate() {
+        // Nano Banana 2 shape: image tokens $60/1M, text/thinking $3/1M.
+        let nb2 = ModelPrice { input: 0.5, output: 60.0, output_text: Some(3.0), ..P };
+        // one 1K image (1120 tokens) + 200 text + 1500 thinking tokens
+        let u = TokenUsage { output_image: 1120, output: 1700, ..Default::default() };
+        let usd = cost_usd(&u, &nb2);
+        // 1120×60 + 1700×3 = 67_200 + 5_100 = 72_300 per-million → $0.0723
+        assert!((usd - 0.0723).abs() < 1e-12, "{usd}");
+        // billing it all at the image rate would have been 2820×60 = $0.1692 — the bug.
+        assert!(usd < 0.08);
+        let f = compute_billing(&nb2, &u, 1.0, 0, false);
+        assert_eq!(f.cost_scrai, 7230.0);
+        assert_eq!(f.price_scrai, 7230);
+    }
+
+    #[test]
+    fn output_image_tokens_count_as_billable_even_without_text() {
+        let nb2 = ModelPrice { output: 60.0, output_text: Some(3.0), ..P };
+        let u = TokenUsage { output_image: 1120, ..Default::default() };
+        assert!(compute_billing(&nb2, &u, 1.4, 0, false).price_scrai > 0);
     }
 
     #[test]

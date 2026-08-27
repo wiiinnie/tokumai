@@ -1,0 +1,12 @@
+# mixbench — standalone diagnostic: measures what actually drives mixnet upload
+# throughput (app-level chunking vs Nym's own fragmentation, chunk size, send delay).
+# Loopback: sends to its OWN Nym address and times send→full-receive. Not shipped.
+[package]
+name = "mixbench"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+nym-sdk = "1.21"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }

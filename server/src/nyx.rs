@@ -45,7 +45,7 @@ impl Nyx {
         // The TS server took a Tendermint RPC (NYX_RPC_HTTP); this watcher needs
         // an LCD/REST endpoint instead. Catch the stale var so the rail doesn't
         // just silently stay off after the migration.
-        if std::env::var("NYX_LCD_URL").map(|s| s.trim().is_empty()).unwrap_or(true)
+        if crate::net_var("NYX_LCD_URL").is_none()
             && std::env::var("NYX_RPC_HTTP").is_ok_and(|s| !s.trim().is_empty())
         {
             eprintln!(
@@ -54,8 +54,9 @@ impl Nyx {
                  sandbox: https://validator-sandbox-1.nymtech.net/api)"
             );
         }
-        let addr = std::env::var("NYX_RECEIVE_ADDRESS").ok().filter(|s| !s.trim().is_empty())?;
-        let lcd = std::env::var("NYX_LCD_URL").ok().filter(|s| !s.trim().is_empty())?;
+        // Network-scoped (NYX_*_MAINNET / _TESTNET, legacy plain fallback).
+        let addr = crate::net_var("NYX_RECEIVE_ADDRESS")?;
+        let lcd = crate::net_var("NYX_LCD_URL")?;
         Some(Nyx {
             receive_address: addr.trim().to_string(),
             lcd_url: lcd.trim().trim_end_matches('/').to_string(),
@@ -141,8 +142,14 @@ impl Nyx {
     /// ever favour the operator, never undercharge. Returns (raised, expected_unym).
     pub async fn create_invoice(&self, usd: u32) -> Result<(crate::pay::RaisedInvoice, u64), String> {
         let rate = self.usd_per_nym().await?;
+        // L4: a near-zero (or non-finite) rate from a hostile/broken price feed would blow
+        // usd/rate up to a huge whole_nym and then wrap `* MICRO` in release, settling the
+        // invoice for a fraction of a NYM. Floor the rate and saturate the multiply.
+        if !(rate.is_finite() && rate > 1e-6) {
+            return Err(format!("implausible NYM price ({rate} USD/NYM) — refusing to quote"));
+        }
         let whole_nym = (usd as f64 / rate).ceil() as u64;
-        let expected_unym = whole_nym * MICRO;
+        let expected_unym = whole_nym.saturating_mul(MICRO);
         let nym_amount = whole_nym.to_string();
         let memo = new_memo();
         let expires_at = crate::pay::now_ms() + 15 * 60_000;
@@ -173,10 +180,27 @@ impl Nyx {
     /// only via a NEW tx — so in practice: pending until the full amount landed
     /// in one transfer, mirroring the TS behaviour).
     pub async fn check_paid(&self, memo: &str, expected_unym: u64) -> Result<String, String> {
-        // Newer Cosmos SDKs take `query=`, older ones `events=` — try both.
-        let filter = format!("transfer.recipient='{}'", self.receive_address);
+        // A live payment always lands at (or just below) the chain tip, but the tx-search
+        // returns EVERY past transfer to our address — including old ones on blocks the
+        // public Nyx endpoints have since PRUNED (they keep only a rolling window). The
+        // LCD errors out ("height N is not available, lowest height is M") the moment it
+        // tries to hydrate a pruned match, so the WHOLE search fails and a fresh payment
+        // never gets returned. Bounding the search to recent heights skips the pruned
+        // tail; a real payment is always well inside the window (we poll every ~10s while
+        // the pay screen is open), so this never misses one.
+        let tip = self.latest_height().await;
+        let base = format!("transfer.recipient='{}'", self.receive_address);
+        // Height floor: stay comfortably inside a ~100k-block pruning window (≈ days on
+        // Nyx) while never reaching below the pruned boundary. `query=` (modern Cosmos)
+        // supports the `AND tx.height>=` condition; the unbounded forms are last-ditch
+        // fallbacks for an endpoint that rejects the modern param.
+        let bounded = tip.map(|h| format!("{base} AND tx.height>={}", h.saturating_sub(30_000)));
+        let attempts: Vec<(&str, String)> = match &bounded {
+            Some(f) => vec![("query", f.clone()), ("query", base.clone()), ("events", base.clone())],
+            None => vec![("query", base.clone()), ("events", base.clone())],
+        };
         let mut last_err = String::new();
-        for param in ["query", "events"] {
+        for (param, filter) in attempts {
             let url = format!(
                 "{}/cosmos/tx/v1beta1/txs?{param}={}&order_by=ORDER_BY_DESC&pagination.limit=100",
                 self.lcd_url,
@@ -184,9 +208,8 @@ impl Nyx {
             );
             match self.lcd_txs(&url).await {
                 Ok(j) => {
-                    // Feed the pay screen's health indicator (best-effort height).
-                    let height = self.latest_height().await;
-                    *self.watch.lock().unwrap() = (true, crate::pay::now_ms(), height);
+                    // Feed the pay screen's health indicator with the tip we already have.
+                    *self.watch.lock().unwrap() = (true, crate::pay::now_ms(), tip);
                     return Ok(scan_txs(&j, &self.receive_address, memo, expected_unym));
                 }
                 Err(e) => last_err = e,
@@ -238,7 +261,7 @@ impl Nyx {
         let j: Value = res.json().await.map_err(|e| format!("non-JSON: {e}"))?;
         if !status.is_success() {
             let msg = j.get("message").and_then(|m| m.as_str()).unwrap_or("");
-            return Err(format!("{status}: {}", &msg[..msg.len().min(200)]));
+            return Err(format!("{status}: {}", msg.chars().take(200).collect::<String>()));
         }
         Ok(j)
     }

@@ -32,6 +32,10 @@ fn err<E: std::fmt::Display>(e: E) -> String {
 }
 
 /// Client → authority request.
+// The Spend variant carries a full `Payment` (large); boxing it would change the wire
+// (de)serialisation shape, and these are short-lived one-per-request values, so the size
+// spread is fine here.
+#[allow(clippy::large_enum_variant)]
 #[derive(Serialize, Deserialize)]
 pub enum FedRequest {
     /// Publish the federation's aggregated verification key + per-authority keys +
@@ -230,6 +234,20 @@ pub fn dispatch_enveloped(
     {
         Ok(FedRequest::Spend { payment, pay_info, spend_date }) => {
             handle_spend(authority, store, payment, pay_info, spend_date)
+        }
+        // M1: a key the quorum has caught double-spending (its ban is computed + persisted in
+        // `submit`) is locked out of withdrawing FRESH ticketbooks. Per-coin protection already
+        // refuses reused serials; this shuts the anti-griefing door the audit found inert.
+        Ok(FedRequest::Withdraw { user_pk, req }) => {
+            if store.is_blacklisted(&user_pk) {
+                FedResponse::Error {
+                    message: "blacklisted: this key was caught double-spending and may not withdraw".into(),
+                }
+            } else {
+                authority
+                    .handle(FedRequest::Withdraw { user_pk, req })
+                    .unwrap_or_else(|e| FedResponse::Error { message: e })
+            }
         }
         Ok(req) => authority
             .handle(req)

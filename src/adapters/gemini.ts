@@ -56,6 +56,10 @@ function toGemini(req: ChatRequest): {
         : {}),
       // Hard cap on thinking so it cannot exceed what the ceiling reserved.
       ...(req.thinkingBudget != null ? { thinkingConfig: { thinkingBudget: req.thinkingBudget } } : {}),
+      // Picture size — Gemini 3.x image models only (2.5 rejects imageConfig.imageSize).
+      ...(req.imageSize && req.model.includes("image") && !req.model.startsWith("gemini-2.5")
+        ? { imageConfig: { imageSize: req.imageSize } }
+        : {}),
     },
   };
 }

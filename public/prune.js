@@ -21,6 +21,8 @@ export const PRUNE_DEFAULTS = Object.freeze({
   whitespace: true, // collapse redundant whitespace (lossless)
   requestTrim: true, // strip leading/trailing filler from the user's prompt
   handover: true, // prune the same way when exporting a handover
+  ctxPairs: 4, // GUARANTEED memory floor: always send the last N complete Q&A pairs
+  //             verbatim, whatever topic-shift decides. 999 ≈ "keep everything".
 });
 
 // Stopwords in EN + DE — the app is German-facing but users mix languages. These
@@ -101,6 +103,11 @@ export function trimRequest(s) {
  */
 export function pruneMessages(messages, opts = PRUNE_DEFAULTS, cfg = {}) {
   const KEEP_RECENT_PAIRS = cfg.keepRecentPairs ?? 1; // last exchange as safety net
+  // Guaranteed memory floor: the last N complete pairs are ALWAYS sent verbatim,
+  // whatever the lexical topic-shift decides. This is the fix for "context gets
+  // lost" — lexical overlap can't see a semantic follow-up, so a hard recent floor
+  // carries the thread regardless. Topic-shift then only ADDS older related turns.
+  const MIN_RECENT = cfg.minRecentPairs ?? opts.ctxPairs ?? 0;
   const THRESHOLD = cfg.threshold ?? 0.08; // min overlap to keep an older turn
   if (!Array.isArray(messages) || messages.length === 0) return [];
   const msgs = messages.map((m) => ({ ...m, content: String(m.content ?? "") }));
@@ -156,6 +163,16 @@ export function pruneMessages(messages, opts = PRUNE_DEFAULTS, cfg = {}) {
     const anchor = pairs.filter((p) => p.length === 2).slice(-KEEP_RECENT_PAIRS).flat();
     if (anchor.length) {
       const keep = new Set([...kept, ...anchor]);
+      kept = prior.filter((m) => keep.has(m));
+    }
+  }
+
+  // Guaranteed recent floor: always include the last MIN_RECENT complete pairs,
+  // unioned with the topic-related turns above and re-ordered chronologically.
+  if (MIN_RECENT > 0) {
+    const floor = pairs.filter((p) => p.length === 2).slice(-MIN_RECENT).flat();
+    if (floor.length) {
+      const keep = new Set([...kept, ...floor]);
       kept = prior.filter((m) => keep.has(m));
     }
   }

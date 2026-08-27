@@ -40,6 +40,13 @@ targets:
       path: scrambleai_iOS/Info.plist
       properties:
         LSRequiresIPhoneOS: true
+        # Privacy usage descriptions MUST live here (not just in Info.plist) — xcodegen
+        # regenerates Info.plist from project.yml, so a key only in the plist gets wiped and
+        # the app crashes (TCC) the moment it touches the camera / photos / local network.
+        NSCameraUsageDescription: "Scans a migration QR code to move your account to this device. The camera is used only while you scan; nothing is recorded or sent."
+        NSPhotoLibraryAddUsageDescription: "Saves AI-generated images from your chats to your photo library. Nothing is ever read from it."
+        NSLocalNetworkUsageDescription: "Development builds load the UI from the dev server on your Mac. Release builds never use the local network."
+        NSFaceIDUsageDescription: "Face ID confirms it's you before your 24-word recovery phrase is shown on this device."
         UILaunchStoryboardName: LaunchScreen
         UIRequiredDeviceCapabilities: [arm64, metal]
         UISupportedInterfaceOrientations:
@@ -62,6 +69,10 @@ targets:
     settings:
       base:
         ENABLE_BITCODE: false
+        # Signing baked into project.yml so `xcodegen generate` / `tauri ios build` keep it
+        # (setting the team only in the Xcode UI gets wiped on the next regeneration).
+        DEVELOPMENT_TEAM: 8KS4A265N9
+        CODE_SIGN_STYLE: Automatic
         ARCHS: [arm64, x86_64]
         VALID_ARCHS: arm64  x86_64 
         LIBRARY_SEARCH_PATHS[arch=x86_64]: $(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)
@@ -84,7 +95,12 @@ targets:
       - sdk: UIKit.framework
       - sdk: WebKit.framework
     preBuildScripts:
-      - script: npm run -- tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths "${FRAMEWORK_SEARCH_PATHS:?}" --header-search-paths "${HEADER_SEARCH_PATHS:?}" --gcc-preprocessor-definitions "${GCC_PREPROCESSOR_DEFINITIONS:-}" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}
+      - script: |
+          # Xcode's build env finds the old Intel node (/usr/local/bin, x86_64) first,
+          # whose @tauri-apps/cli looks for cli-darwin-x64 (not installed) → MODULE_NOT_FOUND.
+          # Force the arm64 Homebrew node (+ cargo) so the native CLI binary resolves.
+          export PATH="/opt/homebrew/bin:$HOME/.cargo/bin:$PATH"
+          npm run -- tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths "${FRAMEWORK_SEARCH_PATHS:?}" --header-search-paths "${HEADER_SEARCH_PATHS:?}" --gcc-preprocessor-definitions "${GCC_PREPROCESSOR_DEFINITIONS:-}" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}
         name: Build Rust Code
         basedOnDependencyAnalysis: false
         outputFiles:

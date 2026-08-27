@@ -17,6 +17,10 @@ use serde_json::{json, Value};
 const TTL: Duration = Duration::from_secs(3 * 60);
 const MAX_CONCURRENT_UPLOADS: usize = 12;
 const MAX_STAGED_BYTES: usize = 96 * 1024 * 1024;
+// Per-chunk ceiling on the *encoded* base64 string, enforced BEFORE decoding so an
+// oversized chunk is refused without ever being allocated/decoded (M-srv-2). Base64
+// inflates ~4/3, so 8 MiB of payload ≈ 11 MiB of text — generous for a vision tile.
+const MAX_CHUNK_B64_LEN: usize = 12 * 1024 * 1024;
 
 struct Upload {
     mime_type: String,
@@ -53,7 +57,13 @@ impl UploadStore {
             .and_then(|m| m.as_str())
             .unwrap_or("application/octet-stream")
             .to_string();
-        if self.uploads.len() >= MAX_CONCURRENT_UPLOADS || self.staged + total > MAX_STAGED_BYTES {
+        // A declared size at/above the whole budget can never succeed — reject it
+        // directly. saturating_add then guards against a u64→usize `total` chosen to
+        // wrap the sum small (L-srv-1: release builds have no overflow-checks).
+        if total > MAX_STAGED_BYTES
+            || self.uploads.len() >= MAX_CONCURRENT_UPLOADS
+            || self.staged.saturating_add(total) > MAX_STAGED_BYTES
+        {
             return err(id, "upload capacity is exhausted — try again shortly");
         }
         let upload_id = rand_hex(16);
@@ -70,7 +80,13 @@ impl UploadStore {
             return err(id, "unknown or expired uploadId");
         };
         let seq = v.get("seq").and_then(|s| s.as_u64()).unwrap_or(0);
-        let Ok(bytes) = B64.decode(v.get("data").and_then(|d| d.as_str()).unwrap_or("")) else {
+        let data = v.get("data").and_then(|d| d.as_str()).unwrap_or("");
+        // Bound the encoded text BEFORE decoding, so an oversized chunk is refused
+        // without allocating its decoded form (M-srv-2).
+        if data.len() > MAX_CHUNK_B64_LEN {
+            return err(id, "chunk is too large");
+        }
+        let Ok(bytes) = B64.decode(data) else {
             return err(id, "chunk is not valid base64");
         };
         // Idempotent: a retried chunk (mixnet loss) replaces rather than double-counts.
@@ -216,6 +232,37 @@ mod tests {
         let r = chunk(&mut s, &uid, 0, b"ab"); // retry replaces, not double-counts
         assert_eq!(r.get("received").and_then(|x| x.as_u64()), Some(2));
         let r = chunk(&mut s, &uid, 1, b"xyz"); // 2 + 3 > 4 declared
+        assert_eq!(r.get("kind").and_then(|k| k.as_str()), Some("error"));
+    }
+
+    #[test]
+    fn oversized_declared_size_is_refused_without_overflow() {
+        // L-srv-1: a totalBytes chosen to wrap `staged + total` small must still be
+        // refused, and the huge declared size must be rejected outright — no panic.
+        let mut s = UploadStore::default();
+        let r: Value = serde_json::from_slice(&s.handle(
+            json!({"kind":"upload.begin","id":"b1","mimeType":"image/png","totalBytes": u64::MAX})
+                .to_string()
+                .as_bytes(),
+        ))
+        .unwrap();
+        assert_eq!(r.get("kind").and_then(|k| k.as_str()), Some("error"));
+        assert_eq!(s.staged, 0);
+    }
+
+    #[test]
+    fn chunk_larger_than_the_ceiling_is_refused_before_decode() {
+        // M-srv-2: an encoded chunk past MAX_CHUNK_B64_LEN is rejected on its length,
+        // never decoded/allocated.
+        let mut s = UploadStore::default();
+        let uid = begin(&mut s, 4);
+        let huge = "A".repeat(MAX_CHUNK_B64_LEN + 1);
+        let r: Value = serde_json::from_slice(&s.handle(
+            json!({"kind":"upload.chunk","id":"c1","uploadId":uid,"seq":0,"data":huge})
+                .to_string()
+                .as_bytes(),
+        ))
+        .unwrap();
         assert_eq!(r.get("kind").and_then(|k| k.as_str()), Some("error"));
     }
 

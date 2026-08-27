@@ -92,13 +92,34 @@ impl Purse {
     }
     /// Coins still available to spend = total minus the wallet's advanced counter
     /// (`tickets_spent`, the trailing 8 big-endian bytes of the wallet serialisation).
+    ///
+    /// M-crypto-2 — FAIL CLOSED on any ambiguity. This counter is what stops an honest
+    /// client from re-spending already-spent coins; a misread that *over*-reports the
+    /// remaining balance makes the client re-spend, which the quorum proves as a
+    /// double-spend and bans the (innocent) user for. So every uncertain path here
+    /// returns 0 ("treat as fully spent") — an under-report only makes the purse look
+    /// empty and quietly unused, never triggers a spend. The two guards:
+    ///   • a serialisation shorter than 8 bytes (would otherwise panic on the slice);
+    ///   • a decoded counter that EXCEEDS `total_coins` — impossible for an honest
+    ///     wallet, so a strong signal the trailing-8-bytes assumption no longer holds
+    ///     (e.g. an upstream `nym-compact-ecash` layout change or a mangled wallet).
+    /// The residual gap the audit notes — a layout change that still leaves 8 trailing
+    /// bytes decoding to a plausible *small* number — can't be detected from here; the
+    /// real fix is an explicit upstream counter API (tracked in the security roadmap).
     pub fn remaining_coins(&self) -> u64 {
         let bytes = self.wallet.to_bytes();
         let n = bytes.len();
-        let spent = <[u8; 8]>::try_from(&bytes[n - 8..])
-            .map(u64::from_be_bytes)
-            .unwrap_or(0);
-        self.total_coins.saturating_sub(spent)
+        if n < 8 {
+            return 0;
+        }
+        let spent = match <[u8; 8]>::try_from(&bytes[n - 8..]) {
+            Ok(arr) => u64::from_be_bytes(arr),
+            Err(_) => return 0,
+        };
+        if spent > self.total_coins {
+            return 0;
+        }
+        self.total_coins - spent
     }
     pub fn verification_key(&self) -> &VerificationKeyAuth {
         &self.vk

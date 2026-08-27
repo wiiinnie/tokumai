@@ -34,6 +34,8 @@ export interface ChatRequest {
    * or a client could unbound its own thinking and outrun what it reserved.
    */
   thinkingBudget?: number;
+  /** Requested picture size for Gemini 3.x image models: "512" | "1K" | "2K" | "4K". */
+  imageSize?: string;
 }
 
 /** An image a model produced, exactly as the provider handed it over. */
