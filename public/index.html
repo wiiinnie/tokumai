@@ -37,6 +37,8 @@
     --bone:#ECE6DC; --muted:#9C938A; --signal:#CBA14E; --mix:#8AA06B; --rust:#C15A43;
     --radius:10px; --mono:'JetBrains Mono',ui-monospace,monospace; --body:'Hanken Grotesk',system-ui,sans-serif;
     --display:'Fraunces',Georgia,serif;
+    /* translucent bands behind the model bar / composer — a tint of the page, never a fixed dark */
+    --band-top:rgba(28,25,23,.5); --band-bottom:rgba(18,15,12,.6);
   }
   /* ---- Appearance themes (Settings). data-theme is set on <html> before paint; default B. ---- */
   :root[data-theme="A"]{ /* In-app warm */
@@ -56,9 +58,17 @@
   }
   :root[data-theme="F"]{ /* Nordic frost (light) */
     --ink:#EDF1F4; --surface:#FFFFFF; --surface-2:#F1F5F7; --line:#DBE3E9;
-    --bone:#1B2A33; --muted:#647581; --signal:#3A7C90; --mix:#4C9A8E; --rust:#C15A43;
+    --bone:#1B2A33; --muted:#586975; --signal:#2F6E82; --mix:#357C70; --rust:#B8503A;
+    --band-top:rgba(255,255,255,.55); --band-bottom:rgba(255,255,255,.65);
     --mono:'JetBrains Mono',ui-monospace,monospace; --body:'Inter',system-ui,sans-serif; --display:'Space Grotesk',system-ui,sans-serif;
   }
+  /* Light theme: the fine print was tuned for dark backgrounds (low opacity on a muted
+     grey) — lift it just enough to be legible, same size and placement. */
+  :root[data-theme="F"] .composer .foot .l .ver{opacity:1}
+  :root[data-theme="F"] .catrow .chev,:root[data-theme="F"] .tut-hint{opacity:.85}
+  :root[data-theme="F"] .costaudit{opacity:1}
+  :root[data-theme="F"] .sizenote{opacity:.85}
+  :root[data-theme="F"] .scrim{background:rgba(27,42,51,.45)}
   :root[data-theme="F"] body{ background:
       radial-gradient(1000px 520px at 82% -10%, rgba(58,124,144,.08), transparent 60%),
       radial-gradient(820px 440px at -8% 110%, rgba(76,154,142,.06), transparent 55%), var(--ink); }
@@ -137,7 +147,7 @@
     border:2px dashed var(--mix);border-radius:16px;background:rgba(38,34,32,.85);color:var(--bone);text-align:center}
   .dropz .dropcard .ic{font-size:34px;color:var(--mix);line-height:1}
   .dropz .dropcard small{font-family:var(--mono);font-size:10.5px;color:var(--muted)}
-  .topbar{border-bottom:1px solid var(--line);padding:12px 20px;display:flex;align-items:center;gap:18px;flex:0 0 auto;background:rgba(28,25,23,.5)}
+  .topbar{border-bottom:1px solid var(--line);padding:12px 20px;display:flex;align-items:center;gap:18px;flex:0 0 auto;background:var(--band-top)}
   .model{position:relative}
   .model .sel{display:flex;align-items:center;gap:10px;background:var(--surface-2);border:1px solid var(--line);
     border-radius:var(--radius);padding:8px 12px;cursor:pointer;transition:border-color .15s}
@@ -413,7 +423,7 @@
   .sovl.done .sic{color:var(--signal);border-color:var(--signal);background:rgba(203,161,78,.18)}
   @media (prefers-reduced-motion:reduce){.genimg img,.sovl{transition:opacity .16s ease}}
   @keyframes blink{50%{opacity:0}}
-  .composer{position:relative;flex:0 0 auto;border-top:1px solid var(--line);padding:16px 24px 20px;background:rgba(18,15,12,.6)}
+  .composer{position:relative;flex:0 0 auto;border-top:1px solid var(--line);padding:16px 24px 20px;background:var(--band-bottom)}
   /* live-data nudge — appears above the input when a prompt looks time-sensitive */
   .nudge{display:flex;align-items:center;gap:12px;padding:11px 13px;margin-bottom:10px;
     border:1px solid color-mix(in srgb,var(--signal) 42%,var(--line));border-radius:12px;
