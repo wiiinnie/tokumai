@@ -866,6 +866,27 @@ pub fn gemini_trains_on_input() -> bool {
     !matches!(gemini_api_key(), Ok((_, "MAINNET")))
 }
 
+/// Human-readable explanation for an EMPTY Gemini answer, built from its finish / block
+/// reason. `None` for a plain STOP with nothing to say (nothing to explain). The text
+/// starts with "Declined by Google" — the app recognises that prefix and styles it.
+pub fn decline_message(finish: Option<&str>, block: Option<&str>, image_model: bool) -> Option<String> {
+    let reason = block.or(finish)?;
+    let why = match reason {
+        "IMAGE_SAFETY" | "IMAGE_PROHIBITED_CONTENT" | "IMAGE_OTHER" =>
+            "its image models don't depict recognisable real people or restricted content. Describe a fictional character or leave the name out, then try again",
+        "IMAGE_RECITATION" | "RECITATION" =>
+            "the result would reproduce protected material. Rephrase the request",
+        "SAFETY" | "PROHIBITED_CONTENT" | "BLOCKLIST" | "SPII" | "OTHER" =>
+            "the request tripped its content policy. Rephrase it and try again",
+        "MAX_TOKENS" =>
+            "the reply ran out of output budget while thinking. Lower the reasoning depth or ask for something shorter",
+        "STOP" => return None,
+        _ => "no content came back",
+    };
+    let billed = if image_model { "Only the model's reasoning was billed — no picture." } else { "Only the tokens it used were billed." };
+    Some(format!("Declined by Google ({reason}): {why}. {billed}"))
+}
+
 async fn gemini(
     model: &str,
     messages: &Value,
@@ -911,7 +932,7 @@ async fn gemini(
     }
 
     let parts = j.pointer("/candidates/0/content/parts").and_then(|p| p.as_array());
-    let text = parts
+    let mut text = parts
         .map(|ps| {
             ps.iter()
                 .filter_map(|p| p.get("text").and_then(|t| t.as_str()))
@@ -936,6 +957,19 @@ async fn gemini(
                 .collect()
         })
         .unwrap_or_default();
+    // Google can answer with NO parts at all — a refused picture (recognisable real
+    // people, safety), a blocked prompt, or a thinking budget that ate the whole output.
+    // The reason arrives as candidates[0].finishReason / promptFeedback.blockReason;
+    // surface it as the reply text so the user learns what to change instead of
+    // seeing "(the model returned no content)".
+    if text.trim().is_empty() && imgs.is_empty() {
+        let finish = j.pointer("/candidates/0/finishReason").and_then(|f| f.as_str());
+        let block = j.pointer("/promptFeedback/blockReason").and_then(|f| f.as_str());
+        if let Some(msg) = decline_message(finish, block, model.contains("image")) {
+            eprintln!("scrai-server: gemini {model} returned no content (finish={finish:?} block={block:?})");
+            text = msg;
+        }
+    }
     let images: Images = (!imgs.is_empty()).then(|| json!(imgs));
     let mut usage = gemini_usage(j.get("usageMetadata").unwrap_or(&Value::Null), !imgs.is_empty());
     // SAFETY (never-lose): if Google returned NO usageMetadata (edge / partial error) but we
@@ -1109,6 +1143,21 @@ fn modality_tokens(details: Option<&Value>, modality: &str) -> u64 {
 // ---------------------------------------------------------------------------
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn empty_gemini_answers_explain_themselves() {
+        use super::decline_message;
+        let m = decline_message(Some("IMAGE_SAFETY"), None, true).unwrap();
+        assert!(m.starts_with("Declined by Google (IMAGE_SAFETY)"));
+        assert!(m.contains("real people") && m.contains("no picture"));
+        // a blocked prompt wins over the candidate's finish reason
+        let m = decline_message(Some("STOP"), Some("PROHIBITED_CONTENT"), false).unwrap();
+        assert!(m.contains("PROHIBITED_CONTENT") && m.contains("content policy") && !m.contains("picture"));
+        assert!(decline_message(Some("MAX_TOKENS"), None, false).unwrap().contains("reasoning depth"));
+        // a normal stop with nothing to say is not a decline
+        assert!(decline_message(Some("STOP"), None, true).is_none());
+        assert!(decline_message(None, None, true).is_none());
+    }
+
     use super::*;
     use scrai_core::billing::{ModelPrice, Tier};
 

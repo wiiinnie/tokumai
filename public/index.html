@@ -337,6 +337,7 @@
   .costaudit{font-family:var(--mono);font-size:10px;color:var(--signal);opacity:.9;margin-top:8px;letter-spacing:.02em}
   .costaudit.bad{color:var(--rust);opacity:1;font-weight:700}
   .sizenote{font-family:var(--mono);font-size:11px;color:var(--bone);opacity:.7;margin-top:8px;letter-spacing:.02em}
+  .sizenote.rust{color:var(--rust);opacity:1;font-size:12px;line-height:1.5}
   .msg.err .body{color:var(--rust)}
   .msg .body a.alink{color:var(--signal);text-decoration:underline;text-underline-offset:2px;word-break:break-all;cursor:pointer}
   .retrybtn{display:inline-flex;align-items:center;gap:6px;margin-top:10px;padding:6px 12px;border-radius:8px;
@@ -1754,7 +1755,7 @@
     t.innerHTML=`<div class="wrap">`+messages.map((m,mi)=>`
       <div class="msg ${m.role}">
         <div class="who">${m.role==='you'?'you':(m.role==='err'?'error':'scrai')}${m.role==='ai'&&m.model?`<span class="viamodel">${esc(m.model)}</span>`:''}</div>
-        <div class="body">${bodyHtml(m,mi)}${(m.role==='ai'&&m.note)?`<div class="sizenote">${esc(m.note)}</div>`:''}${(devCost&&m.role==='ai'&&m.audit)?auditDiv(m.audit):''}${(devCost&&m.role==='you'&&m.xfer)?xferDiv(m.xfer):''}${(m.role==='err'&&m.retry)?`<button class="retrybtn" data-click="retryMsg" data-args="${mi}">↻ Retry</button>`:''}</div>
+        <div class="body">${bodyHtml(m,mi)}${(m.role==='ai'&&m.note)?`<div class="sizenote${m.noteKind?' '+m.noteKind:''}">${esc(m.note)}</div>`:''}${(devCost&&m.role==='ai'&&m.audit)?auditDiv(m.audit):''}${(devCost&&m.role==='you'&&m.xfer)?xferDiv(m.xfer):''}${(m.role==='err'&&m.retry)?`<button class="retrybtn" data-click="retryMsg" data-args="${mi}">↻ Retry</button>`:''}</div>
       </div>`).join("")+`</div>`;
     if(pinQuestion){ pinLastQuestion(t); }
     else { t.style.paddingBottom=""; setTop(t, followStream ? t.scrollHeight : prevTop); }
@@ -2790,6 +2791,9 @@
         const drawn = evt.usage && evt.usage.imageSize;
         ai.audit = bf ? { cost: bf.costScrai, charge: bf.priceScrai, ...timing } : { ...timing };
         if(drawn) ai.audit.size = drawn;
+        // An empty Gemini answer arrives as "Declined by Google (REASON): …" from the server
+        // (finishReason / blockReason translated) — show it as a note, not as model prose.
+        if(/^Declined by Google \(/.test(ai.text||"")){ ai.note = ai.text; ai.noteKind = "rust"; ai.text = ""; }
         // Server clamps an unsupported size to the model's largest (Lite: 1K) instead of
         // failing — say so, and that the bill is for the size actually drawn.
         if(drawn && (ai.images&&ai.images.length) && drawn!==reqSize) ai.note = `Drawn at ${drawn} — ${reqSize} isn't supported by ${reqLabel}. Billed at ${drawn}.`;
