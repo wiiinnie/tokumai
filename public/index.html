@@ -361,6 +361,11 @@
   .mpticks span:last-child{color:var(--mix)}
   .cursor{display:inline-block;width:7px;height:15px;background:var(--mix);vertical-align:-2px;margin-left:2px;animation:blink 1s steps(2) infinite}
   .mixphase{font-family:var(--mono);font-size:12.5px;letter-spacing:.02em;color:var(--mix);opacity:.9}
+  /* picture download: label + bar, replaces the held "Thinking…" once chunks flow */
+  .dlprog{display:block;max-width:460px;margin-top:2px}
+  .dlprog .dllbl{font-family:var(--mono);font-size:12.5px;letter-spacing:.02em;color:var(--mix);opacity:.9;margin-bottom:7px}
+  .dlprog .dlbar{height:5px;border-radius:3px;background:var(--surface-2);overflow:hidden}
+  .dlprog .dlbar>i{display:block;height:100%;background:var(--mix);width:0;transition:width .25s}
   /* white-space:normal + font-size:0 stop the answer body's inherited `pre-wrap`
      from rendering the image markup's own newlines/indentation as grey bands
      above and below the picture. */
@@ -1751,7 +1756,7 @@
   }
   function bodyHtml(m,mi){
     return linkify(esc(m.text))
-      + (m.streaming?(m.text?'<span class="cursor"></span>':'<span id="mixphase" class="mixphase">'+esc(mixShown)+'<span class="cursor"></span></span>'):'')
+      + (m.streaming?(m.text?'<span class="cursor"></span>':'<span id="mixphase" class="mixphase">'+(dlProg?dlProgHTML(dlProg):esc(mixShown)+'<span class="cursor"></span>')+'</span>'):'')
       + (m.att?attHtml(m.att,m.uploading):(m.uploading?uploadHtml(m.uploading):''))
       + (m.images&&m.images.length?imagesHtml(m.images,mi):'');
   }
@@ -2047,6 +2052,18 @@
     }, MIX_TICK);
   }
   function stopMixPhase(){ if(mixTimer){ clearInterval(mixTimer); mixTimer=null; } mixShown=""; mixStep=-1; }
+  // Picture download progress ({done,total} chunks) — lives here (not only in the DOM) so a
+  // re-render mid-download draws the bar again instead of a stale phase word.
+  let dlProg=null;
+  function dlProgHTML(d){
+    const pct=d.total?Math.round(d.done/d.total*100):0;
+    return `<span class="dlprog"><span class="dllbl">Downloading picture · ${d.done}/${d.total} chunks · ${pct}%</span><span class="dlbar"><i style="width:${pct}%"></i></span></span>`;
+  }
+  function setDlProg(d){
+    dlProg=d;
+    const node=document.getElementById("mixphase");
+    if(node) node.innerHTML=dlProgHTML(d);
+  }
 
   // ---------- sessions (Vault-backed) ----------
   async function refreshSessions(){ sessions = await Vault.list(); renderSessions(); }
@@ -2722,6 +2739,7 @@
     // The size we ASKED for — compared with usage.imageSize (what was actually drawn) so a
     // downgrade (2K on Lite → 1K) is told to the user, not silently swallowed.
     const reqSize = imageSize(), reqLabel = $("mName").textContent || currentModel;
+    dlProg=null;
     Backend.chat({ model: currentModel, messages: sendMessages, maxTokens: 4096, free: isFree, live: useLive, thinkingBudget: thinkingBudget(), bigReply: modelKind === "image", retry: isRetry, imageSize: reqSize }, {
       // Real lifecycle signals drive the status line: request fully sent →
       // "Thinking…", which holds until the answer itself takes over.
@@ -2734,13 +2752,13 @@
           // also the true first-byte moment of an image reply.
           if(!tFirst) tFirst=performance.now();
           stopMixPhase();
-          const node=document.getElementById("mixphase");
-          if(node) node.innerHTML=esc(`Downloading picture... ${info.done}/${info.total} chunks`)+'<span class="cursor"></span>';
+          setDlProg({ done:+info.done||0, total:+info.total||0 });
         }
       },
       onDelta:(delta)=>{ if(!tFirst) tFirst=performance.now(); stopMixPhase(); ai.text+=delta; updateStreaming(); },
       onDone: async (evt)=>{
         stopMixPhase();
+        dlProg=null;
         ai.streaming=false; busy=false;
         if(!tFirst) tFirst=performance.now();                       // image reply: no deltas
         if(typeof evt.balance==="number"){ balance=evt.balance; if(typeof evt.held==="number") held=evt.held; renderBal(); }
@@ -2762,6 +2780,7 @@
       },
       onError: async (err)=>{
         stopMixPhase();
+        dlProg=null;
         ai.streaming=false; busy=false;
         // Self-heal: if the provider says this model is gone (deprecated / not
         // available to this key), drop it from the picker and switch to a working
