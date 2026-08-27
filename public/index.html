@@ -2718,7 +2718,19 @@
     Backend.chat({ model: currentModel, messages: sendMessages, maxTokens: 4096, free: isFree, live: useLive, thinkingBudget: thinkingBudget(), bigReply: modelKind === "image", retry: isRetry, imageSize: reqSize }, {
       // Real lifecycle signals drive the status line: request fully sent →
       // "Thinking…", which holds until the answer itself takes over.
-      onPhase:(p)=>{ if(p==="sent"){ setMixPhase(1); tSent=performance.now(); } else if(p==="redeeming"){ setStatus("session credit low — redeeming held credit…"); } },
+      onPhase:(p,info)=>{
+        if(p==="sent"){ setMixPhase(1); tSent=performance.now(); }
+        else if(p==="redeeming"){ setStatus("session credit low — redeeming held credit…"); }
+        else if(p==="image"&&info){
+          // The picture was generated (and charged) — now its chunks trickle through the
+          // mixnet. Replace the held "Thinking…" with live progress; the first event is
+          // also the true first-byte moment of an image reply.
+          if(!tFirst) tFirst=performance.now();
+          stopMixPhase();
+          const node=document.getElementById("mixphase");
+          if(node) node.innerHTML=esc(`Downloading picture... ${info.done}/${info.total} chunks`)+'<span class="cursor"></span>';
+        }
+      },
       onDelta:(delta)=>{ if(!tFirst) tFirst=performance.now(); stopMixPhase(); ai.text+=delta; updateStreaming(); },
       onDone: async (evt)=>{
         stopMixPhase();

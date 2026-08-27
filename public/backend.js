@@ -180,6 +180,9 @@ const tauriBackend = (invoke) => ({
         unlisten.push(await ev.listen("chat-sent", () => onPhase("sent")));
         // Rust auto-redeems held credit when the session runs short mid-request.
         unlisten.push(await ev.listen("chat-redeeming", () => onPhase("redeeming")));
+        // Big generated pictures are fetched chunk by chunk after the reply lands;
+        // Rust emits {done, total} per chunk so the UI can show real download progress.
+        unlisten.push(await ev.listen("image-progress", (e) => onPhase("image", e.payload)));
       }
       const r = await invoke("chat", { model: body.model, messages: body.messages, maxTokens: body.maxTokens, free: !!body.free, live: !!body.live, thinkingBudget: (typeof body.thinkingBudget==="number"?body.thinkingBudget:null), bigReply: !!body.bigReply, retry: !!body.retry, imageSize: (typeof body.imageSize==="string"?body.imageSize:null) });
       if (onPhase) onPhase("receiving");
