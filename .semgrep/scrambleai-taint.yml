@@ -1,0 +1,62 @@
+# Taint rules for the webview (Semgrep OSS = intraprocedural: source and sink must sit in
+# the same function). Sources are everything that arrives from outside the device — server
+# replies, model text, file names, clipboard/QR input. Sanitizers are the escaping helpers.
+rules:
+  - id: scrai-taint-untrusted-to-html
+    mode: taint
+    message: >-
+      Untrusted data ($SOURCE) reaches an HTML sink without esc()/escAttr()/safeHttpUrl().
+      Server replies, model answers, file names and pasted text are attacker-controlled;
+      an injection here runs with wallet access (audit C1: XSS → seed).
+    severity: ERROR
+    languages: [javascript]
+    pattern-sources:
+      # server / backend replies and their fields
+      - pattern: await Backend.$M(...)
+      - pattern: Backend.$M(...)
+      - pattern: evt.$F
+      - pattern: r.$F
+      - pattern: resp.$F
+      - pattern: reply.$F
+      - pattern: inv.$F
+      - pattern: err
+      - pattern: e.message
+      # model catalog + chat content
+      - pattern: m.content
+      - pattern: m.text
+      - pattern: m.label
+      - pattern: m.model
+      - pattern: m.vendor
+      - pattern: s.title
+      # local file / camera / clipboard input
+      - pattern: file.name
+      - pattern: att.name
+      - pattern: att.mimeType
+      - pattern: navigator.clipboard.readText()
+    pattern-sanitizers:
+      - pattern: esc(...)
+      - pattern: escAttr(...)
+      - pattern: safeHttpUrl(...)
+      - pattern: encodeURIComponent(...)
+      - pattern: Number(...)
+      - pattern: parseInt(...)
+      - pattern: parseFloat(...)
+      - pattern: formatScrai(...)
+      - pattern: formatTokens(...)
+      - pattern: scraiLine(...)
+      - pattern: fmtCountdown(...)
+      - pattern: $X.toFixed(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $EL.innerHTML = $SINK
+              - pattern: $EL.outerHTML = $SINK
+              - pattern: $EL.insertAdjacentHTML($POS, $SINK)
+              - pattern: document.write($SINK)
+          - focus-metavariable: $SINK
+      - patterns:
+          - pattern: $EL.setAttribute("$A", $SINK)
+          - metavariable-regex:
+              metavariable: $A
+              regex: ^(src|href|srcdoc|style|on\w+)$
+          - focus-metavariable: $SINK

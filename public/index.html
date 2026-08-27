@@ -123,7 +123,7 @@
   .session:hover .exp{opacity:1}
   .session .exp:hover{color:var(--signal)}
   .empty-rail{padding:14px;font-family:var(--mono);font-size:10.5px;color:var(--muted);line-height:1.5}
-  .ticket{border-top:1px solid var(--line);padding:14px;background:rgba(18,15,12,.4)}
+  .ticket{border-top:1px solid var(--line);padding:14px;background:var(--band-bottom)}
   .ticket .row{display:flex;align-items:baseline;justify-content:space-between}
   .ticket .lbl{font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
   .ticket .bal{font-family:var(--display);font-weight:700;font-size:22px;color:var(--signal)}
@@ -1505,6 +1505,7 @@
       { label:"Pollinations.ai (public, keyless service)", url:"https://pollinations.ai/" } ] },
   };
   // Open external links in the OS browser (the webview won't follow target=_blank).
+  // nosemgrep: scrai-js-window-open -- the app path is open_external (http/https only, OS browser); window.open is the dev-bridge fallback
   function openLink(url){ try{ Backend.openExternal(url); }catch(_){ try{ window.open(url,"_blank","noopener"); }catch(__){} } return false; }
   // Consent is SESSION-ONLY and never persisted: the set starts empty on every app
   // launch, so provider terms must be re-accepted after each restart (and on every
@@ -1524,6 +1525,7 @@
     const links = t.links.length
       ? t.links.map(l=>`<li><a href="${escAttr(safeHttpUrl(l.url))}" data-click="openLink" data-click-pass="href" data-prevent="1">${esc(l.label)} ↗</a></li>`).join("")
       : `<li class="hint">This provider publishes no formal terms page.</li>`;
+    // nosemgrep: scrai-taint-untrusted-to-html -- reviewed 2026-08-27: every interpolation is esc()/escAttr()/safeHttpUrl()-wrapped (links built inside .map(), which taint can't see through)
     $("termsBody").innerHTML = `
       <p>You're about to use <b>${esc(m.label||m.model)}</b> (<code>${esc(m.model)}</code>), served by
       <b>${esc(t.name)}</b>. ScrambleAI's mixnet hides <i>who</i> is asking, but the prompt itself is
@@ -4208,6 +4210,7 @@
       </div>`;
     }).join("") || '<div class="hint">No payment method returned — is this coin’s gateway configured on the server?</div>';
     const isNymInv = onchain.some(o=>/nym/i.test(o.method||""));
+    // nosemgrep: scrai-taint-untrusted-to-html -- reviewed 2026-08-27: destination/memo/amount are esc()-wrapped in `blocks`; o.qr is an SVG the app renders locally (qrcode crate), the server only sends address + memo
     $("payPanel").innerHTML = `<div class="paypanel">
       <div class="paylead">Pay $${inv.amountUsd.toFixed(2)} · ${formatScrai(inv.amountScrai)} SCRAI · expires <span id="payExpiry">…</span></div>
       ${blocks}

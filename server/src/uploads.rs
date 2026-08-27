@@ -142,7 +142,7 @@ impl UploadStore {
                     }
                     Some(_) => {}
                 }
-                let u = self.uploads.remove(&uid).expect("checked above");
+                let u = self.uploads.remove(&uid).expect("checked above"); // nosemgrep: scrai-unwrap-in-server-hot-path -- proven: existence checked immediately above, no await in between
                 self.staged -= u.received.min(self.staged);
                 let mut seqs: Vec<&u64> = u.chunks.keys().collect();
                 seqs.sort();

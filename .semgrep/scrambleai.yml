@@ -1,0 +1,133 @@
+# ScrambleAI project invariants — things no generic ruleset knows about.
+# Run: semgrep scan --metrics=off --config .semgrep/scrambleai.yml <paths>
+# (also loaded by scripts/semgrep.sh together with the public security packs)
+rules:
+
+  # ---------------------------------------------------------------- secrets in logs
+  - id: scrai-secret-in-log
+    message: >-
+      A value that looks like key material ($X) is being printed or logged. Seeds, mnemonics,
+      session secrets and provider keys must never reach stdout/stderr/log files.
+    severity: ERROR
+    languages: [rust]
+    patterns:
+      - pattern-either:
+          - pattern: println!($...ARGS, $X, $...REST)
+          - pattern: println!($...ARGS, $X)
+          - pattern: eprintln!($...ARGS, $X, $...REST)
+          - pattern: eprintln!($...ARGS, $X)
+          - pattern: log::info!($...ARGS, $X, $...REST)
+          - pattern: log::info!($...ARGS, $X)
+          - pattern: log::debug!($...ARGS, $X, $...REST)
+          - pattern: log::debug!($...ARGS, $X)
+          - pattern: log::error!($...ARGS, $X, $...REST)
+          - pattern: log::error!($...ARGS, $X)
+          - pattern: log::warn!($...ARGS, $X, $...REST)
+          - pattern: log::warn!($...ARGS, $X)
+      - metavariable-regex:
+          metavariable: $X
+          regex: (?i).*(mnemonic|seed|secret|api_key|apikey|private_key|passphrase|phrase|sk\.|\.sk\b).*
+
+  # ---------------------------------------------------------------- fake payments only in pay.rs
+  - id: scrai-fake-payments-outside-pay
+    message: >-
+      SCRAI_FAKE_PAYMENTS is read outside server/src/pay.rs. The fake rail must have exactly one
+      gate (Rail::from_env) so the real-money interlocks stay in one place.
+    severity: ERROR
+    languages: [rust]
+    pattern: std::env::var("SCRAI_FAKE_PAYMENTS")
+    paths:
+      exclude: [server/src/pay.rs]
+
+  # ---------------------------------------------------------------- no clearnet from the app
+  - id: scrai-clearnet-in-client
+    message: >-
+      HTTP client usage in the Tauri app. Application traffic must ride the mixnet; the only
+      permitted clearnet request is the one gateway-directory fetch in nym.rs (documented there).
+    severity: ERROR
+    languages: [rust]
+    pattern-either:
+      - pattern: reqwest::get(...)
+      - pattern: reqwest::Client::new()
+      - pattern: reqwest::Client::builder()
+      - pattern: ureq::$F(...)
+    paths:
+      include: [src-tauri/src]
+      exclude: [src-tauri/src/nym.rs]
+
+  # ---------------------------------------------------------------- server dispatch loop must not panic
+  - id: scrai-unwrap-in-server-hot-path
+    message: >-
+      unwrap()/expect() on the server request path. A panic here takes the whole dispatch loop
+      (and every client) down; use unwrap_or / ? / explicit error replies. Boot-time code and
+      tests may use them — mark deliberate ones with `// nosemgrep: scrai-unwrap-in-server-hot-path`.
+    severity: WARNING
+    languages: [rust]
+    patterns:
+      - pattern-either:
+          - pattern: $X.unwrap()
+          - pattern: $X.expect($MSG)
+      # test modules may panic freely
+      - pattern-not-inside: |
+          mod tests { ... }
+      - pattern-not-inside: |
+          mod test { ... }
+    paths:
+      include: [server/src/chat.rs, server/src/pay.rs, server/src/nyx.rs, server/src/replies.rs, server/src/uploads.rs, server/src/catalog.rs, server/src/federation.rs]
+
+  # ---------------------------------------------------------------- unsafe only where FFI lives
+  - id: scrai-unsafe-outside-ffi
+    message: >-
+      `unsafe` outside the native-FFI modules (ocr.rs, the objc2 picker in lib.rs). Keep unsafe
+      confined to the files that already carry the safety comments.
+    severity: WARNING
+    languages: [rust]
+    pattern: unsafe { ... }
+    paths:
+      include: [core/src, server/src, src-tauri/src]
+      exclude: [src-tauri/src/ocr.rs, src-tauri/src/lib.rs]
+
+  # ---------------------------------------------------------------- webview: dangerous sinks
+  - id: scrai-js-dangerous-sink
+    message: >-
+      eval / Function / document.write in the webview. A script-injection here reaches the wallet
+      (C1 in the 2026-08-20 audit: XSS → seed). Render with esc()/escAttr() and never evaluate strings.
+    severity: ERROR
+    languages: [javascript]
+    pattern-either:
+      - pattern: eval(...)
+      - pattern: new Function(...)
+      - pattern: document.write(...)
+      - pattern: document.writeln(...)
+      - pattern: setTimeout("...", ...)
+      - pattern: setInterval("...", ...)
+
+  - id: scrai-js-html-sink-with-raw-interpolation
+    message: >-
+      HTML sink built from a template literal whose interpolation is not wrapped in esc()/escAttr()/
+      safeHttpUrl(). Every value that comes from a server reply, a model answer, a file name or the
+      clipboard must be escaped before it is rendered as HTML. Advisory (INFO): the taint rule in
+      scrambleai-taint.yml is the blocking one; this lists every sink worth a second look.
+    severity: INFO
+    languages: [javascript]
+    patterns:
+      - pattern-either:
+          - pattern: $EL.innerHTML = $TPL
+          - pattern: $EL.outerHTML = $TPL
+          - pattern: $EL.insertAdjacentHTML($POS, $TPL)
+      - metavariable-regex:
+          metavariable: $TPL
+          # a ${...} whose expression does not start with one of the escaping helpers or a literal-safe call
+          regex: (?s).*\$\{(?!\s*(esc|escAttr|safeHttpUrl|escape|encodeURIComponent|String|Math|Number|formatScrai|formatTokens|scraiLine|usd|secs|fmtCountdown|rateHint)\().*
+
+  # ---------------------------------------------------------------- webview: external links
+  - id: scrai-js-window-open
+    message: >-
+      window.open / location assignment in the webview. External links must go through
+      openLink() → open_external (http/https only, OS browser), never navigate the webview.
+    severity: WARNING
+    languages: [javascript]
+    pattern-either:
+      - pattern: window.open(...)
+      - pattern: location.href = $X
+      - pattern: window.location = $X

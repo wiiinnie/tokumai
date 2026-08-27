@@ -107,6 +107,7 @@ const httpBackend = {
   listEntryGateways: () => Promise.resolve([]),
   setEntryGateway: () => Promise.resolve({ entry_gateway: null }),
   setMixnetPerf: () => Promise.resolve({}), // dev backend has no mixnet
+  // nosemgrep: scrai-js-window-open -- dev bridge only; the app routes through open_external
   openExternal: (url) => { window.open(url, "_blank", "noopener"); return Promise.resolve(); },
   // Dev has no mixnet: images ride inline in the chat instead of chunk-uploading.
   uploadBegin: () => Promise.reject(new Error("no chunked upload in dev")),

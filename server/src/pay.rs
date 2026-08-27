@@ -317,7 +317,7 @@ impl Pay {
                 self.settle(&inv_id);
             }
         }
-        let now = self.invoices.get(&inv_id).expect("checked above");
+        let now = self.invoices.get(&inv_id).expect("checked above"); // nosemgrep: scrai-unwrap-in-server-hot-path -- proven: the invoice was looked up two lines above and settle() never removes entries
         json!({
             "kind": "invoice.state", "id": id,
             "status": now.status,
@@ -486,6 +486,16 @@ pub enum Rail {
 impl Rail {
     pub fn from_env() -> Rail {
         if std::env::var("SCRAI_FAKE_PAYMENTS").as_deref() == Ok("1") {
+            // The fake rail must never coexist with a real one: with NYX_* or BTCPAY_* also
+            // set, `is_fake()` would read false (real-money interlock passes) while every
+            // non-nyx invoice still settled for free. Refuse to boot in that mixed state.
+            let real = ["NYX_RECEIVE_ADDRESS", "NYX_LCD_URL", "BTCPAY_URL", "BTCPAY_STORE_ID", "BTCPAY_API_KEY"]
+                .iter()
+                .any(|k| std::env::var(k).map(|v| !v.trim().is_empty()).unwrap_or(false));
+            if real {
+                eprintln!("scrai-server: FATAL: SCRAI_FAKE_PAYMENTS=1 together with a real payment rail (NYX_*/BTCPAY_*) — remove one. Refusing to start.");
+                std::process::exit(1);
+            }
             eprintln!("scrai-server: SCRAI_FAKE_PAYMENTS=1 — invoices settle on first poll. DEV ONLY.");
             return Rail::Fake;
         }

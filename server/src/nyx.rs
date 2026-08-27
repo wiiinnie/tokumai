@@ -75,7 +75,7 @@ impl Nyx {
     async fn usd_per_nym(&self) -> Result<f64, String> {
         let now = crate::pay::now_ms();
         {
-            let p = self.price.lock().unwrap();
+            let p = self.price.lock().unwrap(); // nosemgrep: scrai-unwrap-in-server-hot-path -- poison-only: the guarded value is a plain tuple, no code runs under the lock
             if p.0 > 0.0 && now - p.1 < 60_000 {
                 return Ok(p.0);
             }
@@ -106,7 +106,7 @@ impl Nyx {
                     if name != "coingecko" && name != "override" {
                         eprintln!("scrai-server: NYM/USD via fallback feed {name} ({usd})");
                     }
-                    *self.price.lock().unwrap() = (usd, now);
+                    *self.price.lock().unwrap() = (usd, now); // nosemgrep: scrai-unwrap-in-server-hot-path
                     return Ok(usd);
                 }
                 Err(e) => errors.push(format!("{name}: {e}")),
@@ -209,14 +209,14 @@ impl Nyx {
             match self.lcd_txs(&url).await {
                 Ok(j) => {
                     // Feed the pay screen's health indicator with the tip we already have.
-                    *self.watch.lock().unwrap() = (true, crate::pay::now_ms(), tip);
+                    *self.watch.lock().unwrap() = (true, crate::pay::now_ms(), tip); // nosemgrep: scrai-unwrap-in-server-hot-path
                     return Ok(scan_txs(&j, &self.receive_address, memo, expected_unym));
                 }
                 Err(e) => last_err = e,
             }
         }
-        let h = self.watch.lock().unwrap().2;
-        *self.watch.lock().unwrap() = (false, crate::pay::now_ms(), h);
+        let h = self.watch.lock().unwrap().2; // nosemgrep: scrai-unwrap-in-server-hot-path
+        *self.watch.lock().unwrap() = (false, crate::pay::now_ms(), h); // nosemgrep: scrai-unwrap-in-server-hot-path
         Err(format!("Nyx LCD query failed: {last_err}"))
     }
 
@@ -240,7 +240,7 @@ impl Nyx {
     /// client polling every ~10s while the pay screen is open, that is a live
     /// health signal, not a stale flag.
     pub fn watch_state(&self) -> Value {
-        let (ok, at, height) = *self.watch.lock().unwrap();
+        let (ok, at, height) = *self.watch.lock().unwrap(); // nosemgrep: scrai-unwrap-in-server-hot-path
         let age = crate::pay::now_ms().saturating_sub(at);
         serde_json::json!({
             "connected": ok && at > 0 && age < 90_000,
