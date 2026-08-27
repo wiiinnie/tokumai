@@ -1025,12 +1025,12 @@
         <input type="range" id="mpThink" min="0" max="3" step="1" class="mpslider">
         <div class="mpticks"><span>Off · fastest</span><span>Balanced</span><span>Deep</span></div>
       </div>
-      <label class="setrow" style="align-items:center"><span><b>Image size</b><small>Resolution of generated pictures (Nano Banana 2 models). Bigger pictures cost more tokens and take longer to travel through the mixnet — 4K is several megabytes. 1K is the default. Nano Banana 2 Lite draws 512/1K only: a bigger wish is drawn — and billed — at 1K, and the answer says so.</small></span>
-        <select id="imgSize" style="margin-left:auto;flex:none;background:var(--ink);border:1px solid var(--line);border-radius:8px;color:var(--bone);padding:6px 9px;font-family:var(--mono);font-size:13px;outline:none">
+      <label class="setrow" style="align-items:center"><span><b>Image size</b><small>Resolution of generated pictures (Nano Banana 2). Bigger pictures cost more tokens and take longer through the mixnet — 4K is several megabytes and a few minutes. 1K is the default.<br>Nano Banana 2 Lite draws 512 / 1K only: 2K or 4K on Lite is drawn — and billed — as 1K, and the answer says so.</small></span>
+        <select id="imgSize" style="margin-left:auto;flex:none;min-width:0;background:var(--ink);border:1px solid var(--line);border-radius:8px;color:var(--bone);padding:6px 9px;font-family:var(--mono);font-size:13px;outline:none">
           <option value="512">512 px · ×0.67</option>
           <option value="1K">1K · default</option>
-          <option value="2K">2K · ×1.5 (not on Lite → drawn as 1K)</option>
-          <option value="4K">4K · ×2.25 (not on Lite → drawn as 1K)</option>
+          <option value="2K">2K · ×1.5</option>
+          <option value="4K">4K · ×2.25</option>
         </select>
       </label>
       <label class="setrow"><input type="checkbox" id="prTopic"><span><b>Topic-shift trimming</b><small>Drop earlier turns that are unrelated to your new question (e.g. weather → football). Terse follow-ups keep their context. Never drops the recent exchanges above.</small></span></label>
@@ -1546,9 +1546,13 @@
   // Startup terms are surfaced only AFTER the mixnet connection lands (the green ✓),
   // never before — otherwise the models load faster than the connect animation and the
   // T&C sheet pops up on top of "connecting…". Fires once; the send path re-checks anyway.
-  let termsGated = false;
+  let termsGated = false, termsDeferred = false;
   function armTermsGate(){
-    if(termsGated) return; termsGated = true;
+    if(termsGated) return;
+    // Splash still up (phones: html.boot until the logo has settled) → wait for endBoot,
+    // which re-arms; the sheet must float over the loaded UI, never over the bootup.
+    if(document.documentElement.classList.contains("boot")){ termsDeferred = true; return; }
+    termsGated = true;
     ensureTermsForCurrent();
   }
   function toggleMenu(){
@@ -1910,7 +1914,10 @@
   let bootTimer=null, bootEnded=false;
   function endBoot(delay){
     if(bootEnded || bootTimer) return;
-    bootTimer=setTimeout(()=>{ bootEnded=true; document.documentElement.classList.remove("boot"); }, delay);
+    bootTimer=setTimeout(()=>{
+      bootEnded=true; document.documentElement.classList.remove("boot");
+      if(termsDeferred){ termsDeferred=false; armTermsGate(); }   // terms were waiting for the splash
+    }, delay);
   }
   // Absolute safety net only: normally endBoot fires when the mixnet connects (finishLogo).
   // Keep it LONGER than the connect timeout (180s) so the connecting animation is never
@@ -4300,8 +4307,11 @@
     }
     // Show the real entry/exit gateways + flags once the route is up.
     if(isTauri()) refreshRoute();
-    // Require acceptance of the active model's provider terms on startup.
-    ensureTermsForCurrent();
+    // Provider terms on startup are owned by the boot gate (armTermsGate, fired from
+    // finishLogo / the tutorial close / the raw connect event) — never directly from
+    // here, or the sheet pops up over the connecting animation because the model list
+    // loads faster than the mixnet connects. Non-app builds have no splash: arm now.
+    if(!isTauri()) armTermsGate();
     // Native app: bind Cmd/Ctrl+R to reload the frontend from the dev server, so
     // frontend-only changes don't need a `tauri dev` restart (Rust changes still do).
     if(isTauri()){
