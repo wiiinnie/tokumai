@@ -46,6 +46,7 @@ rules:
       - pattern: scraiLine(...)
       - pattern: fmtCountdown(...)
       - pattern: $X.toFixed(...)
+      - pattern: Math.$F(...)
     pattern-sinks:
       - patterns:
           - pattern-either:

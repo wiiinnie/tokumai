@@ -1688,9 +1688,11 @@
     const pct=Math.round((u.pct||0)*100);
     // A normal photo is a single 4 MB chunk = one mixnet round trip, so a "chunk 0 / 1"
     // counter is just noise — only surface it when the upload is genuinely split (>1).
-    const sub = (u.chunks||0) > 1
-      ? `chunk ${u.chunkIndex||0} / ${u.chunks} · ${(u.kbps||0).toFixed(0)} KB/s`
-      : `${(u.kbps||0).toFixed(0)} KB/s`;
+    // upload-progress fields are numbers from Rust — coerced anyway before they meet innerHTML
+    const chunks=Number(u.chunks)||0, chunkIndex=Number(u.chunkIndex)||0, kbps=Number(u.kbps)||0;
+    const sub = chunks > 1
+      ? `chunk ${chunkIndex} / ${chunks} · ${kbps.toFixed(0)} KB/s`
+      : `${kbps.toFixed(0)} KB/s`;
     return `<div class="uovl"><div class="usend"><div class="upct">${pct}%</div><div class="ulbl">↑ uploading over the mixnet</div><div class="uchunkn">${sub}</div><div class="ubar"><i style="width:${pct}%"></i></div>${cancel}</div></div>`;
   }
   // Fallback progress bar for non-image docs (no thumbnail to overlay).
@@ -2079,8 +2081,10 @@
   // re-render mid-download draws the bar again instead of a stale phase word.
   let dlProg=null;
   function dlProgHTML(d){
-    const pct=d.total?Math.round(d.done/d.total*100):0;
-    return `<span class="dlprog"><span class="dllbl">Downloading picture · ${d.done}/${d.total} chunks · ${pct}%</span><span class="dlbar"><i style="width:${pct}%"></i></span></span>`;
+    // Event payloads are numbers from Rust — coerce anyway, so nothing string-shaped can ever reach innerHTML.
+    const done=Number(d.done)||0, total=Number(d.total)||0;
+    const pct=total?Math.round(done/total*100):0;
+    return `<span class="dlprog"><span class="dllbl">Downloading picture · ${done}/${total} chunks · ${pct}%</span><span class="dlbar"><i style="width:${pct}%"></i></span></span>`;
   }
   function setDlProg(d){
     dlProg=d;
@@ -3213,6 +3217,7 @@
   let scanGen = 0;              // bumped whenever the attachment changes → cancels any in-flight scan
   function showGuard(findings, opts){
     const list = findings.map(f=>`<li>${esc(f.label)}</li>`).join("");
+    // nosemgrep: scrai-taint-untrusted-to-html -- reviewed 2026-08-28: intro and every list item are esc()-wrapped (items inside .map())
     $("guardBody").innerHTML = `<p>${esc(opts.intro)}</p><ul class="glist">${list}</ul>`+
       `<p class="hint">This check ran entirely on your device — nothing was sent, logged, or stored. You decide.</p>`;
     $("guardConfirm").textContent = opts.confirmLabel;

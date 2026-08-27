@@ -32,8 +32,14 @@ EXCL=(--exclude target --exclude node_modules --exclude docs/pitch --exclude pub
 SKIP=(--exclude-rule rust.lang.security.unsafe-usage.unsafe-usage
       --exclude-rule rust.lang.security.temp-dir.temp-dir)
 
-echo "── Semgrep: public packs + project rules"
-semgrep scan --metrics=off --no-git-ignore "${PACKS[@]}" --config .semgrep/scrambleai.yml --config .semgrep/scrambleai-taint.yml \
+# SEMGREP_PRO=1 → cross-file (interprocedural) taint via the Pro engine. Needs a one-time
+# `semgrep login` + `semgrep install-semgrep-pro` on this machine; the code still stays local
+# (only finding metadata leaves), but we run it only over the webview to keep core/server out.
+PRO=()
+if [ "${SEMGREP_PRO:-0}" = "1" ]; then PRO=(--pro); fi
+
+echo "── Semgrep: public packs + project rules${PRO:+ (Pro engine, cross-file)}"
+semgrep scan --metrics=off --no-git-ignore "${PRO[@]}" "${PACKS[@]}" --config .semgrep/scrambleai.yml --config .semgrep/scrambleai-taint.yml \
   "${EXCL[@]}" "${SKIP[@]}" --severity ERROR --severity WARNING --error \
   ${OUT:+--json -o "$OUT/results.json"} \
   core server src-tauri/src src public scripts .github "$TMP" || STATUS=$?

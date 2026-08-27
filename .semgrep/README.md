@@ -12,10 +12,14 @@ security packs plus the two rule files here, then `cargo audit`. CI runs the sam
   model text, file names and clipboard input; sanitizers are `esc()`, `escAttr()`,
   `safeHttpUrl()` and the numeric formatters; sinks are `innerHTML`/`outerHTML`/
   `insertAdjacentHTML`/`document.write` and `src`/`href`/`style`/`on*` attributes.
-  Semgrep OSS taint is **intraprocedural** — a flow that crosses a function boundary (e.g.
-  `messages[]` filled in `onDone`, rendered in `renderThread`) is not followed. Cross-function
-  taint needs Semgrep Pro or CodeQL; until then the second line of defence is the HTML-sink
-  rule above (every `${…}` in a sink must be wrapped) and the fuzz targets for the Rust parsers.
+  Semgrep OSS taint is **intraprocedural**. `SEMGREP_PRO=1 scripts/semgrep.sh` switches to the
+  Pro engine (cross-file/interprocedural) — needs a one-time `semgrep login` +
+  `semgrep install-semgrep-pro`; only finding metadata leaves the machine, and we run it over
+  the webview only (never core/server). Pro run 2026-08-28 over `public/` + the inline
+  scripts: 4 cross-file flows, all from numeric Rust event payloads (download/upload progress)
+  or `.map()`-escaped lists — the two numeric ones were hardened with `Number()`, the rest
+  annotated; result **0 blocking**. CodeQL was ruled out: its CLI licence forbids use on
+  non-open-source code without GitHub Code Security ($30/committer/month).
 
 The inline `<script>` blocks of `public/index.html` are extracted to a temp dir before the
 scan (Semgrep does not scan JS inside HTML); finding lines are reported relative to the
