@@ -214,13 +214,13 @@
   .pmlabel{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:16px 0 8px}
   .paymethods{display:flex;gap:10px;flex-wrap:wrap}
   .pm{display:flex;flex-direction:column;align-items:center;gap:6px;flex:1 1 92px;min-width:92px;cursor:pointer;
-    padding:13px 8px;border:1px solid var(--line);border-radius:11px;background:var(--surface-2);transition:border-color .15s,background .15s}
-  .pm:not(.soon):hover{border-color:var(--mix)}
+    padding:13px 8px;border:1px solid var(--line);border-radius:12px;background:var(--surface-2);transition:border-color .15s,background .15s}
+  .pm:not(.soon):hover{border-color:var(--signal)}
   .pm .pmlogo{width:26px;height:26px;display:flex;align-items:center;justify-content:center}
   .pm .pmname{font-size:12.5px;font-weight:600;color:var(--bone)}
   .pm .pmtag{font-family:var(--mono);font-size:9px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}
-  .pm.sel{border-color:var(--mix);background:color-mix(in srgb,var(--mix) 12%,var(--surface-2))}
-  .pm.sel .pmtag{color:var(--mix)}
+  .pm.sel{border-color:var(--signal);background:color-mix(in srgb,var(--signal) 11%,var(--surface-2))}
+  .pm.sel .pmtag{color:var(--signal)}
   .pm.soon{opacity:.5;cursor:not-allowed}
   .pm.soon .pmtag{color:var(--signal)}
   /* buy: amount tiles + coin brand colours + pay panel (Buy Credit mockup) */
@@ -228,13 +228,10 @@
   .balline b{color:var(--bone)}
   #tierRow.tiles{display:flex;gap:9px;margin-bottom:2px}
   .tiletier{flex:1;border:1px solid var(--line);border-radius:12px;padding:12px 6px;text-align:center;background:var(--surface-2);cursor:pointer;transition:border-color .15s,background .15s}
-  .tiletier.sel{border-color:var(--signal);background:color-mix(in srgb,var(--signal) 11%,transparent)}
+  .tiletier.sel{border-color:var(--signal);background:color-mix(in srgb,var(--signal) 11%,var(--surface-2))}
+  .tiletier.sel .s{color:var(--signal)}
   .tiletier .a{font-family:var(--display);font-weight:700;font-size:20px;color:var(--bone)}
   .tiletier .s{font-family:var(--mono);font-size:9.5px;color:var(--muted);margin-top:3px}
-  .pm.sel[data-method="nyx"]{border-color:#7A5FFF;background:color-mix(in srgb,#7A5FFF 13%,var(--surface-2))}
-  .pm.sel[data-method="nyx"] .pmtag{color:#7A5FFF}
-  .pm.sel[data-method="btc"]{border-color:#F7931A;background:color-mix(in srgb,#F7931A 13%,var(--surface-2))}
-  .pm.sel[data-method="btc"] .pmtag{color:#F7931A}
   .paypanel{border:1px solid var(--line);border-radius:16px;padding:16px;background:var(--surface-2);margin-top:4px}
   .paypanel .paylead{font-family:var(--mono);font-size:12px;color:var(--bone);margin-bottom:12px;text-align:center}
   .paypanel .qrbox{margin-top:0}
@@ -345,13 +342,18 @@
   .retrybtn{display:inline-flex;align-items:center;gap:6px;margin-top:10px;padding:6px 12px;border-radius:8px;
     border:1px solid var(--rust);background:transparent;color:var(--rust);font:inherit;font-size:13px;cursor:pointer;transition:.15s}
   .retrybtn:hover{background:color-mix(in srgb,var(--rust) 14%,transparent)}
-  .mprow{background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--signal);
-    border-radius:8px;padding:13px 15px 14px;margin:0 0 11px}
-  .mprow.rust{border-left-color:var(--rust)}
-  .mprow.leaf{border-left-color:var(--mix)}   /* not "mix": that class is the topbar route chip (a flex row) */
+  /* Menu kit: ONE card for every row — toggles (.setrow), sliders (.mprow), info. No
+     coloured left borders; colour only carries meaning (green on/ok · gold value/selected · rust danger). */
+  .mprow{background:var(--surface-2);border:1px solid var(--line);border-radius:12px;padding:12px 13px 14px;margin:0 0 9px}
   .mptop{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:11px}
-  .mptop b{font-size:14px}
+  .mptop b{font-size:13px;font-weight:600;color:var(--bone)}
+  .mpdesc{font-size:11.5px;line-height:1.4;color:var(--muted);margin:-6px 0 12px}
+  /* the slider's value never sits top-right: it reads centred UNDER the tick labels */
+  .mpout{font-family:var(--mono);font-size:12px;color:var(--signal);text-align:center;margin-top:8px;min-height:1em}
+  .mpticks .act{color:var(--signal);font-weight:700}
+  .btnrow.center{justify-content:center}
   .mpval{color:var(--signal);font-family:var(--mono);font-size:13px;white-space:nowrap}
+  .mpslider.flat{background:linear-gradient(90deg,var(--signal) var(--p,0%),var(--line) var(--p,0%))}   /* stepped: flat track, gold fill to the thumb; --p set by paintFlat() */
   details.why{margin:9px 0 0}
   details.why>summary{list-style:none;cursor:pointer;font-family:var(--mono);font-size:11px;
     color:var(--muted);display:inline-flex;align-items:center;gap:5px;padding:2px 0;user-select:none;-webkit-user-select:none}
@@ -367,8 +369,9 @@
     background:var(--bone);border:2px solid var(--signal);cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.4)}
   .mpslider::-moz-range-thumb{width:18px;height:18px;border-radius:50%;background:var(--bone);border:2px solid var(--signal);cursor:pointer}
   .mpticks{display:flex;justify-content:space-between;margin-top:6px;font-family:var(--mono);font-size:10.5px;color:var(--muted)}
-  .mpticks span:first-child{color:var(--rust)}
-  .mpticks span:last-child{color:var(--mix)}
+  /* only the privacy/perf trade-off sliders colour their ends (lean ↔ most); stepped sliders don't */
+  .mpticks.ends span:first-child{color:var(--rust)}
+  .mpticks.ends span:last-child{color:var(--mix)}
   .cursor{display:inline-block;width:7px;height:15px;background:var(--mix);vertical-align:-2px;margin-left:2px;animation:blink 1s steps(2) infinite}
   .mixphase{font-family:var(--mono);font-size:12.5px;letter-spacing:.02em;color:var(--mix);opacity:.9}
   /* picture download: label + bar, replaces the held "Thinking…" once chunks flow */
@@ -526,6 +529,7 @@
   .catrow:hover{background:var(--surface-2)}
   .catrow + .catrow{border-top:1px solid var(--line)}
   .catrow .ic{width:32px;height:32px;border-radius:9px;display:grid;place-items:center;font-size:15px;flex:0 0 auto}
+  .catrow .ic svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
   .catrow .tx{min-width:0}
   .catrow .tx b{display:block;font-size:14.5px;font-weight:600;color:var(--bone)}
   .catrow .tx small{display:block;color:var(--muted);font-size:11.5px;margin-top:1px}
@@ -554,6 +558,8 @@
   .btn{font-family:var(--body);font-weight:600;font-size:13px;padding:9px 16px;border-radius:9px;cursor:pointer;border:1px solid var(--line);background:var(--surface-2);color:var(--bone)}
   .btn:hover{border-color:var(--mix)}
   .btn.primary{background:var(--mix);color:var(--ink);border-color:var(--mix)}
+  .btn.danger{border-color:var(--rust);color:var(--rust)}
+  .modal .btn{min-height:44px}
   .btn:disabled,.btn.primary:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line)}
   .btn.primary:disabled{background:var(--surface-2);color:var(--muted)}
   /* T&C consent checkbox — required before the model can be accepted */
@@ -570,7 +576,7 @@
   .poval{font-family:var(--mono);font-size:12px;word-break:break-all;color:var(--bone);border:1px solid var(--line);border-radius:8px;padding:8px 10px;background:var(--surface-2)}
   .poval.memo{color:#b9a3ff;border-color:#7A5FFF;font-size:15px;letter-spacing:.06em}
   .memowarn{margin-top:10px;font-size:11.5px;line-height:1.4;color:var(--signal);background:color-mix(in srgb,var(--signal) 10%,transparent);border-radius:8px;padding:8px 10px}
-  .setrow{display:flex;gap:14px;align-items:center;justify-content:space-between;padding:12px 13px;border:1px solid var(--line);border-radius:10px;margin-bottom:9px;cursor:pointer;background:var(--surface-2)}
+  .setrow{display:flex;gap:14px;align-items:center;justify-content:space-between;padding:12px 13px;border:1px solid var(--line);border-radius:12px;margin-bottom:9px;cursor:pointer;background:var(--surface-2)}
   .setrow > span{display:flex;flex-direction:column;gap:3px;min-width:0;order:1}
   .setrow b{font-size:13px;font-weight:600;color:var(--bone)}
   .setrow small{font-size:11.5px;line-height:1.4;color:var(--muted)}
@@ -589,7 +595,7 @@
   .setrow .rowtop{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
   .setrow .cpill{font-family:var(--mono);font-size:9px;letter-spacing:.03em;padding:2px 7px;border-radius:9px;
     color:var(--signal);border:1px solid color-mix(in srgb,var(--signal) 45%,transparent);background:color-mix(in srgb,var(--signal) 12%,transparent);white-space:nowrap}
-  .setrow.live.on{border-color:color-mix(in srgb,var(--mix) 45%,var(--line));background:color-mix(in srgb,var(--mix) 8%,var(--surface-2))}
+  .setrow.on{border-color:color-mix(in srgb,var(--mix) 45%,var(--line));background:color-mix(in srgb,var(--mix) 8%,var(--surface-2))}
   .glist{margin:10px 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px}
   .glist li{font-family:var(--mono);font-size:13px;color:var(--signal);border:1px solid color-mix(in srgb,var(--signal) 40%,var(--line));background:color-mix(in srgb,var(--signal) 8%,transparent);border-radius:8px;padding:8px 11px}
   .glist li::before{content:"⚠ ";}
@@ -708,9 +714,9 @@
   /* Appearance theme picker (Settings) */
   .themepick{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:0 0 6px}
   .themepick .topt{display:flex;align-items:center;gap:10px;text-align:left;padding:9px 11px;border:1px solid var(--line);
-    background:var(--surface-2);border-radius:9px;color:var(--bone);cursor:pointer;font-family:var(--body);font-size:12.5px;transition:border-color .15s,background .15s}
+    background:var(--surface-2);border-radius:12px;color:var(--bone);cursor:pointer;font-family:var(--body);font-size:12.5px;transition:border-color .15s,background .15s}
   .themepick .topt:hover{border-color:var(--muted)}
-  .themepick .topt.sel{border-color:var(--signal);box-shadow:inset 0 0 0 1px var(--signal)}
+  .themepick .topt.sel{border-color:var(--signal);background:color-mix(in srgb,var(--signal) 11%,var(--surface-2))}
   .themepick .sw{display:flex;gap:3px;flex:none}
   .themepick .sw i{width:12px;height:12px;border-radius:50%;border:1px solid rgba(128,128,128,.28)}
   .themepick .nm{font-weight:600;line-height:1.15}
@@ -967,12 +973,12 @@
     </div>
     <div class="mb">
       <div class="mland">
-        <div class="catrow" data-click="navPage" data-click-pass="this" data-page="appearance" data-title="Appearance"><span class="ic c-appear">◐</span><span class="tx"><b>Appearance</b><small>Theme for the whole app</small></span><span class="chev">›</span></div>
-        <div class="catrow" data-click="navPage" data-click-pass="this" data-page="net" data-title="Network &amp; Privacy"><span class="ic c-net">🛡</span><span class="tx"><b>Network &amp; Privacy</b><small>Speed, battery, cover traffic</small></span><span class="chev">›</span></div>
-        <div class="catrow" data-click="navPage" data-click-pass="this" data-page="guard" data-title="Data Guard"><span class="ic c-guard">🔒</span><span class="tx"><b>Data Guard</b><small>On-device sensitive-data checks</small></span><span class="chev">›</span></div>
-        <div class="catrow" data-click="navPage" data-click-pass="this" data-page="eff" data-title="Efficiency"><span class="ic c-eff">✂</span><span class="tx"><b>Efficiency</b><small>Trim tokens, save credit</small></span><span class="chev">›</span></div>
-        <div class="catrow" data-click="navPage" data-click-pass="this" data-page="general" data-title="General"><span class="ic c-gen">⚙</span><span class="tx"><b>General</b><small>Typing, tutorial</small></span><span class="chev">›</span></div>
-        <div class="catrow" id="devCatRow" data-click="navPage" data-click-pass="this" data-page="dev" data-title="Developer"><span class="ic c-dev">🧪</span><span class="tx"><b>Developer</b><small>Diagnostics · dev builds</small></span><span class="chev">›</span></div>
+        <div class="catrow" data-click="navPage" data-click-pass="this" data-page="appearance" data-title="Appearance"><span class="ic c-appear"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></svg></span><span class="tx"><b>Appearance</b><small>Theme for the whole app</small></span><span class="chev">›</span></div>
+        <div class="catrow" data-click="navPage" data-click-pass="this" data-page="net" data-title="Network &amp; Privacy"><span class="ic c-net"><svg viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"></path></svg></span><span class="tx"><b>Network &amp; Privacy</b><small>Speed, battery, cover traffic</small></span><span class="chev">›</span></div>
+        <div class="catrow" data-click="navPage" data-click-pass="this" data-page="guard" data-title="Data Guard"><span class="ic c-guard"><svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg></span><span class="tx"><b>Data Guard</b><small>On-device sensitive-data checks</small></span><span class="chev">›</span></div>
+        <div class="catrow" data-click="navPage" data-click-pass="this" data-page="eff" data-title="Efficiency"><span class="ic c-eff"><svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M20 4L8.5 15.5M20 20L8.5 8.5"></path></svg></span><span class="tx"><b>Efficiency</b><small>Trim tokens, save credit</small></span><span class="chev">›</span></div>
+        <div class="catrow" data-click="navPage" data-click-pass="this" data-page="general" data-title="General"><span class="ic c-gen"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path></svg></span><span class="tx"><b>General</b><small>Typing, tutorial</small></span><span class="chev">›</span></div>
+        <div class="catrow" id="devCatRow" data-click="navPage" data-click-pass="this" data-page="dev" data-title="Developer"><span class="ic c-dev"><svg viewBox="0 0 24 24"><path d="M9 3h6M10 3v6L4.5 19a1.5 1.5 0 0 0 1.3 2.2h12.4a1.5 1.5 0 0 0 1.3-2.2L14 9V3"></path><path d="M7 15h10"></path></svg></span><span class="tx"><b>Developer</b><small>Diagnostics · dev builds</small></span><span class="chev">›</span></div>
       </div>
       <div class="mpage" data-page="appearance">
       <p class="pagelead">Theme for the whole app, including the connect screen. Saved on this device.</p>
@@ -994,27 +1000,30 @@
 
       </div>
       <div class="mpage" data-page="net">
-      <p class="pagelead">Everything you send is routed to hide who you are. The defaults give you <b>the most privacy</b>. You can trade some of it for more speed, or dial things back to save battery — all optional and reversible. Each slider is <b>stepless</b>; the live value sits next to its name.</p>
-      <div class="mprow rust">
-        <div class="mptop"><b>Cover traffic</b><span id="coverVal" class="mpval"></span></div>
+      <p class="pagelead">Everything you send is routed to hide who you are. The defaults give you <b>the most privacy</b>. You can trade some of it for more speed, or dial things back to save battery — all optional and reversible. Each slider is <b>stepless</b>; the live value reads under it.</p>
+      <div class="mprow">
+        <div class="mptop"><b>Cover traffic</b></div>
         <input type="range" id="mpCover" min="1" max="100" step="1" class="mpslider">
-        <div class="mpticks"><span>save battery</span><span>balanced</span><span>most cover</span></div>
+        <div class="mpticks ends"><span>save battery</span><span>balanced</span><span>most cover</span></div>
+        <div class="mpout" id="coverVal"></div>
         <details class="why"><summary><span class="chev">›</span> What this does</summary>
           <div class="body">A constant stream of <b>decoy (“cover”) packets</b> so your real messages hide inside steady, uniform traffic. Shown as the <b>bandwidth it constantly uses</b> — more cover hides you better but uses more data and battery; less runs cooler but thins the decoy stream. <span style="color:var(--muted);opacity:.75">(Nym’s loop_cover_traffic rate)</span></div>
         </details>
       </div>
       <div class="mprow">
-        <div class="mptop"><b>Packet mixing delay</b><span id="mixVal" class="mpval"></span></div>
+        <div class="mptop"><b>Packet mixing delay</b></div>
         <input type="range" id="mpMix" min="0" max="200" step="1" class="mpslider">
-        <div class="mpticks"><span>0 ms · fastest</span><span>100 ms</span><span>200 ms · max</span></div>
+        <div class="mpticks ends"><span>0 ms · fastest</span><span>100 ms</span><span>200 ms · max</span></div>
+        <div class="mpout" id="mixVal"></div>
         <details class="why"><summary><span class="chev">›</span> What this does</summary>
           <div class="body">The random hold each packet waits at <b>every hop</b> before moving on — a Poisson <b>delay</b> (so it’s in ms, not a rate). This reshuffling of packet order <i>is</i> the anonymity: more delay mixes you with more people’s traffic, less delay is faster. The <b>biggest lever on mixnet latency</b>. Default 15 ms. <span style="color:var(--muted);opacity:.75">(Nym’s average_packet_delay)</span></div>
         </details>
       </div>
-      <div class="mprow leaf">
-        <div class="mptop"><b>Sending rate</b><span id="sendVal" class="mpval"></span></div>
+      <div class="mprow">
+        <div class="mptop"><b>Sending rate</b></div>
         <input type="range" id="mpSend" min="10" max="200" step="5" class="mpslider">
-        <div class="mpticks"><span>0.1 Mbps · lean</span><span>1 Mbps · default</span><span>2 Mbps · fastest</span></div>
+        <div class="mpticks ends"><span>0.1 Mbps · lean</span><span>1 Mbps · default</span><span>2 Mbps · fastest</span></div>
+        <div class="mpout" id="sendVal"></div>
         <details class="why"><summary><span class="chev">›</span> What this does</summary>
           <div class="body">The constant <b>rate your real packets leave the device</b> — a throughput dial, so it reads in <b>Mbps</b> (this is exactly NymVPN’s “traffic rate”). Higher = big files and long messages upload quicker, at more constant bandwidth. <span style="color:var(--muted);opacity:.75">“Pipelining” below is a separate on/off. (Nym’s message_sending rate)</span></div>
         </details>
@@ -1027,27 +1036,24 @@
       </div>
       <div class="mpage" data-page="eff">
       <p class="pagelead">Send the model less of the transcript when it isn’t needed — fewer tokens leave this device, so each message costs less. The topic decision is made locally, never by an extra model call.</p>
-      <label class="setrow" style="align-items:center"><span><b>Conversation memory</b><small>How many recent exchanges are always sent as context — higher means better continuity but more tokens per message. Older related turns are still added on top.</small></span>
-        <select id="prCtx" style="margin-left:auto;flex:none;background:var(--ink);border:1px solid var(--line);border-radius:8px;color:var(--bone);padding:6px 9px;font-family:var(--mono);font-size:13px;outline:none">
-          <option value="2">last 2</option>
-          <option value="4">last 4</option>
-          <option value="8">last 8</option>
-          <option value="999">everything</option>
-        </select>
-      </label>
-      <div class="mprow" style="margin-top:14px">
-        <div class="mphead"><b>Reasoning depth <span id="thinkVal" style="color:var(--signal);font-family:var(--mono)"></span></b><small>How long the model “thinks” before it answers. Thinking bills as output tokens, so less = <b>faster and cheaper</b>; more = better on hard problems. “Off” is snappiest for chat and simple tasks. Applies to Gemini models.</small></div>
-        <input type="range" id="mpThink" min="0" max="3" step="1" class="mpslider">
-        <div class="mpticks"><span>Off · fastest</span><span>Balanced</span><span>Deep</span></div>
+      <div class="mprow">
+        <div class="mptop"><b>Conversation memory</b></div>
+        <div class="mpdesc">How many recent exchanges are always sent as context — higher means better continuity but more tokens per message. Older related turns are still added on top.</div>
+        <input type="range" id="prCtx" min="0" max="3" step="1" class="mpslider flat">
+        <div class="mpticks" id="prCtxTicks"><span>last 2</span><span>last 4</span><span>last 8</span><span>everything</span></div>
       </div>
-      <label class="setrow" style="align-items:center"><span><b>Image size</b><small>Resolution of generated pictures (Nano Banana 2). Bigger pictures cost more tokens and take longer through the mixnet — 4K is several megabytes and a few minutes. 1K is the default.<br>Nano Banana 2 Lite draws 512 / 1K only: 2K or 4K on Lite is drawn — and billed — as 1K, and the answer says so.</small></span>
-        <select id="imgSize" style="margin-left:auto;flex:none;min-width:0;background:var(--ink);border:1px solid var(--line);border-radius:8px;color:var(--bone);padding:6px 9px;font-family:var(--mono);font-size:13px;outline:none">
-          <option value="512">512 px · ×0.67</option>
-          <option value="1K">1K · default</option>
-          <option value="2K">2K · ×1.5</option>
-          <option value="4K">4K · ×2.25</option>
-        </select>
-      </label>
+      <div class="mprow">
+        <div class="mptop"><b>Reasoning depth</b></div>
+        <div class="mpdesc">How long the model “thinks” before it answers. Thinking bills as output tokens, so less = <b>faster and cheaper</b>; more = better on hard problems. “Off” is snappiest for chat and simple tasks. Applies to Gemini models.</div>
+        <input type="range" id="mpThink" min="0" max="3" step="1" class="mpslider flat">
+        <div class="mpticks" id="mpThinkTicks"><span>Off · fastest</span><span>Low</span><span>Balanced</span><span>Deep</span></div>
+      </div>
+      <div class="mprow">
+        <div class="mptop"><b>Image size</b></div>
+        <div class="mpdesc">Resolution of generated pictures (Nano Banana 2). Bigger pictures cost more tokens and take longer through the mixnet — 4K is several megabytes and a few minutes. 1K is the default.<br>Nano Banana 2 Lite draws 512 / 1K only: 2K or 4K on Lite is drawn — and billed — as 1K, and the answer says so.</div>
+        <input type="range" id="imgSize" min="0" max="3" step="1" class="mpslider flat">
+        <div class="mpticks" id="imgSizeTicks"><span>512 · ×0.67</span><span>1K</span><span>2K · ×1.5</span><span>4K · ×2.25</span></div>
+      </div>
       <label class="setrow"><input type="checkbox" id="prTopic"><span><b>Topic-shift trimming</b><small>Drop earlier turns that are unrelated to your new question (e.g. weather → football). Terse follow-ups keep their context. Never drops the recent exchanges above.</small></span></label>
       <label class="setrow"><input type="checkbox" id="prWhite"><span><b>Whitespace normalisation</b><small>Collapse redundant spaces and blank lines. Lossless — wording is never changed.</small></span></label>
       <label class="setrow"><input type="checkbox" id="prReq"><span><b>Request de-fluffing</b><small>Strip leading/trailing filler (“could you please…”, “thanks!”) from your prompt. Meaning is preserved.</small></span></label>
@@ -1063,15 +1069,19 @@
       </div>
       <div class="mpage" data-page="dev">
       <p class="pagelead" id="devSectionNote">Diagnostics for testing. Hidden in release builds.</p>
-      <label class="setrow" id="devCostRow"><input type="checkbox" id="devCostChk"><span><b>DEV_TOOLS</b><small>Master switch for inline developer diagnostics: the per-answer cost/margin audit and the real upload transfer speed (size ÷ transfer time). Everything meant to be removed later lives here — local-only, toggle any time.</small></span></label>
-      <div class="mprow" id="dlSizeRow" style="margin-top:14px">
-        <div class="mphead"><b>Image upload size <span id="dlSizeVal" style="color:var(--signal);font-family:var(--mono)"></span></b><small>One dial for resolution + quality before upload. The mixnet path is ~50 KB/s, so upload time ∝ file size. Vision models tile at ~768–1024 px, so smaller barely affects what the model sees.</small></div>
-        <input type="range" id="dlSize" min="0" max="4" step="1" class="mpslider">
-        <div class="mpticks"><span>smallest</span><span>balanced</span><span>sharpest</span></div>
+      <label class="setrow" id="devCostRow"><input type="checkbox" id="devCostChk"><span><b>Developer diagnostics</b><small>Master switch for inline developer diagnostics: the per-answer cost/margin audit and the real upload transfer speed (size ÷ transfer time). Everything meant to be removed later lives here — local-only, toggle any time.</small></span></label>
+      <div class="mprow" id="dlSizeRow">
+        <div class="mptop"><b>Image upload size</b></div>
+        <div class="mpdesc">One dial for resolution + quality before upload. The mixnet path is ~50 KB/s, so upload time ∝ file size. Vision models tile at ~768–1024 px, so smaller barely affects what the model sees.</div>
+        <input type="range" id="dlSize" min="0" max="4" step="1" class="mpslider flat">
+        <div class="mpticks" id="dlSizeTicks"><span>smallest</span><span>balanced</span><span>sharpest</span></div>
+        <div class="mpout" id="dlSizeVal"></div>
       </div>
-      <div class="mprow" style="margin-top:14px">
-        <div class="mphead"><b>Mixnet ping <span id="pingVal" style="color:var(--signal);font-family:var(--mono)"></span></b><small>Times a tiny round-trip to the server with NO model call — the pure mixnet latency. Use it to see what the “Response speed” slider in Network &amp; Privacy actually changes (change it, then ping a few times per setting).</small></div>
-        <button class="btn" id="pingBtn" data-click="runMixPing" style="margin-top:4px">Ping ×5</button>
+      <div class="mprow">
+        <div class="mptop"><b>Mixnet ping</b></div>
+        <div class="mpdesc">Times a tiny round-trip to the server with NO model call — the pure mixnet latency. Use it to see what the “Response speed” slider in Network &amp; Privacy actually changes (change it, then ping a few times per setting).</div>
+        <div class="btnrow center"><button class="btn" id="pingBtn" data-click="runMixPing">Ping ×5</button></div>
+        <div class="mpout" id="pingVal"></div>
       </div>
       </div>
       <p class="hint" id="setStatus" style="margin:12px 6px 0"></p>
@@ -2153,18 +2163,18 @@
   // DEV: measure pure mixnet round-trip latency (ping→pong, no model). 5 samples → median.
   async function runMixPing(){
     const out=$("pingVal"), btn=$("pingBtn");
-    if(!isTauri()){ if(out) out.textContent="· native only"; return; }
+    if(!isTauri()){ if(out) out.textContent="native only"; return; }
     if(btn) btn.disabled=true;
     const samples=[];
-    if(out) out.textContent="· pinging…";
+    if(out) out.textContent="pinging…";
     try{
-      for(let i=0;i<5;i++){ const r=await Backend.mixnetPing(); if(r&&typeof r.ms==="number") samples.push(r.ms); if(out) out.textContent=`· ${samples.length}/5…`; }
-    }catch(e){ if(out) out.textContent="· failed: "+((e&&e.message)||e); if(btn) btn.disabled=false; return; }
+      for(let i=0;i<5;i++){ const r=await Backend.mixnetPing(); if(r&&typeof r.ms==="number") samples.push(r.ms); if(out) out.textContent=`${samples.length}/5…`; }
+    }catch(e){ if(out) out.textContent="failed: "+((e&&e.message)||e); if(btn) btn.disabled=false; return; }
     if(btn) btn.disabled=false;
-    if(!samples.length){ if(out) out.textContent="· no reply"; return; }
+    if(!samples.length){ if(out) out.textContent="no reply"; return; }
     samples.sort((a,b)=>a-b);
     const median=samples[Math.floor(samples.length/2)];
-    if(out) out.textContent=`· median ${median} ms (min ${samples[0]} · max ${samples[samples.length-1]})`;
+    if(out) out.textContent=`${samples.map(v=>v+" ms").join(" · ")} — median ${median} ms`;
     setStatus(`mixnet ping: median ${median} ms over ${samples.length} samples`);
   }
 
@@ -3005,7 +3015,7 @@
     $("mpCover").value = String(Math.max(1,  Math.min(100, Math.round(msToMbps(mp.coverMs)*100))));
     $("mpSend").value  = String(Math.max(10, Math.min(300, Math.round(msToMbps(mp.sendMs)*100))));
     $("mpCont").checked = !!mp.continuous;
-    const setMixLabels = (o)=>{ const put=(id,txt)=>{ const e=$(id); if(e) e.textContent="· "+txt; };
+    const setMixLabels = (o)=>{ const put=(id,txt)=>{ const e=$(id); if(e) e.textContent=txt; };
       put("coverVal", msToMbps(o.coverMs).toFixed(2)+" Mbps");
       put("mixVal",   o.mixMs+" ms");
       put("sendVal",  msToMbps(o.sendMs).toFixed(2)+" Mbps"); };
@@ -3031,22 +3041,26 @@
     // Reasoning-depth slider: index into THINK_STEPS, persisted as the token budget.
     const thinkIdx = Math.max(0, THINK_STEPS.indexOf(thinkingBudget()));
     $("mpThink").value = String(thinkIdx<0?2:thinkIdx);
-    $("thinkVal").textContent = "· "+thinkLabel(thinkingBudget());
+    markTicks("mpThink", +$("mpThink").value);
     $("mpThink").oninput = ()=>{
       const b = THINK_STEPS[+$("mpThink").value] ?? 2048;
       try{ localStorage.setItem("scrai.thinkingBudget", String(b)); }catch(_){}
-      $("thinkVal").textContent = "· "+thinkLabel(b);
+      markTicks("mpThink", +$("mpThink").value);
       $("setStatus").textContent = "reasoning depth: "+thinkLabel(b)+(b>0?` (${b} thinking tokens)`:"");
     };
     // Generated-picture size: persisted as the server's imageSize token ("1K" default).
-    $("imgSize").value = imageSize();
-    $("imgSize").onchange = ()=>{
-      const s = $("imgSize").value;
+    $("imgSize").value = String(Math.max(0, IMAGE_SIZES.indexOf(imageSize())));
+    markTicks("imgSize", +$("imgSize").value);
+    $("imgSize").oninput = ()=>{
+      const s = IMAGE_SIZES[+$("imgSize").value] || "1K";
       try{ localStorage.setItem("scrai.imageSize", s); }catch(_){}
+      markTicks("imgSize", +$("imgSize").value);
       $("setStatus").textContent = "image size: "+s+(s==="1K"?" (default)":"");
     };
     const o = getPruneOpts();
-    $("prCtx").value     = String(o.ctxPairs ?? 4);
+    $("prCtx").value     = String(Math.max(0, CTX_STEPS.indexOf(o.ctxPairs ?? 4)));
+    markTicks("prCtx", +$("prCtx").value);
+    $("prCtx").oninput   = ()=>markTicks("prCtx", +$("prCtx").value);
     $("prTopic").checked = !!o.topicShift;
     $("prWhite").checked = !!o.whitespace;
     $("prReq").checked   = !!o.requestTrim;
@@ -3058,16 +3072,17 @@
     $("devCostChk").checked = devCost;
     $("setStatus").textContent = "";
     ["prCtx","prTopic","prWhite","prReq","prHand"].forEach(id=>{ $(id).onchange = persistSettings; });
+    syncRowTint();
     ["grEnabled","grText","grImages"].forEach(id=>{ $(id).onchange = persistGuard; });
     $("devCostChk").onchange = ()=>{
       devCost = $("devCostChk").checked;
       try{ localStorage.setItem("scrai_devcost", devCost?"1":"0"); }catch(_){}
       renderThread();
-      $("setStatus").textContent = "DEV_TOOLS "+(devCost?"on":"off");
+      $("setStatus").textContent = "developer diagnostics "+(devCost?"on":"off");
     };
     // DEV image-downscale dial (the real upload-speed lever — path is throughput-bound).
     $("dlSize").value = String(dlScale().step);
-    const showDlVals = ()=>{ const s=DL_STEPS[parseInt($("dlSize").value,10)||0]; if($("dlSizeVal")) $("dlSizeVal").textContent = "· "+s[0]+"px q"+s[1]; };
+    const showDlVals = ()=>{ const i=parseInt($("dlSize").value,10)||0, s=DL_STEPS[i]; if($("dlSizeVal")) $("dlSizeVal").textContent = s[0]+"px · q"+s[1]; markTicks("dlSize", Math.round(i/(DL_STEPS.length-1)*2)); };
     showDlVals();
     $("dlSize").oninput = ()=>{ try{ localStorage.setItem("scrai.dev.dlsize", $("dlSize").value); }catch(_){}; showDlVals(); $("setStatus").textContent="applies to your next image"; };
     // Whole dev section is easy to hide in a release build: set DEV_TOOLS=false.
@@ -3077,7 +3092,7 @@
   }
   function closeSettings(){ $("setScrim").classList.remove("open"); }
   function persistSettings(){
-    const o = { ctxPairs:parseInt($("prCtx").value,10)||4, topicShift:$("prTopic").checked, whitespace:$("prWhite").checked, requestTrim:$("prReq").checked, handover:$("prHand").checked };
+    const o = { ctxPairs:CTX_STEPS[parseInt($("prCtx").value,10)] ?? 4, topicShift:$("prTopic").checked, whitespace:$("prWhite").checked, requestTrim:$("prReq").checked, handover:$("prHand").checked };
     savePruneOpts(o);
     const mem = o.ctxPairs>=999 ? "full history" : ("last "+o.ctxPairs+" exchanges");
     $("setStatus").textContent = "Saved — sending "+mem+" as context, from your next message.";
@@ -3142,6 +3157,30 @@
   // Reasoning depth (Gemini thinking budget, in tokens). Slider index → budget; default
   // "Balanced" (2048). Lower = faster + cheaper (thinking bills as output).
   const THINK_STEPS = [0, 512, 2048, 4096];   // Off · Low · Balanced · Deep
+  // Conversation-memory slider stops (pairs always sent as context); 999 ≈ everything.
+  const CTX_STEPS = [2, 4, 8, 999];
+  // Stepped sliders name their value in the tick labels: highlight the active one.
+  function markTicks(inputId, idx){
+    paintFlat($(inputId));
+    const t=$(inputId+"Ticks"); if(!t) return;
+    [...t.children].forEach((c,i)=>c.classList.toggle("act", i===idx));
+  }
+  // Stepped (flat) slider: paint the gold fill up to the thumb.
+  function paintFlat(el){
+    if(!el || !el.classList.contains("flat")) return;
+    const min=+el.min||0, max=+el.max||1, v=+el.value||0;
+    el.style.setProperty("--p", Math.round((v-min)/(max-min)*100)+"%");
+  }
+  document.addEventListener("input", e=>{ if(e.target && e.target.matches && e.target.matches(".mpslider.flat")) paintFlat(e.target); });
+  // Every toggle row tints green while it is on (was only the live-data row).
+  function syncRowTint(){
+    document.querySelectorAll(".setrow input[type=checkbox]").forEach(cb=>{
+      const row=cb.closest(".setrow"); if(row) row.classList.toggle("on", cb.checked);
+    });
+  }
+  document.addEventListener("change", e=>{
+    const cb=e.target; if(cb && cb.matches && cb.matches(".setrow input[type=checkbox]")){ const row=cb.closest(".setrow"); if(row) row.classList.toggle("on", cb.checked); }
+  });
   function thinkingBudget(){
     try{ const v=parseInt(localStorage.getItem("scrai.thinkingBudget"),10); return Number.isFinite(v)?v:2048; }catch(_){ return 2048; }
   }
@@ -3716,7 +3755,8 @@
     }
     const modal = $("acctScrim") ? $("acctScrim").querySelector(".modal") : null;
     const setNav = (title)=>{ if(!modal) return; if(title){ modal.classList.add("subopen"); const t=modal.querySelector(".mnav-ttl"); if(t) t.textContent=title; } else modal.classList.remove("subopen"); };
-    const row = (page,ic,emoji,ttl,sub,tail)=>`<div class="catrow" data-click="acctNav" data-click-pass="this" data-page="${page}"><span class="ic ${ic}">${emoji}</span><span class="tx"><b>${ttl}</b><small>${sub}</small></span>${tail||`<span class="chev">›</span>`}</div>`;
+    const ICONS = {"🌐":ACCT_ICON.globe,"🔑":ACCT_ICON.key,"📥":ACCT_ICON.down,"📲":ACCT_ICON.phone,"↻":ACCT_ICON.refresh,"⚠":ACCT_ICON.alert};
+    const row = (page,ic,emoji,ttl,sub,tail)=>`<div class="catrow" data-click="acctNav" data-click-pass="this" data-page="${page}"><span class="ic ${ic}">${ICONS[emoji]||emoji}</span><span class="tx"><b>${ttl}</b><small>${sub}</small></span>${tail||`<span class="chev">›</span>`}</div>`;
     const idcard = `<div class="idcard">
       <div class="fp">${esc(account.fingerprint)}</div>
       <div class="ses">session #${account.sessionIndex} · fingerprint</div>
@@ -3777,7 +3817,7 @@
            <button class="btn" data-click="cancelAcctView">Cancel</button></div>`
       : `<p class="pagelead">These abandon or wipe this account. Your balance is only recoverable via the 24-word phrase — keep it before you do either.</p>
          <div class="btnrow"><button class="btn" data-click="askNew">Create new account</button>
-           <button class="btn" style="border-color:var(--rust);color:var(--rust)" data-click="doAccountDelete">Delete account</button></div>`;
+           <button class="btn danger" data-click="doAccountDelete">Delete account</button></div>`;
 
     const restorePage = acctView==="confirmRestore"
       ? `<p class="hint" style="color:var(--rust)">This device still holds un-redeemed ecash (bearer money — not recoverable from a seed). Restoring another account discards it. Redeem it first, or confirm to discard.</p>
@@ -3796,8 +3836,18 @@
     const pg = pages[acctPage] || pages.server;
     setNav(pg.t);
     b.innerHTML = pg.h + `<p class="hint" id="acctStatus" style="margin-top:12px"></p>`;
+    paintFlat($("redeemSlider"));
     focusRestore();
   }
+  // Stroke icons for the account landing rows (16px grid, currentColor).
+  const ACCT_ICON = {
+    globe:  '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"></path></svg>',
+    key:    '<svg viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"></circle><path d="M11 12l9-9M15 8l2 2M18 5l2 2"></path></svg>',
+    down:   '<svg viewBox="0 0 24 24"><path d="M12 4v12M6 10l6 6 6-6M4 20h16"></path></svg>',
+    phone:  '<svg viewBox="0 0 24 24"><rect x="7" y="2.5" width="10" height="19" rx="2"></rect><path d="M11 18h2"></path></svg>',
+    refresh:'<svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.7M20 4v5h-5"></path></svg>',
+    alert:  '<svg viewBox="0 0 24 24"><path d="M12 3l10 18H2z"></path><path d="M12 10v4M12 17.5v.5"></path></svg>',
+  };
   // Redeem-amount chooser: $1 (100k) minimum, all held maximum. Redeeming always uses
   // uniform $1 chunks over the mixnet — a larger amount just loops more of them.
   function redeemSection(){
@@ -3805,20 +3855,23 @@
     const maxD = Math.max(1, Math.floor(held/100000));
     const d = Math.min(redeemDollars!=null?redeemDollars:maxD, maxD);
     const scrai = d>=maxD ? held : d*100000;   // at max, drain the remainder too
-    return `<div style="margin:10px 0 2px">
-      <div class="hint"><span id="redeemLabel">Redeem ${esc(formatScrai(scrai))} SCRAI ($${d}${d>=maxD?" · all held":""})</span></div>
+    return `<div class="grouplbl">Redeem held credit</div>
+    <div class="mprow">
+      <div class="mptop"><b>Redeem</b></div>
       <input type="range" id="redeemSlider" min="1" max="${maxD}" value="${d}" step="1"
-        data-input="redeemSliderChanged" data-input-pass="value"
-        style="width:100%;margin:8px 0;accent-color:var(--signal)">
-      <div class="btnrow"><button class="btn primary" data-click="doRedeem">Redeem</button></div>
+        data-input="redeemSliderChanged" data-input-pass="value" class="mpslider flat">
+      <div class="mpticks"><span>$1</span><span>${maxD>2?"$"+Math.ceil(maxD/2):""}</span><span>$${maxD} · all held</span></div>
+      <div class="mpout" id="redeemLabel">${esc(formatScrai(scrai))} SCRAI ($${d}${d>=maxD?" · all held":""})</div>
+      <div class="btnrow center" style="margin-top:12px"><button class="btn primary" data-click="doRedeem">Redeem</button></div>
     </div>`;
   }
   function redeemSliderChanged(v){
+    paintFlat($("redeemSlider"));
     redeemDollars = parseInt(v,10)||1;
     const maxD = Math.max(1, Math.floor(held/100000));
     const d = Math.min(redeemDollars, maxD);
     const scrai = d>=maxD ? held : d*100000;
-    const lbl = $("redeemLabel"); if(lbl) lbl.textContent = `Redeem ${formatScrai(scrai)} SCRAI ($${d}${d>=maxD?" · all held":""})`;
+    const lbl = $("redeemLabel"); if(lbl) lbl.textContent = `${formatScrai(scrai)} SCRAI ($${d}${d>=maxD?" · all held":""})`;
   }
   function showRestore(){ acctView="restore"; acctPhrase=null; renderAccount(); }
   function askNew(){ acctView="confirmNew"; acctPhrase=null; renderAccount(); }
