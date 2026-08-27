@@ -348,7 +348,7 @@
   .mprow{background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--signal);
     border-radius:8px;padding:13px 15px 14px;margin:0 0 11px}
   .mprow.rust{border-left-color:var(--rust)}
-  .mprow.mix{border-left-color:var(--mix)}
+  .mprow.leaf{border-left-color:var(--mix)}   /* not "mix": that class is the topbar route chip (a flex row) */
   .mptop{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:11px}
   .mptop b{font-size:14px}
   .mpval{color:var(--signal);font-family:var(--mono);font-size:13px;white-space:nowrap}
@@ -1011,7 +1011,7 @@
           <div class="body">The random hold each packet waits at <b>every hop</b> before moving on — a Poisson <b>delay</b> (so it’s in ms, not a rate). This reshuffling of packet order <i>is</i> the anonymity: more delay mixes you with more people’s traffic, less delay is faster. The <b>biggest lever on mixnet latency</b>. Default 15 ms. <span style="color:var(--muted);opacity:.75">(Nym’s average_packet_delay)</span></div>
         </details>
       </div>
-      <div class="mprow mix">
+      <div class="mprow leaf">
         <div class="mptop"><b>Sending rate</b><span id="sendVal" class="mpval"></span></div>
         <input type="range" id="mpSend" min="10" max="200" step="5" class="mpslider">
         <div class="mpticks"><span>0.1 Mbps · lean</span><span>1 Mbps · default</span><span>2 Mbps · fastest</span></div>
