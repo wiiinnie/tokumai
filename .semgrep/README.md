@@ -32,3 +32,18 @@ extracted file, whose first line states the HTML line offset.
 | `cargo audit`: `libcrux-*`, `h2 0.3`, `rustls-webpki 0.101`, `rsa` | pulled in by `nym-sdk 1.21.4` (nym-crypto, tendermint-rpc, jwt-simple) | not reachable from our code paths; fixed upstream only — re-check on every nym-sdk bump |
 | `cargo audit`: `lopdf 0.36` (via `pdf-extract`) | on-device PDF text extraction for the privacy guard | DoS only (stack overflow on a hostile PDF the user chose to attach); no upstream release with `lopdf ≥ 0.42` yet |
 | `cargo audit`: `lru 0.12` (via `ratatui 0.28`) | `scrai-admin`, the operator's local terminal UI | never handles remote input; the fix needs a `ratatui` major bump — do it with the next admin-TUI change |
+
+## Fuzzing (the Rust answer to taint tracking)
+
+There is no useful taint tool for Rust, but the server's attack surface is four parsers fed
+with bytes from anonymous mixnet senders. `scripts/fuzz.sh` (cargo-fuzz, nightly, ASan)
+drives them directly — `server/fuzz/fuzz_targets/`:
+
+| target | entry point | what it exercises |
+|---|---|---|
+| `fed_dispatch` | `federation::dispatch_enveloped` / `dispatch` | Coconut spend/withdraw envelopes against a live 1-of-1 authority + persistent quorum store (double-spend / ban sequences) |
+| `chat_reserve` | `chat::reserve` | request validation, signature/counter checks, pricing ceiling — the code that runs on the dispatch loop |
+| `upload_handle` | `UploadStore::handle` | begin/chunk sequences, offsets, size lies, caps |
+| `replies_handle` | `ReplyStore::stage` + `handle` | staged pictures, `image.chunk` refs/seqs, expiry |
+
+Baseline 2026-08-27: 150 s per target in parallel — 3.3 M / 2.9 M / 0.76 M / 1.06 M runs, ~2500 edges each, **no panic, no leak, no OOM**. The `server/src/lib.rs` split exists for this: the binary, the admin TUI and the fuzz targets share one code path.

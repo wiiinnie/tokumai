@@ -29,3 +29,9 @@ bin/
 # generated images
 images/
 data/
+
+# fuzzing (server/fuzz is its own workspace)
+server/fuzz/target/
+server/fuzz/corpus/
+server/fuzz/artifacts/
+server/fuzz/coverage/

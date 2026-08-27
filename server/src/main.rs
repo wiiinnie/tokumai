@@ -12,14 +12,9 @@
 // needs one shared DKG whose shares are distributed to each server (same published
 // verification key) — a separate setup step; see docs/federation-params.md.
 
-mod catalog;
-mod chat;
-mod http;
-mod nyx;
-mod pay;
-mod replies;
-mod store;
-mod uploads;
+// The request handlers live in the library crate (server/src/lib.rs) so the fuzz targets
+// under server/fuzz/ can drive the same parsers the mixnet loop feeds.
+use scrai_server::{catalog, chat, http, pay, replies, store, uploads};
 
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -42,17 +37,6 @@ const TICKETBOOK_COINS: u64 = 500;
 /// against REAL money is gated (see the H9 interlock in `main`). A real production
 /// federation is t-of-n (≥ 2) with a shared DKG — bump this and wire the shares.
 const AUTHORITY_N: usize = 1;
-
-/// Resolve a network-scoped config value: `{base}_MAINNET` or `{base}_TESTNET`
-/// (whichever is set and non-empty), falling back to the legacy plain `{base}`. The
-/// scrai-admin network toggle keeps exactly one suffix uncommented in the .env, so at
-/// most one is ever present. Mirrors the two Gemini key slots (see chat::gemini_api_key).
-pub fn net_var(base: &str) -> Option<String> {
-    let get = |name: String| std::env::var(name).ok().filter(|v| !v.trim().is_empty());
-    get(format!("{base}_MAINNET"))
-        .or_else(|| get(format!("{base}_TESTNET")))
-        .or_else(|| get(base.to_string()))
-}
 
 #[tokio::main]
 async fn main() {
