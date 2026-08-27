@@ -171,7 +171,7 @@ figure.shot figcaption b{color:var(--ink);font-weight:500}
 <div class="page" id="lang-en">
 
 <header class="hero">
-  <div class="eyebrow">Pitch · August 2026</div>
+  <div class="eyebrow">Pitch · 27 August 2026</div>
   <h1>Scramble<b>AI</b></h1>
   <p class="claim">Anonymous AI for everyone. Every question you ask a chatbot reveals two things:
   <b>who</b> is asking and <b>what</b> is being asked. ScrambleAI separates the two — by engineering,
@@ -182,6 +182,7 @@ figure.shot figcaption b{color:var(--ink);font-weight:500}
     <div class="kpi"><div class="n">5 hops</div><div class="l">Sphinx routing</div></div>
     <div class="kpi"><div class="n">~1.1 s</div><div class="l">mixnet round-trip, measured</div></div>
     <div class="kpi"><div class="n">−60 %</div><div class="l">token cost via pruning</div></div>
+    <div class="kpi"><div class="n">4K</div><div class="l">image delivered over SURBs, measured</div></div>
     <div class="kpi"><div class="n">zk-nym</div><div class="l">Coconut credentials</div></div>
     <div class="kpi"><div class="n">100 % Rust</div><div class="l">client core + server</div></div>
   </div>
@@ -221,6 +222,12 @@ figure.shot figcaption b{color:var(--ink);font-weight:500}
   only for the request that references them. The conversation itself
   lives only on the device, encrypted with AES-256-GCM; export and migration use an open, portable
   format (<span class="chip on">handover.md</span>), passphrase-encrypted on request.</p>
+  <p><b>Replies scale the same way.</b> A generated picture is not one giant mixnet message: the server
+  stages it and answers with a small reference, the app pulls it back in <mark>96 KB chunks,
+  eight in flight</mark>, and shows a real progress bar. A chunk that stalls is re-fired alone; a download
+  that breaks is <mark>resumed on Retry</mark> — only the missing chunks, no second generation, no second
+  charge. Measured on an iPhone: a <b>4K picture (5632 × 3072)</b>, 46 chunks, delivered end-to-end through
+  the mixnet in about four minutes, billed at Google's list price plus our margin.</p>
   <div class="shots">
     <figure class="shot wide"><div class="frame"><img data-img="chat-mixnet" alt="Chat over the mixnet, the 5-hop chain top right"></div>
       <figcaption><b>The chat.</b> Top right, the real route: you · entry · mix · mix · mix · exit · model. Left, the encrypted local history. Bottom right, the price of this answer — 138 in · 342 out · 2 SCRAI.</figcaption></figure>
@@ -234,6 +241,12 @@ figure.shot figcaption b{color:var(--ink);font-weight:500}
       <figcaption><b>Your data, portable.</b> One click exports the conversation as open Markdown — plaintext for reading, or PBKDF2 + AES-256-GCM encrypted for moving between machines.</figcaption></figure>
     <figure class="shot"><div class="frame"><img data-img="gateway" alt="Entry gateway picker"></div>
       <figcaption><b>You choose where you enter.</b> The entry gateway is selectable by country and host; the middle mix hops stay re-randomised per packet — that reshuffling <em>is</em> the anonymity.</figcaption></figure>
+    <figure class="shot"><div class="frame"><img data-img="ios-progress" alt="iPhone: picture download progress, 9 of 46 chunks"></div>
+      <figcaption><b>A picture arriving.</b> "Downloading picture · 9/46 chunks" — every chunk is an acknowledged mixnet reply; the first chunk marks the true first byte, so generation time and transfer time are visible separately.</figcaption></figure>
+    <figure class="shot"><div class="frame"><img data-img="ios-4k" alt="iPhone: 4K image generated and delivered over the mixnet, with the per-answer cost line"></div>
+      <figcaption><b>4K, end to end.</b> Nano Banana 2 at 5632 × 3072 px, delivered through SURBs in 247 s. The developer cost line under the picture reads provider $0.155 · charged $0.171 · +10 % — the margin is a number, not a secret.</figcaption></figure>
+    <figure class="shot wide"><div class="frame"><img data-img="home-light" alt="Desktop app in the light theme, Nordic frost"></div>
+      <figcaption><b>Four themes, one app.</b> "Nordic frost", the light theme, on the desktop — every surface, including the connect screen, follows the chosen theme.</figcaption></figure>
   </div>
 </section>
 
@@ -248,13 +261,14 @@ figure.shot figcaption b{color:var(--ink);font-weight:500}
     <li><span class="t">File scan with OCR</span><span class="d">Images and PDFs are read locally (Apple Vision natively, Tesseract-WASM as fallback) and pushed through the same checks. Findings can be redacted right in the image.</span></li>
     <li><span class="t">Manual redaction mode</span><span class="d">Detection boxes are a starting point, not the authority: dismiss false positives with a click, and drag your own black boxes across anything the scanner missed. The bars are burned into the image before it leaves.</span></li>
     <li><span class="t">Metadata stripped</span><span class="d">Before upload every image is re-encoded to drop EXIF/GPS and the embedded original — and downscaled to a vision-friendly size, so far fewer bytes cross the mixnet; PDFs lose their <span class="chip">/Info</span> dictionary and XMP stream. Nothing tells the model where a photo was taken.</span></li>
-    <li><span class="t">Smart pruning</span><span class="d">Before sending, the transcript is trimmed lexically to what this question needs — a measured −60 % tokens, without an extra model call.</span></li>
+    <li><span class="t">Smart pruning</span><span class="d">Before sending, the transcript is trimmed lexically to what this question needs — a measured −60 % tokens, without an extra model call. A guaranteed memory floor (the last N exchanges always ride along) keeps the thread even when the lexical decision would drop it.</span></li>
+    <li><span class="t">Spend dials</span><span class="d">Reasoning depth (how long a Gemini model thinks, billed as output tokens) and generated-picture size (512 px → 4K) are sliders next to the pruning switches — cost is a setting you can see, not a surprise on the bill.</span></li>
   </ul>
   <div class="shots two">
     <figure class="shot"><div class="frame"><img data-img="guard" alt="Privacy guard warning"></div>
       <figcaption><b>Privacy guard.</b> Warns about an IBAN, a name next to an address, a phone number — "nothing was sent, logged, or stored. You decide."</figcaption></figure>
-    <figure class="shot"><div class="frame"><img data-img="settings" alt="Settings: smart pruning and privacy guard"></div>
-      <figcaption><b>Settings.</b> Every check can be toggled; the topic decision is made locally, never via a model call.</figcaption></figure>
+    <figure class="shot"><div class="frame"><img data-img="settings-efficiency" alt="Settings › Efficiency: conversation memory, reasoning depth and image size as sliders, pruning switches below"></div>
+      <figcaption><b>Settings › Efficiency.</b> Memory floor, reasoning depth and picture size as stepped sliders; the pruning checks below can each be toggled. The topic decision is made locally, never via a model call.</figcaption></figure>
     <figure class="shot"><div class="frame"><img data-img="guard-edit" alt="Attachment review: detected findings in red, one user-drawn black box"></div>
       <figcaption><b>Attachment review, edit mode.</b> OCR reads the form on-device; the guard flags name, IBAN and phone (red). The black box over the amount was drawn by hand — the manual mode for everything the scanner can't know is sensitive.</figcaption></figure>
     <figure class="shot"><div class="frame"><img data-img="guard-redacted" alt="Redacted preview with black bars burned in"></div>
@@ -301,6 +315,13 @@ figure.shot figcaption b{color:var(--ink);font-weight:500}
   <span class="chip" style="color:var(--rust);border-color:color-mix(in srgb,var(--rust) 45%,var(--line))">trains on input</span>
   badge, and before first use the app shows the provider's terms — because the mixnet hides
   <em>who</em> is asking, not <em>where</em> the answer is produced.</p>
+  <p>Honesty extends to the bill and to refusals. Image models are billed the way Google bills us —
+  <mark>image tokens and text/thinking tokens at their separate rates</mark>, verified line by line against
+  the published price list (a 1K picture on Nano Banana 2 Lite: $0.034 provider cost). Ask a Lite model
+  for 2K and it draws — and bills — 1K, and the answer says so. And when Google declines a request
+  (a recognisable real person, a policy hit, a thinking budget that ate the reply), the app no longer shows
+  "no content": the server translates Gemini's <span class="chip">finishReason</span> into a plain
+  sentence that says what to change and that only the reasoning was billed.</p>
   <div class="shots two">
     <figure class="shot"><div class="frame"><img data-img="picker" alt="Model picker"></div>
       <figcaption><b>The catalog.</b> Filters: All · Chatbot · Image gen · Free · Latest — additively combinable.</figcaption></figure>
@@ -308,6 +329,8 @@ figure.shot figcaption b{color:var(--ink);font-weight:500}
       <figcaption><b>Free filter.</b> Only models that cost nothing — and are billed exactly that way.</figcaption></figure>
     <figure class="shot wide"><div class="frame"><img data-img="terms" alt="Provider terms dialog"></div>
       <figcaption><b>Provider terms.</b> Consent per model, with a plain-language warning about what the provider may do with inputs.</figcaption></figure>
+    <figure class="shot wide"><div class="frame"><img data-img="ios-declined" alt="iPhone: an image request Google declined — no picture, 803 reasoning tokens, $0.0012"></div>
+      <figcaption><b>A refusal, priced honestly.</b> "generate an image of [a named public figure] in a helicopter" — Google's image model declines real people. 803 reasoning tokens, zero image tokens, $0.0012 — and, since this build, a sentence explaining why instead of "(the model returned no content)".</figcaption></figure>
   </div>
 </section>
 
@@ -324,8 +347,17 @@ figure.shot figcaption b{color:var(--ink);font-weight:500}
     <li><span class="t">scrai-core</span><span class="d">Shared library: Coconut e-cash, double-spend quorum, price table, billing math, request signatures. One bug fix lands on both sides.</span></li>
     <li><span class="t">Desktop app</span><span class="d">Tauri 2. A Rust process with the embedded Nym SDK, native OCR and a local NER model; the murmur UI runs as a web frontend in the webview — identical for the coming mobile builds.</span></li>
     <li><span class="t">scrai-server</span><span class="d">A Rust binary acting as a Nym service provider. Persists sessions, quorum and paywall in SQLite; model catalog live from Gemini + Groq; vision uploads in acked chunks.</span></li>
-    <li><span class="t">Hardened</span><span class="d">Core paths unit-tested (billing, signatures, e-cash lifecycle, upload reassembly); verified end-to-end over the real mixnet.</span></li>
+    <li><span class="t">The transport, precisely</span><span class="d">Official <span class="chip">nym-sdk 1.21.4</span> on both ends, Nym mainnet. The app connects with an <b>ephemeral identity</b> — a fresh sender key per session — and sends every request with anonymous reply SURBs, so the server never learns a client address. The server keeps one persistent Nym identity, binds <b>no inbound port at all</b>, and replies only through the SURBs a request carried. Chat, uploads, pictures, payments, even the model catalog: one path, no clearnet fallback in the app.</div></span></li>
+    <li><span class="t">Traffic shaping you can see</span><span class="d">Cover traffic, per-hop mixing delay and sending rate are sliders in <b>Network &amp; Privacy</b>, defaulting to Nym's own parameters (0.10 Mbps cover · 15 ms mixing · 1 Mbps sending, cover stream always on). Every dial says what it costs in privacy; "Reset to recommended" is one tap.</span></li>
+    <li><span class="t">Big payloads, small packets</span><span class="d">Uploads and generated pictures move as 96 KB acknowledged chunks. Downloads run eight chunks in flight — Nym keeps only ~200 reply SURBs per sender, so a burst starves the server — and a stalled chunk is re-fired alone. Staged pictures live 30 min server-side, so an interrupted download resumes instead of re-billing.</span></li>
+    <li><span class="t">Hardened &amp; audited</span><span class="d">Core paths unit-tested (billing, signatures, e-cash lifecycle, upload reassembly, decline messages); verified end-to-end over the real mixnet on desktop and two iPhones. A code audit on 27 Aug 2026 found no mock, simulated or clearnet path for application traffic — and two honest disclosures: the app makes one clearnet request to Nym's validator API for the gateway directory before connecting (the same call the SDK's own topology fetch makes), and today's build pins a single operator address until the signed directory ships.</span></li>
   </ul>
+  <div class="shots two">
+    <figure class="shot"><div class="frame"><img data-img="settings-network" alt="Settings › Network &amp; Privacy: cover traffic, packet mixing delay and sending rate sliders"></div>
+      <figcaption><b>Settings › Network &amp; Privacy.</b> The three Nym traffic parameters as sliders, live value under each — 0.10 Mbps cover, 15 ms mixing, 1.02 Mbps sending — plus the constant-cover switch.</figcaption></figure>
+    <figure class="shot"><div class="frame"><img data-img="buy" alt="Buy credit: fixed amounts, NYM · Bitcoin · Monero"></div>
+      <figcaption><b>One control vocabulary.</b> Settings, account and credit share one card, slider and tile language — the same on desktop and phone.</figcaption></figure>
+  </div>
 </section>
 
 <section class="chapter">
@@ -339,10 +371,16 @@ figure.shot figcaption b{color:var(--ink);font-weight:500}
       (<b>native NYM on Nyx</b> with memo matching via our own chain watcher, plus Bitcoin/Lightning
       through BTCPay), blind-signed Coconut ticketbooks, metered sessions with per-message
       reserve → settle, and a paywalled model catalog served live from the providers.</p></li>
+    <li><span class="when">Live</span><span class="t">Megabyte replies</span>
+      <p>Image generation up to <b>4K</b> over the mixnet — chunked, windowed, resumable — with a real
+      progress bar and Google-exact billing (image tokens vs. text tokens). Verified on iPhone: 5632 × 3072 px
+      in 247 s. Text and image models from Google, Groq and Cloudflare, plus a keyless free rail for testing.</p></li>
     <li><span class="when">Live</span><span class="t">Federation-grade cryptography</span>
       <p>The Coconut layer is <b>t-of-n from day one</b> — threshold issuance with one aggregated
       verification key is implemented and tested in the shared core; the current deployment simply
-      runs it as 1-of-1. Scaling to many scrai-servers where <mark>one balance is valid
+      runs it as 1-of-1 — which we state plainly: the single authority is trusted for issuance
+      until the threshold key ceremony, and the server refuses to boot in that mode without an explicit
+      operator override. Scaling to many scrai-servers where <mark>one balance is valid
       everywhere</mark> is deployment and key ceremony, not a rewrite. Double-spends are accepted
       offline and caught by a majority quorum; sanctions only on identify() proof.</p></li>
   </ol>
@@ -355,9 +393,11 @@ figure.shot figcaption b{color:var(--ink);font-weight:500}
       the directory over the mixnet and verifies every entry against the federation key:
       <mark>prices are client-verifiable</mark>, so a server can neither slip in per-customer pricing
       nor silent increases.</p></li>
-    <li><span class="when">Next</span><span class="t">More rails, bigger replies</span>
-      <p>Monero as a third payment rail, ticketbooks sized to the purchase tiers, and image
-      generation over SURB budgets for megabyte-sized replies.</p></li>
+    <li><span class="when">Next</span><span class="t">More rails, more throughput</span>
+      <p>Monero as a third payment rail and ticketbooks sized to the purchase tiers. On the server, the
+      bottleneck is Nym's per-client pacing (≈ 100 KB/s egress at default settings — fine for text, a
+      queue for concurrent 4K pictures): next are a tuned server send rate and several Nym identities
+      per server, announced through the same signed directory.</p></li>
     <li><span class="when">Next</span><span class="t">Same core, every platform</span>
       <p>iOS already runs the full stack — see the chapter below. Android follows via the same
       Tauri 2 setup with the same Rust core and the same UI; keys move into the OS keychain.</p></li>
@@ -369,9 +409,12 @@ figure.shot figcaption b{color:var(--ink);font-weight:500}
   <h2>The same app, <b>in your pocket</b></h2>
   <p class="lead">Not a second codebase: the identical Rust core — Nym SDK, Coconut wallet, privacy
   guard, native OCR — compiled for iOS with Tauri 2, running the same UI. Chat, payments and image
-  generation ride the mixnet from the phone today. A first-run <b>tutorial</b> walks you through
-  account → server → credit → chat, the connect screen narrates each real step of the route as it
-  comes up, and four <b>appearance themes</b> restyle the whole app — connect screen included.</p>
+  generation — up to 4K — ride the mixnet from the phone today, on real devices (iPhone 15 and 17e
+  in daily use). A first-run <b>tutorial</b> walks you through account → server → credit → chat, the
+  connect screen narrates each real step of the route as it comes up, and four <b>appearance themes</b>
+  restyle the whole app — connect screen included. Generated pictures save to Photos, exports go through
+  the share sheet, and the recovery phrase is revealed only behind Face ID, natively — it never enters the
+  web view.</p>
   <div class="shots phones">
     <figure class="shot"><div class="frame"><img data-img="ios-connecting" alt="iPhone: building the route through the mixnet"></div>
       <figcaption><b>Connecting.</b> The embedded Nym client builds its route on launch.</figcaption></figure>
@@ -385,6 +428,8 @@ figure.shot figcaption b{color:var(--ink);font-weight:500}
       <figcaption><b>Buy credit.</b> Fixed tiers as a bottom sheet — NYM native, Bitcoin, Monero next.</figcaption></figure>
     <figure class="shot"><div class="frame"><img data-img="ios-settings" alt="iPhone: smart pruning and privacy guard settings"></div>
       <figcaption><b>Settings.</b> Smart pruning and the on-device privacy guard — identical switches, phone-sized.</figcaption></figure>
+    <figure class="shot"><div class="frame"><img data-img="ios-4k" alt="iPhone: 4K picture generated over the mixnet"></div>
+      <figcaption><b>4K from the phone.</b> The same chunked, resumable delivery — 46 chunks over SURBs, a progress bar while they land.</figcaption></figure>
   </div>
 </section>
 
@@ -401,7 +446,7 @@ figure.shot figcaption b{color:var(--ink);font-weight:500}
 <div class="page" id="lang-de" hidden>
 
 <header class="hero">
-  <div class="eyebrow">Pitch · Stand August 2026</div>
+  <div class="eyebrow">Pitch · Stand 27. August 2026</div>
   <h1>Scramble<b>AI</b></h1>
   <p class="claim">Anonyme KI für alle. Jede Frage an einen Chatbot verrät zwei Dinge: <b>wer</b> fragt und <b>was</b> gefragt wird.
   ScrambleAI trennt beides — technisch, nicht per Versprechen: Fragen laufen durchs
@@ -412,6 +457,7 @@ figure.shot figcaption b{color:var(--ink);font-weight:500}
     <div class="kpi"><div class="n">5 Hops</div><div class="l">Sphinx-Routing</div></div>
     <div class="kpi"><div class="n">~1,1 s</div><div class="l">Mixnet-Anlauf, real gemessen</div></div>
     <div class="kpi"><div class="n">−60 %</div><div class="l">Tokenkosten durch Pruning</div></div>
+    <div class="kpi"><div class="n">4K</div><div class="l">Bild über SURBs geliefert, gemessen</div></div>
     <div class="kpi"><div class="n">zk-nym</div><div class="l">Coconut Credentials</div></div>
     <div class="kpi"><div class="n">100 % Rust</div><div class="l">Client-Kern + Server</div></div>
   </div>
@@ -454,6 +500,12 @@ figure.shot figcaption b{color:var(--ink);font-weight:500}
   Konversation selbst liegt ausschließlich lokal, verschlüsselt mit AES-256-GCM; Export und Umzug
   laufen über ein offenes, portables Format (<span class="chip on">handover.md</span>), auf Wunsch
   passphrase-verschlüsselt.</p>
+  <p><b>Antworten skalieren genauso.</b> Ein generiertes Bild ist keine einzige riesige Mixnet-Nachricht: Der
+  Server parkt es und antwortet mit einer kleinen Referenz, die App holt es in <mark>96-KB-Chunks, acht
+  gleichzeitig</mark> zurück und zeigt einen echten Fortschrittsbalken. Ein hängender Chunk wird allein neu
+  angefordert; ein abgebrochener Download wird <mark>per Retry fortgesetzt</mark> — nur die fehlenden Chunks, keine
+  zweite Generierung, keine zweite Abbuchung. Auf dem iPhone gemessen: ein <b>4K-Bild (5632 × 3072)</b>, 46 Chunks,
+  Ende zu Ende durchs Mixnet in rund vier Minuten, abgerechnet zu Googles Listenpreis plus Marge.</p>
   <div class="shots">
     <figure class="shot wide"><div class="frame"><img data-img="chat-mixnet" alt="Chat über das Mixnet, oben rechts die 5-Hop-Kette"></div>
       <figcaption><b>Der Chat.</b> Oben rechts die echte Route: you · entry · mix · mix · mix · exit · model. Links die verschlüsselte lokale Historie. Unten rechts der Preis der Antwort — 138 in · 342 out · 2 SCRAI.</figcaption></figure>
@@ -467,6 +519,12 @@ figure.shot figcaption b{color:var(--ink);font-weight:500}
       <figcaption><b>Deine Daten, portabel.</b> Ein Klick exportiert die Konversation als offenes Markdown — im Klartext zum Lesen, oder PBKDF2 + AES-256-GCM-verschlüsselt für den Umzug.</figcaption></figure>
     <figure class="shot"><div class="frame"><img data-img="gateway" alt="Entry-Gateway-Auswahl"></div>
       <figcaption><b>Du wählst, wo du reingehst.</b> Das Entry-Gateway ist nach Land und Host wählbar; die mittleren Mix-Hops bleiben pro Paket neu gewürfelt — genau dieses Mischen <em>ist</em> die Anonymität.</figcaption></figure>
+    <figure class="shot"><div class="frame"><img data-img="ios-progress" alt="iPhone: Bild-Download-Fortschritt, 9 von 46 Chunks"></div>
+      <figcaption><b>Ein Bild kommt an.</b> „Downloading picture · 9/46 chunks" — jeder Chunk ist eine quittierte Mixnet-Antwort; der erste Chunk markiert das echte First Byte, Generierungs- und Transferzeit werden getrennt sichtbar.</figcaption></figure>
+    <figure class="shot"><div class="frame"><img data-img="ios-4k" alt="iPhone: 4K-Bild über das Mixnet generiert und geliefert, mit Kostenzeile"></div>
+      <figcaption><b>4K, Ende zu Ende.</b> Nano Banana 2 mit 5632 × 3072 px, in 247 s über SURBs geliefert. Die Entwickler-Kostenzeile unter dem Bild: provider $0.155 · charged $0.171 · +10 % — die Marge ist eine Zahl, kein Geheimnis.</figcaption></figure>
+    <figure class="shot wide"><div class="frame"><img data-img="home-light" alt="Desktop-App im hellen Theme Nordic frost"></div>
+      <figcaption><b>Vier Themes, eine App.</b> „Nordic frost", das helle Theme, auf dem Desktop — jede Fläche, auch der Verbinden-Screen, folgt dem gewählten Theme.</figcaption></figure>
   </div>
 </section>
 
@@ -482,13 +540,14 @@ figure.shot figcaption b{color:var(--ink);font-weight:500}
     <li><span class="t">Datei-Scan mit OCR</span><span class="d">Bilder und PDFs werden lokal gelesen (Apple Vision nativ, Tesseract-WASM als Fallback) und durch dieselben Prüfungen geschickt. Funde lassen sich direkt im Bild schwärzen.</span></li>
     <li><span class="t">Manueller Markier-Modus</span><span class="d">Die erkannten Boxen sind Startpunkt, nicht Instanz: Fehltreffer per Klick verwerfen, und eigene schwarze Boxen über alles ziehen, was der Scanner nicht kennen kann. Die Balken werden vor dem Senden fest ins Bild eingebrannt.</span></li>
     <li><span class="t">Metadaten entfernt</span><span class="d">Vor dem Upload wird jedes Bild neu kodiert — EXIF/GPS und das eingebettete Original fallen weg — und auf eine vision-taugliche Größe herunterskaliert, sodass deutlich weniger Bytes durchs Mixnet gehen; PDFs verlieren ihr <span class="chip">/Info</span>-Dictionary und den XMP-Stream. Nichts verrät dem Modell, wo ein Foto entstand.</span></li>
-    <li><span class="t">Smart Pruning</span><span class="d">Vor dem Senden wird die Historie lexikalisch auf das Nötige getrimmt — gemessene −60 % Tokens, ohne zusätzlichen Modell-Aufruf.</span></li>
+    <li><span class="t">Smart Pruning</span><span class="d">Vor dem Senden wird die Historie lexikalisch auf das Nötige getrimmt — gemessene −60 % Tokens, ohne zusätzlichen Modell-Aufruf. Ein garantierter Gedächtnis-Sockel (die letzten N Wechsel gehen immer mit) hält den Faden, auch wenn die lexikalische Entscheidung ihn kappen würde.</span></li>
+    <li><span class="t">Kosten-Regler</span><span class="d">Reasoning-Tiefe (wie lange ein Gemini-Modell nachdenkt — abgerechnet als Output-Tokens) und Bildgröße (512 px → 4K) sind Slider neben den Pruning-Schaltern — Kosten sind eine sichtbare Einstellung, keine Überraschung auf der Rechnung.</span></li>
   </ul>
   <div class="shots two">
     <figure class="shot"><div class="frame"><img data-img="guard" alt="Privacy-Guard-Warnung"></div>
       <figcaption><b>Privacy Guard.</b> Warnt vor IBAN, Name + Adresse, Telefonnummer — „nothing was sent, logged, or stored. You decide."</figcaption></figure>
-    <figure class="shot"><div class="frame"><img data-img="settings" alt="Einstellungen: Smart Pruning und Privacy Guard"></div>
-      <figcaption><b>Einstellungen.</b> Jede Prüfung einzeln schaltbar; die Topic-Entscheidung fällt lokal, nie per Modell-Aufruf.</figcaption></figure>
+    <figure class="shot"><div class="frame"><img data-img="settings-efficiency" alt="Einstellungen › Efficiency: Gedächtnis, Reasoning-Tiefe und Bildgröße als Slider, darunter die Pruning-Schalter"></div>
+      <figcaption><b>Einstellungen › Efficiency.</b> Gedächtnis-Sockel, Reasoning-Tiefe und Bildgröße als Stufen-Slider; die Pruning-Prüfungen darunter einzeln schaltbar. Die Topic-Entscheidung fällt lokal, nie per Modell-Aufruf.</figcaption></figure>
     <figure class="shot"><div class="frame"><img data-img="guard-edit" alt="Anhang-Review: erkannte Funde in Rot, eine selbst gezogene schwarze Box"></div>
       <figcaption><b>Anhang-Review, Edit-Modus.</b> OCR liest das Formular auf dem Gerät; der Guard markiert Name, IBAN und Telefon (rot). Die schwarze Box über dem Betrag ist von Hand gezogen — der manuelle Modus für alles, was der Scanner nicht als sensibel kennen kann.</figcaption></figure>
     <figure class="shot"><div class="frame"><img data-img="guard-redacted" alt="Redigierte Vorschau mit eingebrannten schwarzen Balken"></div>
@@ -535,6 +594,14 @@ figure.shot figcaption b{color:var(--ink);font-weight:500}
   ein sichtbares <span class="chip" style="color:var(--rust);border-color:color-mix(in srgb,var(--rust) 45%,var(--line))">trains on input</span>-Badge,
   und vor der ersten Nutzung zeigt die App die Bedingungen des Providers — denn das Mixnet
   versteckt <em>wer</em> fragt, nicht <em>bei wem</em> die Antwort entsteht.</p>
+  <p>Die Ehrlichkeit reicht bis zur Rechnung und bis zur Absage. Bildmodelle werden so abgerechnet, wie Google
+  uns abrechnet — <mark>Bild-Tokens und Text-/Thinking-Tokens zu ihren getrennten Sätzen</mark>, Zeile für Zeile
+  gegen die veröffentlichte Preisliste geprüft (ein 1K-Bild auf Nano Banana 2 Lite: $0,034 Provider-Kosten).
+  Wer ein Lite-Modell um 2K bittet, bekommt — und bezahlt — 1K, und die Antwort sagt es. Und lehnt Google eine
+  Anfrage ab (eine erkennbare reale Person, ein Policy-Treffer, ein Thinking-Budget, das die Antwort aufgefressen
+  hat), zeigt die App nicht mehr „no content": Der Server übersetzt Geminis
+  <span class="chip">finishReason</span> in einen klaren Satz, der sagt, was zu ändern ist und dass nur das
+  Nachdenken berechnet wurde.</p>
   <div class="shots two">
     <figure class="shot"><div class="frame"><img data-img="picker" alt="Modell-Picker"></div>
       <figcaption><b>Der Katalog.</b> Filter: All · Chatbot · Image gen · Free · Latest — additiv kombinierbar.</figcaption></figure>
@@ -542,6 +609,8 @@ figure.shot figcaption b{color:var(--ink);font-weight:500}
       <figcaption><b>Free-Filter.</b> Nur Modelle, die nichts kosten — und genau so abgerechnet werden.</figcaption></figure>
     <figure class="shot wide"><div class="frame"><img data-img="terms" alt="Provider-Terms-Dialog"></div>
       <figcaption><b>Provider-Terms.</b> Zustimmung pro Modell, mit Klartext-Warnung, was der Anbieter mit Eingaben tun darf.</figcaption></figure>
+    <figure class="shot wide"><div class="frame"><img data-img="ios-declined" alt="iPhone: eine von Google abgelehnte Bildanfrage — kein Bild, 803 Reasoning-Tokens, $0,0012"></div>
+      <figcaption><b>Eine Absage, ehrlich bepreist.</b> „generate an image of [eine namentlich genannte Person des öffentlichen Lebens] in a helicopter" — Googles Bildmodell zeichnet keine realen Personen. 803 Reasoning-Tokens, null Bild-Tokens, $0,0012 — und seit diesem Build ein Satz, der den Grund nennt, statt „(the model returned no content)".</figcaption></figure>
   </div>
 </section>
 
@@ -558,8 +627,17 @@ figure.shot figcaption b{color:var(--ink);font-weight:500}
     <li><span class="t">scrai-core</span><span class="d">Geteilte Bibliothek: Coconut-E-Cash, Double-Spend-Quorum, Preistabelle, Billing-Mathematik, Request-Signaturen. Ein Bug-Fix wirkt auf beiden Seiten.</span></li>
     <li><span class="t">Desktop-App</span><span class="d">Tauri 2. Rust-Prozess mit eingebettetem Nym-SDK, nativer OCR und lokalem NER-Modell; die murmur-UI läuft als Web-Frontend im Webview — identisch für die kommenden Mobile-Builds.</span></li>
     <li><span class="t">scrai-server</span><span class="d">Rust-Binary als Nym-Service-Provider. Persistiert Sessions, Quorum und Paywall in SQLite; Modellkatalog live von Gemini + Groq; Vision-Uploads in quittierten Chunks.</span></li>
-    <li><span class="t">Abgesichert</span><span class="d">Kernpfade unit-getestet (Billing, Signaturen, E-Cash-Lebenszyklus, Upload-Reassemblierung); Ende-zu-Ende real über das Mixnet verifiziert.</span></li>
+    <li><span class="t">Der Transport, präzise</span><span class="d">Offizielles <span class="chip">nym-sdk 1.21.4</span> auf beiden Seiten, Nym-Mainnet. Die App verbindet sich mit einer <b>ephemeren Identität</b> — ein frischer Sender-Key pro Sitzung — und schickt jede Anfrage mit anonymen Reply-SURBs, der Server erfährt nie eine Client-Adresse. Der Server hält eine persistente Nym-Identität, öffnet <b>keinerlei eingehenden Port</b> und antwortet nur über die SURBs, die eine Anfrage mitbrachte. Chat, Uploads, Bilder, Zahlungen, sogar der Modellkatalog: ein Pfad, kein Clearnet-Fallback in der App.</span></li>
+    <li><span class="t">Sichtbares Traffic-Shaping</span><span class="d">Cover-Traffic, Mixing-Verzögerung pro Hop und Senderate sind Slider unter <b>Network &amp; Privacy</b>, voreingestellt auf Nyms eigene Parameter (0,10 Mbps Cover · 15 ms Mixing · 1 Mbps Senden, Cover-Strom immer an). Jeder Regler sagt, was er an Privatsphäre kostet; „Reset to recommended" ist ein Tipp.</span></li>
+    <li><span class="t">Große Nutzlast, kleine Pakete</span><span class="d">Uploads und generierte Bilder reisen als quittierte 96-KB-Chunks. Downloads laufen mit acht Chunks gleichzeitig — Nym hält nur ~200 Reply-SURBs pro Absender, ein Schwall lässt den Server trockenlaufen — und ein hängender Chunk wird allein neu angefordert. Geparkte Bilder leben 30 min serverseitig, ein abgebrochener Download wird fortgesetzt statt neu berechnet.</span></li>
+    <li><span class="t">Abgesichert &amp; auditiert</span><span class="d">Kernpfade unit-getestet (Billing, Signaturen, E-Cash-Lebenszyklus, Upload-Reassemblierung, Absage-Meldungen); Ende-zu-Ende real über das Mixnet verifiziert, auf Desktop und zwei iPhones. Ein Code-Audit am 27.&nbsp;8.&nbsp;2026 fand keinen Mock-, Simulations- oder Clearnet-Pfad für Anwendungs-Traffic — und zwei ehrliche Offenlegungen: Die App macht vor dem Verbinden eine Clearnet-Anfrage an Nyms Validator-API für das Gateway-Verzeichnis (derselbe Aufruf, den der Topologie-Fetch des SDK macht), und der heutige Build pinnt eine einzelne Betreiber-Adresse, bis das signierte Verzeichnis kommt.</span></li>
   </ul>
+  <div class="shots two">
+    <figure class="shot"><div class="frame"><img data-img="settings-network" alt="Einstellungen › Network &amp; Privacy: Cover-Traffic, Mixing-Verzögerung und Senderate als Slider"></div>
+      <figcaption><b>Einstellungen › Network &amp; Privacy.</b> Die drei Nym-Traffic-Parameter als Slider, Live-Wert jeweils darunter — 0,10 Mbps Cover, 15 ms Mixing, 1,02 Mbps Senden — plus der Schalter für konstanten Cover-Traffic.</figcaption></figure>
+    <figure class="shot"><div class="frame"><img data-img="buy" alt="Guthaben kaufen: feste Beträge, NYM · Bitcoin · Monero"></div>
+      <figcaption><b>Ein Bedienvokabular.</b> Einstellungen, Konto und Guthaben teilen sich eine Karten-, Slider- und Kachelsprache — identisch auf Desktop und Telefon.</figcaption></figure>
+  </div>
 </section>
 
 <section class="chapter">
@@ -574,10 +652,17 @@ figure.shot figcaption b{color:var(--ink);font-weight:500}
       Bitcoin/Lightning via BTCPay), blind signierte Coconut-Ticketbooks, getaktete Sessions mit
       Reserve → Settle pro Nachricht, und ein bezahlschrankengesicherter Modellkatalog live von den
       Providern.</p></li>
+    <li><span class="when">Live</span><span class="t">Megabyte-Antworten</span>
+      <p>Bildgenerierung bis <b>4K</b> über das Mixnet — gechunkt, gefenstert, fortsetzbar — mit echtem
+      Fortschrittsbalken und Google-exakter Abrechnung (Bild-Tokens vs. Text-Tokens). Auf dem iPhone verifiziert:
+      5632 × 3072 px in 247 s. Text- und Bildmodelle von Google, Groq und Cloudflare, dazu ein schlüsselloser
+      Gratis-Pfad zum Testen.</p></li>
     <li><span class="when">Live</span><span class="t">Föderationsreife Kryptografie</span>
       <p>Die Coconut-Schicht ist <b>von Anfang an t-von-n</b> — Threshold-Issuance mit einem
       aggregierten Verification Key ist im geteilten Kern implementiert und getestet; das aktuelle
-      Deployment fährt sie schlicht als 1-von-1. Die Skalierung auf viele scrai-server, bei der
+      Deployment fährt sie schlicht als 1-von-1 — und das sagen wir klar: Die einzelne Authority ist bis zur
+      Threshold-Key-Zeremonie für die Ausgabe vertrauenswürdig zu setzen, und der Server startet in diesem Modus
+      nur mit ausdrücklicher Betreiber-Freigabe. Die Skalierung auf viele scrai-server, bei der
       <mark>ein Guthaben überall gilt</mark>, ist Deployment und Key-Zeremonie, kein Rewrite.
       Double-Spends werden offline akzeptiert und vom Mehrheits-Quorum erkannt; sanktioniert wird nur
       auf identify()-Beweis.</p></li>
@@ -592,9 +677,11 @@ figure.shot figcaption b{color:var(--ink);font-weight:500}
       verifiziert jeden Eintrag gegen den Föderations-Key: <mark>Preise sind clientseitig
       beweisbar</mark> — ein Server kann weder Sonderpreise pro Kunde noch stille Erhöhungen
       unterschieben.</p></li>
-    <li><span class="when">Next</span><span class="t">Mehr Rails, größere Antworten</span>
-      <p>Monero als dritter Zahlungsweg, Ticketbooks in Kaufstufen-Größe, und Bildgenerierung über
-      SURB-Budgets für megabytegroße Antworten.</p></li>
+    <li><span class="when">Next</span><span class="t">Mehr Rails, mehr Durchsatz</span>
+      <p>Monero als dritter Zahlungsweg und Ticketbooks in Kaufstufen-Größe. Serverseitig ist der Engpass Nyms
+      Pacing pro Client (≈ 100 KB/s Egress bei Standardwerten — für Text reichlich, bei gleichzeitigen 4K-Bildern
+      eine Warteschlange): Als Nächstes kommen eine getunte Server-Senderate und mehrere Nym-Identitäten pro
+      Server, angekündigt über dasselbe signierte Verzeichnis.</p></li>
     <li><span class="when">Next</span><span class="t">Gleicher Kern, jede Plattform</span>
       <p>iOS läuft bereits mit dem vollen Stack — siehe das Kapitel unten. Android folgt über
       dasselbe Tauri-2-Setup mit demselben Rust-Kern und derselben UI; Schlüssel wandern in die
@@ -607,10 +694,12 @@ figure.shot figcaption b{color:var(--ink);font-weight:500}
   <h2>Dieselbe App, <b>in der Hosentasche</b></h2>
   <p class="lead">Keine zweite Codebase: der identische Rust-Kern — Nym SDK, Coconut-Wallet, Privacy
   Guard, native OCR — für iOS kompiliert mit Tauri 2, mit derselben UI. Chat, Zahlungen und
-  Bildgenerierung laufen heute vom Telefon aus übers Mixnet. Ein <b>Tutorial</b> beim ersten Start
-  führt durch Account → Server → Guthaben → Chat, der Verbinden-Screen benennt jeden echten Schritt
-  der Route, während er live steht, und vier <b>Themes</b> stylen die ganze App um — inklusive
-  Verbinden-Screen.</p>
+  Bildgenerierung — bis 4K — laufen heute vom Telefon aus übers Mixnet, auf echten Geräten (iPhone 15 und
+  17e im täglichen Einsatz). Ein <b>Tutorial</b> beim ersten Start führt durch Account → Server → Guthaben →
+  Chat, der Verbinden-Screen benennt jeden echten Schritt der Route, während er live steht, und vier
+  <b>Themes</b> stylen die ganze App um — inklusive Verbinden-Screen. Generierte Bilder landen in Fotos,
+  Exporte gehen über das Share-Sheet, und die Recovery-Phrase wird nur hinter Face ID gezeigt, nativ — sie
+  betritt den Webview nie.</p>
   <div class="shots phones">
     <figure class="shot"><div class="frame"><img data-img="ios-connecting" alt="iPhone: Route durchs Mixnet wird aufgebaut"></div>
       <figcaption><b>Verbinden.</b> Der eingebettete Nym-Client baut beim Start seine Route.</figcaption></figure>
@@ -624,6 +713,8 @@ figure.shot figcaption b{color:var(--ink);font-weight:500}
       <figcaption><b>Guthaben kaufen.</b> Feste Stufen als Bottom Sheet — NYM nativ, Bitcoin, Monero als Nächstes.</figcaption></figure>
     <figure class="shot"><div class="frame"><img data-img="ios-settings" alt="iPhone: Smart-Pruning- und Privacy-Guard-Einstellungen"></div>
       <figcaption><b>Einstellungen.</b> Smart Pruning und der On-Device-Privacy-Guard — dieselben Schalter, in Telefongröße.</figcaption></figure>
+    <figure class="shot"><div class="frame"><img data-img="ios-4k" alt="iPhone: 4K-Bild über das Mixnet generiert"></div>
+      <figcaption><b>4K vom Telefon.</b> Dieselbe gechunkte, fortsetzbare Zustellung — 46 Chunks über SURBs, ein Fortschrittsbalken, während sie landen.</figcaption></figure>
   </div>
 </section>
 
@@ -666,6 +757,12 @@ const IMGS = {
   "ios-drawer": "data:image/jpeg;base64,{{IMG:ios-drawer}}",
   "ios-buy": "data:image/jpeg;base64,{{IMG:ios-buy}}",
   "ios-settings": "data:image/jpeg;base64,{{IMG:ios-settings}}",
+  "settings-efficiency": "data:image/jpeg;base64,{{IMG:settings-efficiency}}",
+  "settings-network": "data:image/jpeg;base64,{{IMG:settings-network}}",
+  "home-light": "data:image/jpeg;base64,{{IMG:home-light}}",
+  "ios-4k": "data:image/jpeg;base64,{{IMG:ios-4k}}",
+  "ios-progress": "data:image/jpeg;base64,{{IMG:ios-progress}}",
+  "ios-declined": "data:image/jpeg;base64,{{IMG:ios-declined}}",
 };
 document.querySelectorAll("img[data-img]").forEach(img => {
   const src = IMGS[img.dataset.img];

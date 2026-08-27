@@ -46,7 +46,7 @@ def svg(lang):
       <rect class="bx" x="770" y="62" width="140" height="42" rx="8"/>
       <text class="lbl" x="786" y="88">Gemini</text>
       <rect class="bx" x="770" y="118" width="140" height="42" rx="8"/>
-      <text class="lbl" x="786" y="144">Groq</text>
+      <text class="lbl" x="786" y="144">Groq · Cloudflare</text>
       <text class="sub" x="10" y="196">{L["f1"]}</text>
       <text class="sub" x="512" y="196">{L["f2"]}</text>
       <text class="sub" x="770" y="196">{L["f3"]}</text>
