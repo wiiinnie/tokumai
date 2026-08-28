@@ -33,6 +33,16 @@ use scrai_core::session::SessionStore;
 // data/authority.json) and invalidates previously issued purses — fine while
 // everything is testnet.
 const TICKETBOOK_COINS: u64 = 500;
+/// Testnet servers (SCRAI_TESTNET=1) issue $1 books (100 coins) so a faucet-paid $1
+/// purchase is exactly one book and collects at once. Mainnet stays at $5 — the minimum
+/// purchase — and redeems in the same $1 slices as before (REDEEM_CHUNK_COINS).
+const TESTNET_TICKETBOOK_COINS: u64 = 100;
+
+/// Coins per ticketbook for THIS server's mode. Baked into the authority keys, so it is
+/// checked against the persisted authority at boot (see `load_or_bootstrap`).
+fn ticketbook_coins() -> u64 {
+    if pay::is_testnet_server() { TESTNET_TICKETBOOK_COINS } else { TICKETBOOK_COINS }
+}
 
 /// Number of issuing authorities this build runs. 1 = a single trusted-dealer
 /// authority (testnet bring-up): it can forge unlimited credentials, so issuing
@@ -186,12 +196,14 @@ async fn main() {
     // Revision marks of what is already on disk — persist_changed() re-saves a store
     // only when its revision moved past these.
     let mut saved = SavedRevs { sessions: sessions.revision(), quorum: quorum.revision(), pay: paywall.revision() };
-    let book_scrai = TICKETBOOK_COINS * scrai_core::coconut::COIN_SCRAI;
+    let book_scrai = ticketbook_coins() * scrai_core::coconut::COIN_SCRAI;
     println!(
-        "scrai-server: gateway {} · ticketbook {} coins ({} SCRAI)",
+        "scrai-server: gateway {} · ticketbook {} coins ({} SCRAI = ${}){}",
         gateway.name(),
-        TICKETBOOK_COINS,
-        book_scrai
+        ticketbook_coins(),
+        book_scrai,
+        book_scrai / scrai_core::coconut::SCRAI_PER_USD,
+        if pay::is_testnet_server() { " · testnet $1 books" } else { "" }
     );
 
     // H9: a single (1-of-1) authority can forge unlimited credentials. That is fine for
@@ -574,13 +586,29 @@ fn env_usize(name: &str, default: usize) -> usize {
 
 /// Load the persisted authority, or bootstrap + persist one on first run.
 fn load_or_bootstrap(path: &Path) -> Authority {
+    let want = ticketbook_coins();
     if let Ok(json) = std::fs::read_to_string(path) {
         match Authority::restore(&json) {
+            // The book size lives in the keys: a persisted authority with a different size
+            // must NOT be silently replaced (every held book would die unannounced).
+            Ok(a) if a.total_coins() != want => {
+                eprintln!(
+                    "scrai-server: {} holds a {}-coin authority but this mode needs {}-coin books \
+                     (SCRAI_TESTNET={}). Re-bootstrapping invalidates every ticketbook clients hold. \
+                     To proceed on purpose: stop the server, move that file away, start again.",
+                    path.display(),
+                    a.total_coins(),
+                    want,
+                    if pay::is_testnet_server() { "1" } else { "unset" }
+                );
+                std::process::exit(1);
+            }
             Ok(a) => return a,
             Err(e) => eprintln!("scrai-server: couldn't restore authority ({e}) — re-bootstrapping"),
         }
     }
-    let authority = federation::bootstrap(AUTHORITY_N, AUTHORITY_N as u64, TICKETBOOK_COINS, future_expiration_date())
+    println!("scrai-server: bootstrapping a {want}-coin authority");
+    let authority = federation::bootstrap(AUTHORITY_N, AUTHORITY_N as u64, want, future_expiration_date())
         .expect("bootstrap authority")
         .into_iter()
         .next()
