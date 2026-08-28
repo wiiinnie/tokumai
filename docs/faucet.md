@@ -83,6 +83,18 @@ account — in the test a purchase is linkable to a tester. The site says so.
 5. Check: `curl -s https://scrai-faucet.hermes-stakepool.de/api/status` →
    `{"testnet":true,"wallet":true,"claimsToday":0,"dailyMax":20}`.
 
+## Ticketbook size: $1 on testnet, $5 on mainnet
+
+Credit is withdrawn as uniform Coconut ticketbooks. Mainnet books are 500 coins
+($5 — the minimum purchase); a testnet server (`SCRAI_TESTNET=1`) issues 100-coin ($1)
+books so a faucet-paid $1 is exactly one book and collects immediately. Redeeming into
+a session stays at 100-coin ($1) slices on both. The size is baked into the authority
+keys (`data/authority.json`): the server refuses to boot if the persisted authority's
+size differs from its mode, instead of silently re-keying. Switching a server's mode
+therefore means, once: `systemctl stop scrai`, move `authority.json` away, start — every
+ticketbook clients hold from the old key is void (they are dropped automatically on the
+next spend; server-side entitlement is unaffected).
+
 ## Downloads + version on the site
 
 `scripts/publish-downloads.sh hermes@<vps>` uploads the newest local `.dmg` (from
