@@ -54,7 +54,7 @@ const IMAGES: &[(&str, &[u8])] = &[
     ("mac-chat.jpg", include_bytes!("../../site/img/mac-chat.jpg")),
     ("mac-picker.jpg", include_bytes!("../../site/img/mac-picker.jpg")),
     ("mac-guard.jpg", include_bytes!("../../site/img/mac-guard.jpg")),
-    ("ios-home.jpg", include_bytes!("../../site/img/ios-home.jpg")),
+    ("ios-pay.jpg", include_bytes!("../../site/img/ios-pay.jpg")),
     ("ios-buy.jpg", include_bytes!("../../site/img/ios-buy.jpg")),
     ("ios-settings.jpg", include_bytes!("../../site/img/ios-settings.jpg")),
 ];

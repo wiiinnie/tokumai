@@ -84,20 +84,23 @@
   .tile:focus-visible .frame{box-shadow:inset 0 0 0 2px var(--signal)}
   .tile .frame{display:block;background:#0F0D0B;border-bottom:1px solid var(--line);aspect-ratio:2/1}
   .tile.mac img{width:100%;height:100%;object-fit:cover;object-position:top left;display:block}
-  .tile.ios .frame{display:grid;place-items:end center;padding:14px 0 0;overflow:hidden}
-  .tile.ios img{height:135%;width:auto;display:block;border-radius:22px 22px 0 0;box-shadow:0 0 0 1px var(--line),0 10px 30px rgba(0,0,0,.5)}
+  .tile.ios .frame{display:grid;place-items:center;padding:12px 0}
+  .tile.ios img{height:100%;width:auto;max-width:100%;display:block;border-radius:14px;box-shadow:0 0 0 1px var(--line),0 10px 30px rgba(0,0,0,.5)}
   .tile .cap{display:flex;flex-direction:column;gap:3px;padding:12px 14px 13px}
   .tile .cap .os{font:500 10.5px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
   .tile .cap .t{font-size:14px;font-weight:600}
   .galnote{margin:14px 0 0;font-family:var(--mono);font-size:11.5px;color:var(--muted)}
   .lb{position:fixed;inset:0;background:rgba(10,8,6,.9);display:none;align-items:center;justify-content:center;z-index:50;padding:28px}
   .lb[data-open]{display:flex}
-  .lb .slide{margin:0;max-width:min(1400px,96vw);display:flex;flex-direction:column;align-items:center;gap:14px}
-  .lb .slide img{max-width:100%;max-height:78vh;border-radius:12px;border:1px solid var(--line);box-shadow:0 30px 80px rgba(0,0,0,.6);display:block}
+  .lb .slide{margin:0;max-width:min(1600px,96vw);display:flex;flex-direction:column;align-items:center;gap:14px}
+  .lb .slide[hidden]{display:none}
+  .lb .slide img{max-width:100%;max-height:82vh;border-radius:12px;border:1px solid var(--line);box-shadow:0 30px 80px rgba(0,0,0,.6);display:block}
+  .lb .slide.ios img{max-height:84vh;width:auto}
   .lb figcaption{text-align:center;max-width:720px;font-size:14.5px;color:var(--bone)}
   .lb figcaption .os{font:500 10.5px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--signal);margin-right:8px}
   .lb figcaption .d{display:block;margin-top:4px;color:var(--muted);font-size:13.5px;line-height:1.5}
-  .lb .x,.lb .nav{position:absolute;appearance:none;border:1px solid var(--line);background:var(--surface-2);color:var(--bone);border-radius:10px;cursor:pointer;font:600 14px var(--body);min-width:44px;min-height:44px;display:grid;place-items:center}
+  .lb .x,.lb .nav{position:absolute;appearance:none;border:1px solid var(--line);background:var(--surface-2);color:var(--bone);border-radius:12px;cursor:pointer;font:600 22px var(--body);min-width:52px;min-height:52px;display:grid;place-items:center;z-index:2}
+  .lb .x{font-size:16px}
   .lb .x{top:18px;right:18px}
   .lb .nav{top:50%;transform:translateY(-50%)}.lb .prev{left:18px}.lb .next{right:18px}
   .lb .x:hover,.lb .nav:hover,.lb .x:focus-visible,.lb .nav:focus-visible{border-color:var(--signal);outline:none}
@@ -137,7 +140,7 @@
       <div class="dlc{{CLS_MACOS}}">
         <div class="os"> macOS</div>
         <div class="meta">{{META_MACOS}}</div>
-        <div class="note"><b>First launch:</b> the build is not notarised yet (no Apple developer programme). Drag the app to Applications, open it once — macOS refuses — then <b>System Settings → Privacy &amp; Security → Open Anyway</b>. Terminal alternative: <span style="font-family:var(--mono)">xattr -d com.apple.quarantine /Applications/ScrambleAI.app</span>. Afterwards it opens normally.</div>
+        <div class="note"><b>First launch:</b> the build is not notarised yet (no Apple developer programme). Drag the app to Applications, open it once — macOS refuses — then <b>System Settings → Privacy &amp; Security</b>, scroll down to the <b>Security</b> block: "ScrambleAI was blocked…" → <b>Open Anyway</b> (the button shows for about an hour after the attempt). No button there? Terminal: <span style="font-family:var(--mono)">xattr -d com.apple.quarantine /Applications/ScrambleAI.app</span>. Afterwards it opens normally.</div>
         <div class="sum" id="verify">sha256 {{SHA_MACOS}}</div>
         <div class="row">{{DL_MACOS}}</div>
       </div>
@@ -173,11 +176,11 @@
       <button class="tile mac" type="button" data-i="0" aria-label="Open screenshot: macOS — Chat over five mixnet hops"><span class="frame"><img src="/img/mac-chat.jpg" alt="macOS: Chat over five mixnet hops" loading="lazy"></span><span class="cap"><span class="os">macOS</span><span class="t">Chat over five mixnet hops</span></span></button>
       <button class="tile mac" type="button" data-i="1" aria-label="Open screenshot: macOS — Pick a model, see its price"><span class="frame"><img src="/img/mac-picker.jpg" alt="macOS: Pick a model, see its price" loading="lazy"></span><span class="cap"><span class="os">macOS</span><span class="t">Pick a model, see its price</span></span></button>
       <button class="tile mac" type="button" data-i="2" aria-label="Open screenshot: macOS — Data guard before you send"><span class="frame"><img src="/img/mac-guard.jpg" alt="macOS: Data guard before you send" loading="lazy"></span><span class="cap"><span class="os">macOS</span><span class="t">Data guard before you send</span></span></button>
-      <button class="tile ios" type="button" data-i="3" aria-label="Open screenshot: iPhone — Same app, same core"><span class="frame"><img src="/img/ios-home.jpg" alt="iPhone: Same app, same core" loading="lazy"></span><span class="cap"><span class="os">iPhone</span><span class="t">Same app, same core</span></span></button>
+      <button class="tile ios" type="button" data-i="3" aria-label="Open screenshot: iPhone — Pay in NYM, memo included"><span class="frame"><img src="/img/ios-pay.jpg" alt="iPhone: Pay in NYM, memo included" loading="lazy"></span><span class="cap"><span class="os">iPhone</span><span class="t">Pay in NYM, memo included</span></span></button>
       <button class="tile ios" type="button" data-i="4" aria-label="Open screenshot: iPhone — Buy credit in NYM"><span class="frame"><img src="/img/ios-buy.jpg" alt="iPhone: Buy credit in NYM" loading="lazy"></span><span class="cap"><span class="os">iPhone</span><span class="t">Buy credit in NYM</span></span></button>
-      <button class="tile ios" type="button" data-i="5" aria-label="Open screenshot: iPhone — Smart pruning, on by default"><span class="frame"><img src="/img/ios-settings.jpg" alt="iPhone: Smart pruning, on by default" loading="lazy"></span><span class="cap"><span class="os">iPhone</span><span class="t">Smart pruning, on by default</span></span></button>
+      <button class="tile ios" type="button" data-i="5" aria-label="Open screenshot: iPhone — Efficiency dials"><span class="frame"><img src="/img/ios-settings.jpg" alt="iPhone: Efficiency dials" loading="lazy"></span><span class="cap"><span class="os">iPhone</span><span class="t">Efficiency dials</span></span></button>
     </div>
-    <p class="galnote">macOS · Apple silicon — iPhone · sideloaded test build</p>
+    <p class="galnote">macOS · Apple silicon — iPhone · 0.3.0 test build</p>
   </div>
 
   <div class="sec" id="faucet">
@@ -265,9 +268,9 @@
   <figure class="slide mac" data-i="0" hidden><img src="/img/mac-chat.jpg" alt="macOS: Chat over five mixnet hops"><figcaption><span class="os">macOS</span> <b>Chat over five mixnet hops</b><span class="d">Every reply rides the sphinx path shown top right — you · entry · mix · mix · mix · exit · model.</span></figcaption></figure>
   <figure class="slide mac" data-i="1" hidden><img src="/img/mac-picker.jpg" alt="macOS: Pick a model, see its price"><figcaption><span class="os">macOS</span> <b>Pick a model, see its price</b><span class="d">Google and Groq models with their per-1k SCRAI cost; image models beside chat models.</span></figcaption></figure>
   <figure class="slide mac" data-i="2" hidden><img src="/img/mac-guard.jpg" alt="macOS: Data guard before you send"><figcaption><span class="os">macOS</span> <b>Data guard before you send</b><span class="d">An IBAN, a name next to an address, a phone number — flagged on-device, nothing sent, you decide.</span></figcaption></figure>
-  <figure class="slide ios" data-i="3" hidden><img src="/img/ios-home.jpg" alt="iPhone: Same app, same core"><figcaption><span class="os">iPhone</span> <b>Same app, same core</b><span class="d">The Rust core runs on the phone; the conversation stays on the device.</span></figcaption></figure>
+  <figure class="slide ios" data-i="3" hidden><img src="/img/ios-pay.jpg" alt="iPhone: Pay in NYM, memo included"><figcaption><span class="os">iPhone</span> <b>Pay in NYM, memo included</b><span class="d">QR, address and the memo the chain watcher matches — on the testnet this is the memo you paste into the faucet.</span></figcaption></figure>
   <figure class="slide ios" data-i="4" hidden><img src="/img/ios-buy.jpg" alt="iPhone: Buy credit in NYM"><figcaption><span class="os">iPhone</span> <b>Buy credit in NYM</b><span class="d">Fixed amounts, one coin, no account — a purchase reveals no per-user fingerprint.</span></figcaption></figure>
-  <figure class="slide ios" data-i="5" hidden><img src="/img/ios-settings.jpg" alt="iPhone: Smart pruning, on by default"><figcaption><span class="os">iPhone</span> <b>Smart pruning, on by default</b><span class="d">Fewer tokens leave the device; every trimming decision is made locally.</span></figcaption></figure>
+  <figure class="slide ios" data-i="5" hidden><img src="/img/ios-settings.jpg" alt="iPhone: Efficiency dials"><figcaption><span class="os">iPhone</span> <b>Efficiency dials</b><span class="d">Conversation memory, reasoning depth, image size — fewer tokens leave the device, and the trimming decision is made locally.</span></figcaption></figure>
   <div class="cnt" id="lbc"></div>
 </div>
 <script>
