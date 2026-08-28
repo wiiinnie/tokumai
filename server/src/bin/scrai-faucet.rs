@@ -60,6 +60,14 @@ fn env_or(name: &str, default: &str) -> String {
     std::env::var(name).ok().filter(|v| !v.trim().is_empty()).unwrap_or_else(|| default.to_string())
 }
 
+/// `https://validator-sandbox-1.nymtech.net/api` → `https://validator-sandbox-1.nymtech.net`.
+/// Anything without a trailing `/api` is returned as-is (minus a trailing slash).
+fn rpc_from_lcd(lcd: Option<&str>) -> String {
+    let Some(l) = lcd else { return String::new() };
+    let l = l.trim().trim_end_matches('/');
+    l.strip_suffix("/api").unwrap_or(l).to_string()
+}
+
 fn testnet_on() -> bool {
     scrai_server::pay::is_testnet_server()
 }
@@ -90,7 +98,11 @@ impl Cfg {
         Cfg {
             data: PathBuf::from(env_or("SCRAI_DATA", "./data")),
             listen: env_or("SCRAI_FAUCET_LISTEN", "127.0.0.1:8790"),
-            rpc: env_or("SCRAI_FAUCET_RPC", ""),
+            // Tendermint RPC of the chain the server watches. Derived from the LCD the
+            // server uses (NYX_LCD_URL_*: `<validator>/api` → `<validator>`), so the faucet
+            // can never pay on a different chain by accident; SCRAI_FAUCET_RPC overrides
+            // for hosts where LCD and RPC don't share a root.
+            rpc: env_or("SCRAI_FAUCET_RPC", &rpc_from_lcd(scrai_server::net_var("NYX_LCD_URL").as_deref())),
             // the SAME receive address the server watches — a payment anywhere else is lost
             receive: scrai_server::net_var("NYX_RECEIVE_ADDRESS").unwrap_or_default(),
             daily_max: env_or("SCRAI_FAUCET_DAILY_MAX", "20").parse().unwrap_or(20),
@@ -150,7 +162,7 @@ impl Wallet {
             return Ok(None);
         };
         if cfg.rpc.is_empty() {
-            return Err("SCRAI_FAUCET_RPC (Tendermint RPC of the Nyx testnet node) is required with a mnemonic".into());
+            return Err("no chain RPC: set NYX_LCD_URL_* (the faucet derives the RPC from it) or SCRAI_FAUCET_RPC".into());
         }
         let mnemonic: bip39::Mnemonic = m.trim().parse().map_err(|e| format!("SCRAI_FAUCET_MNEMONIC: {e}"))?;
         // Chain details: the Nyx sandbox shares prefix + denom with mainnet; the chain id
@@ -602,6 +614,7 @@ async fn serve(cfg: Cfg) -> Result<(), String> {
     match (&wallet, testnet_on()) {
         (Some(w), true) => {
             println!("scrai-faucet: TESTNET on · wallet {} · pays to {} · daily max {}", w.address(), cfg.receive, cfg.daily_max);
+            println!("scrai-faucet: chain RPC {}", cfg.rpc);
             match w.balance_unym().await {
                 Ok(b) => println!("scrai-faucet: wallet balance {:.3} NYM (reserve {:.3})", b as f64 / 1e6, cfg.reserve_unym as f64 / 1e6),
                 Err(e) => eprintln!("scrai-faucet: balance check failed ({e}) — claims will fail until the RPC answers"),
@@ -674,5 +687,18 @@ async fn main() {
     if let Err(e) = result {
         eprintln!("scrai-faucet: {e}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rpc_from_lcd;
+
+    #[test]
+    fn rpc_is_the_lcd_root() {
+        assert_eq!(rpc_from_lcd(Some("https://validator-sandbox-1.nymtech.net/api")), "https://validator-sandbox-1.nymtech.net");
+        assert_eq!(rpc_from_lcd(Some("https://validator-sandbox-1.nymtech.net/api/")), "https://validator-sandbox-1.nymtech.net");
+        assert_eq!(rpc_from_lcd(Some("https://api.nymtech.net")), "https://api.nymtech.net");
+        assert_eq!(rpc_from_lcd(None), "");
     }
 }
