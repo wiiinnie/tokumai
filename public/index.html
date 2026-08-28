@@ -2184,10 +2184,17 @@
   // (CONN_STEPS) so a returning user recognises them. connectedAt feeds the sheet.
   let mixState = "ok", routeStart = 0, routeTicker = null, routeFail = "", connectedAt = 0, hiddenAt = 0, lastRtt = 0, lastRebuildSecs = 0;
   let routeSteps = [];   // [{label, st:'done'|'now'|''}] mirrors CONN_STEPS[0..3] (+ [4] while a question waits)
+  // Only steps that REALLY run are listed: Rust reports each one as it starts. The
+  // gateway-directory fetch is an extra first line that appears only on a cold cache.
   function routeReset(){ routeSteps = CONN_STEPS.map(l=>({label:l, st:""})); }
   function routeMark(idx, detail){
-    for(let i=0;i<routeSteps.length;i++) routeSteps[i].st = i<idx ? "done" : (i===idx ? "now" : "");
-    if(detail && routeSteps[idx]) routeSteps[idx].label = CONN_STEPS[idx] + (detail ? " · " + detail : "");
+    const off = routeSteps.filter(s=>s.extra).length;             // extra lines sit before CONN_STEPS
+    for(let i=0;i<routeSteps.length;i++){ const k=i-off; routeSteps[i].st = routeSteps[i].extra ? "done" : (k<idx ? "done" : (k===idx ? "now" : "")); }
+    if(detail && routeSteps[idx+off]) routeSteps[idx+off].label = CONN_STEPS[idx] + " · " + detail;
+  }
+  function routeExtra(label){
+    if(!routeSteps.some(s=>s.extra && s.label===label)) routeSteps.unshift({label, st:"now", extra:true});
+    else routeSteps.forEach(s=>{ if(s.extra && s.label===label) s.st="now"; });
   }
   function routeSecs(){ return routeStart ? Math.max(0, Math.round((Date.now()-routeStart)/1000)) : 0; }
   function setMixState(st, why){
@@ -2221,7 +2228,7 @@
         <div class="why">You were away briefly. The route may still be alive — one round-trip through the mixnet tells us. If it answers, ${waiting?"your question goes right out":"you're set"}; if not, a fresh route is built (about 10 s).</div>
         <div class="steps"><div class="step done"><i>✓</i>App back in the foreground</div><div class="step now"><i></i>Ping through the mixnet (up to 10 s)</div>${waiting?`<div class="step"><i></i>${esc(CONN_STEPS[4])}</div>`:""}</div></div>`;
     }
-    const steps = routeSteps.slice(0, waiting?5:4);
+    const steps = routeSteps.filter(s=>s.extra || CONN_STEPS.indexOf(s.label.split(" · ")[0]) < (waiting?5:4));
     return `<div class="rc"><div class="t">Reconnecting to the mixnet <span class="el">${secs} s</span></div>
       <div class="why">${esc(routeWhy||"The route was dropped. A fresh one takes about 10 s.")}</div>
       <div class="steps">${steps.map(s=>`<div class="step ${s.st}"><i>${s.st==="done"?"✓":""}</i>${esc(s.label)}</div>`).join("")}</div>
@@ -2249,12 +2256,13 @@
     if(!p || !everConnected) return;               // the boot animation owns the first connect
     switch(p.step){
       case "check":   setMixState("checking"); break;
+      case "directory": if(mixState!=="reconnecting") setMixState("reconnecting"); routeExtra("Fetching the gateway directory"); break;
       case "keys":    if(mixState!=="reconnecting") setMixState("reconnecting"); routeMark(0); break;
       case "client":  routeMark(1); break;
       case "gateway": routeMark(2, p.detail); break;
       case "cover":   routeMark(3); if(routeSteps[4]) routeSteps[4].st=""; break;
       case "ready":
-        routeSteps.forEach((s,i)=>{ if(i<4) s.st="done"; });
+        routeSteps.forEach((s)=>{ if(s.extra || CONN_STEPS.indexOf(s.label.split(" · ")[0])<4) s.st="done"; });
         connectedAt = Date.now();
         if(mixState!=="ok"){ setMixState("ok"); if(p.detail!=="alive" && lastRebuildSecs) setStatus(`route rebuilt · ${lastRebuildSecs} s · new session identity`); else if(p.detail==="alive") setStatus("route alive"); }
         refreshRoute(); return;

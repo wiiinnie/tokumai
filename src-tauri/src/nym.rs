@@ -412,7 +412,6 @@ impl Transport {
         // attempt just before it finishes and loop forever. Healthy-network
         // connects take 5–10s and never feel this value.
         const CONNECT_TIMEOUT: Duration = Duration::from_secs(180);
-        self.phase("keys", "");
         let connect = async {
             // No user choice → curated random (described gateways only);
             // only if even the directory fails, let the SDK pick blindly.
@@ -420,6 +419,8 @@ impl Transport {
                 Some(gw) => Some(gw),
                 None => self.random_described_gateway().await,
             };
+            // new_ephemeral() + build(): fresh identity keys, then the client itself
+            self.phase("keys", "");
             self.phase("client", "");
             let gw_label = match &gw {
                 Some(id) => match self.gateway_info(id).await {
@@ -555,6 +556,8 @@ impl Transport {
         if let Some(m) = guard.as_ref() {
             return Ok(m.clone());
         }
+        // Cold cache: this clearnet fetch really happens now — say so (a warm cache skips it).
+        self.phase("directory", "");
         let body: Value = reqwest::Client::new()
             .get(NYM_DIRECTORY)
             .timeout(Duration::from_secs(30))
