@@ -2,7 +2,7 @@
 # publish-downloads.sh — put the locally built app bundles on the download site.
 #
 # Uploads every release artefact found locally (macOS .dmg from `npm run tauri:build`,
-# Linux .AppImage/.deb dropped into dist/downloads/) to the VPS and installs them into
+# Windows .exe and Linux .AppImage/.deb from the CI workflows, dropped into dist/downloads/) to the VPS and installs them into
 # /opt/scrai/site/dl, which Caddy serves as https://<site>/dl/<file>. Prints the sha256
 # of each file and the SCRAI_DL_* lines to paste into /opt/scrai/.env (the site shows a
 # download button only for links present there; `systemctl restart scrai-faucet` after).
@@ -27,7 +27,7 @@ SSH_OPTS=(-o ControlMaster=auto -o ControlPath="/tmp/scrai-pub-%r@%h:%p" -o Cont
 files=()
 dmg=$(ls -t "$SRC"/target/release/bundle/dmg/*.dmg 2>/dev/null | head -1 || true)
 [ -n "$dmg" ] && files+=("$dmg")
-for f in "$SRC"/dist/downloads/*.AppImage "$SRC"/dist/downloads/*.deb; do
+for f in "$SRC"/dist/downloads/*.exe "$SRC"/dist/downloads/*.AppImage "$SRC"/dist/downloads/*.deb; do
   [ -f "$f" ] && files+=("$f")
 done
 if [ ${#files[@]} -eq 0 ]; then
@@ -48,7 +48,7 @@ mkdir -p "$(dirname "$MANIFEST")"
   sep=""
   for f in "${files[@]}"; do
     name=$(basename "$f"); sum=$(shasum -a 256 "$f" | cut -c1-64); bytes=$(stat -f%z "$f" 2>/dev/null || stat -c%s "$f")
-    case "$name" in *.dmg) key=macos;; *.AppImage) key=appimage;; *.deb) key=deb;; *) key=other;; esac
+    case "$name" in *.dmg) key=macos;; *.exe) key=windows;; *.AppImage) key=appimage;; *.deb) key=deb;; *) key=other;; esac
     printf '%s\n    "%s": {"name": "%s", "sha256": "%s", "bytes": %s}' "$sep" "$key" "$name" "$sum" "$bytes"
     sep=","
   done

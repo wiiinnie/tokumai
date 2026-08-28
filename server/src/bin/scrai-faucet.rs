@@ -387,7 +387,7 @@ struct DlFile {
 
 /// `manifest.json` next to the bundles — written by publish-downloads.sh on every upload,
 /// read here on every page view, so the site always shows the version that is actually
-/// downloadable (no .env edit, no restart). Keys: macos · appimage · deb.
+/// downloadable (no .env edit, no restart). Keys: macos · windows · appimage · deb.
 fn read_manifest(dl_dir: &Path) -> (Option<String>, HashMap<String, DlFile>) {
     let Ok(raw) = std::fs::read_to_string(dl_dir.join("manifest.json")) else {
         return (None, HashMap::new());
@@ -427,6 +427,7 @@ fn site_html(dl_dir: &Path) -> String {
     // Bundles we host ourselves: from the manifest (relative /dl/ link on this very host).
     for (ph, key, label, primary) in [
         ("{{DL_MACOS}}", "macos", "Download .dmg", true),
+        ("{{DL_WINDOWS}}", "windows", "Download installer (.exe)", true),
         ("{{DL_APPIMAGE}}", "appimage", "AppImage", true),
         ("{{DL_DEB}}", "deb", ".deb", false),
     ] {
@@ -458,11 +459,14 @@ fn site_html(dl_dir: &Path) -> String {
     let sha = |key: &str| files.get(key).map(|f| html_escape(&f.sha256)).filter(|x| !x.is_empty()).unwrap_or_else(|| "—".into());
     // green card when something is actually downloadable; iOS greys until TestFlight exists
     s = s.replace("{{CLS_MACOS}}", if files.contains_key("macos") { " has" } else { "" });
+    s = s.replace("{{CLS_WINDOWS}}", if files.contains_key("windows") { " has" } else { "" });
     s = s.replace("{{CLS_LINUX}}", if files.contains_key("appimage") || files.contains_key("deb") { " has" } else { "" });
     s = s.replace("{{CLS_IOS}}", if env_link("SCRAI_DL_IOS").is_some() { " has" } else { " soon" });
     s = s.replace("{{META_MACOS}}", &meta("macos", "Apple silicon · .dmg"));
+    s = s.replace("{{META_WINDOWS}}", &meta("windows", "NSIS installer · Windows 10/11"));
     s = s.replace("{{META_LINUX}}", &meta("appimage", "AppImage — or the .deb for Debian/Ubuntu"));
     s = s.replace("{{SHA_MACOS}}", &sha("macos"));
+    s = s.replace("{{SHA_WINDOWS}}", &sha("windows"));
     s = s.replace("{{SHA_APPIMAGE}}", &sha("appimage"));
     let version = mver.map(|v| format!("Testnet build {v}")).unwrap_or_else(|| env_or("SCRAI_SITE_VERSION", "testnet build"));
     s = s.replace("{{VERSION}}", &html_escape(&version));

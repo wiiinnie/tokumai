@@ -38,7 +38,8 @@
   .eyebrow{font-family:var(--mono);font-size:11.5px;letter-spacing:.12em;color:var(--signal);text-transform:uppercase;margin-bottom:10px}
   .sec h2{font-family:var(--display);font-weight:700;font-size:34px;margin:0 0 10px}.sec h2 b{color:var(--mix)}
   .lead{color:var(--muted);font-size:15.5px;line-height:1.55;max-width:760px;margin:0 0 26px}
-  .dl{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+  .dl{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
+  @media (max-width:1180px){.dl{grid-template-columns:repeat(2,1fr)}}
   .dlc{border:1px solid var(--line);border-radius:14px;background:var(--surface);padding:20px;display:flex;flex-direction:column;gap:10px;min-height:250px}
   .dlc.soon{opacity:.8}
   /* a card with a real download: green frame + tick, like the app's "connected" state */
@@ -102,7 +103,7 @@
   <div class="sec" id="download">
     <div class="eyebrow">01 · Download</div>
     <h2>Runs on your <b>machine</b></h2>
-    <p class="lead">No App Store yet — we're saving the developer fee for later. That means two honest caveats: macOS shows a warning on first launch, and iPhone needs TestFlight or sideloading. Every download has a checksum you can verify.</p>
+    <p class="lead">No App Store yet — we're saving the developer fee for later. That means two honest caveats: macOS and Windows show a warning on first launch, and iPhone needs TestFlight or sideloading. Every download has a checksum you can verify.</p>
     <div class="dl">
       <div class="dlc{{CLS_MACOS}}">
         <div class="os"> macOS</div>
@@ -110,6 +111,13 @@
         <div class="note"><b>First launch:</b> the build is not notarised yet (no Apple developer programme), so macOS says it "cannot be opened". Right-click the app → <b>Open</b> once; afterwards it opens normally.</div>
         <div class="sum" id="verify">sha256 {{SHA_MACOS}}</div>
         <div class="row">{{DL_MACOS}}</div>
+      </div>
+      <div class="dlc{{CLS_WINDOWS}}">
+        <div class="os">⊞ Windows · x64</div>
+        <div class="meta">{{META_WINDOWS}}</div>
+        <div class="note"><b>First launch:</b> the installer is not code-signed yet, so SmartScreen says "Windows protected your PC". Click <b>More info → Run anyway</b> once. Installs per user, no admin rights; needs the Edge WebView2 runtime (fetched automatically if missing).</div>
+        <div class="sum">sha256 {{SHA_WINDOWS}}</div>
+        <div class="row">{{DL_WINDOWS}}</div>
       </div>
       <div class="dlc{{CLS_LINUX}}">
         <div class="os">🐧 Linux · x86_64</div>

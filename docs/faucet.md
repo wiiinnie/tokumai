@@ -98,7 +98,10 @@ next spend; server-side entitlement is unaffected).
 ## Downloads + version on the site
 
 `scripts/publish-downloads.sh hermes@<vps>` uploads the newest local `.dmg` (from
-`npm run tauri:build`) and any `dist/downloads/*.AppImage|*.deb` to `/opt/scrai/site/dl`
+`npm run tauri:build`) and any `dist/downloads/*.exe|*.AppImage|*.deb` (Windows/Linux come
+from the GitHub Actions workflows `build-windows.yml` / `build-linux.yml`, ~35 min each:
+`gh workflow run build-<os>.yml --ref main`, then `gh run download <id> -D dist/downloads`
+and flatten) to `/opt/scrai/site/dl`
 (Caddy `handle_path /dl/*` → `file_server`) plus a `manifest.json` with version, file
 names, sha256 and sizes. The site reads the manifest on every page view, so the buttons,
 the checksum lines and the "Testnet build 0.2.x" label always match what is downloadable
