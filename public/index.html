@@ -2264,6 +2264,7 @@
   // ---- overlay ----
   function routeOpen(){
     rt.timers.forEach(clearTimeout); rt = { lines:[], timers:[], seq:rt.seq+1 };
+    if(routeQuiet) return;                        // user closed it — retry in the background
     const box=$("routeBox"); if(!box) return;
     box.className="routebox";
     box.innerHTML = `<div class="t"><span>Reconnecting to the mixnet</span><span class="el" id="routeEl">${routeSecs()} s</span></div>
@@ -2272,6 +2273,29 @@
     $("routeScrim").classList.add("open");
   }
   function routeClose(){ rt.timers.forEach(clearTimeout); rt.timers=[]; $("routeScrim").classList.remove("open"); }
+  // ---- automatic retry after a failed rebuild ----
+  // A failed route is usually transient (a Nym epoch rollover leaves the directory
+  // inconsistent for a few minutes, the phone lost its network for a moment). Retry on
+  // our own with backoff — 15 · 30 · 60 · 120 s — instead of waiting for a tap. Only
+  // while the app is visible (in the background the resume path owns reconnects). If the
+  // user closed the overlay, retries run quietly (chip only) and it reopens on success.
+  const RETRY_STEPS = [15, 30, 60, 120];
+  let autoRetryTimer=null, autoRetryAt=0, autoRetryN=0, routeQuiet=false;
+  function clearAutoRetry(){ if(autoRetryTimer){ clearInterval(autoRetryTimer); autoRetryTimer=null; } }
+  function scheduleAutoRetry(){
+    clearAutoRetry();
+    const d = RETRY_STEPS[Math.min(autoRetryN, RETRY_STEPS.length-1)]; autoRetryN++;
+    autoRetryAt = Date.now() + d*1000;
+    const tick = ()=>{
+      const left = Math.max(0, Math.ceil((autoRetryAt-Date.now())/1000));
+      const el=$("routeAuto"); if(el) el.textContent = `Retrying automatically in ${left} s`;
+      if(left>0) return;
+      clearAutoRetry();
+      if(mixState!=="offline") return;
+      if(document.visibilityState==="visible") appResumed(0, true, true); else scheduleAutoRetry();
+    };
+    tick(); autoRetryTimer=setInterval(tick, 500);
+  }
   // Type one console line for a step that just STARTED. The previous line's step is
   // therefore finished → it gets its ✓ (after its own typing completes).
   function routeLine(text){
@@ -2308,11 +2332,11 @@
         routeLine(PHASE_LABEL[p.step] + (p.detail ? " · " + p.detail : ""));
         return;
       case "ready":
-        if(p.detail==="alive" && mixState==="checking"){ connectedAt=connectedAt||Date.now(); setMixState("ok"); setStatus("route alive"); }
+        if(p.detail==="alive" && mixState==="checking"){ connectedAt=connectedAt||Date.now(); autoRetryN=0; clearAutoRetry(); setMixState("ok"); setStatus("route alive"); }
         return;                                     // the rebuild goes on with the server step
       case "online": {
         const last = rt.lines[rt.lines.length-1]; if(last) routeFinish(last, true);
-        connectedAt = Date.now();
+        connectedAt = Date.now(); autoRetryN=0; clearAutoRetry(); routeQuiet=false;
         const host=$("routeCons"); if(host && !host.querySelector(".donemark")){ const mk=document.createElement("div"); mk.innerHTML=DONE_MARK_SVG; host.appendChild(mk.firstElementChild); }
         const my=rt.seq;
         rt.timers.push(setTimeout(()=>{ if(my!==rt.seq) return; routeClose(); setMixState("ok"); if(lastRebuildSecs) setStatus(`route rebuilt · ${lastRebuildSecs} s · new session identity`); refreshRoute(); }, 1400));
@@ -2323,23 +2347,25 @@
         const last = rt.lines[rt.lines.length-1]; if(last) routeFinish(last, false);
         const box=$("routeBox"); if(box){ box.classList.add("bad"); const t=box.querySelector(".t span"); if(t) t.textContent="Mixnet offline"; }
         const why=$("routeWhy"); if(why) why.textContent = routeFail || "Could not reach an entry gateway. Usually the phone has no internet right now, or the chosen gateway is down.";
-        const btns=$("routeBtns"); if(btns) btns.innerHTML = `<div class="btnrow"><button class="btn primary" data-click="rebuildRoute">Try again</button><button class="btn" data-click="openEntryPicker">Pick another gateway</button><button class="btn" data-click="routeDismiss">Close</button></div>`;
+        const btns=$("routeBtns"); if(btns) btns.innerHTML = `<div class="btnrow"><button class="btn primary" data-click="rebuildRoute">Try again</button><button class="btn" data-click="openEntryPicker">Pick another gateway</button><button class="btn" data-click="routeDismiss">Close</button></div><div class="hint" id="routeAuto" style="margin-top:8px"></div>`;
         setMixState("offline");
+        scheduleAutoRetry();
         return;
       }
     }
   }
-  function routeDismiss(){ routeClose(); }
+  function routeDismiss(){ routeQuiet=true; routeClose(); }
   // Returning to the foreground: tell Rust how long we were away — it decides between a
   // quick ping (chip only) and a full rebuild (overlay).
-  async function appResumed(hiddenMs, force){
+  async function appResumed(hiddenMs, force, auto){
     if(!isTauri() || !mixOn || !everConnected) return;
-    if(force || hiddenMs >= 20000){ setMixState("reconnecting", force ? "Rebuilding the route on request — new session identity, about 10 s." : pauseWhy(hiddenMs)); }
+    if(force || hiddenMs >= 20000){ setMixState("reconnecting", auto ? "Retrying the route automatically — new session identity, about 10 s." : force ? "Rebuilding the route on request — new session identity, about 10 s." : pauseWhy(hiddenMs)); }
     else setMixState("checking");
-    try{ const r = await Backend.appResumed(hiddenMs, !!force); if(r && r.action==="alive"){ lastRtt = r.ms||lastRtt; connectedAt = connectedAt||Date.now(); setMixState("ok"); } }
-    catch(e){ routeFail = (e&&e.message)||String(e); setMixState("offline"); }
+    try{ const r = await Backend.appResumed(hiddenMs, !!force); if(r && r.action==="alive"){ lastRtt = r.ms||lastRtt; connectedAt = connectedAt||Date.now(); autoRetryN=0; clearAutoRetry(); setMixState("ok"); } }
+    catch(e){ routeFail = (e&&e.message)||String(e); setMixState("offline"); scheduleAutoRetry(); }
   }
-  function rebuildRoute(){ routeClose(); mixState="ok"; appResumed(0, true); }
+  // Manual retry: resets the backoff and brings the overlay back.
+  function rebuildRoute(){ clearAutoRetry(); autoRetryN=0; routeQuiet=false; routeClose(); mixState="ok"; appResumed(0, true); }
   // ---------- connection sheet (tap the chip) ----------
   function openConnSheet(){
     if(!isTauri()){ setStatus("dev bridge — no mixnet"); return; }
