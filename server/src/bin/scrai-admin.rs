@@ -63,6 +63,20 @@ struct QuorumBlob {
     blacklist: HashSet<String>,
 }
 
+/// Column header for a model id: short enough for a TUI cell, still recognisable —
+/// "gemini-3.1-flash-lite-image" → "3.1-fl-lt-img", "llama-3.3-70b-versatile" → "llama-3.3-70b".
+fn short_model(id: &str) -> String {
+    let s = id
+        .trim_start_matches("gemini-")
+        .replace("-versatile", "")
+        .replace("-instant", "-inst")
+        .replace("flash", "fl")
+        .replace("lite", "lt")
+        .replace("image", "img")
+        .replace("pollinations-", "polli-");
+    s.chars().take(10).collect()
+}
+
 #[derive(Default)]
 struct DayRow {
     day: String,
@@ -73,6 +87,10 @@ struct DayRow {
     cost: u64,
     purchases: u64,
     purchased: u64,
+    /// most clients served in parallel at one instant that day (chat/catalog/payment in flight)
+    peak_clients: u64,
+    /// prompts per model id that day (from `daily_model`; empty for days before it existed)
+    per_model: std::collections::HashMap<String, u64>,
 }
 
 #[derive(Default)]
@@ -104,6 +122,10 @@ struct Metrics {
     total_purchased: u64,
     daily: Vec<DayRow>,
     has_daily: bool,
+    /// highest `peak_clients` over all recorded days — the capacity signal (a MAX, not a sum)
+    peak_clients_max: u64,
+    /// model ids seen in the shown days, most-used first — one table column each
+    models: Vec<String>,
     // live-grounding queries used this UTC month (Gemini's 5,000/mo free allowance)
     grounding_used: u64,
 }
@@ -281,9 +303,12 @@ fn read_metrics(path: &PathBuf) -> Metrics {
     m.blacklisted = quo.blacklist.len();
 
     // per-day metrics table (may not exist on an un-migrated server)
-    if let Ok(mut stmt) = conn.prepare(
-        "SELECT day, prompts, spent, purchases, purchased, cost FROM daily ORDER BY day DESC LIMIT 12",
-    ) {
+    // `peak_clients` arrived later — read it as 0 on a db the server hasn't migrated yet
+    let has_peak = conn.prepare("SELECT peak_clients FROM daily LIMIT 0").is_ok();
+    let peak_col = if has_peak { "peak_clients" } else { "0" };
+    if let Ok(mut stmt) = conn.prepare(&format!(
+        "SELECT day, prompts, spent, purchases, purchased, cost, {peak_col} FROM daily ORDER BY day DESC LIMIT 12"
+    )) {
         m.has_daily = true;
         if let Ok(rows) = stmt.query_map([], |r| {
             Ok(DayRow {
@@ -293,9 +318,32 @@ fn read_metrics(path: &PathBuf) -> Metrics {
                 purchases: r.get::<_, i64>(3)? as u64,
                 purchased: r.get::<_, i64>(4)? as u64,
                 cost: r.get::<_, i64>(5)? as u64,
+                peak_clients: r.get::<_, i64>(6)? as u64,
+                per_model: Default::default(),
             })
         }) {
             m.daily = rows.filter_map(|r| r.ok()).collect();
+        }
+        if has_peak {
+            let _ = conn.query_row("SELECT COALESCE(MAX(peak_clients),0) FROM daily", [], |r| {
+                m.peak_clients_max = r.get::<_, i64>(0)? as u64;
+                Ok(())
+            });
+        }
+        // per-model prompts for the same days (table may not exist on an older server)
+        if let Ok(mut st) = conn.prepare("SELECT day, model, prompts FROM daily_model") {
+            if let Ok(rows) = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)? as u64))) {
+                let mut totals: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+                for (day, model, n) in rows.filter_map(|r| r.ok()) {
+                    if let Some(d) = m.daily.iter_mut().find(|d| d.day == day) {
+                        *d.per_model.entry(model.clone()).or_insert(0) += n;
+                        *totals.entry(model).or_insert(0) += n;
+                    }
+                }
+                let mut models: Vec<(String, u64)> = totals.into_iter().collect();
+                models.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+                m.models = models.into_iter().map(|(k, _)| k).collect();
+            }
         }
         let _ = conn.query_row(
             "SELECT COALESCE(SUM(prompts),0), COALESCE(SUM(spent),0), COALESCE(SUM(purchases),0), COALESCE(SUM(purchased),0), COALESCE(SUM(cost),0) FROM daily",
@@ -426,6 +474,15 @@ fn ui(f: &mut Frame, m: &Metrics, path: &str, clock: &str, network: &str, status
         kv("= profit", format!("{}  ({} scrai)", usd(m.total_spent.saturating_sub(m.total_cost)), grp(m.total_spent.saturating_sub(m.total_cost))), SAGE),
         kv("  since metrics deploy", String::new(), DIM),
         kv(
+            "max simultaneous clients",
+            format!(
+                "{} today · {} all-time",
+                grp(m.daily.first().map(|d| d.peak_clients).unwrap_or(0)),
+                grp(m.peak_clients_max)
+            ),
+            SAGE,
+        ),
+        kv(
             "live search free left",
             format!(
                 "{} of {}  ({} used this month)",
@@ -451,8 +508,13 @@ fn ui(f: &mut Frame, m: &Metrics, path: &str, clock: &str, network: &str, status
     // bottom row: DAILY | INTEGRITY
     let bot = Layout::horizontal([Constraint::Min(40), Constraint::Length(30)]).split(root[2]);
 
-    let header_row = Row::new(vec!["day", "prompts", "spent", "cost", "margin", "buys", "buys $"])
-        .style(Style::default().fg(DIM));
+    // day · prompts · spent · cost · margin · <one column per model> · buys · buys $
+    let mut header: Vec<String> = ["day", "prompts", "spent", "cost", "margin"].iter().map(|s| s.to_string()).collect();
+    header.extend(m.models.iter().map(|id| short_model(id)));
+    header.push("buys".into());
+    header.push("buys $".into());
+    header.push("peak".into());
+    let header_row = Row::new(header).style(Style::default().fg(DIM));
     let rows: Vec<Row> = if m.daily.is_empty() {
         vec![Row::new(vec![Cell::from(Span::styled(
             if m.has_daily { "no activity yet today" } else { "server not yet redeployed with metrics" },
@@ -471,21 +533,34 @@ fn ui(f: &mut Frame, m: &Metrics, path: &str, clock: &str, network: &str, status
                         if d.cost > 0 { format!("+{:.1}%", (d.spent as f64 / d.cost as f64 - 1.0) * 100.0) } else { "—".into() },
                         Style::default().fg(SAGE),
                     )),
+                ]
+                .into_iter()
+                .chain(m.models.iter().map(|id| {
+                    // "—" for days before the per-model table existed, 0 for "not used that day"
+                    let txt = if d.per_model.is_empty() { "—".to_string() } else { grp(*d.per_model.get(id).unwrap_or(&0)) };
+                    let color = if txt == "—" || txt == "0" { DIM } else { SAGE };
+                    Cell::from(Span::styled(txt, Style::default().fg(color)))
+                }))
+                .chain([
                     Cell::from(Span::styled(grp(d.purchases), Style::default().fg(BONE))),
                     Cell::from(Span::styled(usd(d.purchased), Style::default().fg(GOLD))),
+                    Cell::from(Span::styled(grp(d.peak_clients), Style::default().fg(SAGE))),
                 ])
+                .collect::<Vec<Cell>>())
             })
             .collect()
     };
-    let widths = [
+    let mut widths = vec![
         Constraint::Length(12),
-        Constraint::Length(9),
-        Constraint::Length(9),
-        Constraint::Length(9),
         Constraint::Length(8),
-        Constraint::Length(6),
-        Constraint::Length(9),
+        Constraint::Length(8),
+        Constraint::Length(8),
+        Constraint::Length(8),
     ];
+    widths.extend(m.models.iter().map(|_| Constraint::Length(10)));
+    widths.push(Constraint::Length(5));
+    widths.push(Constraint::Length(8));
+    widths.push(Constraint::Length(5));
     f.render_widget(
         Table::new(rows, widths).header(header_row).block(block("DAILY · per UTC day")),
         bot[0],
@@ -504,7 +579,7 @@ fn ui(f: &mut Frame, m: &Metrics, path: &str, clock: &str, network: &str, status
 
     // footer
     let note = Line::from(Span::styled(
-        "accounts = distinct paying pubkeys (anonymous) · sessions are unlinkable to accounts · spend & prompts are real daily counters, started at metrics deploy · burned-serial count is integrity only, not a $ value",
+        "accounts = distinct paying pubkeys (anonymous) · sessions are unlinkable to accounts · spend & prompts are real daily counters, started at metrics deploy · peak = most clients with a chat/purchase/catalog request in flight at one instant · burned-serial count is integrity only, not a $ value",
         Style::default().fg(DIM),
     ));
     f.render_widget(Paragraph::new(note), root[3]);

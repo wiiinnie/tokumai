@@ -45,7 +45,36 @@ impl Store {
         // retail (what users chatted); `cost` is the raw provider price we paid (no margin),
         // so profit = spent − cost. Ignore the error when the column is already there.
         let _ = conn.execute("ALTER TABLE daily ADD COLUMN cost INTEGER NOT NULL DEFAULT 0", []);
+        // Peak number of distinct clients served in parallel that day (a MAX, not a sum) —
+        // the capacity signal for the single Nym client / provider slots (inflight.rs).
+        let _ = conn.execute("ALTER TABLE daily ADD COLUMN peak_clients INTEGER NOT NULL DEFAULT 0", []);
+        // Per-UTC-day × model counters (which models are actually used, what they cost).
+        // Same privacy shape as `daily`: aggregates only, no account/session ids, no content.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS daily_model (\
+               day     TEXT NOT NULL,\
+               model   TEXT NOT NULL,\
+               prompts INTEGER NOT NULL DEFAULT 0,\
+               spent   INTEGER NOT NULL DEFAULT 0,\
+               cost    INTEGER NOT NULL DEFAULT 0,\
+               PRIMARY KEY (day, model))",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
         Ok(Store { conn })
+    }
+
+    /// Add to today's per-model counters (upsert the day×model row). Best-effort like
+    /// `bump_daily`: a metrics write must never break request handling.
+    pub fn bump_daily_model(&self, day: &str, model: &str, prompts: u64, spent: u64, cost: u64) {
+        let _ = self.conn.execute(
+            "INSERT INTO daily_model (day, model, prompts, spent, cost) VALUES (?1, ?2, ?3, ?4, ?5) \
+             ON CONFLICT(day, model) DO UPDATE SET \
+               prompts = prompts + ?3, \
+               spent   = spent   + ?4, \
+               cost    = cost    + ?5",
+            params![day, model, prompts as i64, spent as i64, cost as i64],
+        );
     }
 
     /// Add to today's activity counters (upsert the day row). Cheap, best-effort:

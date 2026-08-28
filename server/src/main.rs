@@ -240,6 +240,9 @@ async fn main() {
                         let spent = rv.get("cost").and_then(|c| c.as_u64()).unwrap_or(0);
                         let cost = rv.pointer("/usage/billing/costScrai").and_then(|c| c.as_f64()).map(|f| f.ceil() as u64).unwrap_or(0);
                         db.bump_daily(&today, 1, spent, cost, 0, 0);
+                        // Per-model breakdown for the admin table (the reply names the billed model).
+                        let model = rv.pointer("/usage/billing/model").and_then(|m| m.as_str()).unwrap_or("unknown");
+                        db.bump_daily_model(&today, model, 1, spent, cost);
                         // Consume the month's grounding allowance — re-read on the loop, so it's race-free.
                         let q = rv.pointer("/usage/groundingQueries").and_then(|c| c.as_u64()).unwrap_or(0);
                         if q > 0 {
