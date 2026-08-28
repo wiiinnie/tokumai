@@ -1411,8 +1411,21 @@
 
   // ---------- backend state ----------
   let modelRetries = 0;
+  // What the wallet knows without the network. Sets server/account BEFORE the mixnet call
+  // so a slow or failed connect never shows "no server / no account" for a wallet that has
+  // both (that false claim once made a user overwrite a good server with an empty one).
+  let localKnown=false;
+  async function refreshLocal(){
+    if(!isTauri()) return;
+    try{
+      const l = await Backend.localState();
+      server = l.server || null; account = l.account || null; if(typeof l.held==="number") held = l.held;
+      localKnown = true;
+    }catch(e){ console.warn("local state unavailable:", e); }
+  }
   async function refreshState(){
     if(isTauri()){ $("env").className="env"; $("envText").textContent = "connecting over the mixnet…"; }
+    await refreshLocal();
     try{
       const s = await Backend.state();
       // Right after a reconnect (e.g. an entry-gateway switch) the model fetch can
@@ -3920,8 +3933,10 @@
     const cur=server||"";
     const knownIdx=KNOWN_SERVERS.findIndex(s=>s.address===cur);
     const custom = serverCustom || (!!cur && knownIdx<0) || KNOWN_SERVERS.length===0;
-    const selVal = custom ? "__custom__" : (knownIdx>=0 ? "k"+knownIdx : "k0");
-    const opts = KNOWN_SERVERS.map((s,i)=>`<option value="k${i}"${selVal==="k"+i?" selected":""}>${esc(s.name)}</option>`).join("")
+    // Nothing set yet → a real placeholder, never "official" pre-selected while unsaved.
+    const selVal = custom ? "__custom__" : (knownIdx>=0 ? "k"+knownIdx : "");
+    const opts = (selVal===""?`<option value="" selected disabled>Choose a server…</option>`:"")
+      + KNOWN_SERVERS.map((s,i)=>`<option value="k${i}"${selVal==="k"+i?" selected":""}>${esc(s.name)}</option>`).join("")
       + `<option value="__custom__"${selVal==="__custom__"?" selected":""}>Custom / manual…</option>`;
     return `<select id="srvSelect" data-change="srvSelected" style="${SRV_STYLE}">${opts}</select>
       ${custom?`<input id="srvInput" placeholder="id.enc@gateway — from your scrai-server" value="${escAttr(cur)}"
@@ -3947,6 +3962,8 @@
   }
   async function saveServer(){
     const v=$("srvInput")?$("srvInput").value.trim():"";
+    // An empty field never clears a saved server — pick "official" above or paste an address.
+    if(!v){ acctStatus(server ? "enter a server address to replace the current one" : "enter a server address, or pick the official server above"); return; }
     return saveServerAddr(v);
   }
   function focusRestore(){ if(acctView==="restore") setTimeout(()=>{ const t=$("restorePhrase"); if(t) t.focus(); },0); }

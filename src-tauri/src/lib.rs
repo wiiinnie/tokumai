@@ -572,6 +572,28 @@ async fn coconut_redeem(
 
 // ---- commands -------------------------------------------------------------
 
+/// What the wallet knows WITHOUT touching the mixnet: server, account, held credit.
+/// The UI reads this first at launch (and whenever the network `state` call fails), so a
+/// slow or failed connect can never make the app claim "no server / no account" — that
+/// wrong claim once led a user to "save" an empty server over a good one.
+#[tauri::command]
+fn local_state(app: AppHandle) -> Result<Value, String> {
+    let dir = data_dir(&app)?;
+    let w = wallet::load(&dir);
+    let account = match &w.mnemonic {
+        Some(m) => {
+            let a = account::from_mnemonic(m)?;
+            json!({ "fingerprint": account::fingerprint(&a.account_id), "sessionIndex": w.session_index })
+        }
+        None => Value::Null,
+    };
+    Ok(json!({
+        "account": account,
+        "server": server_addr(&w).ok(),
+        "held": coconut_held_scrai(&app),
+    }))
+}
+
 #[tauri::command]
 async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<Value, String> {
     diag(&app, "state: begin");
@@ -2171,13 +2193,13 @@ pub fn run() {
         .manage(Arc::new(Transport::new()))
         .setup(|app| {
             diag(&app.handle().clone(), "==== launch ====");
-            if cfg!(debug_assertions) {
-                app.handle().plugin(
-                    tauri_plugin_log::Builder::default()
-                        .level(log::LevelFilter::Info)
-                        .build(),
-                )?;
-            }
+            // Release builds log too (warn+ → the OS log dir, e.g. ~/Library/Logs/<bundle id>/):
+            // a wallet/keychain problem must leave evidence, not just a blank UI.
+            app.handle().plugin(
+                tauri_plugin_log::Builder::default()
+                    .level(if cfg!(debug_assertions) { log::LevelFilter::Info } else { log::LevelFilter::Warn })
+                    .build(),
+            )?;
             // Connect progress → UI (same five steps the boot animation types).
             {
                 let h = app.handle().clone();
@@ -2199,7 +2221,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            state, set_server, account_new, account_reveal, account_restore, account_delete, account_migrate_qr,
+            state, local_state, set_server, account_new, account_reveal, account_restore, account_delete, account_migrate_qr,
             invoice, invoice_status, invoice_cancel, ocr_scan, pdf_text, pdf_ocr, pdf_pages, collect, redeem, chat,
             smart_available, smart_detect, coconut_redeem,
             mixnet_route, mixnet_ping, cancel_chat, app_resumed, list_entry_gateways, set_entry_gateway, set_mixnet_perf, open_external, save_image,

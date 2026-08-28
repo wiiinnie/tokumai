@@ -81,6 +81,7 @@ async function streamChat(body, { onDelta, onDone, onError, onPhase }) {
 
 const httpBackend = {
   state: () => jsonCall("GET", "/api/state"),
+  localState: () => jsonCall("GET", "/api/state"),
   setServer: () => Promise.resolve({}), // dev backend is in-process; no server address
   accountNew: (force) => jsonCall("POST", "/api/account/new", { force }),
   accountReveal: () => jsonCall("GET", "/api/account/reveal"),
@@ -137,6 +138,7 @@ const httpBackend = {
 
 const tauriBackend = (invoke) => ({
   state: () => invoke("state"),
+  localState: () => invoke("local_state"),
   setServer: (address) => invoke("set_server", { address }),
   accountNew: (force) => invoke("account_new", { force: !!force }),
   accountReveal: () => invoke("account_reveal"),
@@ -226,6 +228,7 @@ function pick(method, ...args) {
 
 export const Backend = {
   state: () => pick("state"),
+  localState: () => pick("localState"),
   setServer: (address) => pick("setServer", address),
   accountNew: (force) => pick("accountNew", force),
   accountReveal: () => pick("accountReveal"),
