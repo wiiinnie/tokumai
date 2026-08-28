@@ -39,7 +39,8 @@ PRO=()
 if [ "${SEMGREP_PRO:-0}" = "1" ]; then PRO=(--pro); fi
 
 echo "── Semgrep: public packs + project rules${PRO:+ (Pro engine, cross-file)}"
-semgrep scan --metrics=off --no-git-ignore "${PRO[@]}" "${PACKS[@]}" --config .semgrep/scrambleai.yml --config .semgrep/scrambleai-taint.yml \
+# (bash 3.2 treats an empty array as unbound under `set -u` — hence the ${PRO[@]+…} form)
+semgrep scan --metrics=off --no-git-ignore ${PRO[@]+"${PRO[@]}"} "${PACKS[@]}" --config .semgrep/scrambleai.yml --config .semgrep/scrambleai-taint.yml \
   "${EXCL[@]}" "${SKIP[@]}" --severity ERROR --severity WARNING --error \
   ${OUT:+--json -o "$OUT/results.json"} \
   core server src-tauri/src src public scripts .github "$TMP" || STATUS=$?
