@@ -4516,10 +4516,12 @@
       </div>`;
     }).join("") || '<div class="hint">No payment method returned — is this coin’s gateway configured on the server?</div>';
     const isNymInv = onchain.some(o=>/nym/i.test(o.method||""));
-    // nosemgrep: scrai-taint-untrusted-to-html -- reviewed 2026-08-27: destination/memo/amount are esc()-wrapped in `blocks`; o.qr is an SVG the app renders locally (qrcode crate), the server only sends address + memo
+    // Testnet purchase: the faucet note. `faucetUrl` is the server's https URL (validated on
+    // state load) — esc()/escAttr()-wrapped here anyway; inv.testnet only picks the branch.
     const tnote = inv.testnet
       ? `<div class="tnote"><b>Testnet purchase</b> — don’t pay this yourself. Copy the <b>memo</b> below and paste it on the faucet page; the faucet sends the NYM with that memo and your credit lands here within a minute.${faucetUrl?`<a class="fl" href="${escAttr(faucetUrl)}" data-click="openLink" data-click-pass="href" data-prevent="1">${esc(faucetUrl)}</a>`:""}</div>`
       : "";
+    // nosemgrep: scrai-taint-untrusted-to-html -- reviewed 2026-08-28: destination/memo/amount are esc()-wrapped in `blocks`, tnote's URL is escAttr()/esc()-wrapped; o.qr is an SVG the app renders locally (qrcode crate), the server only sends address + memo
     $("payPanel").innerHTML = `<div class="paypanel">
       ${tnote}
       <div class="paylead">Pay $${inv.amountUsd.toFixed(2)} · ${formatScrai(inv.amountScrai)} SCRAI · expires <span id="payExpiry">…</span></div>

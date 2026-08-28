@@ -52,6 +52,9 @@ struct Inv {
     amount_scrai: u64,
     #[serde(default)]
     status: String,
+    /// raised as a $1 faucet-paid testnet purchase (SCRAI_TESTNET servers)
+    #[serde(default)]
+    testnet: bool,
 }
 #[derive(Deserialize, Default)]
 struct QuorumBlob {
@@ -114,6 +117,8 @@ struct DayRow {
     peak_clients: u64,
     /// prompts per model id that day (from `daily_model`; empty for days before it existed)
     per_model: std::collections::HashMap<String, u64>,
+    /// faucet payments that day (from faucet.db next to state.db; UTC days)
+    faucet: u64,
 }
 
 #[derive(Default)]
@@ -153,6 +158,13 @@ struct Metrics {
     metrics_tz: String,
     // live-grounding queries used this UTC month (Gemini's 5,000/mo free allowance)
     grounding_used: u64,
+    // testnet faucet (SCRAI_TESTNET servers): invoices flagged testnet + faucet.db claims
+    testnet_paid: usize,
+    testnet_pending: usize,
+    faucet_claims: u64,
+    faucet_unym: u64,
+    faucet_stuck: u64,
+    has_faucet: bool,
 }
 
 /// Gemini's monthly free Grounding allowance — mirror of chat::GROUNDING_FREE_PER_MONTH.
@@ -160,6 +172,21 @@ const GROUNDING_FREE_PER_MONTH: u64 = 5000;
 
 /// Current UTC month as `YYYY-MM` (same civil_from_days math as the server's today_utc,
 /// so we need no date crate) — picks the right `grounding:<month>` counter key.
+/// "YYYY-MM-DD" of a unix timestamp in UTC (the faucet stamps claims in UTC).
+fn civil_day_utc(secs: i64) -> String {
+    let z = secs.div_euclid(86_400) + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
 fn month_utc() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -327,6 +354,15 @@ fn read_metrics(path: &PathBuf) -> Metrics {
     m.offenders = quo.offenses.len();
     m.blacklisted = quo.blacklist.len();
 
+    // testnet purchases as the pay blob sees them
+    for inv in pay.invoices.values().filter(|i| i.testnet) {
+        match inv.status.as_str() {
+            "paid" => m.testnet_paid += 1,
+            "pending" => m.testnet_pending += 1,
+            _ => {}
+        }
+    }
+
     // per-day metrics table (may not exist on an un-migrated server)
     // `peak_clients` arrived later — read it as 0 on a db the server hasn't migrated yet
     let has_peak = conn.prepare("SELECT peak_clients FROM daily LIMIT 0").is_ok();
@@ -345,6 +381,7 @@ fn read_metrics(path: &PathBuf) -> Metrics {
                 cost: r.get::<_, i64>(5)? as u64,
                 peak_clients: r.get::<_, i64>(6)? as u64,
                 per_model: Default::default(),
+                faucet: 0,
             })
         }) {
             m.daily = rows.filter_map(|r| r.ok()).collect();
@@ -385,6 +422,32 @@ fn read_metrics(path: &PathBuf) -> Metrics {
                 Ok(())
             },
         );
+    }
+
+    // faucet.db (scrai-faucet, same data dir): one row per funded memo. Read-only, and
+    // absent on any server that never ran the faucet.
+    if let Some(fdb) = conn.path().map(std::path::Path::new).and_then(|p| p.parent()).map(|d| d.join("faucet.db")) {
+        if fdb.exists() {
+            if let Ok(fc) = Connection::open_with_flags(&fdb, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX) {
+                m.has_faucet = true;
+                if let Ok(mut st) = fc.prepare("SELECT ts, unym, stage FROM claims") {
+                    if let Ok(rows) = st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?))) {
+                        for (ts, unym, stage) in rows.filter_map(|r| r.ok()) {
+                            if stage == "sent" {
+                                m.faucet_claims += 1;
+                                m.faucet_unym += unym.max(0) as u64;
+                                let day = civil_day_utc(ts);
+                                if let Some(d) = m.daily.iter_mut().find(|d| d.day == day) {
+                                    d.faucet += 1;
+                                }
+                            } else if stage == "sending" || stage == "failed" {
+                                m.faucet_stuck += 1; // needs a human: broadcast unknown/failed
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     m.ok = true;
@@ -481,6 +544,23 @@ fn ui(f: &mut Frame, m: &Metrics, path: &str, clock: &str, network: &str, status
         kv("purchased", format!("{}  ({} scrai)", usd(m.purchased_scrai), grp(m.purchased_scrai)), GOLD),
         kv("entitlement open", format!("{}  ({} scrai)", usd(m.entitlement_out), grp(m.entitlement_out)), BONE),
         kv("-> withdrawn ecash", format!("{}  ({} scrai)", usd(m.withdrawn_scrai), grp(m.withdrawn_scrai)), SAGE),
+        // testnet faucet: how many $1 test buys were funded, and what that cost in NYM
+        kv(
+            "testnet faucet",
+            if m.has_faucet || m.testnet_paid + m.testnet_pending > 0 {
+                format!(
+                    "{} funded · {:.1} NYM · {} paid · {} open{}",
+                    m.faucet_claims,
+                    m.faucet_unym as f64 / 1e6,
+                    m.testnet_paid,
+                    m.testnet_pending,
+                    if m.faucet_stuck > 0 { format!(" · {} STUCK", m.faucet_stuck) } else { String::new() }
+                )
+            } else {
+                "off".into()
+            },
+            if m.faucet_stuck > 0 { RUST } else if m.has_faucet { GOLD } else { DIM },
+        ),
     ];
     let eb = block("ECONOMY · money in");
     let ei = eb.inner(top[0]);
@@ -539,6 +619,7 @@ fn ui(f: &mut Frame, m: &Metrics, path: &str, clock: &str, network: &str, status
     // day · prompts · spent · cost · margin · <one column per model> · buys · buys $
     let mut header: Vec<String> = ["day", "prompts", "spent", "cost", "margin"].iter().map(|s| s.to_string()).collect();
     header.extend(m.models.iter().map(|id| model_header(id)));
+    header.push("faucet".into());
     header.push("buys".into());
     header.push("buys $".into());
     header.push("peak".into());
@@ -571,6 +652,10 @@ fn ui(f: &mut Frame, m: &Metrics, path: &str, clock: &str, network: &str, status
                     Cell::from(Span::styled(txt, Style::default().fg(color)))
                 }))
                 .chain([
+                    Cell::from(Span::styled(
+                        if d.faucet == 0 { "—".to_string() } else { grp(d.faucet) },
+                        Style::default().fg(if d.faucet == 0 { DIM } else { GOLD }),
+                    )),
                     Cell::from(Span::styled(grp(d.purchases), Style::default().fg(BONE))),
                     Cell::from(Span::styled(usd(d.purchased), Style::default().fg(GOLD))),
                     Cell::from(Span::styled(grp(d.peak_clients), Style::default().fg(SAGE))),
@@ -587,6 +672,7 @@ fn ui(f: &mut Frame, m: &Metrics, path: &str, clock: &str, network: &str, status
         Constraint::Length(8),
     ];
     widths.extend(m.models.iter().map(|_| Constraint::Length(13)));
+    widths.push(Constraint::Length(6));
     widths.push(Constraint::Length(5));
     widths.push(Constraint::Length(8));
     widths.push(Constraint::Length(5));

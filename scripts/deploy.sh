@@ -72,6 +72,12 @@ mv /opt/scrai/bin/scrai-server.new /opt/scrai/bin/scrai-server
 install -o scrai -g scrai -m 755 \
   "$SCRAI_ADMIN_HOME/scrai-stage/target/release/scrai-admin" /opt/scrai/bin/scrai-admin.new
 mv /opt/scrai/bin/scrai-admin.new /opt/scrai/bin/scrai-admin
+# testnet faucet + distribution site (same crate). Installed always; the unit only
+# stays enabled while SCRAI_TESTNET=1 is in /opt/scrai/.env — that one line is the
+# kill switch for server, faucet and (via the server) every client.
+install -o scrai -g scrai -m 755 \
+  "$SCRAI_ADMIN_HOME/scrai-stage/target/release/scrai-faucet" /opt/scrai/bin/scrai-faucet.new
+mv /opt/scrai/bin/scrai-faucet.new /opt/scrai/bin/scrai-faucet
 install -o scrai -g scrai -m 644 \
   "$SCRAI_ADMIN_HOME/scrai-stage/pricing.json" /opt/scrai/pricing.json
 # retire the Node deployment (keep .env, data/, images/, and our bin/)
@@ -97,9 +103,35 @@ Environment=SCRAI_DATA=/opt/scrai/data
 [Install]
 WantedBy=multi-user.target
 UNIT
+cat > /etc/systemd/system/scrai-faucet.service <<UNIT
+[Unit]
+Description=scrai-faucet (ScrambleAI testnet faucet + download site, loopback only — Caddy in front)
+After=network-online.target scrai.service
+Wants=network-online.target
+
+[Service]
+User=scrai
+Group=scrai
+WorkingDirectory=/opt/scrai
+ExecStart=/opt/scrai/bin/scrai-faucet
+Restart=always
+RestartSec=5
+Environment=SCRAI_DATA=/opt/scrai/data
+
+[Install]
+WantedBy=multi-user.target
+UNIT
 systemctl daemon-reload
 systemctl restart scrai
-systemctl --no-pager status scrai | head -6'
+systemctl --no-pager status scrai | head -6
+if grep -Eq "^SCRAI_TESTNET=(1|true)" /opt/scrai/.env 2>/dev/null; then
+  systemctl enable --now scrai-faucet >/dev/null 2>&1 || true
+  systemctl restart scrai-faucet
+  systemctl --no-pager status scrai-faucet | head -4
+else
+  systemctl disable --now scrai-faucet >/dev/null 2>&1 || true
+  echo "scrai-faucet: not enabled (SCRAI_TESTNET is not 1 in /opt/scrai/.env)"
+fi'
 
 # One-time: install the apply script as root so the NOPASSWD sudoers line applies.
 # The body is streamed verbatim (no local OR remote expansion) into a staging
@@ -159,7 +191,7 @@ ssh "${SSH_OPTS[@]}" "$TARGET" '
     "[workspace]" \
     "resolver = \"2\"" \
     "members = [\"core\", \"server\"]" > Cargo.toml
-  "$HOME/.cargo/bin/cargo" build --release -p scrai-server
+  "$HOME/.cargo/bin/cargo" build --release -p scrai-server --bins
 '
 
 echo "→ 4/4  install binary + unit, restart scrai.service"

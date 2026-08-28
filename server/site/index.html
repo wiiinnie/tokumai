@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en" data-testnet="{{TESTNET}}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>ScrambleAI — anonymous AI over the Nym mixnet</title>
+<style>
+  :root{
+    --ink:#141210; --surface:#1C1917; --surface-2:#262220; --line:#332E2A;
+    --bone:#ECE6DC; --muted:#9C938A; --signal:#CBA14E; --mix:#8AA06B; --rust:#C15A43;
+    --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+    --body:'Hanken Grotesk',system-ui,-apple-system,sans-serif;
+    --display:'Fraunces',Georgia,serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--ink);color:var(--bone);font-family:var(--body);-webkit-font-smoothing:antialiased}
+  a{color:inherit}
+  .site{max-width:1280px;margin:0 auto}
+  .nav{display:flex;align-items:center;justify-content:space-between;padding:22px 48px;border-bottom:1px solid var(--line)}
+  .nav .logo{font-family:var(--display);font-weight:700;font-size:22px}.nav .logo b{color:var(--mix)}
+  .nav .links{display:flex;gap:26px;font-family:var(--mono);font-size:12.5px;color:var(--muted)}
+  .nav .links a{text-decoration:none}.nav .links a:hover{color:var(--bone)}
+  .hero{display:grid;grid-template-columns:1.1fr .9fr;gap:48px;padding:64px 48px 40px;align-items:center}
+  .hero h1{font-family:var(--display);font-weight:700;font-size:52px;line-height:1.06;margin:0 0 18px;letter-spacing:-.01em}
+  .hero h1 b{color:var(--mix);font-weight:700}
+  .hero p{font-size:17px;line-height:1.55;color:var(--muted);margin:0 0 26px;max-width:560px}
+  .hero p b{color:var(--bone);font-weight:600}
+  .cta{display:flex;gap:10px;flex-wrap:wrap}
+  .btn{display:inline-block;padding:11px 18px;border-radius:10px;border:1px solid var(--line);background:var(--surface-2);color:var(--bone);font:600 14px var(--body);text-decoration:none;cursor:pointer;line-height:1.2}
+  .btn.primary{background:var(--signal);border-color:var(--signal);color:#1a1408}
+  .btn.big{padding:14px 22px;font-size:15px}
+  .btn.off{opacity:.45;cursor:not-allowed}
+  .btn[disabled]{opacity:.5;cursor:wait}
+  .shot{border:1px solid var(--line);border-radius:16px;background:var(--surface);padding:22px;font-family:var(--mono);font-size:12.5px;line-height:1.6;color:var(--muted)}
+  .shot .y{color:var(--signal);font-weight:700}.shot .a{color:var(--mix);font-weight:700}.shot .k{color:var(--muted);font-size:11px}
+  .sec{padding:44px 48px;border-top:1px solid var(--line)}
+  .eyebrow{font-family:var(--mono);font-size:11.5px;letter-spacing:.12em;color:var(--signal);text-transform:uppercase;margin-bottom:10px}
+  .sec h2{font-family:var(--display);font-weight:700;font-size:34px;margin:0 0 10px}.sec h2 b{color:var(--mix)}
+  .lead{color:var(--muted);font-size:15.5px;line-height:1.55;max-width:760px;margin:0 0 26px}
+  .dl{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+  .dlc{border:1px solid var(--line);border-radius:14px;background:var(--surface);padding:20px;display:flex;flex-direction:column;gap:10px;min-height:250px}
+  .dlc.soon{opacity:.8}
+  .os{font-family:var(--display);font-size:20px;font-weight:700;display:flex;align-items:center;gap:8px}
+  .meta{font-family:var(--mono);font-size:11.5px;color:var(--muted)}
+  .note{font-size:13px;line-height:1.5;color:var(--muted)}.note b{color:var(--bone)}
+  .sum{font-family:var(--mono);font-size:10.5px;color:var(--muted);word-break:break-all;margin-top:auto}
+  .row{display:flex;gap:8px;flex-wrap:wrap}
+  .faucet{display:grid;grid-template-columns:1fr 1fr;gap:28px;align-items:start}
+  .steps{display:flex;flex-direction:column;gap:14px}
+  .st{display:flex;gap:14px}.st i{flex:none;width:26px;height:26px;border-radius:50%;border:1px solid var(--signal);color:var(--signal);display:grid;place-items:center;font:700 12px var(--mono);font-style:normal}
+  .st b{display:block;font-size:14.5px;margin-bottom:3px}.st small{display:block;font-size:13px;line-height:1.5;color:var(--muted)}
+  .form{border:1px solid var(--line);border-radius:14px;background:var(--surface);padding:22px}
+  .form label{display:block;font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:12px 0 6px}
+  .form label:first-child{margin-top:0}
+  .form input{width:100%;padding:12px 14px;border-radius:10px;border:1px solid var(--line);background:var(--surface-2);color:var(--bone);font:500 15px var(--mono);letter-spacing:.04em;outline:none}
+  .form input:focus{border-color:var(--signal)}
+  .form .btn{margin-top:16px;width:100%;text-align:center}
+  .state{margin-top:16px;font-family:var(--mono);font-size:12px;line-height:1.7;color:var(--muted);min-height:1.5em;word-break:break-all}
+  .state .k{color:var(--signal)}.state .ok{color:var(--mix)}.state .bad{color:var(--rust)}
+  .state a{color:var(--mix)}
+  .off-note{display:none;border:1px solid var(--line);border-radius:12px;padding:14px 16px;color:var(--muted);font-size:14px}
+  html[data-testnet="off"] .faucet{display:none}
+  html[data-testnet="off"] .off-note{display:block}
+  .foot{display:flex;justify-content:space-between;gap:16px;padding:26px 48px;border-top:1px solid var(--line);font-family:var(--mono);font-size:11.5px;color:var(--muted)}
+  @media (max-width:900px){
+    .nav{padding:16px 18px}.nav .links{display:none}
+    .hero{display:block;padding:28px 18px 8px}.hero h1{font-size:34px}.hero p{font-size:15px}.shot{margin-top:22px}
+    .sec{padding:26px 18px}.sec h2{font-size:24px}.dl{grid-template-columns:1fr}.faucet{grid-template-columns:1fr}
+    .foot{padding:18px;flex-direction:column;gap:6px}
+  }
+</style>
+</head>
+<body>
+<div class="site">
+  <div class="nav">
+    <span class="logo">Scramble<b>AI</b></span>
+    <span class="links"><a href="#download">Download</a><a href="#faucet">Testnet credit</a><a href="#how">How it works</a><a href="#verify">Verify a download</a></span>
+  </div>
+
+  <div class="hero">
+    <div>
+      <h1>Anonymous AI.<br>Over the <b>Nym mixnet</b>.</h1>
+      <p>Every question you ask a chatbot reveals <b>who</b> is asking and <b>what</b>. ScrambleAI separates the two by engineering: questions travel through five mixnet hops, credit is bought once and spent as blind-signed coins, and your history never leaves the device.</p>
+      <div class="cta">
+        <a class="btn primary big" href="#download">Download</a>
+        <a class="btn big" href="#faucet">Get testnet credit</a>
+      </div>
+      <p style="font-size:12px;margin-top:14px">{{VERSION}} · built on the Nym SDK · no account, no e-mail — a 24-word phrase is all you keep.</p>
+    </div>
+    <div class="shot">
+      <span class="y">YOU</span><br>what does a mixnet add over a VPN?<br><br>
+      <span class="a">SCRAI</span> · gemini-3.5-flash-lite<br>
+      A VPN moves trust to one company that still sees everything. A mixnet reshuffles and delays packets across independent nodes, so no single party sees both who sent a message and where it went …<br><br>
+      <span class="k">⚙ provider $0.000412 · charged $0.000453 · +10 % · ⏱ 1.9 s</span>
+    </div>
+  </div>
+
+  <div class="sec" id="download">
+    <div class="eyebrow">01 · Download</div>
+    <h2>Runs on your <b>machine</b></h2>
+    <p class="lead">No App Store yet — we're saving the developer fee for later. That means two honest caveats: macOS shows a warning on first launch, and iPhone needs TestFlight or sideloading. Every download has a checksum you can verify.</p>
+    <div class="dl">
+      <div class="dlc">
+        <div class="os"> macOS</div>
+        <div class="meta">Apple silicon · .dmg</div>
+        <div class="note"><b>First launch:</b> the build is not notarised yet (no Apple developer programme), so macOS says it "cannot be opened". Right-click the app → <b>Open</b> once; afterwards it opens normally.</div>
+        <div class="sum" id="verify">sha256 {{SHA_MACOS}}</div>
+        <div class="row">{{DL_MACOS}}</div>
+      </div>
+      <div class="dlc">
+        <div class="os">🐧 Linux · x86_64</div>
+        <div class="meta">AppImage — or the .deb for Debian/Ubuntu</div>
+        <div class="note"><b>AppImage:</b> one file — <span style="font-family:var(--mono)">chmod +x</span>, double-click. Needs WebKitGTK (present on GNOME/KDE desktops).</div>
+        <div class="sum">sha256 {{SHA_APPIMAGE}}</div>
+        <div class="row">{{DL_APPIMAGE}}{{DL_DEB}}</div>
+      </div>
+      <div class="dlc soon">
+        <div class="os">📱 iPhone</div>
+        <div class="meta">TestFlight — as soon as the developer programme is in place</div>
+        <div class="note">An iPhone can't install an app from a download. Until TestFlight opens, the closed test group installs via <b>sideloading</b> (AltStore / Sideloadly, re-signed every 7 days).</div>
+        <div class="sum">closed test group</div>
+        <div class="row">{{DL_IOS}}{{DL_IOS_GUIDE}}</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="sec" id="faucet">
+    <div class="eyebrow">02 · Testnet credit</div>
+    <h2>A <b>faucet</b> that pays like a customer</h2>
+    <p class="lead">Testers don't get a pre-funded seed (we would know it) and the server has no special faucet path (nothing to remove later). Instead this page pays the invoice your app created — on the Nyx testnet, with the memo the app shows you. Every tester runs the real purchase flow end to end.</p>
+    <div class="off-note">The faucet is currently switched off — this server is not in testnet mode.</div>
+    <div class="faucet">
+      <div class="steps">
+        <div class="st"><i>1</i><div><b>In the app: Buy credit → tick "Testnet purchase" → $1 → NYM → Continue</b><small>Only $1 is selectable in testnet mode. You get the server's address and a short memo — copy the memo.</small></div></div>
+        <div class="st"><i>2</i><div><b>Here: invite code + memo → Fund</b><small>The faucet checks that the memo is an open $1 testnet invoice, then pays it from our testnet wallet — a real NYM transfer on the Nyx chain, exactly like a customer. One payment per memo; each invite code is good for a few purchases.</small></div></div>
+        <div class="st"><i>3</i><div><b>Wait — both sides tell you</b><small>This page follows the payment (sent → credited); the app's chain watcher matches the memo and shows the credit as "held", spent as blind-signed coins from your next message.</small></div></div>
+        <p class="note" style="font-size:12px;margin-top:6px">Honest note: the faucet knows memo ↔ invite code, the server knows memo ↔ account, and both are ours — in this test, a purchase is linkable to a tester. Real purchases on mainnet are not routed through anything like this.</p>
+      </div>
+      <form class="form" id="f" autocomplete="off">
+        <label for="code">Invite code</label>
+        <input id="code" name="code" placeholder="SCRAI-XXXX-XXXX" maxlength="32" spellcheck="false" autocapitalize="characters">
+        <label for="memo">Memo from the app</label>
+        <input id="memo" name="memo" placeholder="the memo shown under “Memo — required”" maxlength="64" spellcheck="false">
+        <div class="note" style="margin-top:12px;font-size:12px">Amount: read from the invoice the app created — $1 at today's rate, pinned by the server. Nothing to type.</div>
+        <button class="btn primary" id="go" type="submit">Fund this invoice</button>
+        <div class="state" id="state"></div>
+      </form>
+    </div>
+  </div>
+
+  <div class="sec" id="how">
+    <div class="eyebrow">03 · How it works</div>
+    <h2>Two things that never <b>meet</b></h2>
+    <p class="lead">Your identity and your questions. The app talks to the ScrambleAI server only through the Nym mixnet (Sphinx packets, five hops, cover traffic) — the server has no public address at all. Credit is bought once as an account top-up and then withdrawn as blind-signed coins; a coin spent on a question cannot be linked back to the purchase that funded it.</p>
+  </div>
+
+  <div class="foot">
+    <span>© 2026 Hermes Blockchain Ventures</span>
+    <span>verify downloads: compare the sha256 above with <span style="font-family:var(--mono)">shasum -a 256 &lt;file&gt;</span></span>
+  </div>
+</div>
+
+<script>
+(function(){
+  var f=document.getElementById('f'), go=document.getElementById('go'), st=document.getElementById('state');
+  var esc=function(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); };
+  var pollTimer=null;
+  function line(k,cls,txt){ return '<span class="k">'+k+'</span> <span class="'+cls+'">'+txt+'</span><br>'; }
+  function render(rows){ st.innerHTML=rows.join(''); }
+  function follow(memo, base){
+    var started=Date.now();
+    clearInterval(pollTimer);
+    pollTimer=setInterval(function(){
+      fetch('/api/claim?memo='+encodeURIComponent(memo)).then(function(r){return r.json();}).then(function(s){
+        if(s.stage==='credited'){ clearInterval(pollTimer); render(base.concat([line('3 ✓','ok','credited — the app shows the $1 as held credit')])); }
+        else if(s.stage==='expired'){ clearInterval(pollTimer); render(base.concat([line('3 ✗','bad','the invoice expired before the chain watcher matched it — tell us the memo')])); }
+        else if(Date.now()-started>15*60*1000){ clearInterval(pollTimer); render(base.concat([line('3 ⏳','','still waiting after 15 min — keep the app open; if nothing lands, tell us the memo')])); }
+      }).catch(function(){});
+    }, 10000);
+  }
+  f.addEventListener('submit', function(ev){
+    ev.preventDefault();
+    var code=document.getElementById('code').value.trim().toUpperCase();
+    var memo=document.getElementById('memo').value.trim();
+    if(!code||!memo){ render([line('!','bad','both fields are needed')]); return; }
+    go.disabled=true; go.textContent='Funding…';
+    render([line('1 …','','checking the memo against the server')]);
+    fetch('/api/claim',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:code,memo:memo})})
+      .then(function(r){ return r.json().then(function(j){ return {ok:r.ok, j:j}; }); })
+      .then(function(x){
+        go.disabled=false; go.textContent='Fund this invoice';
+        if(!x.ok||x.j.error){ render([line('1 ✗','bad',esc(x.j.error||'request failed'))]); return; }
+        var j=x.j;
+        var base=[
+          line('1 ✓','ok','invoice found · $1 · testnet purchase · open'),
+          line('2 ✓','ok','sent '+esc(j.nym)+' NYM to the server address, memo '+esc(j.memo)+' · tx '+esc(String(j.tx).slice(0,12))+'…'+(j.explorer?' <a href="'+esc(j.explorer)+'" target="_blank" rel="noopener noreferrer">↗ explorer</a>':'')),
+          line('3 ⏳','','waiting for the chain watcher (polls every ~10 s) — the app shows "held credit" when it lands')
+        ];
+        render(base); follow(j.memo, base.slice(0,2));
+      })
+      .catch(function(){ go.disabled=false; go.textContent='Fund this invoice'; render([line('1 ✗','bad','network error — try again')]); });
+  });
+})();
+</script>
+</body>
+</html>
