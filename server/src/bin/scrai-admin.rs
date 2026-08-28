@@ -115,6 +115,10 @@ struct DayRow {
     purchased: u64,
     /// most clients served in parallel at one instant that day (chat/catalog/payment in flight)
     peak_clients: u64,
+    /// DIFFERENT paying sessions that chatted that day (`daily_users`; 0 before it existed).
+    /// One person = one session unless they bump the session index; free-tier chats
+    /// carry no session and are not counted.
+    users: u64,
     /// prompts per model id that day (from `daily_model`; empty for days before it existed)
     per_model: std::collections::HashMap<String, u64>,
     /// faucet payments that day (from faucet.db next to state.db; UTC days)
@@ -389,8 +393,11 @@ fn read_metrics(path: &PathBuf) -> Metrics {
     // `peak_clients` arrived later — read it as 0 on a db the server hasn't migrated yet
     let has_peak = conn.prepare("SELECT peak_clients FROM daily LIMIT 0").is_ok();
     let peak_col = if has_peak { "peak_clients" } else { "0" };
+    // `daily_users` arrived with 0.3.0 — absent on an older db
+    let has_users = conn.prepare("SELECT sid FROM daily_users LIMIT 0").is_ok();
+    let users_col = if has_users { "(SELECT COUNT(*) FROM daily_users u WHERE u.day = daily.day)" } else { "0" };
     if let Ok(mut stmt) = conn.prepare(&format!(
-        "SELECT day, prompts, spent, purchases, purchased, cost, {peak_col} FROM daily ORDER BY day DESC LIMIT 12"
+        "SELECT day, prompts, spent, purchases, purchased, cost, {peak_col}, {users_col} FROM daily ORDER BY day DESC LIMIT 12"
     )) {
         m.has_daily = true;
         if let Ok(rows) = stmt.query_map([], |r| {
@@ -402,6 +409,7 @@ fn read_metrics(path: &PathBuf) -> Metrics {
                 purchased: r.get::<_, i64>(4)? as u64,
                 cost: r.get::<_, i64>(5)? as u64,
                 peak_clients: r.get::<_, i64>(6)? as u64,
+                users: r.get::<_, i64>(7)? as u64,
                 per_model: Default::default(),
                 faucet: 0,
             })
@@ -610,6 +618,11 @@ fn ui(f: &mut Frame, m: &Metrics, path: &str, clock: &str, network: &str, status
         kv("= profit", format!("{}  ({} scrai)", usd(m.total_spent.saturating_sub(m.total_cost)), grp(m.total_spent.saturating_sub(m.total_cost))), SAGE),
         kv("  since metrics deploy", String::new(), DIM),
         kv(
+            "users today",
+            format!("{} different paying sessions chatted", grp(m.daily.first().map(|d| d.users).unwrap_or(0))),
+            BONE,
+        ),
+        kv(
             "max simultaneous clients",
             format!(
                 "{} today · {} all-time",
@@ -654,6 +667,7 @@ fn ui(f: &mut Frame, m: &Metrics, path: &str, clock: &str, network: &str, status
     header.push("faucet".into());
     header.push("buys".into());
     header.push("buys $".into());
+    header.push("users".into());
     header.push("peak".into());
     // two lines: the model labels wrap ("Nano Banana\n2 Lite"), the rest sits on the first
     let header_row = Row::new(header).style(Style::default().fg(DIM)).height(2);
@@ -690,6 +704,7 @@ fn ui(f: &mut Frame, m: &Metrics, path: &str, clock: &str, network: &str, status
                     )),
                     Cell::from(Span::styled(grp(d.purchases), Style::default().fg(BONE))),
                     Cell::from(Span::styled(usd(d.purchased), Style::default().fg(GOLD))),
+                    Cell::from(Span::styled(grp(d.users), Style::default().fg(BONE))),
                     Cell::from(Span::styled(grp(d.peak_clients), Style::default().fg(SAGE))),
                 ])
                 .collect::<Vec<Cell>>())
@@ -707,7 +722,8 @@ fn ui(f: &mut Frame, m: &Metrics, path: &str, clock: &str, network: &str, status
     widths.push(Constraint::Length(6));
     widths.push(Constraint::Length(5));
     widths.push(Constraint::Length(8));
-    widths.push(Constraint::Length(5));
+    widths.push(Constraint::Length(5)); // users
+    widths.push(Constraint::Length(5)); // peak
     f.render_widget(
         Table::new(rows, widths).header(header_row).block(block(&format!("DAILY · per {} day", m.metrics_tz))),
         bot[0],

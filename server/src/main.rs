@@ -285,6 +285,7 @@ async fn main() {
             }
             // A spawned chat's provider call returned → price + settle it here on the loop.
             Some(done) = http_rx.recv() => {
+                let session_of_chat = done.pending.session_id().map(str::to_string);
                 let mut response = chat::settle(done.pending, done.result, &mut sessions, &mut chat_replies);
                 // Per-day chat metrics from the reply (spent = charged, cost = provider price).
                 if let Ok(mut rv) = serde_json::from_slice::<serde_json::Value>(&response) {
@@ -301,6 +302,9 @@ async fn main() {
                         let spent = rv.get("cost").and_then(|c| c.as_u64()).unwrap_or(0);
                         let cost = rv.pointer("/usage/billing/costScrai").and_then(|c| c.as_f64()).map(|f| f.ceil() as u64).unwrap_or(0);
                         db.bump_daily(&today, 1, spent, cost, 0, 0);
+                        if let Some(sid) = &session_of_chat {
+                            db.note_user(&today, sid); // distinct paying sessions today ("users")
+                        }
                         // Per-model breakdown for the admin table (the reply names the billed model).
                         let model = rv.pointer("/usage/billing/model").and_then(|m| m.as_str()).unwrap_or("unknown");
                         db.bump_daily_model(&today, model, 1, spent, cost);

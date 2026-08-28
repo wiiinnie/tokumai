@@ -48,6 +48,19 @@ impl Store {
         // Peak number of distinct clients served in parallel that day (a MAX, not a sum) —
         // the capacity signal for the single Nym client / provider slots (inflight.rs).
         let _ = conn.execute("ALTER TABLE daily ADD COLUMN peak_clients INTEGER NOT NULL DEFAULT 0", []);
+        // Distinct paying sessions per UTC day ("users"): one row per (day, hashed session
+        // id), so COUNT(*) per day is the number of different sessions that chatted. The
+        // hash (sha256, 16 hex) keeps raw session ids out of the metrics table; rows older
+        // than 90 days are pruned on write. `peak_clients` is a MAX of simultaneous
+        // clients — this is the count of different ones over the whole day.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS daily_users (\
+               day TEXT NOT NULL,\
+               sid TEXT NOT NULL,\
+               PRIMARY KEY (day, sid))",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
         // Per-UTC-day × model counters (which models are actually used, what they cost).
         // Same privacy shape as `daily`: aggregates only, no account/session ids, no content.
         conn.execute(
@@ -90,6 +103,16 @@ impl Store {
                purchased = purchased + ?6",
             params![day, prompts as i64, spent as i64, cost as i64, purchases as i64, purchased as i64],
         );
+    }
+
+    /// Remember that `session_id` chatted on `day` (idempotent). Best-effort like `bump_daily`.
+    pub fn note_user(&self, day: &str, session_id: &str) {
+        let h: String = scrai_core::auth::sha256(&[session_id.as_bytes()]).iter().take(8).map(|b| format!("{b:02x}")).collect();
+        let _ = self.conn.execute("INSERT OR IGNORE INTO daily_users (day, sid) VALUES (?1, ?2)", params![day, h]);
+        // keep the table small: 90 days is plenty for the admin's 12-day view
+        if let Some(cut) = day_minus(day, 90) {
+            let _ = self.conn.execute("DELETE FROM daily_users WHERE day < ?1", params![cut]);
+        }
     }
 
     /// Raise today's peak-simultaneous-clients mark to `n` if it is higher. Best-effort
@@ -147,5 +170,42 @@ mod tests {
         assert_eq!(s.load("sessions").as_deref(), Some("{\"bal\":9}"));
         assert_eq!(s.load("quorum").as_deref(), Some("{\"serials\":[1]}"));
         let _ = std::fs::remove_file(&p);
+    }
+}
+
+/// "YYYY-MM-DD" minus `days` (civil arithmetic on a proleptic Gregorian calendar).
+fn day_minus(day: &str, days: i64) -> Option<String> {
+    let mut it = day.split('-').map(|p| p.parse::<i64>().ok());
+    let (y, m, d) = (it.next()??, it.next()??, it.next()??);
+    // days-from-civil / civil-from-days (Howard Hinnant)
+    let (y2, m2) = if m <= 2 { (y - 1, m + 9) } else { (y, m - 3) };
+    let era = y2.div_euclid(400);
+    let yoe = y2 - era * 400;
+    let doy = (153 * m2 + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let z = era * 146097 + doe - 719468 - days;
+    let z = z + 719468;
+    let era = z.div_euclid(146097);
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    Some(format!("{y:04}-{m:02}-{d:02}"))
+}
+
+#[cfg(test)]
+mod day_tests {
+    use super::day_minus;
+    #[test]
+    fn civil_subtraction() {
+        assert_eq!(day_minus("2026-08-29", 90).as_deref(), Some("2026-05-31"));
+        assert_eq!(day_minus("2026-03-01", 1).as_deref(), Some("2026-02-28"));
+        assert_eq!(day_minus("2024-03-01", 1).as_deref(), Some("2024-02-29"));
+        assert_eq!(day_minus("2026-01-01", 1).as_deref(), Some("2025-12-31"));
+        assert_eq!(day_minus("garbage", 1), None);
     }
 }

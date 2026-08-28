@@ -17,7 +17,7 @@ use sha2::{Digest, Sha256};
 const SPKI_ED25519_PREFIX: [u8; 12] =
     [0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00];
 
-fn sha256(parts: &[&[u8]]) -> [u8; 32] {
+pub fn sha256(parts: &[&[u8]]) -> [u8; 32] {
     let mut h = Sha256::new();
     for p in parts {
         h.update(p);

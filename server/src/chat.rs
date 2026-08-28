@@ -340,6 +340,14 @@ struct PaidCtx {
 }
 
 /// Outcome of the synchronous, loop-side reserve step.
+impl PendingChat {
+    /// The paying session behind this chat (None on the genuinely-free tier). Used only
+    /// for the per-day distinct-users count — hashed before it touches the metrics table.
+    pub fn session_id(&self) -> Option<&str> {
+        self.paid.as_ref().map(|p| p.session_id.as_str())
+    }
+}
+
 pub enum Reserved {
     /// Done — send this reply immediately (validation error, or an idempotent replay hit).
     Reply(Vec<u8>),

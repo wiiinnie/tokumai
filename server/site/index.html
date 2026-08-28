@@ -137,7 +137,7 @@
       <div class="dlc{{CLS_MACOS}}">
         <div class="os"> macOS</div>
         <div class="meta">{{META_MACOS}}</div>
-        <div class="note"><b>First launch:</b> the build is not notarised yet (no Apple developer programme), so macOS says it "cannot be opened". Right-click the app → <b>Open</b> once; afterwards it opens normally.</div>
+        <div class="note"><b>First launch:</b> the build is not notarised yet (no Apple developer programme). Drag the app to Applications, open it once — macOS refuses — then <b>System Settings → Privacy &amp; Security → Open Anyway</b>. Terminal alternative: <span style="font-family:var(--mono)">xattr -d com.apple.quarantine /Applications/ScrambleAI.app</span>. Afterwards it opens normally.</div>
         <div class="sum" id="verify">sha256 {{SHA_MACOS}}</div>
         <div class="row">{{DL_MACOS}}</div>
       </div>
