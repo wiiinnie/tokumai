@@ -628,6 +628,8 @@
   .watchrow.live{color:#7fbf97}
   .watchrow.down .wd{background:var(--signal)}
   .watchrow.down{color:var(--signal)}
+  /* a status line that needs to be READ (raising an invoice, waiting on the gateway) */
+  .modal .hint.busy{color:var(--signal);font-size:12px}
   /* In the native app the OS draws the window controls (overlay titlebar), so
      hide our decorative dots and clear space for the real traffic lights. */
   body.tauri .dot{display:none}
@@ -4042,7 +4044,7 @@
   function removePending(id){ pendingList=pendingList.filter(p=>p.invoiceId!==id); savePending(); }
   function coinOf(inv){ const o=(inv.options||[])[0]; return o&&/nym/i.test(o.method||"")?"NYM":"Bitcoin"; }
 
-  function stopPoll(){ if(pollTimer){ clearInterval(pollTimer); pollTimer=null; } }
+  function stopPoll(){ if(pollTimer){ clearInterval(pollTimer); pollTimer=null; } stopWatchTicker(); }
   function stopCountdown(){ if(countdownTimer){ clearInterval(countdownTimer); countdownTimer=null; } }
   function stopPendRefresh(){ if(pendRefreshTimer){ clearInterval(pendRefreshTimer); pendRefreshTimer=null; } }
   // Amounts are SELECTION items (like the coins) — clicking only highlights, it
@@ -4171,9 +4173,12 @@
   // Real gateway: raise an invoice, remember it as pending, open its payment view.
   async function startInvoice(usd, method){
     stopPoll(); stopCountdown(); activeInvoice=null;
-    $("buyStatus").textContent="raising invoice…";
+    // Readable while the gateway works (BTCPay / Nyx invoice takes a mixnet round trip + the
+    // gateway call): gold, not muted — same for NYM, Bitcoin and, later, Monero.
+    $("buyStatus").className="hint busy"; $("buyStatus").textContent="raising invoice… (a mixnet round trip plus the payment gateway — usually a few seconds)";
     let inv;
-    try{ inv=await Backend.invoice(usd, method); }catch(e){ $("buyStatus").textContent=e.message||String(e); return; }
+    try{ inv=await Backend.invoice(usd, method); }catch(e){ $("buyStatus").className="hint"; $("buyStatus").textContent=e.message||String(e); return; }
+    $("buyStatus").className="hint";
     addPending(inv);
     openPayment(inv);
   }
@@ -4201,15 +4206,26 @@
     tick();                                   // immediate, so the watch shows fast
     pollTimer=setInterval(tick, 10000);
   }
-  // Live NYM chain-watch indicator, fed by each status poll's `watch` field.
+  // Live NYM chain-watch indicator, fed by each status poll's `watch` field. The server's
+  // age is measured at ITS poll (≈ 0 s by the time the reply lands), so the seconds shown
+  // are counted here — since the last poll reply — and tick up between polls.
+  let lastWatch=null, watchTicker=null;
+  function watchAgeText(){
+    if(!lastWatch) return "";
+    const serverAge = lastWatch.serverAgeMs!=null ? lastWatch.serverAgeMs : 0;
+    const secs = Math.max(0, Math.round((serverAge + (Date.now()-lastWatch.at))/1000));
+    return `last poll ${secs}s ago`;
+  }
+  function stopWatchTicker(){ if(watchTicker){ clearInterval(watchTicker); watchTicker=null; } lastWatch=null; }
   function updateWatch(watch){
     const el=$("watchState"); if(!el) return;
     if(!watch){ el.className="watchrow"; el.innerHTML='<span class="wd"></span> connecting to the Nyx chain…'; return; }
     if(watch.connected){
-      const age = watch.lastBlockAgoMs!=null ? Math.max(0,Math.round(watch.lastBlockAgoMs/1000)) : "?";
+      lastWatch={ at:Date.now(), serverAgeMs:(watch.lastBlockAgoMs!=null?watch.lastBlockAgoMs:null) };
       const how = watch.mode==="polling" ? "polling the Nyx chain" : "watching the Nyx chain";
       el.className="watchrow live";
-      el.innerHTML=`<span class="wd"></span> Live · ${how} · block #${esc(String(watch.height??"?"))} · ${age}s ago`;
+      el.innerHTML=`<span class="wd"></span> Live · ${how} · block #${esc(String(watch.height??"?"))} · <span id="watchAge">${watchAgeText()}</span>`;
+      if(!watchTicker) watchTicker=setInterval(()=>{ const a=$("watchAge"); if(a) a.textContent=watchAgeText(); else stopWatchTicker(); }, 1000);
     }else{
       el.className="watchrow down";
       el.innerHTML='<span class="wd"></span> Chain watch offline — reconnecting… (payment still safe, it settles on reconnect)';
