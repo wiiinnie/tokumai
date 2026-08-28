@@ -17,7 +17,7 @@ src-tauri/gen/schemas/
 src-tauri/models/
 
 # nym-client binary — platform-specific, installed per host (npm run nym:install)
-bin/
+/bin/
 
 # Claude Code local state
 .claude/
