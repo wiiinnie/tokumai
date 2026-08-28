@@ -378,6 +378,10 @@
   .pillbtn{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:9px;padding:6px 10px;cursor:pointer}
   .pillbtn.on{color:var(--signal);border-color:color-mix(in srgb,var(--signal) 45%,var(--line));background:color-mix(in srgb,var(--signal) 8%,transparent)}
   .editref{font-family:var(--mono);font-size:10.5px;color:var(--signal);margin-top:6px}
+  .iterrow{margin:6px 0 2px}
+  .iterbtn{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:9px;padding:6px 10px;cursor:pointer;background:transparent}
+  .iterbtn:hover{color:var(--bone)}
+  .iterbtn.on{color:var(--signal);border-color:color-mix(in srgb,var(--signal) 45%,var(--line));background:color-mix(in srgb,var(--signal) 8%,transparent)}
   .msgacts{display:flex;gap:8px;margin-top:10px}
   .msgact{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:11px;color:var(--muted);background:transparent;border:1px solid var(--line);border-radius:7px;padding:5px 10px;cursor:pointer;min-height:30px}
   .msgact:hover{color:var(--bone);border-color:var(--muted)}
@@ -900,7 +904,6 @@
       <button class="scrolldn" id="scrollBottom" data-click="scrollToBottom" title="Jump to latest" aria-label="Jump to latest" style="display:none"><span class="a">↓</span><span>latest</span></button>
       <div class="wrap2">
         <div id="attachRow" class="attachrow" style="display:none"></div>
-        <div id="editPill" class="editpill" style="display:none"></div>
         <div id="liveNudge" class="nudge" style="display:none">
           <span class="ni">◎</span>
           <span class="nt"><b>This looks like it needs live data.</b><small>answer with a web search? · costs a bit more, queries Google Search</small></span>
@@ -1542,6 +1545,13 @@
     currentModel=m.model; modelVendor=m.vendor; modelTrains=m.trainsOnInput; modelRate=m.rate||null; modelAcceptsImages=!!m.acceptsImages; modelTier=m.tier||"paid"; modelKind=m.kind||"text";
     $("mName").textContent=m.label||m.model; $("mVend").textContent=m.vendor+(m.rate?(' · '+rateHint(m.rate)):'');
     if(typeof pendingFile!=="undefined" && pendingFile) renderAttach();  // refresh the file hint
+    syncComposerHint();
+  }
+  // The composer's placeholder says what the next send does: ask · create a picture ·
+  // change the picture picked with "Iterate / edit".
+  function syncComposerHint(){
+    const el=$("input"); if(!el) return;
+    el.placeholder = modelKind==="image" ? (editTarget ? "Describe the change to the selected picture…" : "Create image…") : "Ask anything…";
   }
 
   // ---------- provider terms & conditions ----------
@@ -1715,6 +1725,8 @@
       // browser's scroll anchoring then "centres" the view on it. Data URIs are
       // local anyway; eager decode + the onload bottom re-pin keep the view calm.
       const saveLbl = isIOSNative() ? "save to Photos" : "download";
+      const on = !!(editTarget && editTarget.mi===mi && editTarget.i===i);
+      const canIter = modelKind==="image" && !!im.data;
       return `<figure class="genimg" data-click="toggleImgOvl" data-click-pass="event">
         <img src="${src}" alt="generated image" data-onload="imgSettled">
         <div class="sovl">
@@ -1722,7 +1734,7 @@
             <span class="sic">⬇</span><span class="stx">${saveLbl}</span>
           </button>
         </div>
-      </figure>`;
+      </figure>${canIter?`<div class="iterrow"><button class="iterbtn${on?' on':''}" data-click="iterateImg" data-args="${mi},${i}" data-stop="1">${on?'✓ Editing this image — describe the change below · tap to cancel':'✎ Iterate / edit this image'}</button></div>`:''}`;
     }).join("")+`</div>`;
   }
   // A user's input attachment: image → thumbnail (with a live upload overlay), else a chip.
@@ -1819,7 +1831,7 @@
     t.innerHTML=`<div class="wrap">`+messages.map((m,mi)=>`
       <div class="msg ${m.role}">
         <div class="who">${m.role==='you'?'you':(m.role==='err'?'error':'scrai')}${m.role==='ai'&&m.model?`<span class="viamodel">${esc(m.model)}</span>`:''}</div>
-        <div class="body">${bodyHtml(m,mi)}${(m.role==='you'&&m.editRef)?`<div class="editref">✎ edits the picture above</div>`:''}${(m.role==='ai'&&m.note)?`<div class="sizenote${m.noteKind?' '+m.noteKind:''}">${esc(m.note)}</div>`:''}${(devCost&&m.role==='ai'&&m.audit)?auditDiv(m.audit):''}${(devCost&&m.role==='you'&&m.xfer)?xferDiv(m.xfer):''}${(m.role==='err'&&m.retry)?`<button class="retrybtn" data-click="retryMsg" data-args="${mi}">↻ Retry</button>`:''}${(m.role==='ai'&&m.streaming)?`<div class="msgacts"><button class="msgact rust" data-click="cancelMsg" data-args="${mi}">✕ Cancel</button></div>`:''}${(m.role==='ai'&&!m.streaming&&m.canResend)?`<div class="msgacts"><button class="msgact" data-click="resendMsg" data-args="${mi}" title="Send the same question again with the currently selected model">↻ Resend</button></div>`:''}</div>
+        <div class="body">${bodyHtml(m,mi)}${(m.role==='you'&&m.editRef)?`<div class="editref">✎ edits the selected picture</div>`:''}${(m.role==='ai'&&m.note)?`<div class="sizenote${m.noteKind?' '+m.noteKind:''}">${esc(m.note)}</div>`:''}${(devCost&&m.role==='ai'&&m.audit)?auditDiv(m.audit):''}${(devCost&&m.role==='you'&&m.xfer)?xferDiv(m.xfer):''}${(m.role==='err'&&m.retry)?`<button class="retrybtn" data-click="retryMsg" data-args="${mi}">↻ Retry</button>`:''}${(m.role==='ai'&&m.streaming)?`<div class="msgacts"><button class="msgact rust" data-click="cancelMsg" data-args="${mi}">✕ Cancel</button></div>`:''}${(m.role==='ai'&&!m.streaming&&m.canResend)?`<div class="msgacts"><button class="msgact" data-click="resendMsg" data-args="${mi}" title="Send the same question again with the currently selected model">↻ Resend</button></div>`:''}</div>
       </div>`).join("")+`</div>`;
     if(pinQuestion){ pinLastQuestion(t); }
     else { t.style.paddingBottom=""; setTop(t, followStream ? t.scrollHeight : prevTop); }
@@ -2160,14 +2172,21 @@
     // it isn't truly running elsewhere yet). Switching now would orphan its reply and lose
     // the conversation — block until it lands. See also updateSendEnabled's `busy` gate.
     if(busy){ setStatus("wait for the current answer to finish before starting a new chat"); return; }
-    await endSession(current); clearImage(); current=newSession(); messages=current.messages; pinQuestion=false; followStream=true; renderSessions(); renderThread(); $("input").focus();
+    await endSession(current); clearImage(); editTarget=null; current=newSession(); messages=current.messages; pinQuestion=false; followStream=true; renderSessions(); renderThread(); $("input").focus();
   }
   async function openSession(id){
     if(busy){ setStatus("wait for the current answer to finish before switching chats"); return; }
     if(current && current.id!==id) await endSession(current);
     const s = await Vault.load(id); if(!s) return;
     clearImage();   // an un-sent attachment belongs to the chat you're leaving — drop it
-    current=s; messages=current.messages; pinQuestion=false; followStream=true; renderSessions(); renderThread();
+    editTarget=null;
+    current=s; messages=current.messages; pinQuestion=false; followStream=true;
+    // Pick up the model this chat last used (else the one it was saved with) — an image
+    // chat reopened on a text model would spend credit on an answer that can't draw.
+    const lastUsed=[...messages].reverse().find(m=>m.role==="ai" && m.model && modelByName(m.model));
+    const want = lastUsed ? modelByName(lastUsed.model) : (s.model ? modelByName(s.model) : null);
+    if(want && want.model!==currentModel) chooseModel(want);
+    renderSessions(); renderThread();
   }
   async function deleteSession(id){
     await Vault.remove(id);
@@ -2535,17 +2554,24 @@
   // model is an image model and the conversation already holds a generated picture, the
   // most recent one is re-sent as the reference for the next prompt (downscaled + stripped
   // like any attachment, chunked over the mixnet). Toggle off for a fresh picture.
-  let editLast = true;
-  function lastPicture(){ for(let i=messages.length-1;i>=0;i--){ const m=messages[i]; if(m.role==="ai" && m.images && m.images.length && m.images[0].data) return m.images[0]; } return null; }
-  function renderEditPill(){
-    const el=$("editPill"); if(!el) return;
-    const show = modelKind==="image" && !pendingFile && !!lastPicture();
-    el.style.display = show ? "" : "none";
-    if(show) el.innerHTML = editLast
-      ? `<span class="pillbtn on" data-click="toggleEditLast">✎ Editing the picture above · tap for a fresh picture</span>`
-      : `<span class="pillbtn" data-click="toggleEditLast">✚ Fresh picture · tap to edit the one above</span>`;
+  // Picture iteration is explicit: an image chat draws FRESH pictures unless the user
+  // taps "Iterate / edit" under one — that picture then rides along as the reference for
+  // the next prompt only, and the mode clears itself after sending.
+  let editTarget = null;                 // { mi, i } — message index + image index
+  function editTargetPic(){
+    if(!editTarget) return null;
+    const m=messages[editTarget.mi]; const im=m&&m.role==="ai"&&m.images&&m.images[editTarget.i];
+    return (im&&im.data) ? im : null;
   }
-  function toggleEditLast(){ editLast=!editLast; renderEditPill(); setStatus(editLast ? "next prompt edits the picture above" : "next prompt draws a fresh picture"); }
+  function iterateImg(mi,i){
+    mi=Number(mi); i=Number(i);
+    editTarget = (editTarget && editTarget.mi===mi && editTarget.i===i) ? null : { mi, i };
+    if(editTarget && !editTargetPic()) editTarget=null;
+    renderThread(); syncComposerHint();
+    setStatus(editTarget ? "next prompt changes the selected picture" : "next prompt draws a fresh picture");
+    if(editTarget){ const el=$("input"); if(el) el.focus(); }
+  }
+  function renderEditPill(){ syncComposerHint(); }
   function bytesToB64(u8){ let bin=""; const CH=0x8000; for(let i=0;i<u8.length;i+=CH){ bin+=String.fromCharCode.apply(null,u8.subarray(i,i+CH)); } return btoa(bin); }
   // On iOS the web <input type=file> is unreliable (won't reopen after a cancel), so the
   // "+" opens a small chooser and photos/camera go through the NATIVE picker (pick_image
@@ -2923,8 +2949,10 @@
     if(!current){ current=newSession(); messages=current.messages; }
 
     const file=pendingFile;                            // capture (may be null)
-    // No attachment, image model, a picture already in the thread → edit it (see editLast).
-    const refPic = (!file && modelKind==="image" && editLast) ? lastPicture() : null;
+    // No attachment, image model, a picture explicitly picked with "Iterate / edit" → it
+    // goes along as the reference. Cleared right away: the mode is one prompt long.
+    const refPic = (!file && modelKind==="image") ? editTargetPic() : null;
+    editTarget=null;
     const displayAtt = file ? { mimeType:file.mimeType, name:file.name, size:file.size, thumb:file.thumb } : undefined;
     // History is sent text-only; a prior attachment is not re-uploaded in v1.
     // Empty turns stay out: a failed send leaves an answerless assistant shell.
@@ -3037,7 +3065,7 @@
         ai.streaming=false; busy=false;
         if(!tFirst) tFirst=performance.now();                       // image reply: no deltas
         if(typeof evt.balance==="number"){ balance=evt.balance; if(typeof evt.held==="number") held=evt.held; renderBal(); }
-        if(Array.isArray(evt.images) && evt.images.length){ ai.images=evt.images; editLast=true; }
+        if(Array.isArray(evt.images) && evt.images.length){ ai.images=evt.images; }
         if(!ai.text && !(ai.images&&ai.images.length)){
           if(modelKind==="image"){
             // a question sent to a painter — older servers answer with nothing at all
@@ -4545,7 +4573,7 @@
   // expose for inline handlers
   Object.assign(window,{ pickModel, copyPhrase, newChat, openSession, deleteSession, exportSession, toggleMenu, selectModelIdx,
     autogrow, onKey, sendMsg, retryMsg, showHandover, downloadHandover, closeHandover, pickImport, importHandover,
-    cancelMsg, resendMsg, openConnSheet, closeConnSheet, rebuildRoute, rebuildRouteFromSheet, routeDismiss, toggleEditLast,
+    cancelMsg, resendMsg, openConnSheet, closeConnSheet, rebuildRoute, rebuildRouteFromSheet, routeDismiss, iterateImg,
     openBuy, closeBuy, buyTier, buyOrInvoice, copyUri, openAccount, closeAccount, doAccountNew, doAccountReveal, doAccountRestore, doAccountDelete, doMigrate, doRedeem, redeemSliderChanged, startQrScan, stopQrScan,
     showRestore, askNew, cancelAcctView, saveServer, srvSelected, qNav, scrollToBottom, reopenGuard, checkCredit,
     openEntryPicker, showExitInfo, chooseGateway, closeGw, filterGw,
