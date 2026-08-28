@@ -63,18 +63,43 @@ struct QuorumBlob {
     blacklist: HashSet<String>,
 }
 
-/// Column header for a model id: short enough for a TUI cell, still recognisable —
-/// "gemini-3.1-flash-lite-image" → "3.1-fl-lt-img", "llama-3.3-70b-versatile" → "llama-3.3-70b".
-fn short_model(id: &str) -> String {
-    let s = id
-        .trim_start_matches("gemini-")
-        .replace("-versatile", "")
-        .replace("-instant", "-inst")
-        .replace("flash", "fl")
-        .replace("lite", "lt")
-        .replace("image", "img")
-        .replace("pollinations-", "polli-");
-    s.chars().take(10).collect()
+/// Column header for a model: the catalog label from pricing.json ("Nano Banana 2 Lite",
+/// "Gemini 3.5 Flash-Lite"), wrapped onto two lines of ≤ 12 chars so neighbouring models
+/// stay tellable apart; the raw id only when the table doesn't know the model.
+fn model_header(id: &str) -> String {
+    static PRICING: std::sync::OnceLock<Option<scrai_core::pricing::PricingTable>> = std::sync::OnceLock::new();
+    let table = PRICING.get_or_init(|| scrai_core::pricing::PricingTable::parse(include_str!("../../../pricing.json")).ok());
+    let label = table
+        .as_ref()
+        .and_then(|t| t.label(id))
+        .map(|l| l.to_string())
+        .unwrap_or_else(|| id.trim_start_matches("gemini-").replace('-', " "));
+    two_lines(&label, 12)
+}
+
+/// Wrap `text` at word boundaries onto at most two lines of ≤ `width` chars (a longer
+/// tail is cut with "…"), e.g. "Gemini 3.5 Flash-Lite" → "Gemini 3.5\nFlash-Lite".
+fn two_lines(text: &str, width: usize) -> String {
+    let mut lines: Vec<String> = vec![String::new()];
+    for word in text.split_whitespace() {
+        let cur = lines.last_mut().unwrap();
+        if cur.is_empty() {
+            cur.push_str(word);
+        } else if cur.chars().count() + 1 + word.chars().count() <= width {
+            cur.push(' ');
+            cur.push_str(word);
+        } else if lines.len() < 2 {
+            lines.push(word.to_string());
+        } else {
+            cur.push(' ');
+            cur.push_str(word);
+        }
+    }
+    lines
+        .into_iter()
+        .map(|l| if l.chars().count() > width { l.chars().take(width - 1).collect::<String>() + "…" } else { l })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[derive(Default)]
@@ -515,11 +540,12 @@ fn ui(f: &mut Frame, m: &Metrics, path: &str, clock: &str, network: &str, status
 
     // day · prompts · spent · cost · margin · <one column per model> · buys · buys $
     let mut header: Vec<String> = ["day", "prompts", "spent", "cost", "margin"].iter().map(|s| s.to_string()).collect();
-    header.extend(m.models.iter().map(|id| short_model(id)));
+    header.extend(m.models.iter().map(|id| model_header(id)));
     header.push("buys".into());
     header.push("buys $".into());
     header.push("peak".into());
-    let header_row = Row::new(header).style(Style::default().fg(DIM));
+    // two lines: the model labels wrap ("Nano Banana\n2 Lite"), the rest sits on the first
+    let header_row = Row::new(header).style(Style::default().fg(DIM)).height(2);
     let rows: Vec<Row> = if m.daily.is_empty() {
         vec![Row::new(vec![Cell::from(Span::styled(
             if m.has_daily { "no activity yet today" } else { "server not yet redeployed with metrics" },
@@ -562,7 +588,7 @@ fn ui(f: &mut Frame, m: &Metrics, path: &str, clock: &str, network: &str, status
         Constraint::Length(8),
         Constraint::Length(8),
     ];
-    widths.extend(m.models.iter().map(|_| Constraint::Length(10)));
+    widths.extend(m.models.iter().map(|_| Constraint::Length(13)));
     widths.push(Constraint::Length(5));
     widths.push(Constraint::Length(8));
     widths.push(Constraint::Length(5));
@@ -688,5 +714,17 @@ OTHER=1
         assert_eq!(managed_suffix("GEMINI_API_KEY=legacy"), None); // unsuffixed = not managed
         assert_eq!(managed_suffix("SCRAI_GATEWAY_MAINNET=z"), None); // not in the managed set
         assert_eq!(managed_suffix("NOTES_MAINNET is a sentence"), None); // no '='
+    }
+}
+
+#[cfg(test)]
+mod header_tests {
+    use super::*;
+    #[test]
+    fn model_headers_wrap_and_fall_back() {
+        assert_eq!(model_header("gemini-3.1-flash-lite-image"), "Nano Banana\n2 Lite");
+        assert_eq!(model_header("gemini-3.5-flash-lite"), "Gemini 3.5\nFlash-Lite");
+        assert_eq!(two_lines("Nano Banana 2", 12), "Nano Banana\n2");
+        assert_eq!(model_header("gemini-9-imaginary"), "9 imaginary");
     }
 }
