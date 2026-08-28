@@ -112,19 +112,19 @@
         <div class="sum" id="verify">sha256 {{SHA_MACOS}}</div>
         <div class="row">{{DL_MACOS}}</div>
       </div>
-      <div class="dlc{{CLS_WINDOWS}}">
-        <div class="os">⊞ Windows · x64</div>
-        <div class="meta">{{META_WINDOWS}}</div>
-        <div class="note"><b>First launch:</b> the installer is not code-signed yet, so SmartScreen says "Windows protected your PC". Click <b>More info → Run anyway</b> once. Installs per user, no admin rights; needs the Edge WebView2 runtime (fetched automatically if missing).</div>
-        <div class="sum">sha256 {{SHA_WINDOWS}}</div>
-        <div class="row">{{DL_WINDOWS}}</div>
-      </div>
       <div class="dlc{{CLS_LINUX}}">
         <div class="os">🐧 Linux · x86_64</div>
         <div class="meta">{{META_LINUX}}</div>
         <div class="note"><b>AppImage:</b> one file — <span style="font-family:var(--mono)">chmod +x</span>, double-click. Needs WebKitGTK (present on GNOME/KDE desktops).</div>
         <div class="sum">sha256 {{SHA_APPIMAGE}}</div>
         <div class="row">{{DL_APPIMAGE}}{{DL_DEB}}</div>
+      </div>
+      <div class="dlc{{CLS_WINDOWS}}">
+        <div class="os">⊞ Windows · x64</div>
+        <div class="meta">{{META_WINDOWS}}</div>
+        <div class="note"><b>First launch:</b> the installer is not code-signed yet, so SmartScreen says "Windows protected your PC". Click <b>More info → Run anyway</b> once. Installs per user, no admin rights; needs the Edge WebView2 runtime (fetched automatically if missing).</div>
+        <div class="sum">sha256 {{SHA_WINDOWS}}</div>
+        <div class="row">{{DL_WINDOWS}}</div>
       </div>
       <div class="dlc{{CLS_IOS}}">
         <div class="os">📱 iPhone</div>
