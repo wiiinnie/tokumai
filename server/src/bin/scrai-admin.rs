@@ -82,17 +82,15 @@ fn model_header(id: &str) -> String {
 fn two_lines(text: &str, width: usize) -> String {
     let mut lines: Vec<String> = vec![String::new()];
     for word in text.split_whitespace() {
-        let cur = lines.last_mut().unwrap();
-        if cur.is_empty() {
-            cur.push_str(word);
-        } else if cur.chars().count() + 1 + word.chars().count() <= width {
-            cur.push(' ');
-            cur.push_str(word);
-        } else if lines.len() < 2 {
+        let last = lines.len() - 1;
+        let fits = lines[last].chars().count() + 1 + word.chars().count() <= width;
+        if lines[last].is_empty() {
+            lines[last].push_str(word);
+        } else if !fits && lines.len() < 2 {
             lines.push(word.to_string());
         } else {
-            cur.push(' ');
-            cur.push_str(word);
+            lines[last].push(' ');
+            lines[last].push_str(word);
         }
     }
     lines
