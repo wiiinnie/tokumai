@@ -7,7 +7,7 @@
 # of each file and the SCRAI_DL_* lines to paste into /opt/scrai/.env (the site shows a
 # download button only for links present there; `systemctl restart scrai-faucet` after).
 #
-# Usage:  scripts/publish-downloads.sh <admin_user>@<vps-host> [https://site-host]
+# Usage:  scripts/publish-downloads.sh <admin_user>@<vps-host> [https://site-host] [--force]
 #         (target falls back to SCRAI_DEPLOY_TARGET; site host defaults to
 #          https://scrai-faucet.hermes-stakepool.de)
 #
@@ -23,7 +23,11 @@ fi
 SRC="$(cd "$(dirname "$0")/.." && pwd)"
 SSH_OPTS=(-o ControlMaster=auto -o ControlPath="/tmp/scrai-pub-%r@%h:%p" -o ControlPersist=300)
 
-# What is there to publish? Newest of each kind wins.
+# What is there to publish? Newest of each kind wins. Incremental: a file whose sha256
+# already matches the server's manifest is skipped, and manifest entries for platforms
+# not present locally are kept — so adding one platform re-uploads nothing else, while a
+# new version (all files changed) replaces everything. --force re-uploads all.
+FORCE=0; [ "${3:-}" = "--force" ] && FORCE=1
 files=()
 dmg=$(ls -t "$SRC"/target/release/bundle/dmg/*.dmg 2>/dev/null | head -1 || true)
 [ -n "$dmg" ] && files+=("$dmg")
@@ -31,34 +35,65 @@ for f in "$SRC"/dist/downloads/*.exe "$SRC"/dist/downloads/*.AppImage "$SRC"/dis
   [ -f "$f" ] && files+=("$f")
 done
 if [ ${#files[@]} -eq 0 ]; then
-  echo "nothing to publish: run 'npm run tauri:build' (dmg) or drop Linux builds into dist/downloads/" >&2
+  echo "nothing to publish: run 'npm run tauri:build' (dmg) or drop CI builds into dist/downloads/" >&2
   exit 1
 fi
 
-echo "→ files:"
+ver=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$SRC/src-tauri/tauri.conf.json" | head -1)
+echo "→ version $ver · local files:"
 for f in "${files[@]}"; do printf '   %s  (%s)\n' "$(basename "$f")" "$(du -h "$f" | cut -f1)"; done
 
-# manifest.json — the site reads it on every page view (version, names, sha256, sizes),
-# so a new upload is live immediately with no .env edit and no restart.
-ver=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$SRC/src-tauri/tauri.conf.json" | head -1)
-MANIFEST="$SRC/target/publish-manifest.json"
-mkdir -p "$(dirname "$MANIFEST")"
-{
-  printf '{\n  "version": "%s",\n  "published": "%s",\n  "files": {' "$ver" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  sep=""
-  for f in "${files[@]}"; do
-    name=$(basename "$f"); sum=$(shasum -a 256 "$f" | cut -c1-64); bytes=$(stat -f%z "$f" 2>/dev/null || stat -c%s "$f")
-    case "$name" in *.dmg) key=macos;; *.exe) key=windows;; *.AppImage) key=appimage;; *.deb) key=deb;; *) key=other;; esac
-    printf '%s\n    "%s": {"name": "%s", "sha256": "%s", "bytes": %s}' "$sep" "$key" "$name" "$sum" "$bytes"
-    sep=","
-  done
-  printf '\n  }\n}\n'
-} > "$MANIFEST"
-cp "$MANIFEST" "$SRC/target/manifest.json"
-files+=("$SRC/target/manifest.json")
+echo "→ reading the server's manifest"
+REMOTE=$(ssh "${SSH_OPTS[@]}" "$TARGET" 'cat /opt/scrai/site/dl/manifest.json 2>/dev/null || echo "{}"')
 
-echo "→ upload → $TARGET:~/scrai-stage/dl/"
-ssh "${SSH_OPTS[@]}" "$TARGET" 'mkdir -p ~/scrai-stage/dl'
+# Decide what to upload and build the merged manifest (python: JSON without extra tools).
+MANIFEST="$SRC/target/manifest.json"
+mkdir -p "$(dirname "$MANIFEST")"
+UPLOAD=$(REMOTE="$REMOTE" VER="$ver" FORCE="$FORCE" MANIFEST="$MANIFEST" python3 - "${files[@]}" <<'PY'
+import hashlib, json, os, sys, datetime
+try:
+    remote = json.loads(os.environ["REMOTE"] or "{}")
+except Exception:
+    remote = {}
+old = remote.get("files", {}) if isinstance(remote, dict) else {}
+key_of = lambda n: ("macos" if n.endswith(".dmg") else "windows" if n.endswith(".exe")
+                    else "appimage" if n.endswith(".AppImage") else "deb" if n.endswith(".deb") else "other")
+files = dict(old)          # keep what the server already has
+upload = []
+for path in sys.argv[1:]:
+    name = os.path.basename(path)
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    sha = h.hexdigest()
+    key = key_of(name)
+    prev = old.get(key)
+    if os.environ["FORCE"] != "1" and prev and prev.get("sha256") == sha and prev.get("name") == name:
+        print(f"   = {name} unchanged (already on the server)", file=sys.stderr)
+        continue
+    files[key] = {"name": name, "sha256": sha, "bytes": os.path.getsize(path)}
+    upload.append(path)
+    print(f"   ^ {name} {'new' if not prev else 'changed'}", file=sys.stderr)
+manifest = {"version": os.environ["VER"], "published": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "files": files}
+with open(os.environ["MANIFEST"], "w") as out:
+    json.dump(manifest, out, indent=2); out.write("\n")
+print("\n".join(upload))
+PY
+)
+REMOTE_VER=$(printf '%s' "$REMOTE" | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("version",""))
+except Exception: print("")')
+if [ -z "$UPLOAD" ] && [ "$REMOTE_VER" = "$ver" ]; then
+  echo "✓ nothing changed — the server already serves version $ver with these files"
+  exit 0
+fi
+files=()
+while IFS= read -r line; do [ -n "$line" ] && files+=("$line"); done <<< "$UPLOAD"
+files+=("$MANIFEST")
+
+echo "→ upload → $TARGET:~/scrai-stage/dl/  (${#files[@]} file(s) incl. manifest)"
+ssh "${SSH_OPTS[@]}" "$TARGET" 'rm -rf ~/scrai-stage/dl && mkdir -p ~/scrai-stage/dl'
 rsync -a --info=progress2 -e "ssh ${SSH_OPTS[*]}" "${files[@]}" "$TARGET:~/scrai-stage/dl/"
 
 echo "→ install into /opt/scrai/site/dl (sudo once)"
