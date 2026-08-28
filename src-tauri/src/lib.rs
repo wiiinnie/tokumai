@@ -23,6 +23,15 @@ use tauri::{AppHandle, Emitter, Manager, State};
 const TIERS: [u32; 4] = [5, 10, 20, 50];
 /// (server reports testnet mode, faucet URL) — learned with the model list.
 static SERVER_TESTNET: std::sync::Mutex<(bool, Option<String>)> = std::sync::Mutex::new((false, None));
+/// The server's update notice (`update` on the catalogue reply) — set with the model list,
+/// shown by the UI as a blocking "Update available" gate.
+static SERVER_UPDATE: std::sync::Mutex<Option<Value>> = std::sync::Mutex::new(None);
+/// tauri.conf.json's version, read once at launch; goes out as `app` on every request so
+/// the server's release gate (SCRAI_MIN_APP) can tell an outdated build apart.
+static APP_VER: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+pub fn app_version() -> &'static str {
+    APP_VER.get().map(String::as_str).unwrap_or("0.0.0")
+}
 const PROTO: u64 = 1;
 
 // Reply-SURB budgets: a small answer needs few, a chat answer more.
@@ -623,6 +632,10 @@ async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<V
                 models = m.clone();
                 transport.set_cached_models(m.clone()).await;
             }
+            {
+                let mut u = SERVER_UPDATE.lock().unwrap_or_else(|e| e.into_inner());
+                *u = resp.get("update").filter(|u| u.get("required").and_then(|r| r.as_bool()) == Some(true)).cloned();
+            }
             // Testnet servers advertise the $1 faucet purchase; remembered with the models
             // so the flag survives the cache (no extra round trip on later `state` calls).
             {
@@ -648,8 +661,14 @@ async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<V
     // already the user's, so a fresh credential shouldn't read as "0").
     balance = balance.saturating_add(coconut_held_scrai(&app));
     let (testnet, faucet_url) = SERVER_TESTNET.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let update = SERVER_UPDATE.lock().unwrap_or_else(|e| e.into_inner()).clone();
 
     let out = json!({
+        // Developer diagnostics (cost audit, upload readout, dev dials) exist only in a
+        // debug build — a shipped binary never shows the Developer section.
+        "devBuild": cfg!(debug_assertions),
+        "appVersion": app_version(),
+        "update": update,
         "account": account,
         "balance": balance,
         "held": coconut_held_scrai(&app),
@@ -2192,6 +2211,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(Arc::new(Transport::new()))
         .setup(|app| {
+            let _ = APP_VER.set(app.package_info().version.to_string());
             diag(&app.handle().clone(), "==== launch ====");
             // Release builds log too (warn+ → the OS log dir, e.g. ~/Library/Logs/<bundle id>/):
             // a wallet/keychain problem must leave evidence, not just a blank UI.

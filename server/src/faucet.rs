@@ -6,8 +6,9 @@ use rusqlite::{params, Connection};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Default number of purchases one invite code is good for.
-pub const DEFAULT_CODE_USES: u32 = 3;
+/// Purchases one invite code is good for: ONE — a code is a single $1 claim (user decision
+/// 2026-08-28). `scrai-faucet code new [uses]` can still mint a multi-use code on purpose.
+pub const DEFAULT_CODE_USES: u32 = 1;
 
 fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
@@ -102,11 +103,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("scrai-faucet-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let conn = open_db(&dir.join("faucet.db")).unwrap();
-        let code = mint(&conn, 2, "alice").unwrap();
+        let code = mint(&conn, DEFAULT_CODE_USES, "alice").unwrap();
         let rows = list_codes(&conn).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].code, code);
-        assert_eq!(rows[0].left(), 2);
+        assert_eq!(rows[0].left(), 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

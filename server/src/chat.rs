@@ -507,7 +507,7 @@ pub fn settle(
                     "imageSize": p.image_size,
                     "billing": {
                         "priceScrai": frame.price_scrai,
-                        "costScrai": frame.cost_scrai,
+                        "costScrai": dev_audit_cost(frame.cost_scrai),
                         "model": p.model,
                         "pricingVersion": p.pricing_version,
                         "estimated": frame.estimated,
@@ -555,7 +555,7 @@ pub fn settle(
                 "groundingQueries": usage.grounding_queries,
                 "billing": {
                     "priceScrai": cost,
-                    "costScrai": frame.cost_scrai,
+                    "costScrai": dev_audit_cost(frame.cost_scrai),
                     "model": p.model,
                     "pricingVersion": p.pricing_version,
                     "estimated": frame.estimated,
@@ -1575,5 +1575,16 @@ mod tests {
         )
         .unwrap();
         assert!(r["error"].as_str().unwrap().contains("no prompt to draw"));
+    }
+}
+
+/// What the provider billed us for one answer. That number is the margin in plain sight,
+/// so it leaves the server ONLY when `SCRAI_DEV_AUDIT=1` (a developer's own server);
+/// release servers send null and the app's cost-audit overlay has nothing to show.
+fn dev_audit_cost(cost_scrai: f64) -> serde_json::Value {
+    if std::env::var("SCRAI_DEV_AUDIT").as_deref() == Ok("1") {
+        serde_json::json!(cost_scrai)
+    } else {
+        serde_json::Value::Null
     }
 }

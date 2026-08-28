@@ -179,7 +179,9 @@ impl Nyx {
     /// stays pending (the buyer can top up with a second memo-carrying transfer
     /// only via a NEW tx — so in practice: pending until the full amount landed
     /// in one transfer, mirroring the TS behaviour).
-    pub async fn check_paid(&self, memo: &str, expected_unym: u64) -> Result<String, String> {
+    /// `required_sender`: when set, only transfers FROM that address count (testnet
+    /// invoices — sandbox NYM is free, so only the faucet wallet may fund them).
+    pub async fn check_paid(&self, memo: &str, expected_unym: u64, required_sender: Option<&str>) -> Result<String, String> {
         // A live payment always lands at (or just below) the chain tip, but the tx-search
         // returns EVERY past transfer to our address — including old ones on blocks the
         // public Nyx endpoints have since PRUNED (they keep only a rolling window). The
@@ -210,7 +212,7 @@ impl Nyx {
                 Ok(j) => {
                     // Feed the pay screen's health indicator with the tip we already have.
                     *self.watch.lock().unwrap() = (true, crate::pay::now_ms(), tip); // nosemgrep: scrai-unwrap-in-server-hot-path
-                    return Ok(scan_txs(&j, &self.receive_address, memo, expected_unym));
+                    return Ok(scan_txs(&j, &self.receive_address, memo, expected_unym, required_sender));
                 }
                 Err(e) => last_err = e,
             }
@@ -269,7 +271,9 @@ impl Nyx {
 
 /// Scan an LCD tx-search reply for a successful tx whose memo matches and which
 /// moved at least `expected_unym` to `addr`. Pure so it's testable offline.
-pub fn scan_txs(j: &Value, addr: &str, memo: &str, expected_unym: u64) -> String {
+/// `required_sender`: None = anyone may pay (mainnet); Some(addr) = only transfers whose
+/// `sender` is that address are summed (testnet: the faucet wallet, nobody else).
+pub fn scan_txs(j: &Value, addr: &str, memo: &str, expected_unym: u64, required_sender: Option<&str>) -> String {
     let empty = Vec::new();
     let txs = j.get("txs").and_then(|t| t.as_array()).unwrap_or(&empty);
     let resps = j.get("tx_responses").and_then(|t| t.as_array()).unwrap_or(&empty);
@@ -281,7 +285,7 @@ pub fn scan_txs(j: &Value, addr: &str, memo: &str, expected_unym: u64) -> String
         if tx_memo != memo {
             continue;
         }
-        if received_unym(resp, addr) >= expected_unym {
+        if received_unym(resp, addr, required_sender) >= expected_unym {
             return "paid".into();
         }
         eprintln!("scrai-server: nyx invoice {memo} underpaid — left pending");
@@ -291,11 +295,11 @@ pub fn scan_txs(j: &Value, addr: &str, memo: &str, expected_unym: u64) -> String
 
 /// Sum every unym this tx actually delivered to `addr`, reading the flat
 /// `events` list (new LCD) and the `logs[].events` shape (older SDKs).
-fn received_unym(resp: &Value, addr: &str) -> u64 {
+fn received_unym(resp: &Value, addr: &str, required_sender: Option<&str>) -> u64 {
     let flat = resp
         .get("events")
         .and_then(|e| e.as_array())
-        .map(|e| scan_events(e, addr))
+        .map(|e| scan_events(e, addr, required_sender))
         .unwrap_or(0);
     if flat > 0 {
         return flat;
@@ -305,13 +309,13 @@ fn received_unym(resp: &Value, addr: &str) -> u64 {
         .map(|logs| {
             logs.iter()
                 .filter_map(|log| log.get("events").and_then(|e| e.as_array()))
-                .map(|e| scan_events(e, addr))
+                .map(|e| scan_events(e, addr, required_sender))
                 .sum()
         })
         .unwrap_or(0)
 }
 
-fn scan_events(events: &[Value], addr: &str) -> u64 {
+fn scan_events(events: &[Value], addr: &str, required_sender: Option<&str>) -> u64 {
     let mut sum = 0u64;
     for ev in events {
         if ev.get("type").and_then(|t| t.as_str()) != Some("transfer") {
@@ -325,6 +329,15 @@ fn scan_events(events: &[Value], addr: &str) -> u64 {
         });
         if !to_us {
             continue;
+        }
+        if let Some(want) = required_sender {
+            let from_faucet = attrs.iter().any(|a| {
+                a.get("key").and_then(|k| k.as_str()) == Some("sender")
+                    && a.get("value").and_then(|v| v.as_str()) == Some(want)
+            });
+            if !from_faucet {
+                continue; // right memo, right amount, wrong wallet — does not count
+            }
         }
         for a in attrs {
             if a.get("key").and_then(|k| k.as_str()) == Some("amount") {
@@ -384,19 +397,41 @@ mod tests {
     #[test]
     fn matching_memo_with_enough_unym_settles() {
         let j = lcd_reply(0, "SCRAI-ABC23456", "5000000unym", "n1ourselves");
-        assert_eq!(scan_txs(&j, "n1ourselves", "SCRAI-ABC23456", 5_000_000), "paid");
+        assert_eq!(scan_txs(&j, "n1ourselves", "SCRAI-ABC23456", 5_000_000, None), "paid");
     }
 
     #[test]
     fn underpaid_wrong_memo_failed_tx_or_wrong_recipient_stay_pending() {
         let under = lcd_reply(0, "SCRAI-ABC23456", "4999999unym", "n1ourselves");
-        assert_eq!(scan_txs(&under, "n1ourselves", "SCRAI-ABC23456", 5_000_000), "pending");
+        assert_eq!(scan_txs(&under, "n1ourselves", "SCRAI-ABC23456", 5_000_000, None), "pending");
         let wrong_memo = lcd_reply(0, "SCRAI-OTHER222", "5000000unym", "n1ourselves");
-        assert_eq!(scan_txs(&wrong_memo, "n1ourselves", "SCRAI-ABC23456", 5_000_000), "pending");
+        assert_eq!(scan_txs(&wrong_memo, "n1ourselves", "SCRAI-ABC23456", 5_000_000, None), "pending");
         let failed = lcd_reply(5, "SCRAI-ABC23456", "5000000unym", "n1ourselves");
-        assert_eq!(scan_txs(&failed, "n1ourselves", "SCRAI-ABC23456", 5_000_000), "pending");
+        assert_eq!(scan_txs(&failed, "n1ourselves", "SCRAI-ABC23456", 5_000_000, None), "pending");
         let not_ours = lcd_reply(0, "SCRAI-ABC23456", "5000000unym", "n1somebodyelse");
-        assert_eq!(scan_txs(&not_ours, "n1ourselves", "SCRAI-ABC23456", 5_000_000), "pending");
+        assert_eq!(scan_txs(&not_ours, "n1ourselves", "SCRAI-ABC23456", 5_000_000, None), "pending");
+    }
+
+    /// Testnet: sandbox NYM is free, so a memo+amount match from any wallet but the
+    /// faucet's must NOT settle — otherwise anyone self-funds $1 credits without a code.
+    #[test]
+    fn testnet_settles_only_from_the_faucet_wallet() {
+        let j = lcd_reply(0, "SCRAI-ABC23456", "5000000unym", "n1ourselves"); // sender n1sender
+        assert_eq!(scan_txs(&j, "n1ourselves", "SCRAI-ABC23456", 5_000_000, Some("n1sender")), "paid");
+        assert_eq!(scan_txs(&j, "n1ourselves", "SCRAI-ABC23456", 5_000_000, Some("n1faucet")), "pending");
+        // legacy `logs[].events` shape honours the pin too
+        let legacy = json!({
+            "txs": [ { "body": { "memo": "SCRAI-ABC23456" } } ],
+            "tx_responses": [ { "code": 0, "logs": [ { "events": [ {
+                "type": "transfer",
+                "attributes": [
+                    { "key": "recipient", "value": "n1ourselves" },
+                    { "key": "sender", "value": "n1stranger" },
+                    { "key": "amount", "value": "5000000unym" }
+                ] } ] } ] } ]
+        });
+        assert_eq!(scan_txs(&legacy, "n1ourselves", "SCRAI-ABC23456", 5_000_000, None), "paid");
+        assert_eq!(scan_txs(&legacy, "n1ourselves", "SCRAI-ABC23456", 5_000_000, Some("n1faucet")), "pending");
     }
 
     #[test]

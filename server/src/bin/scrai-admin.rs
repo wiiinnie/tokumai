@@ -164,6 +164,10 @@ struct Metrics {
     faucet_claims: u64,
     faucet_unym: u64,
     faucet_stuck: u64,
+    /// claim rows stamped today (UTC) — the number `scrai-faucet` compares with its cap
+    faucet_today: u64,
+    /// SCRAI_FAUCET_DAILY_MAX from the env file (default 20, as in scrai-faucet)
+    faucet_daily_max: u64,
     has_faucet: bool,
     /// invite codes (newest first) — minted here with `c`
     faucet_codes: Vec<scrai_server::faucet::CodeRow>,
@@ -221,6 +225,22 @@ const NET_VARS: &[&str] = &[
 
 fn env_file_path() -> String {
     std::env::var("SCRAI_ENV_FILE").unwrap_or_else(|_| "/opt/scrai/.env".into())
+}
+
+/// `KEY=value` from the env file (uncommented lines only; quotes stripped), falling back to
+/// the process environment — so the panel shows the cap the services actually run with.
+fn env_file_value(key: &str) -> Option<String> {
+    let from_file = std::fs::read_to_string(env_file_path()).ok().and_then(|s| {
+        s.lines().rev().find_map(|l| {
+            let l = l.trim();
+            if l.starts_with('#') {
+                return None;
+            }
+            let (k, v) = l.split_once('=')?;
+            (k.trim() == key).then(|| v.trim().trim_matches('"').trim_matches('\'').to_string())
+        })
+    });
+    from_file.or_else(|| std::env::var(key).ok()).filter(|v| !v.is_empty())
 }
 
 /// If `line` assigns one of the managed vars, which network slot is it (comment state ignored)?
@@ -432,10 +452,15 @@ fn read_metrics(path: &PathBuf) -> Metrics {
         if fdb.exists() {
             if let Ok(fc) = Connection::open_with_flags(&fdb, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX) {
                 m.has_faucet = true;
+                m.faucet_daily_max = env_file_value("SCRAI_FAUCET_DAILY_MAX").and_then(|v| v.parse().ok()).unwrap_or(20);
+                let today_start = { let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0); t - t % 86_400 };
                 m.faucet_codes = scrai_server::faucet::list_codes(&fc).unwrap_or_default();
                 if let Ok(mut st) = fc.prepare("SELECT ts, unym, stage FROM claims") {
                     if let Ok(rows) = st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?))) {
                         for (ts, unym, stage) in rows.filter_map(|r| r.ok()) {
+                            if ts >= today_start {
+                                m.faucet_today += 1; // every row counts for the cap, like scrai-faucet's claims_since
+                            }
                             if stage == "sent" {
                                 m.faucet_claims += 1;
                                 m.faucet_unym += unym.max(0) as u64;
@@ -558,11 +583,11 @@ fn ui(f: &mut Frame, m: &Metrics, path: &str, clock: &str, network: &str, status
                     m.testnet_paid,
                     m.testnet_pending,
                     if m.faucet_stuck > 0 { format!(" · {} STUCK", m.faucet_stuck) } else { String::new() }
-                )
+                ) + &if m.has_faucet && m.faucet_today >= m.faucet_daily_max { format!(" · DAILY LIMIT {}/{}", m.faucet_today, m.faucet_daily_max) } else { String::new() }
             } else {
                 "off".into()
             },
-            if m.faucet_stuck > 0 { RUST } else if m.has_faucet { GOLD } else { DIM },
+            if m.faucet_stuck > 0 || (m.has_faucet && m.faucet_today >= m.faucet_daily_max) { RUST } else if m.has_faucet { GOLD } else { DIM },
         ),
     ];
     let eb = block("ECONOMY · money in");
@@ -703,6 +728,12 @@ fn ui(f: &mut Frame, m: &Metrics, path: &str, clock: &str, network: &str, status
     if m.has_faucet {
         let mut lines: Vec<Line> = vec![
             kv("funded", format!("{} · {:.1} NYM", m.faucet_claims, m.faucet_unym as f64 / 1e6), GOLD),
+            // today vs the cap (SCRAI_FAUCET_DAILY_MAX in .env) — red at the limit, the moment to raise it
+            kv(
+                "today",
+                format!("{} / {}{}", m.faucet_today, m.faucet_daily_max, if m.faucet_today >= m.faucet_daily_max { "  LIMIT — raise SCRAI_FAUCET_DAILY_MAX" } else { "" }),
+                if m.faucet_today >= m.faucet_daily_max { RUST } else if m.faucet_today > 0 { GOLD } else { DIM },
+            ),
             kv("open invoices", grp(m.testnet_pending as u64), if m.testnet_pending > 0 { GOLD } else { DIM }),
             Line::from(Span::styled("codes · uses left · note", Style::default().fg(DIM))),
         ];
@@ -718,7 +749,7 @@ fn ui(f: &mut Frame, m: &Metrics, path: &str, clock: &str, network: &str, status
         if m.faucet_codes.len() > avail.max(1) {
             lines.push(Line::from(Span::styled(format!("… {} more (scrai-faucet code list)", m.faucet_codes.len() - avail.max(1)), Style::default().fg(DIM))));
         }
-        lines.push(Line::from(Span::styled("c = new code (3 uses)", Style::default().fg(GOLD))));
+        lines.push(Line::from(Span::styled("c = new code (1 claim)", Style::default().fg(GOLD))));
         f.render_widget(Paragraph::new(lines).block(block("FAUCET · testnet")), bot[1]);
     }
 
@@ -773,7 +804,7 @@ fn mint_invite_code(state_db: &Path) -> String {
     let Some(dir) = state_db.parent() else { return "no data dir".into() };
     let fdb = dir.join("faucet.db");
     match scrai_server::faucet::open_db(&fdb).and_then(|c| scrai_server::faucet::mint(&c, scrai_server::faucet::DEFAULT_CODE_USES, "admin")) {
-        Ok(code) => format!("invite code {code} ({} uses) — hand it to a tester", scrai_server::faucet::DEFAULT_CODE_USES),
+        Ok(code) => format!("invite code {code} (1 claim) — hand it to a tester"),
         Err(e) => format!("could not mint a code: {e}"),
     }
 }

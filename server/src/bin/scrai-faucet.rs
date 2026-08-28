@@ -48,6 +48,16 @@ use scrai_server::faucet::{list_codes, mint, open_db as open_faucet_db, DEFAULT_
 use scrai_server::pay::{Pay, TestnetInv, TESTNET_USD};
 
 const SITE: &str = include_str!("../../site/index.html");
+/// The site's screenshots, baked into the binary so a deploy ships them (Caddy only knows
+/// /dl/; nothing else to upload or configure). Served as GET /img/<name>.
+const IMAGES: &[(&str, &[u8])] = &[
+    ("mac-chat.jpg", include_bytes!("../../site/img/mac-chat.jpg")),
+    ("mac-picker.jpg", include_bytes!("../../site/img/mac-picker.jpg")),
+    ("mac-guard.jpg", include_bytes!("../../site/img/mac-guard.jpg")),
+    ("ios-home.jpg", include_bytes!("../../site/img/ios-home.jpg")),
+    ("ios-buy.jpg", include_bytes!("../../site/img/ios-buy.jpg")),
+    ("ios-settings.jpg", include_bytes!("../../site/img/ios-settings.jpg")),
+];
 const MAX_HEAD: usize = 16 * 1024;
 const MAX_BODY: usize = 4 * 1024;
 const IP_ATTEMPTS_PER_HOUR: usize = 10;
@@ -275,7 +285,8 @@ impl Faucet {
         if inv.status == "paid" {
             return Err("that invoice is already paid — the app should show the credit".into());
         }
-        if inv.status != "pending" || inv.expires_at <= now() + 60 {
+        // `expires_at` is in ms (pay.rs `now_ms`); `now()` here is seconds
+        if inv.status != "pending" || inv.expires_at <= (now() + 60) * 1000 {
             return Err("that invoice has expired — raise a fresh one in the app".into());
         }
         if inv.amount_usd != TESTNET_USD || inv.unym == 0 {
@@ -297,7 +308,13 @@ impl Faucet {
         let day_start = ts - ts % 86_400;
         if claims_since(&db, day_start) > self.cfg.daily_max {
             let _ = db.execute("DELETE FROM claims WHERE memo = ?1 AND stage = 'sending'", [memo]);
-            return Err("the faucet's daily limit is reached — try again tomorrow".into());
+            // Operator signal: the cap is SCRAI_FAUCET_DAILY_MAX in /opt/scrai/.env (restart
+            // scrai-faucet after raising it). scrai-admin shows the same count in red.
+            eprintln!(
+                "scrai-faucet: DAILY LIMIT reached — {} claims today, max {} (SCRAI_FAUCET_DAILY_MAX in .env; restart scrai-faucet after raising) — refused memo {memo} code {code}",
+                self.cfg.daily_max, self.cfg.daily_max
+            );
+            return Err("the faucet's daily limit is reached — try again tomorrow (the operator sees this and can raise it)".into());
         }
         let bal = match wallet.balance_unym().await {
             Ok(b) => b,
@@ -308,7 +325,11 @@ impl Faucet {
         };
         if bal < self.cfg.reserve_unym + inv.unym as u128 {
             let _ = db.execute("DELETE FROM claims WHERE memo = ?1 AND stage = 'sending'", [memo]);
-            return Err("the faucet wallet is running low — we've been notified, try again later".into());
+            eprintln!(
+                "scrai-faucet: WALLET LOW — {:.3} NYM in {}, reserve {:.3} + quote {:.3} needed — top up the faucet wallet (sandbox: https://sandbox-faucet.nymtech.net/) — refused memo {memo}",
+                bal as f64 / 1e6, wallet.address(), self.cfg.reserve_unym as f64 / 1e6, inv.unym as f64 / 1e6
+            );
+            return Err("the faucet wallet is running low — the operator sees this in the log; try again later".into());
         }
 
         // pay — exactly the quote, to the server's address, with the memo
@@ -344,7 +365,7 @@ impl Faucet {
         let inv = server_testnet_invoices(&self.cfg.state_db()).ok().and_then(|v| v.into_iter().find(|i| i.memo == memo));
         let stage = match (&inv, &claim) {
             (Some(i), _) if i.status == "paid" => "credited",
-            (Some(i), _) if i.status != "pending" || i.expires_at <= now() => "expired",
+            (Some(i), _) if i.status != "pending" || i.expires_at <= now() * 1000 => "expired",
             (_, Some((_, s))) if s == "sent" => "sent",
             (_, Some((_, s))) if s == "sending" || s == "failed" => "pending",
             (Some(_), None) => "open",
@@ -550,6 +571,12 @@ fn query_param(q: &str, key: &str) -> Option<String> {
 }
 
 async fn respond(sock: &mut tokio::net::TcpStream, status: u16, ctype: &str, body: &[u8]) {
+    respond_cached(sock, status, ctype, body, "no-store").await
+}
+
+/// Same headers, chosen Cache-Control — the baked-in images may be cached (they change
+/// only with a deploy), everything else stays `no-store`.
+async fn respond_cached(sock: &mut tokio::net::TcpStream, status: u16, ctype: &str, body: &[u8], cache: &str) {
     let reason = match status {
         200 => "OK",
         400 => "Bad Request",
@@ -560,9 +587,9 @@ async fn respond(sock: &mut tokio::net::TcpStream, status: u16, ctype: &str, bod
         _ => "Error",
     };
     let head = format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nCache-Control: no-store\r\n\
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nCache-Control: {cache}\r\n\
          X-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\n\
-         Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; img-src data:; base-uri 'none'; form-action 'self'\r\n\
+         Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'\r\n\
          Connection: close\r\n\r\n",
         body.len()
     );
@@ -580,6 +607,13 @@ async fn handle(f: Arc<Faucet>, mut sock: tokio::net::TcpStream, peer: SocketAdd
     match (req.method.as_str(), req.path.as_str()) {
         ("GET", "/") | ("GET", "/index.html") => respond(&mut sock, 200, "text/html; charset=utf-8", site_html(&f.cfg.dl_dir).as_bytes()).await,
         ("GET", "/health") => respond(&mut sock, 200, "text/plain", b"ok").await,
+        ("GET", p) if p.starts_with("/img/") => {
+            // exact-name lookup in the baked-in list — no filesystem, so no traversal to worry about
+            match IMAGES.iter().find(|(n, _)| *n == &p[5..]) {
+                Some((_, bytes)) => respond_cached(&mut sock, 200, "image/jpeg", bytes, "public, max-age=86400").await,
+                None => respond(&mut sock, 404, "text/plain", b"not found").await,
+            }
+        }
         ("GET", "/api/status") => respond(&mut sock, 200, "application/json", &json(&f.overview())).await,
         ("GET", "/api/claim") => {
             let memo = query_param(&req.query, "memo").unwrap_or_default();

@@ -210,6 +210,7 @@ function statePayload() {
     balance: sessionBalance(w),
     held: heldTotal(w),
     tiers: purchaseTiers(),
+    devBuild: true,
     fakePayments,
     testnet: process.env.SCRAI_TESTNET === "1",
     gateway: issuer.gatewayName,

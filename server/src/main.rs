@@ -262,7 +262,10 @@ async fn main() {
     const QUEUE_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
     println!("scrai-server: concurrency caps — chats {max_chats}, gateway calls {max_gateway}");
     if pay::is_testnet_server() {
-        println!("scrai-server: TESTNET mode — $1 faucet purchases enabled (SCRAI_TESTNET=1)");
+        match pay::testnet_faucet_address() {
+            Some(a) => println!("scrai-server: TESTNET mode — $1 faucet purchases only, settled only from faucet wallet {a} (SCRAI_TESTNET=1)"),
+            None => eprintln!("scrai-server: TESTNET mode but SCRAI_TESTNET_FAUCET_ADDRESS is unset — every purchase will be refused until the faucet wallet is pinned"),
+        }
     }
 
     // Distinct clients with a spawned request in flight; the daily peak lands in the
@@ -345,10 +348,34 @@ async fn main() {
             };
             // `chat` + `models` need async HTTP to the provider; everything else is
             // handled synchronously by the shared core.
-            let kind = serde_json::from_slice::<serde_json::Value>(&m.message)
-                .ok()
-                .and_then(|v| v.get("kind").and_then(|k| k.as_str()).map(String::from))
-                .unwrap_or_default();
+            let envelope = serde_json::from_slice::<serde_json::Value>(&m.message).unwrap_or(serde_json::Value::Null);
+            let kind = envelope.get("kind").and_then(|k| k.as_str()).map(String::from).unwrap_or_default();
+            // Release gate (SCRAI_MIN_APP): an outdated app gets nothing but the update
+            // notice. `models` answers with a one-entry pseudo catalogue so even a 0.2.x
+            // client — which swallows a plain error on its start-up fetch — shows the
+            // notice in its model header; everything else is a plain error carrying the link.
+            if kind != "ping" {
+                if let Some((min, url)) = scrai_server::app_outdated(&envelope) {
+                    let id = envelope.get("id").cloned().unwrap_or(serde_json::Value::Null);
+                    let app = envelope.get("app").and_then(|a| a.as_str()).unwrap_or("<0.3.0 (no version sent)");
+                    eprintln!("scrai-server: UPDATE GATE — refused `{kind}` from app {app} (min {min})");
+                    let notice = format!("Update required — ScrambleAI {min} or newer. Download: {url}");
+                    let resp = if kind == "models" {
+                        serde_json::json!({
+                            "id": id,
+                            "models": [{ "model": "update-required", "label": format!("⚠ Update required — get {min} at {url}"), "vendor": "ScrambleAI", "kind": "chat", "rate": { "in": 0, "out": 0 } }],
+                            "testnet": scrai_server::pay::is_testnet_server(), "faucetUrl": scrai_server::pay::faucet_url(),
+                            "update": { "required": true, "minApp": min, "url": url },
+                        })
+                    } else {
+                        serde_json::json!({ "id": id, "kind": "error", "error": notice, "updateRequired": true, "minApp": min, "updateUrl": url })
+                    };
+                    if let Err(e) = reply_sender.send_reply(tag, serde_json::to_vec(&resp).unwrap_or_default()).await {
+                        eprintln!("scrai-server: update-gate reply failed: {e}");
+                    }
+                    continue;
+                }
+            }
             // L5: every control branch (coconut/invoice/redeem/models/ping/gateway) should be
             // tiny; feeding a big reassembled body to serde_json + O(coins) BLS is wasted
             // transient allocation. chat + upload manage their own (much larger) size limits.

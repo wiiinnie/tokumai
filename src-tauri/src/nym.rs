@@ -653,7 +653,12 @@ impl Transport {
         let recipient =
             Recipient::try_from_base58_string(server).map_err(|e| format!("bad server address: {e}"))?;
         let id = req.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
-        let bytes = serde_json::to_vec(req).map_err(|e| e.to_string())?;
+        // Every request carries the app version for the server's release gate.
+        let mut req = req.clone();
+        if let Some(o) = req.as_object_mut() {
+            o.insert("app".into(), serde_json::Value::String(crate::app_version().to_string()));
+        }
+        let bytes = serde_json::to_vec(&req).map_err(|e| e.to_string())?;
 
         self.ensure_connected().await?;
         let mut guard = self.client.lock().await;

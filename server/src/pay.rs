@@ -64,6 +64,14 @@ pub fn is_testnet_server() -> bool {
 /// The only amount a testnet (faucet-paid) purchase may have.
 pub const TESTNET_USD: u32 = 1;
 
+/// The faucet wallet — the ONLY address whose NYM settles a testnet invoice. Sandbox NYM is
+/// free (public Nym sandbox faucet), so without this pin anyone could raise $1 testnet
+/// invoices and pay them without an invite code; every such credit is real model spend.
+/// Unset on a testnet server → testnet purchases are refused (fail closed).
+pub fn testnet_faucet_address() -> Option<String> {
+    std::env::var("SCRAI_TESTNET_FAUCET_ADDRESS").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+}
+
 /// Where testers redeem a testnet invoice (`SCRAI_FAUCET_URL`); shown in the app next to
 /// the memo. Only reported while testnet mode is on.
 pub fn faucet_url() -> Option<String> {
@@ -127,6 +135,9 @@ pub struct Pay {
     acct_hits: HashMap<String, Vec<u64>>,
     #[serde(skip)]
     global_hits: Vec<u64>,
+    /// last "global invoice cap" log line (ms) — one per minute, not one per refused request
+    #[serde(skip)]
+    global_cap_logged_at: u64,
 }
 
 impl Pay {
@@ -171,12 +182,20 @@ impl Pay {
         let now = now_ms();
         self.global_hits.retain(|t| now - t < 60_000);
         if self.global_hits.len() >= INVOICE_GLOBAL_PER_MIN {
+            if now - self.global_cap_logged_at > 60_000 {
+                self.global_cap_logged_at = now;
+                eprintln!("scrai-server: INVOICE LIMIT — {INVOICE_GLOBAL_PER_MIN} invoices/min server-wide reached (INVOICE_GLOBAL_PER_MIN in pay.rs, compiled in) — refusing creates for up to 60 s");
+            }
             return Err("the server is issuing too many invoices right now — retry in ~60s".into());
         }
         let hits = self.acct_hits.entry(account_id.to_string()).or_default();
         hits.retain(|t| now - t < INVOICE_ACCT_WINDOW_MS);
         if hits.len() >= INVOICE_PER_ACCT {
             let retry = (INVOICE_ACCT_WINDOW_MS - (now - hits[0])).div_ceil(1000).max(1);
+            eprintln!(
+                "scrai-server: INVOICE LIMIT — account {}… hit {INVOICE_PER_ACCT} invoices/{} min (INVOICE_PER_ACCT in pay.rs, compiled in) — retry in {retry}s",
+                &account_id[..account_id.len().min(8)], INVOICE_ACCT_WINDOW_MS / 60_000
+            );
             return Err(format!("too many invoices from this account — retry in ~{retry}s"));
         }
         hits.push(now);
@@ -326,6 +345,10 @@ impl Pay {
         // Fixed amounts only, so every purchase looks like everyone else's — a
         // free-form amount would be a fingerprint.
         let testnet = v.get("testnet").and_then(|t| t.as_bool()).unwrap_or(false);
+        // The client picks the rail ("nyx" = native NYM on the Nyx chain); it is
+        // deliberately NOT part of the account signature — it only selects HOW to
+        // pay, never how much is credited.
+        let wanted = v.get("method").and_then(|m| m.as_str()).unwrap_or("btc").to_string();
         if testnet {
             // A tester's $1, paid by the faucet on this host. Refused outright on a
             // production server — the flag is the server-side kill switch.
@@ -335,6 +358,19 @@ impl Pay {
             if usd != TESTNET_USD {
                 return Err(err(id, &format!("a testnet purchase is ${TESTNET_USD} only")));
             }
+            // Only the faucet's NYM may settle it (see `testnet_faucet_address`), so the
+            // invoice must be native NYM and the pin must be configured.
+            if wanted != "nyx" {
+                return Err(err(id, "testnet purchases are paid in NYM by the faucet — pick NYM"));
+            }
+            if testnet_faucet_address().is_none() {
+                return Err(err(id, "testnet purchases are not enabled on this server (no faucet wallet pinned)"));
+            }
+        } else if is_testnet_server() {
+            // A testnet server watches a test chain, where every coin is free: a "real"
+            // purchase here would be self-funded model spend. Invite-code testers only,
+            // until the flag comes off.
+            return Err(err(id, "this is a testnet server — purchases are $1 testnet credits funded by the faucet with an invite code"));
         } else {
             let tiers = purchase_tiers();
             if !tiers.contains(&usd) {
@@ -347,10 +383,6 @@ impl Pay {
             return Err(err(id, &e));
         }
         let our_id = rand_hex(16);
-        // The client picks the rail ("nyx" = native NYM on the Nyx chain); it is
-        // deliberately NOT part of the account signature — it only selects HOW to
-        // pay, never how much is credited.
-        let wanted = v.get("method").and_then(|m| m.as_str()).unwrap_or("btc").to_string();
         Ok(PayPending::Create { id: id.clone(), account, usd, our_id, wanted, testnet })
     }
 
@@ -560,7 +592,7 @@ impl PayOutcome {
 pub async fn run_gateway(pending: PayPending, gateway: &Gateway) -> PayOutcome {
     match pending {
         PayPending::Create { id, account, usd, our_id, wanted, testnet } => {
-            let result = gateway.create_invoice(usd, &our_id, &wanted).await;
+            let result = gateway.create_invoice(usd, &our_id, &wanted, testnet).await;
             PayOutcome::Create { id, account, usd, our_id, testnet, result }
         }
         PayPending::Status { id, inv } => {
@@ -641,12 +673,16 @@ impl Gateway {
         self.nyx.is_none() && matches!(self.rail, Rail::Fake)
     }
 
-    async fn create_invoice(&self, usd: u32, reference: &str, wanted: &str) -> Result<Raised, String> {
+    async fn create_invoice(&self, usd: u32, reference: &str, wanted: &str, testnet: bool) -> Result<Raised, String> {
         if wanted == "nyx" {
             if let Some(nyx) = &self.nyx {
                 let (raised, expected_unym) = nyx.create_invoice(usd).await?;
                 return Ok(Raised { raised, method: "nyx".into(), expected_unym });
             }
+        }
+        if testnet {
+            // never the processor-rail fallback: a testnet invoice is NYM from the faucet or nothing
+            return Err("testnet purchases need the native NYM rail, which is not configured here".into());
         }
         let raised = self.rail.create_invoice(usd, reference).await?;
         Ok(Raised { raised, method: "btc".into(), expected_unym: 0 })
@@ -657,7 +693,14 @@ impl Gateway {
             let Some(nyx) = &self.nyx else {
                 return Err("this invoice is native-NYM but no Nyx rail is configured".into());
             };
-            return nyx.check_paid(&inv.provider_ref, inv.expected_unym).await;
+            // Testnet invoice: only the faucet wallet's transfer counts. No pin → never paid
+            // (fail closed; `begin_create` refuses such invoices up front anyway).
+            let pin = if inv.testnet {
+                Some(testnet_faucet_address().ok_or("testnet invoice but SCRAI_TESTNET_FAUCET_ADDRESS is unset — refusing to settle")?)
+            } else {
+                None
+            };
+            return nyx.check_paid(&inv.provider_ref, inv.expected_unym, pin.as_deref()).await;
         }
         self.rail.check_status(&inv.provider_ref).await
     }
@@ -854,6 +897,10 @@ mod tests {
     use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
     use ed25519_dalek::{Signer, SigningKey};
 
+    /// SCRAI_TESTNET is process-global and decides whether a plain $5 create is accepted,
+    /// so the one test that flips it takes the write side; invoice-creating tests read.
+    static ENV_LOCK: std::sync::RwLock<()> = std::sync::RwLock::new(());
+
     fn account() -> (SigningKey, String, String) {
         let sk = SigningKey::from_bytes(&[9u8; 32]);
         let mut der = vec![0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00];
@@ -869,6 +916,7 @@ mod tests {
 
     #[tokio::test]
     async fn fake_invoice_settles_on_poll_and_credits_entitlement_once() {
+        let _env = ENV_LOCK.read().unwrap_or_else(|e| e.into_inner());
         let (sk, pem, aid) = account();
         let mut pay = Pay::default();
         let gw = Gateway { rail: Rail::Fake, nyx: None };
@@ -888,41 +936,61 @@ mod tests {
         }
     }
 
-    // Faucet: a `testnet:true` create is $1 only and only on a server with SCRAI_TESTNET=1;
-    // without the env (the kill switch) the request is refused before touching the gateway.
-    // The flag survives into the invoice and the reply so admin/faucet can see it.
+    // Faucet: on a testnet server (SCRAI_TESTNET=1) the ONLY purchase is a $1 `testnet:true`
+    // invoice in native NYM, and only with the faucet wallet pinned; a "real" purchase there
+    // is refused (test chain = free coins). Without the env the flag itself is refused. The
+    // flag survives into the invoice so admin/faucet can see it.
     #[tokio::test]
     async fn testnet_create_is_one_dollar_and_gated_by_env() {
+        let _env = ENV_LOCK.write().unwrap_or_else(|e| e.into_inner());
         let (sk, pem, aid) = account();
         let gw = Gateway { rail: Rail::Fake, nyx: None };
         // nonces burn on first sight (even for a refused create), so every call gets its own
-        let req = |usd: u32, testnet: bool, n: &str| json!({"kind":"invoice.create","id":"r1","publicKey":pem,
-            "usd":usd,"testnet":testnet,"nonce":n,
+        let req = |usd: u32, testnet: bool, method: &str, n: &str| json!({"kind":"invoice.create","id":"r1","publicKey":pem,
+            "usd":usd,"testnet":testnet,"method":method,"nonce":n,
             "sig":signed(&sk,&aid,&format!("invoice:{usd}"),n)});
+        let refused = |pay: &mut Pay, v: Value, needle: &str| {
+            let PayStep::Reply(r) = pay.begin(v.to_string().as_bytes(), &gw) else { panic!("must be refused ({needle})") };
+            let r: Value = serde_json::from_slice(&r).unwrap();
+            assert!(r["error"].as_str().unwrap_or("").contains(needle), "{r}");
+        };
 
         std::env::remove_var("SCRAI_TESTNET");
+        std::env::remove_var("SCRAI_TESTNET_FAUCET_ADDRESS");
         let mut pay = Pay::default();
-        let PayStep::Reply(r) = pay.begin(req(1, true, "n1").to_string().as_bytes(), &gw) else { panic!("must be refused") };
-        let r: Value = serde_json::from_slice(&r).unwrap();
-        assert!(r["error"].as_str().unwrap_or("").contains("testnet"), "{r}");
+        refused(&mut pay, req(1, true, "nyx", "n1"), "testnet");
         // $1 is not a normal tier either
-        let PayStep::Reply(r) = pay.begin(req(1, false, "n2").to_string().as_bytes(), &gw) else { panic!("must be refused") };
-        let r: Value = serde_json::from_slice(&r).unwrap();
-        assert!(r["error"].as_str().unwrap_or("").contains("one of"), "{r}");
+        refused(&mut pay, req(1, false, "nyx", "n2"), "one of");
 
         std::env::set_var("SCRAI_TESTNET", "1");
-        let PayStep::Reply(r) = pay.begin(req(5, true, "n3").to_string().as_bytes(), &gw) else { panic!("$5 testnet must be refused") };
-        let r: Value = serde_json::from_slice(&r).unwrap();
-        assert!(r["error"].as_str().unwrap_or("").contains("$1"), "{r}");
-        let PayStep::Pending(p) = pay.begin(req(1, true, "n4").to_string().as_bytes(), &gw) else { panic!("create needs the gateway") };
+        // a normal purchase on a testnet server is refused outright
+        refused(&mut pay, req(5, false, "nyx", "n3"), "testnet server");
+        refused(&mut pay, req(5, true, "nyx", "n4"), "$1");
+        // NYM only — the faucet cannot pay a BTCPay invoice
+        refused(&mut pay, req(1, true, "btc", "n5"), "NYM");
+        // fail closed: no faucet wallet pinned → no testnet purchase at all
+        refused(&mut pay, req(1, true, "nyx", "n6"), "faucet wallet");
+
+        std::env::set_var("SCRAI_TESTNET_FAUCET_ADDRESS", "n1faucet");
+        let PayStep::Pending(p) = pay.begin(req(1, true, "nyx", "n7").to_string().as_bytes(), &gw) else { panic!("create needs the gateway") };
         let r: Value = serde_json::from_slice(&pay.finish(run_gateway(p, &gw).await, &gw)).unwrap();
         std::env::remove_var("SCRAI_TESTNET");
-        assert_eq!(r["testnet"].as_bool(), Some(true));
-        assert_eq!(r["amountUsd"].as_u64(), Some(1));
+        std::env::remove_var("SCRAI_TESTNET_FAUCET_ADDRESS");
+        // the gate passed; this test gateway has no NYM rail, and a testnet invoice must
+        // never fall back to the processor rail — so it is refused there, not raised on BTC
+        assert!(r["error"].as_str().unwrap_or("").contains("NYM rail"), "{r}");
+        assert!(pay.testnet_invoices().is_empty());
+
+        // the flag rides in the durable record and the faucet view picks exactly those
+        pay.invoices.insert("t1".into(), Inv { id: "t1".into(), provider_ref: "SCRAI-MEMO2345".into(), account_id: aid.clone(),
+            amount_usd: 1, amount_scrai: SCRAI_PER_USD, method: "nyx".into(), status: "pending".into(),
+            expires_at: now_ms() + 60_000, expected_unym: 59_000_000, testnet: true });
+        pay.invoices.insert("r1".into(), Inv { id: "r1".into(), provider_ref: "SCRAI-REAL2345".into(), account_id: aid,
+            amount_usd: 5, amount_scrai: 5 * SCRAI_PER_USD, method: "nyx".into(), status: "pending".into(),
+            expires_at: now_ms() + 60_000, expected_unym: 295_000_000, testnet: false });
         let t = pay.testnet_invoices();
         assert_eq!(t.len(), 1);
-        assert_eq!(t[0].amount_usd, 1);
-        assert_eq!(t[0].status, "pending");
+        assert_eq!((t[0].amount_usd, t[0].memo.as_str(), t[0].unym), (1, "SCRAI-MEMO2345", 59_000_000));
     }
 
     // H2 (pay): the split API. Two status polls for the same invoice can be in flight at
@@ -930,6 +998,7 @@ mod tests {
     // "gateway busy" outcome leaves the invoice pending with nothing credited.
     #[tokio::test]
     async fn split_begin_finish_credits_once_and_busy_leaves_it_pending() {
+        let _env = ENV_LOCK.read().unwrap_or_else(|e| e.into_inner());
         let (sk, pem, aid) = account();
         let mut pay = Pay::default();
         let gw = Gateway { rail: Rail::Fake, nyx: None };
@@ -963,6 +1032,7 @@ mod tests {
 
     #[tokio::test]
     async fn bad_signature_nonce_replay_and_odd_amounts_are_refused() {
+        let _env = ENV_LOCK.read().unwrap_or_else(|e| e.into_inner());
         let (sk, pem, aid) = account();
         let mut pay = Pay::default();
         let gw = Gateway { rail: Rail::Fake, nyx: None };
@@ -990,6 +1060,7 @@ mod tests {
 
     #[tokio::test]
     async fn late_confirmation_is_swept_in_by_the_entitlement_check() {
+        let _env = ENV_LOCK.read().unwrap_or_else(|e| e.into_inner());
         let (sk, pem, aid) = account();
         let mut pay = Pay::default();
         let gw = Gateway { rail: Rail::Fake, nyx: None };
@@ -1017,6 +1088,7 @@ mod tests {
 
     #[tokio::test]
     async fn withdraw_gate_requires_signature_and_entitlement_and_consumes_it() {
+        let _env = ENV_LOCK.read().unwrap_or_else(|e| e.into_inner());
         let (sk, pem, aid) = account();
         let mut pay = Pay::default();
         let book = 500_000u64;

@@ -960,12 +960,23 @@
   </div>
 </div>
 
+<div class="scrim" id="updScrim" style="z-index:1000">
+  <div class="modal" role="alertdialog" aria-labelledby="updTtl">
+    <div class="mh"><span class="ttl" id="updTtl">Update <b>available</b></span></div>
+    <div class="mb">
+      <p class="lead" style="margin:0 0 12px">This version of ScrambleAI (<span id="updHave"></span>) is no longer accepted by the server. Please install <b id="updMin"></b> or newer, then open the app again.</p>
+      <a class="btn primary" id="updLink" href="#" style="display:inline-block;word-break:break-all" data-click="openLink" data-click-pass="href" data-prevent="1"></a>
+      <p class="hint" style="margin:12px 0 0">Your account, history and credit stay on this device — the update keeps them.</p>
+    </div>
+  </div>
+</div>
+
 <div class="scrim" id="buyScrim" data-click="__backdrop__" data-close="closeBuy">
   <div class="modal">
     <div class="mh"><span class="ttl">Buy <b>credit</b></span><span class="x" data-click="closeBuy">✕</span></div>
     <div class="mb">
       <p class="balline" id="buyBal"></p>
-      <label class="setrow" id="testnetRow" style="display:none"><input type="checkbox" id="testnetChk"><span><b>Testnet purchase<span class="tpill">TESTER</span></b><small>A <b>$1</b> credit paid for you by the ScrambleAI faucet — no real money moves. Raise the invoice, then paste its memo on the faucet page. Switch off to buy real credit at the normal amounts.</small></span></label>
+      <label class="setrow" id="testnetRow" style="display:none;cursor:default"><input type="checkbox" id="testnetChk" style="display:none"><span><b>Testnet purchase<span class="tpill">TESTER</span></b><small>This server is in testnet mode: every purchase is a <b>$1</b> credit paid for you by the ScrambleAI faucet against your invite code — no real money moves. Raise the invoice, then paste its memo on the faucet page.</small></span></label>
       <div class="grouplbl" style="margin-top:2px">Amount</div>
       <div id="tierRow" class="tiles"></div>
 
@@ -1436,6 +1447,9 @@
       tiers = s.tiers || tiers || [];
       account = s.account; balance = s.balance||0; held = s.held||0;
       fakePayments = s.fakePayments !== false;   // default to fake if unknown
+      devBuild = s.devBuild === true;
+      if(!devBuild) devCost = false;             // no diagnostics outside a debug build, whatever localStorage says
+      if(s.update && s.update.required) showUpdateGate(s.update);
       serverTestnet = s.testnet === true;          // the server's kill switch: absent/false → no toggle
       { const fu=String(s.faucetUrl||""); faucetUrl = serverTestnet && /^https:\/\/[\w.-]+/.test(fu) ? fu : null; }
       if(!serverTestnet) testnetBuy = false;
@@ -1890,9 +1904,11 @@
   let followStream = true;
   // Dev cost-audit overlay (Settings → Developer → Cost audit): shows, under each answer,
   // what the provider bills us vs what we charged the user + the margin, with a PASS/FAIL.
-  // Flip DEV_TOOLS to false in a release build to hide the whole Developer settings section.
-  const DEV_TOOLS = true;
-  const APP_VERSION = "0.2.3 (kash)";   // codename from Howard Marks' "Mr Nice"
+  // Only a DEBUG build has it: the backend reports `devBuild` (Tauri: cfg!(debug_assertions),
+  // dev HTTP bridge: always) — a shipped binary hides the Developer section and never
+  // renders the audit, and a release server doesn't even send the provider cost.
+  let devBuild = false;
+  const APP_VERSION = "0.3.0 (peroni)";   // codename from Howard Marks' "Mr Nice"
   let devCost = false;
   // DEV upload readout: real file size ÷ pure transfer time (excludes chunk-split +
   // uploadBegin setup). Shown under a sent image only when the dev cost-audit is on.
@@ -3419,12 +3435,21 @@
     const showDlVals = ()=>{ const i=parseInt($("dlSize").value,10)||0, s=DL_STEPS[i]; if($("dlSizeVal")) $("dlSizeVal").textContent = s[0]+"px · q"+s[1]; markTicks("dlSize", Math.round(i/(DL_STEPS.length-1)*2)); };
     showDlVals();
     $("dlSize").oninput = ()=>{ try{ localStorage.setItem("scrai.dev.dlsize", $("dlSize").value); }catch(_){}; showDlVals(); $("setStatus").textContent="applies to your next image"; };
-    // Whole dev section is easy to hide in a release build: set DEV_TOOLS=false.
-    const showDev = DEV_TOOLS;
+    // The Developer section exists in debug builds only (backend `devBuild`).
+    const showDev = devBuild;
     { const e=$("devCatRow"); if(e) e.style.display = showDev?"":"none"; }
     openScrim("setScrim");
   }
   function closeSettings(){ $("setScrim").classList.remove("open"); }
+  // Release gate: the server refuses this build (SCRAI_MIN_APP). Nothing else is usable
+  // until the update is installed — the sheet has no close, no backdrop click.
+  function showUpdateGate(u){
+    const url = safeHttpUrl(String(u.url||""));
+    $("updMin").textContent = u.minApp ? String(u.minApp) : "a newer version";
+    $("updHave").textContent = APP_VERSION;
+    const a=$("updLink"); if(url){ a.href=url; a.textContent=url; a.style.display=""; } else { a.style.display="none"; }
+    $("updScrim").classList.add("open");
+  }
   function persistSettings(){
     const o = { ctxPairs:CTX_STEPS[parseInt($("prCtx").value,10)] ?? 4, topicShift:$("prTopic").checked, whitespace:$("prWhite").checked, requestTrim:$("prReq").checked, handover:$("prHand").checked };
     savePruneOpts(o);
@@ -4367,9 +4392,10 @@
     row.style.display = serverTestnet ? "" : "none";
     chk.checked = testnetBuy;
   }
+  // A testnet server sells $1 faucet-funded credits and nothing else (it refuses
+  // everything else), so the row is information, not a switch: on = serverTestnet.
   function setTestnetBuy(on){
-    testnetBuy = !!on && serverTestnet;
-    try{ localStorage.setItem("scrai.testnetBuy", testnetBuy?"1":"0"); }catch(_){}
+    testnetBuy = serverTestnet;
     abandonInvoice();
     if(testnetBuy){ selectedTier=TESTNET_USD; selectMethodQuiet("nyx"); } else if(selectedTier===TESTNET_USD){ selectedTier=null; }
     syncTestnetRow(); renderTiers(); renderContinue();
@@ -4397,10 +4423,9 @@
   function openBuy(){
     if(!account){ openAccount(); return; }
     stopPoll(); stopCountdown(); activeInvoice=null; selectedTier=null;
-    // On a testnet server the toggle defaults ON (that is what testers are here for) and
-    // remembers the last choice; on a production server it never renders.
-    let remembered=null; try{ remembered = localStorage.getItem("scrai.testnetBuy"); }catch(_){}
-    testnetBuy = serverTestnet && remembered !== "0";
+    // On a testnet server every purchase is a testnet purchase (the server refuses the
+    // rest); on a production server the row never renders.
+    testnetBuy = serverTestnet;
     if(testnetBuy){ selectedTier=TESTNET_USD; selectMethodQuiet("nyx"); }
     syncTestnetRow();
     renderBuyBal(); showChooser(true); renderTiers(); renderContinue(); renderPending();
@@ -4460,7 +4485,7 @@
     document.querySelectorAll('.pm[data-method]').forEach(el=>el.classList.toggle('sel', el.dataset.method===m));
   }
   function selectMethod(m){
-    if(testnetBuy && m!=="nyx"){ const s=$("buyStatus"); if(s) s.textContent="Testnet purchases are paid in NYM by the faucet — switch the toggle off to pay with Bitcoin."; return; }
+    if(testnetBuy && m!=="nyx"){ const s=$("buyStatus"); if(s) s.textContent="Testnet purchases are paid in NYM by the faucet."; return; }
     selectMethodQuiet(m);
     abandonInvoice();
     renderContinue();
