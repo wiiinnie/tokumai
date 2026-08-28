@@ -54,9 +54,9 @@ const IMAGES: &[(&str, &[u8])] = &[
     ("mac-chat.jpg", include_bytes!("../../site/img/mac-chat.jpg")),
     ("mac-picker.jpg", include_bytes!("../../site/img/mac-picker.jpg")),
     ("mac-guard.jpg", include_bytes!("../../site/img/mac-guard.jpg")),
-    ("ios-pay.jpg", include_bytes!("../../site/img/ios-pay.jpg")),
-    ("ios-buy.jpg", include_bytes!("../../site/img/ios-buy.jpg")),
-    ("ios-settings.jpg", include_bytes!("../../site/img/ios-settings.jpg")),
+    ("mac-imagegen.jpg", include_bytes!("../../site/img/mac-imagegen.jpg")),
+    ("mac-pay.jpg", include_bytes!("../../site/img/mac-pay.jpg")),
+    ("mac-network.jpg", include_bytes!("../../site/img/mac-network.jpg")),
 ];
 const MAX_HEAD: usize = 16 * 1024;
 const MAX_BODY: usize = 4 * 1024;
@@ -486,6 +486,11 @@ fn site_html(dl_dir: &Path) -> String {
     s = s.replace("{{META_MACOS}}", &meta("macos", "Apple silicon · .dmg"));
     s = s.replace("{{META_WINDOWS}}", &meta("windows", "NSIS installer · Windows 10/11"));
     s = s.replace("{{META_LINUX}}", &meta("appimage", "AppImage — or the .deb for Debian/Ubuntu"));
+    // 04 · verify: the exact published file name goes into the copy-paste command
+    let fname = |key: &str| files.get(key).map(|f| html_escape(&f.name)).unwrap_or_else(|| "<file>".into());
+    s = s.replace("{{FILE_MACOS}}", &fname("macos"));
+    s = s.replace("{{FILE_APPIMAGE}}", &fname("appimage"));
+    s = s.replace("{{FILE_WINDOWS}}", &fname("windows"));
     s = s.replace("{{SHA_MACOS}}", &sha("macos"));
     s = s.replace("{{SHA_WINDOWS}}", &sha("windows"));
     s = s.replace("{{SHA_APPIMAGE}}", &sha("appimage"));

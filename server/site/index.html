@@ -19,8 +19,10 @@
   .site{max-width:1280px;margin:0 auto}
   .nav{display:flex;align-items:center;justify-content:space-between;padding:22px 48px;border-bottom:1px solid var(--line)}
   .nav .logo{font-family:var(--display);font-weight:700;font-size:22px}.nav .logo b{color:var(--mix)}
-  .nav .links{display:flex;gap:26px;font-family:var(--mono);font-size:12.5px;color:var(--muted)}
-  .nav .links a{text-decoration:none}.nav .links a:hover{color:var(--bone)}
+  .nav .links{display:flex;gap:26px;font-family:var(--mono);font-size:12.5px}
+  /* the same gold as the Download button, so the menu reads as actions, not footnotes */
+  .nav .links a{color:var(--signal);text-decoration:none;padding:6px 0;border-bottom:1px solid transparent}
+  .nav .links a:hover,.nav .links a:focus-visible{color:var(--bone);border-bottom-color:var(--signal);outline:none}
   .hero{display:grid;grid-template-columns:1.1fr .9fr;gap:48px;padding:64px 48px 40px;align-items:center}
   .hero h1{font-family:var(--display);font-weight:700;font-size:52px;line-height:1.06;margin:0 0 18px;letter-spacing:-.01em}
   .hero h1 b{color:var(--mix);font-weight:700}
@@ -84,8 +86,6 @@
   .tile:focus-visible .frame{box-shadow:inset 0 0 0 2px var(--signal)}
   .tile .frame{display:block;background:#0F0D0B;border-bottom:1px solid var(--line);aspect-ratio:2/1}
   .tile.mac img{width:100%;height:100%;object-fit:cover;object-position:top left;display:block}
-  .tile.ios .frame{display:grid;place-items:center;padding:12px 0}
-  .tile.ios img{height:100%;width:auto;max-width:100%;display:block;border-radius:14px;box-shadow:0 0 0 1px var(--line),0 10px 30px rgba(0,0,0,.5)}
   .tile .cap{display:flex;flex-direction:column;gap:3px;padding:12px 14px 13px}
   .tile .cap .os{font:500 10.5px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
   .tile .cap .t{font-size:14px;font-weight:600}
@@ -95,7 +95,6 @@
   .lb .slide{margin:0;max-width:min(1600px,96vw);display:flex;flex-direction:column;align-items:center;gap:14px}
   .lb .slide[hidden]{display:none}
   .lb .slide img{max-width:100%;max-height:82vh;border-radius:12px;border:1px solid var(--line);box-shadow:0 30px 80px rgba(0,0,0,.6);display:block}
-  .lb .slide.ios img{max-height:84vh;width:auto}
   .lb figcaption{text-align:center;max-width:720px;font-size:14.5px;color:var(--bone)}
   .lb figcaption .os{font:500 10.5px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--signal);margin-right:8px}
   .lb figcaption .d{display:block;margin-top:4px;color:var(--muted);font-size:13.5px;line-height:1.5}
@@ -106,13 +105,25 @@
   .lb .x:hover,.lb .nav:hover,.lb .x:focus-visible,.lb .nav:focus-visible{border-color:var(--signal);outline:none}
   .lb .cnt{position:absolute;bottom:18px;left:50%;transform:translateX(-50%);font:500 11.5px var(--mono);color:var(--muted);letter-spacing:.08em}
   @media (prefers-reduced-motion:reduce){.tile{transition:none}.tile:hover{transform:none}}
+
+  /* 04 · verify: one card per platform, the command is the thing to copy */
+  .vf{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+  @media (max-width:900px){.vf{grid-template-columns:1fr}}
+  .vfc{border:1px solid var(--line);border-radius:14px;background:var(--surface);padding:20px;display:flex;flex-direction:column;gap:12px;min-width:0}
+  .vfc .os{font-size:18px}
+  .vfc .shell{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+  .vfc pre{margin:0;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--ink);font-family:var(--mono);font-size:12px;line-height:1.55;color:var(--bone);white-space:pre-wrap;word-break:break-all;overflow-x:auto}
+  .vfc pre b{color:var(--signal);font-weight:500}
+  .vfc .row{align-items:center}
+  .vfc .ok{font-family:var(--mono);font-size:11.5px;color:var(--muted)}.vfc .ok b{color:var(--mix);font-weight:600}
+  .vfc .btn.copied{border-color:var(--mix);color:var(--mix)}
 </style>
 </head>
 <body>
 <div class="site">
   <div class="nav">
     <span class="logo">Scramble<b>AI</b></span>
-    <span class="links"><a href="#download">Download</a><a href="#faucet">Testnet credit</a><a href="#how">How it works</a><a href="#verify">Verify a download</a></span>
+    <span class="links"><a href="#download">Download</a><a href="#shots">Screenshots</a><a href="#faucet">Testnet credit</a><a href="#how">How it works</a><a href="#verify">Verify a download</a></span>
   </div>
 
   <div class="hero">
@@ -141,7 +152,7 @@
         <div class="os"> macOS</div>
         <div class="meta">{{META_MACOS}}</div>
         <div class="note"><b>First launch:</b> the build is not notarised yet (no Apple developer programme). Drag the app to Applications, open it once — macOS refuses — then <b>System Settings → Privacy &amp; Security</b>, scroll down to the <b>Security</b> block: "ScrambleAI was blocked…" → <b>Open Anyway</b> (the button shows for about an hour after the attempt). No button there? Terminal: <span style="font-family:var(--mono)">xattr -d com.apple.quarantine /Applications/ScrambleAI.app</span>. Afterwards it opens normally.</div>
-        <div class="sum" id="verify">sha256 {{SHA_MACOS}}</div>
+        <div class="sum">sha256 {{SHA_MACOS}}</div>
         <div class="row">{{DL_MACOS}}</div>
       </div>
       <div class="dlc{{CLS_LINUX}}">
@@ -171,16 +182,16 @@
   <div class="sec" id="shots">
     <div class="eyebrow">Screenshots</div>
     <h2>What you'll <b>see</b></h2>
-    <p class="lead">The same app on a Mac and on an iPhone — one Rust core, one interface. Click a picture for the full size.</p>
+    <p class="lead">The desktop app, as it looks today. Click a picture for the full size.</p>
     <div class="gal" id="gal">
-      <button class="tile mac" type="button" data-i="0" aria-label="Open screenshot: macOS — Chat over five mixnet hops"><span class="frame"><img src="/img/mac-chat.jpg" alt="macOS: Chat over five mixnet hops" loading="lazy"></span><span class="cap"><span class="os">macOS</span><span class="t">Chat over five mixnet hops</span></span></button>
-      <button class="tile mac" type="button" data-i="1" aria-label="Open screenshot: macOS — Pick a model, see its price"><span class="frame"><img src="/img/mac-picker.jpg" alt="macOS: Pick a model, see its price" loading="lazy"></span><span class="cap"><span class="os">macOS</span><span class="t">Pick a model, see its price</span></span></button>
-      <button class="tile mac" type="button" data-i="2" aria-label="Open screenshot: macOS — Data guard before you send"><span class="frame"><img src="/img/mac-guard.jpg" alt="macOS: Data guard before you send" loading="lazy"></span><span class="cap"><span class="os">macOS</span><span class="t">Data guard before you send</span></span></button>
-      <button class="tile ios" type="button" data-i="3" aria-label="Open screenshot: iPhone — Pay in NYM, memo included"><span class="frame"><img src="/img/ios-pay.jpg" alt="iPhone: Pay in NYM, memo included" loading="lazy"></span><span class="cap"><span class="os">iPhone</span><span class="t">Pay in NYM, memo included</span></span></button>
-      <button class="tile ios" type="button" data-i="4" aria-label="Open screenshot: iPhone — Buy credit in NYM"><span class="frame"><img src="/img/ios-buy.jpg" alt="iPhone: Buy credit in NYM" loading="lazy"></span><span class="cap"><span class="os">iPhone</span><span class="t">Buy credit in NYM</span></span></button>
-      <button class="tile ios" type="button" data-i="5" aria-label="Open screenshot: iPhone — Efficiency dials"><span class="frame"><img src="/img/ios-settings.jpg" alt="iPhone: Efficiency dials" loading="lazy"></span><span class="cap"><span class="os">iPhone</span><span class="t">Efficiency dials</span></span></button>
+      <button class="tile mac" type="button" data-i="0" aria-label="Open screenshot: Chat over five mixnet hops"><span class="frame"><img src="/img/mac-chat.jpg" alt="Chat over five mixnet hops" loading="lazy"></span><span class="cap"><span class="os">macOS</span><span class="t">Chat over five mixnet hops</span></span></button>
+      <button class="tile mac" type="button" data-i="1" aria-label="Open screenshot: Pick a model, see its price"><span class="frame"><img src="/img/mac-picker.jpg" alt="Pick a model, see its price" loading="lazy"></span><span class="cap"><span class="os">macOS</span><span class="t">Pick a model, see its price</span></span></button>
+      <button class="tile mac" type="button" data-i="2" aria-label="Open screenshot: Data guard before you send"><span class="frame"><img src="/img/mac-guard.jpg" alt="Data guard before you send" loading="lazy"></span><span class="cap"><span class="os">macOS</span><span class="t">Data guard before you send</span></span></button>
+      <button class="tile mac" type="button" data-i="3" aria-label="Open screenshot: Ask for a picture"><span class="frame"><img src="/img/mac-imagegen.jpg" alt="Ask for a picture" loading="lazy"></span><span class="cap"><span class="os">macOS</span><span class="t">Ask for a picture</span></span></button>
+      <button class="tile mac" type="button" data-i="4" aria-label="Open screenshot: Pay in NYM, memo included"><span class="frame"><img src="/img/mac-pay.jpg" alt="Pay in NYM, memo included" loading="lazy"></span><span class="cap"><span class="os">macOS</span><span class="t">Pay in NYM, memo included</span></span></button>
+      <button class="tile mac" type="button" data-i="5" aria-label="Open screenshot: Tune the mixnet"><span class="frame"><img src="/img/mac-network.jpg" alt="Tune the mixnet" loading="lazy"></span><span class="cap"><span class="os">macOS</span><span class="t">Tune the mixnet</span></span></button>
     </div>
-    <p class="galnote">macOS · Apple silicon — iPhone · 0.3.0 test build</p>
+    <p class="galnote">macOS · Apple silicon · 0.3.0 — the Linux and Windows builds are the same interface</p>
   </div>
 
   <div class="sec" id="faucet">
@@ -213,12 +224,54 @@
     <p class="lead">Your identity and your questions. The app talks to the ScrambleAI server only through the Nym mixnet (Sphinx packets, five hops, cover traffic) — the server has no public address at all. Credit is bought once as an account top-up and then withdrawn as blind-signed coins; a coin spent on a question cannot be linked back to the purchase that funded it.</p>
   </div>
 
+  <div class="sec" id="verify">
+    <div class="eyebrow">04 · Verify a download</div>
+    <h2>Check the file <b>before</b> you open it</h2>
+    <p class="lead">The builds are not signed by a store, so the checksum is your proof that the file is the one we published. Copy the line for your system into a terminal — it prints <b>OK</b> (macOS, Linux) or <b>True</b> (Windows) when the download matches.</p>
+    <div class="vf">
+      <div class="vfc">
+        <div class="os"> macOS</div>
+        <div class="shell">Terminal · file in ~/Downloads</div>
+        <pre id="vfMac">cd ~/Downloads &amp;&amp; echo "<b>{{SHA_MACOS}}</b>  {{FILE_MACOS}}" | shasum -a 256 -c</pre>
+        <div class="row"><button class="btn" type="button" data-copy="vfMac">Copy command</button><span class="ok">expect <b>{{FILE_MACOS}}: OK</b></span></div>
+      </div>
+      <div class="vfc">
+        <div class="os">🐧 Linux</div>
+        <div class="shell">Shell · file in ~/Downloads</div>
+        <pre id="vfLinux">cd ~/Downloads &amp;&amp; echo "<b>{{SHA_APPIMAGE}}</b>  {{FILE_APPIMAGE}}" | sha256sum -c</pre>
+        <div class="row"><button class="btn" type="button" data-copy="vfLinux">Copy command</button><span class="ok">expect <b>{{FILE_APPIMAGE}}: OK</b></span></div>
+      </div>
+      <div class="vfc">
+        <div class="os">⊞ Windows</div>
+        <div class="shell">PowerShell · file in Downloads</div>
+        <pre id="vfWin">(Get-FileHash "$env:USERPROFILE\Downloads\{{FILE_WINDOWS}}" -Algorithm SHA256).Hash -eq "<b>{{SHA_WINDOWS}}</b>"</pre>
+        <div class="row"><button class="btn" type="button" data-copy="vfWin">Copy command</button><span class="ok">expect <b>True</b></span></div>
+      </div>
+    </div>
+    <p class="note" style="margin-top:14px">Mismatch or "FAILED"? Don't open the file — download it again from this page, and if it still differs, tell us. The sha256 values above are also printed on each download card.</p>
+  </div>
+
   <div class="foot">
     <span>© 2026 Hermes Blockchain Ventures</span>
-    <span>verify downloads: compare the sha256 above with <span style="font-family:var(--mono)">shasum -a 256 &lt;file&gt;</span></span>
+    <span><a href="#verify" style="color:var(--signal);text-decoration:none">Verify a download ↑</a></span>
   </div>
 </div>
 
+<script>
+(function(){
+  // copy-to-clipboard for the verify commands (text only — the <b> is just colour)
+  var btns=document.querySelectorAll('[data-copy]');
+  for(var i=0;i<btns.length;i++){
+    btns[i].addEventListener('click',function(){
+      var b=this, pre=document.getElementById(b.getAttribute('data-copy')); if(!pre) return;
+      var txt=pre.textContent;
+      var done=function(){ b.textContent='Copied'; b.classList.add('copied'); setTimeout(function(){ b.textContent='Copy command'; b.classList.remove('copied'); },1600); };
+      if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(txt).then(done,function(){}); }
+      else { var r=document.createRange(); r.selectNodeContents(pre); var s=window.getSelection(); s.removeAllRanges(); s.addRange(r); try{ document.execCommand('copy'); done(); }catch(e){} }
+    });
+  }
+})();
+</script>
 <script>
 (function(){
   var f=document.getElementById('f'), go=document.getElementById('go'), st=document.getElementById('state');
@@ -265,12 +318,12 @@
   <button class="x" type="button" id="lbx" aria-label="Close">✕</button>
   <button class="nav prev" type="button" id="lbp" aria-label="Previous">‹</button>
   <button class="nav next" type="button" id="lbn" aria-label="Next">›</button>
-  <figure class="slide mac" data-i="0" hidden><img src="/img/mac-chat.jpg" alt="macOS: Chat over five mixnet hops"><figcaption><span class="os">macOS</span> <b>Chat over five mixnet hops</b><span class="d">Every reply rides the sphinx path shown top right — you · entry · mix · mix · mix · exit · model.</span></figcaption></figure>
-  <figure class="slide mac" data-i="1" hidden><img src="/img/mac-picker.jpg" alt="macOS: Pick a model, see its price"><figcaption><span class="os">macOS</span> <b>Pick a model, see its price</b><span class="d">Google and Groq models with their per-1k SCRAI cost; image models beside chat models.</span></figcaption></figure>
-  <figure class="slide mac" data-i="2" hidden><img src="/img/mac-guard.jpg" alt="macOS: Data guard before you send"><figcaption><span class="os">macOS</span> <b>Data guard before you send</b><span class="d">An IBAN, a name next to an address, a phone number — flagged on-device, nothing sent, you decide.</span></figcaption></figure>
-  <figure class="slide ios" data-i="3" hidden><img src="/img/ios-pay.jpg" alt="iPhone: Pay in NYM, memo included"><figcaption><span class="os">iPhone</span> <b>Pay in NYM, memo included</b><span class="d">QR, address and the memo the chain watcher matches — on the testnet this is the memo you paste into the faucet.</span></figcaption></figure>
-  <figure class="slide ios" data-i="4" hidden><img src="/img/ios-buy.jpg" alt="iPhone: Buy credit in NYM"><figcaption><span class="os">iPhone</span> <b>Buy credit in NYM</b><span class="d">Fixed amounts, one coin, no account — a purchase reveals no per-user fingerprint.</span></figcaption></figure>
-  <figure class="slide ios" data-i="5" hidden><img src="/img/ios-settings.jpg" alt="iPhone: Efficiency dials"><figcaption><span class="os">iPhone</span> <b>Efficiency dials</b><span class="d">Conversation memory, reasoning depth, image size — fewer tokens leave the device, and the trimming decision is made locally.</span></figcaption></figure>
+  <figure class="slide mac" data-i="0" hidden><img src="/img/mac-chat.jpg" alt="Chat over five mixnet hops"><figcaption><span class="os">macOS</span> <b>Chat over five mixnet hops</b><span class="d">Every reply rides the sphinx path shown top right — you · entry · mix · mix · mix · exit · model.</span></figcaption></figure>
+  <figure class="slide mac" data-i="1" hidden><img src="/img/mac-picker.jpg" alt="Pick a model, see its price"><figcaption><span class="os">macOS</span> <b>Pick a model, see its price</b><span class="d">Google and Groq models with their per-1k SCRAI cost; image models beside chat models.</span></figcaption></figure>
+  <figure class="slide mac" data-i="2" hidden><img src="/img/mac-guard.jpg" alt="Data guard before you send"><figcaption><span class="os">macOS</span> <b>Data guard before you send</b><span class="d">An IBAN, a name next to an address, a phone number — flagged on-device, nothing sent, you decide.</span></figcaption></figure>
+  <figure class="slide mac" data-i="3" hidden><img src="/img/mac-imagegen.jpg" alt="Ask for a picture"><figcaption><span class="os">macOS</span> <b>Ask for a picture</b><span class="d">Image models draw over the same path; the picture comes back through the mixnet in chunks.</span></figcaption></figure>
+  <figure class="slide mac" data-i="4" hidden><img src="/img/mac-pay.jpg" alt="Pay in NYM, memo included"><figcaption><span class="os">macOS</span> <b>Pay in NYM, memo included</b><span class="d">QR, address and the memo the chain watcher matches — on the testnet this is the memo you paste into the faucet.</span></figcaption></figure>
+  <figure class="slide mac" data-i="5" hidden><img src="/img/mac-network.jpg" alt="Tune the mixnet"><figcaption><span class="os">macOS</span> <b>Tune the mixnet</b><span class="d">Cover traffic, packet mixing delay, sending rate — the defaults are the most private; every slider is reversible.</span></figcaption></figure>
   <div class="cnt" id="lbc"></div>
 </div>
 <script>

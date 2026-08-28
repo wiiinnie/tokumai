@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
-# deploy.sh — push the RUST scrai-server to the VPS, build there, restart.
+# deploy.sh — push the RUST server crate to the VPS, build there, install all three
+# binaries (scrai-server, scrai-admin, scrai-faucet) + pricing.json, restart scrai and
+# — when SCRAI_TESTNET=1 — scrai-faucet (disabled otherwise).
 #
 # What ships: core/ + server/ + pricing.json + Cargo.lock (a minimal cargo
 # workspace is generated on the VPS — src-tauri stays home). The build runs as
@@ -200,7 +202,7 @@ ssh "${SSH_OPTS[@]}" "$TARGET" '
   "$HOME/.cargo/bin/cargo" build --release -p scrai-server --bins
 '
 
-echo "→ 4/4  install binary + unit, restart scrai.service"
+echo "→ 4/4  install scrai-server + scrai-admin + scrai-faucet + pricing.json, restart scrai (and scrai-faucet if SCRAI_TESTNET=1, else disable it)"
 # If the root-owned apply script exists, run it (one sudo call — NOPASSWD-able);
 # otherwise fall back to the inline block (still one shared SSH connection).
 ssh -t "${SSH_OPTS[@]}" "$TARGET" '
@@ -212,6 +214,14 @@ ssh -t "${SSH_OPTS[@]}" "$TARGET" '
     sudo env SCRAI_ADMIN_HOME="$HOME" bash -c '"'"''"$APPLY_BODY"''"'"'
   fi
 '
-echo "✓ deployed. Follow logs:  ssh $TARGET 'journalctl -u scrai -f'"
+# What is actually running now — read back, not assumed (no sudo needed for is-active).
+echo "→ services after apply:"
+ssh "${SSH_OPTS[@]}" "$TARGET" '
+  for u in scrai scrai-faucet; do
+    printf "   %-13s %s" "$u" "$(systemctl is-active "$u" 2>/dev/null || true)"
+    printf "  (enabled: %s)\n" "$(systemctl is-enabled "$u" 2>/dev/null || true)"
+  done
+'
+echo "✓ deployed. Logs:  ssh $TARGET 'journalctl -u scrai -f'   ·   ssh $TARGET 'journalctl -u scrai-faucet -f'"
 echo "  First start bootstraps a fresh authority and a NEW Nym address — grab it"
 echo "  from the logs (scrai-server: … address: …) and set it in the app."
