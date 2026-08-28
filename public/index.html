@@ -92,6 +92,26 @@
   .titlebar .env.ok .cdot{background:var(--mix);box-shadow:0 0 7px rgba(138,160,107,.7)}
   .titlebar .env.bad .cdot{background:#C15A43;box-shadow:0 0 7px rgba(193,90,67,.7)}
   .titlebar .env.bad{color:var(--rust)}
+  .titlebar .env.wake{color:var(--signal)}
+  .titlebar .env.wake .cdot{background:var(--signal);box-shadow:0 0 7px rgba(203,161,78,.7);animation:blink 1.2s ease-in-out infinite}
+  /* route card: shown in the thread (under a waiting question) or as a banner while the route is rebuilt */
+  .rc{border:1px solid var(--line);border-radius:12px;background:var(--surface-2);padding:13px 14px;margin:6px 0 14px;font-family:var(--body)}
+  .rc .t{font-size:13px;font-weight:600;color:var(--bone);display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+  .rc .t .el{font-family:var(--mono);font-size:12px;color:var(--signal);font-weight:400;white-space:nowrap}
+  .rc .why{font-size:11.5px;line-height:1.45;color:var(--muted);margin:6px 0 10px}
+  .rc .steps{display:flex;flex-direction:column;gap:6px}
+  .rc .step{display:flex;align-items:center;gap:9px;font-family:var(--mono);font-size:11.5px;color:var(--muted)}
+  .rc .step i{width:14px;height:14px;border-radius:50%;border:1.5px solid var(--line);display:inline-flex;align-items:center;justify-content:center;font-size:9px;flex:none;font-style:normal}
+  .rc .step.done{color:var(--bone)}.rc .step.done i{border-color:var(--mix);background:var(--mix);color:var(--ink)}
+  .rc .step.now{color:var(--signal)}.rc .step.now i{border-color:var(--signal);animation:blink 1.2s ease-in-out infinite}
+  .rc .foot{font-family:var(--mono);font-size:10.5px;color:var(--muted);margin-top:10px;line-height:1.5}
+  .rc.bad{border-color:color-mix(in srgb,var(--rust) 45%,var(--line))}.rc.bad .t{color:var(--rust)}
+  .rc .btnrow{margin-top:12px}
+  #routeBanner{padding:10px 20px 0}#routeBanner .rc{margin:0 0 4px}
+  .kv{display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--line);font-size:13px}
+  .kv:last-child{border-bottom:none}.kv .k{color:var(--muted)}.kv .v{font-family:var(--mono);font-size:12px;color:var(--bone);text-align:right}
+  .kv .v.ok{color:var(--mix)}.kv .v.sig{color:var(--signal)}.kv .v.bad{color:var(--rust)}
+  .tl{font-family:var(--mono);font-size:11px;color:var(--muted);line-height:1.55}.tl b{color:var(--bone);font-weight:600}
   .app{flex:1 1 auto;display:grid;grid-template-columns:248px 1fr;min-height:0}
   .rail{border-right:1px solid var(--line);background:var(--surface);display:flex;flex-direction:column;min-height:0}
   .rail .pad{padding:16px 14px;display:flex;flex-direction:column;gap:8px}
@@ -797,7 +817,7 @@
   <button class="mburger" data-click="toggleRail" aria-label="Conversations">☰</button>
   <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
   <span class="wordmark" id="wordmark">Scramble<b>AI</b></span>
-  <span class="env" id="env" data-click="reconnectMix" title="mixnet status — tap to reconnect"><span class="cdot"></span><span id="envText">connecting…</span></span>
+  <span class="env" id="env" data-click="openConnSheet" title="mixnet status — tap for details"><span class="cdot"></span><span id="envText">connecting…</span></span>
 </div>
 
 <div class="railscrim" data-click="toggleRail" data-args="false"></div>
@@ -823,6 +843,7 @@
   </aside>
 
   <section class="main" id="main">
+    <div id="routeBanner" style="display:none"></div>
     <div class="dropz" id="dropz"><div class="dropcard"><span class="ic">＋</span><span>Drop a file to attach</span><small>image, PDF or text · max 10&nbsp;MB · analysed with a Gemini model</small></div></div>
     <div class="topbar">
       <div class="model">
@@ -1175,6 +1196,12 @@
   </div>
 </div>
 
+<div class="scrim" id="connScrim" data-click="__backdrop__" data-close="closeConnSheet">
+  <div class="modal">
+    <div class="mh"><span class="ttl">Mixnet <b>connection</b></span><span class="x" data-click="closeConnSheet">✕</span></div>
+    <div class="mb" id="connBody"></div>
+  </div>
+</div>
 <div class="scrim" id="termsScrim">
   <div class="modal">
     <div class="mh"><span class="ttl">Provider <b>terms</b></span></div>
@@ -2150,6 +2177,130 @@
   // Dev talks to the local backend directly; the real mixnet lives in the Rust
   // core the Tauri build embeds. This just animates that future path.
   let mixOn = false, mixConnected = false, routeRetry = null, everConnected = false;
+
+  // ---------- route state: what the chip says, the card explains ----------
+  // ok · checking (short pause: one ping decides) · reconnecting (route rebuilt, steps
+  // below) · offline (rebuild failed). The steps use the SAME wording as the boot animation
+  // (CONN_STEPS) so a returning user recognises them. connectedAt feeds the sheet.
+  let mixState = "ok", routeStart = 0, routeTicker = null, routeFail = "", connectedAt = 0, hiddenAt = 0, lastRtt = 0, lastRebuildSecs = 0;
+  let routeSteps = [];   // [{label, st:'done'|'now'|''}] mirrors CONN_STEPS[0..3] (+ [4] while a question waits)
+  function routeReset(){ routeSteps = CONN_STEPS.map(l=>({label:l, st:""})); }
+  function routeMark(idx, detail){
+    for(let i=0;i<routeSteps.length;i++) routeSteps[i].st = i<idx ? "done" : (i===idx ? "now" : "");
+    if(detail && routeSteps[idx]) routeSteps[idx].label = CONN_STEPS[idx] + (detail ? " · " + detail : "");
+  }
+  function routeSecs(){ return routeStart ? Math.max(0, Math.round((Date.now()-routeStart)/1000)) : 0; }
+  function setMixState(st, why){
+    if(st!==mixState){
+      if(st==="reconnecting"||st==="checking"){ routeStart=Date.now(); routeFail=""; routeReset(); if(st==="checking") routeMark(-1); }
+      if(st==="ok" && (mixState==="reconnecting"||mixState==="checking") && routeStart){ lastRebuildSecs = routeSecs(); }
+      mixState = st;
+    }
+    if(why!==undefined) routeWhy = why;
+    if((st==="reconnecting"||st==="checking") && !routeTicker) routeTicker=setInterval(updateRouteUI, 1000);
+    if(st==="ok"||st==="offline"){ if(routeTicker){ clearInterval(routeTicker); routeTicker=null; } }
+    updateRouteUI();
+  }
+  let routeWhy = "";
+  function pauseWhy(ms){
+    const m = Math.round(ms/60000), sec = Math.round(ms/1000);
+    const dur = m>=1 ? `${m} min` : `${sec} s`;
+    return `The app was paused in the background for ${dur}, so the anonymous route was dropped — on purpose: a paused route would be a fixed, traceable address. A fresh one takes about 10 s.`;
+  }
+  function rcHTML(waiting){
+    const secs = routeSecs();
+    if(mixState==="offline"){
+      return `<div class="rc bad"><div class="t">Mixnet offline <span class="el">tried for ${secs} s</span></div>
+        <div class="why">${esc(routeFail||"Could not reach an entry gateway. Usually the phone has no internet right now, or the chosen gateway is down.")}</div>
+        <div class="steps">${routeSteps.map(s=>`<div class="step ${s.st}"><i>${s.st==="done"?"✓":""}</i>${esc(s.label)}</div>`).join("")}</div>
+        <div class="btnrow"><button class="btn primary" data-click="rebuildRoute">Try again</button><button class="btn" data-click="openEntryPicker">Pick another gateway</button></div>
+        ${waiting?`<div class="foot">Your question is kept. Nothing was sent, nothing billed.</div>`:""}</div>`;
+    }
+    if(mixState==="checking"){
+      return `<div class="rc"><div class="t">Checking the route <span class="el">${secs} s</span></div>
+        <div class="why">You were away briefly. The route may still be alive — one round-trip through the mixnet tells us. If it answers, ${waiting?"your question goes right out":"you're set"}; if not, a fresh route is built (about 10 s).</div>
+        <div class="steps"><div class="step done"><i>✓</i>App back in the foreground</div><div class="step now"><i></i>Ping through the mixnet (up to 10 s)</div>${waiting?`<div class="step"><i></i>${esc(CONN_STEPS[4])}</div>`:""}</div></div>`;
+    }
+    const steps = routeSteps.slice(0, waiting?5:4);
+    return `<div class="rc"><div class="t">Reconnecting to the mixnet <span class="el">${secs} s</span></div>
+      <div class="why">${esc(routeWhy||"The route was dropped. A fresh one takes about 10 s.")}</div>
+      <div class="steps">${steps.map(s=>`<div class="step ${s.st}"><i>${s.st==="done"?"✓":""}</i>${esc(s.label)}</div>`).join("")}</div>
+      ${waiting?`<div class="foot">Your question is waiting — nothing was sent yet, nothing is billed until it is.</div>`:""}</div>`;
+  }
+  // Repaint every route surface: chip text, the banner (no question waiting), the card
+  // inside a waiting answer, the composer status. Cheap — called per phase event + 1/s.
+  function updateRouteUI(){
+    applyPathState();
+    const waiting = busy && messages.length && messages[messages.length-1].role==="ai" && messages[messages.length-1].streaming;
+    const banner = $("routeBanner");
+    if(banner){
+      const show = everConnected && mixState!=="ok" && !waiting;
+      banner.style.display = show ? "" : "none";
+      if(show) banner.innerHTML = rcHTML(false);
+    }
+    const card = document.getElementById("routeCard");
+    if(card){ if(mixState==="ok") card.outerHTML = '<span id="mixphase" class="mixphase">'+esc(mixShown)+'<span class="cursor"></span></span>'; else card.innerHTML = rcHTML(true); }
+    else if(waiting && mixState!=="ok"){ const node=document.getElementById("mixphase"); if(node) node.outerHTML = `<div id="routeCard">${rcHTML(true)}</div>`; }
+    if(waiting && mixState!=="ok") setStatus(mixState==="offline" ? "offline — your question is kept" : "waiting for the route…");
+  }
+  // Progress events from Rust's connect (ensure_connected): keys → client → gateway →
+  // cover → ready | failed; "check" while the wake-up ping runs.
+  function onMixnetPhase(p){
+    if(!p || !everConnected) return;               // the boot animation owns the first connect
+    switch(p.step){
+      case "check":   setMixState("checking"); break;
+      case "keys":    if(mixState!=="reconnecting") setMixState("reconnecting"); routeMark(0); break;
+      case "client":  routeMark(1); break;
+      case "gateway": routeMark(2, p.detail); break;
+      case "cover":   routeMark(3); if(routeSteps[4]) routeSteps[4].st=""; break;
+      case "ready":
+        routeSteps.forEach((s,i)=>{ if(i<4) s.st="done"; });
+        connectedAt = Date.now();
+        if(mixState!=="ok"){ setMixState("ok"); if(p.detail!=="alive" && lastRebuildSecs) setStatus(`route rebuilt · ${lastRebuildSecs} s · new session identity`); else if(p.detail==="alive") setStatus("route alive"); }
+        refreshRoute(); return;
+      case "failed":  routeFail = p.detail||""; setMixState("offline"); return;
+    }
+    updateRouteUI();
+  }
+  // Returning to the foreground (see the visibilitychange hook): tell Rust how long we
+  // were away — it decides between a quick ping and a full rebuild — and reflect it.
+  async function appResumed(hiddenMs, force){
+    if(!isTauri() || !mixOn || !everConnected) return;
+    if(force || hiddenMs >= 20000){ setMixState("reconnecting", force ? "Rebuilding the route on request — new session identity, about 10 s." : pauseWhy(hiddenMs)); }
+    else setMixState("checking");
+    try{ const r = await Backend.appResumed(hiddenMs, !!force); if(r && r.action==="alive"){ lastRtt = r.ms||lastRtt; connectedAt = connectedAt||Date.now(); setMixState("ok"); } }
+    catch(e){ routeFail = (e&&e.message)||String(e); setMixState("offline"); }
+  }
+  function rebuildRoute(){ appResumed(0, true); }
+  // ---------- connection sheet (tap the chip) ----------
+  function openConnSheet(){
+    if(!isTauri()){ setStatus("dev bridge — no mixnet"); return; }
+    const b=$("connBody"); if(!b) return;
+    const mp=getMixPerf();
+    const ago = connectedAt ? Math.max(0, Math.round((Date.now()-connectedAt)/60000)) : null;
+    const stTxt = mixState==="ok" ? (mixConnected ? "connected · 5 hops" : "connecting…") : mixState==="offline" ? "offline" : mixState==="checking" ? "checking the route…" : `reconnecting · ${routeSecs()} s`;
+    const stCls = mixState==="ok" && mixConnected ? "ok" : mixState==="offline" ? "bad" : "sig";
+    const eg=routeCache.entry, xg=routeCache.exit;
+    b.innerHTML = `<p class="pagelead">Everything you send is routed through the Nym mixnet. This is where the connection stands right now.</p>
+      <div class="mprow" style="padding:4px 13px">
+        <div class="kv"><span class="k">Status</span><span class="v ${stCls}">${esc(stTxt)}</span></div>
+        <div class="kv"><span class="k">Entry gateway</span><span class="v">${esc((flagOf(eg&&eg.country)||"🛰")+" "+edgeLabel(eg))}</span></div>
+        <div class="kv"><span class="k">Exit (server's gateway)</span><span class="v">${esc((flagOf(xg&&xg.country)||"🛰")+" "+edgeLabel(xg))}</span></div>
+        <div class="kv"><span class="k">Session identity</span><span class="v">${ago===null?"—":(ago<1?"new · under a minute":"current · "+ago+" min old")}</span></div>
+        <div class="kv"><span class="k">Cover traffic</span><span class="v ${mp.continuous?"ok":"sig"}">${mp.continuous?"on":"idle-only"} · ${msToMbps(mp.coverMs).toFixed(2)} Mbps</span></div>
+        <div class="kv"><span class="k">Mixing delay</span><span class="v">${mp.mixMs} ms per hop</span></div>
+        <div class="kv"><span class="k">Last round-trip</span><span class="v sig">${lastRtt?(lastRtt/1000).toFixed(1)+" s":"—"}</span></div>
+      </div>
+      ${mixState==="offline"?`<p class="hint" style="color:var(--rust)">${esc(routeFail||"Could not reach an entry gateway.")}</p>`:""}
+      <div class="grouplbl">What happens when the app sleeps</div>
+      <div class="mprow"><div class="tl"><b>Background / lock screen.</b> iOS pauses the app after about 30 s. Cover traffic stops and the route goes quiet — a paused route would be a fixed, traceable address, so it is not kept alive.<br><br>
+      <b>Coming back.</b> Away under 20 s: one ping decides. Longer: a fresh route with a <b>new session identity</b> — about 10 s, shown step by step. A waiting question goes out automatically.<br><br>
+      <b>Why that is good.</b> Every return is a new, unlinkable session. Nothing is sent or billed while the route is down.</div></div>
+      <div class="btnrow"><button class="btn${mixState==="offline"?" primary":""}" data-click="rebuildRouteFromSheet">${mixState==="offline"?"Try again":"Rebuild the route now"}</button><button class="btn" data-click="openEntryPicker">Choose entry gateway</button></div>`;
+    openScrim("connScrim");
+  }
+  function closeConnSheet(){ $("connScrim").classList.remove("open"); }
+  function rebuildRouteFromSheet(){ closeConnSheet(); rebuildRoute(); }
   // The path only turns green once we're ACTUALLY routed. Until then it shows the
   // topology in a neutral "connecting" pulse — never a green line we aren't on yet.
   function applyPathState(){
@@ -2161,8 +2312,11 @@
     if(isTauri()){
       const env=$("env"), t=$("envText");
       if(env && t){
-        if(mixConnected){ env.className="env ok"; t.textContent="Mixnet connected"; }
-        else if(everConnected){ env.className="env bad"; t.textContent="Mixnet offline — tap to reconnect"; }
+        if(everConnected && mixState==="checking"){ env.className="env wake"; t.textContent="Checking route…"; }
+        else if(everConnected && mixState==="reconnecting"){ env.className="env wake"; t.textContent=`Reconnecting · ${routeSecs()} s`; }
+        else if(everConnected && mixState==="offline"){ env.className="env bad"; t.textContent="Mixnet offline — tap to retry"; }
+        else if(mixConnected){ env.className="env ok"; t.textContent="Mixnet connected"; }
+        else if(everConnected){ env.className="env bad"; t.textContent="Mixnet offline — tap to retry"; }
         else if(mixOn){ env.className="env"; t.textContent="Mixnet connecting…"; }
       }
     }
@@ -2234,7 +2388,7 @@
       // gateway (a dead client must not keep the route showing green).
       mixConnected = !!(r && r.entry && r.entry.id && r.live !== false);
     }catch(_){ mixConnected=false; }
-    if(mixConnected) everConnected=true;
+    if(mixConnected){ if(!everConnected){ connectedAt=Date.now(); routeReset(); routeSteps.forEach((s,i)=>{ if(i<4) s.st="done"; }); } everConnected=true; if(mixState==="offline") setMixState("ok"); }
     applyPathState();
     onMixConnectChange(wasConnected);   // connecting-screen → scramble → logo
     // Poll continuously: fast (2.5s) while (re)connecting so it comes up promptly,
@@ -2797,7 +2951,8 @@
       // Real lifecycle signals drive the status line: request fully sent →
       // "Thinking…", which holds until the answer itself takes over.
       onPhase:(p,info)=>{
-        if(p==="sent"){ setMixPhase(1); tSent=performance.now(); }
+        if(p==="route"){ updateRouteUI(); return; }                 // queued behind a route rebuild
+        if(p==="sent"){ setMixPhase(1); tSent=performance.now(); if(routeSteps[4]) { routeSteps[4].st="done"; } }
         else if(p==="redeeming"){ setStatus("session credit low — redeeming held credit…"); }
         else if(p==="image"&&info){
           // The picture was generated (and charged) — now its chunks trickle through the
@@ -2829,6 +2984,7 @@
         const timing = { ms: Math.round(performance.now()-t0), net: tSent ? Math.round(tFirst-tSent) : 0 };
         const drawn = evt.usage && evt.usage.imageSize;
         ai.audit = bf ? { cost: bf.costScrai, charge: bf.priceScrai, ...timing } : { ...timing };
+        if(timing.net) lastRtt = timing.net;
         if(drawn) ai.audit.size = drawn;
         // An empty Gemini answer arrives as "Declined by Google (REASON): …" from the server
         // (finishReason / blockReason translated) — show it as a note, not as model prose.
@@ -4285,7 +4441,7 @@
   // expose for inline handlers
   Object.assign(window,{ pickModel, copyPhrase, newChat, openSession, deleteSession, exportSession, toggleMenu, selectModelIdx,
     autogrow, onKey, sendMsg, retryMsg, showHandover, downloadHandover, closeHandover, pickImport, importHandover,
-    cancelMsg, resendMsg,
+    cancelMsg, resendMsg, openConnSheet, closeConnSheet, rebuildRoute, rebuildRouteFromSheet,
     openBuy, closeBuy, buyTier, buyOrInvoice, copyUri, openAccount, closeAccount, doAccountNew, doAccountReveal, doAccountRestore, doAccountDelete, doMigrate, doRedeem, redeemSliderChanged, startQrScan, stopQrScan,
     showRestore, askNew, cancelAcctView, saveServer, srvSelected, qNav, scrollToBottom, reopenGuard, checkCredit,
     openEntryPicker, showExitInfo, chooseGateway, closeGw, filterGw,
@@ -4466,8 +4622,14 @@
     // Re-check the route the instant we're visible again — that kicks a reconnect
     // when the client is down, so the connection is back before the user sends.
     document.addEventListener("visibilitychange",()=>{
-      if(document.visibilityState==="visible" && isTauri() && mixOn) refreshRoute();
+      if(document.visibilityState==="hidden"){ hiddenAt=Date.now(); return; }
+      if(document.visibilityState==="visible" && isTauri() && mixOn){
+        const away = hiddenAt ? Date.now()-hiddenAt : 0; hiddenAt=0;
+        if(everConnected && away > 3000) appResumed(away); else refreshRoute();
+      }
     });
+    // Connect progress from Rust (every reconnect after the first): drives the chip + card.
+    if(isTauri()){ try{ Backend.onMixnetPhase(onMixnetPhase); }catch(_){} }
     // Drag & drop files anywhere in the chat column (alternative to the "+").
     const mainEl=$("main");
     if(mainEl){

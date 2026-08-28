@@ -99,6 +99,9 @@ pub struct Transport {
     /// already left for the mixnet and the server may still process (and bill) it; the
     /// pending chat stays set, so Retry replays it idempotently instead of paying twice.
     cancel: tokio::sync::Notify,
+    /// Connect-progress sink (lib.rs wires it to a Tauri event): the UI shows the same
+    /// steps the boot animation types — keys · client · gateway · cover · ready/failed.
+    progress: std::sync::Mutex<Option<Box<dyn Fn(&str, &str) + Send + Sync>>>,
 }
 
 /// The state of a chunked picture download: the chat reply holding the chunk
@@ -125,7 +128,30 @@ impl Transport {
             pending_chat: Mutex::new(None),
             staged_download: Mutex::new(None),
             cancel: tokio::sync::Notify::new(),
+            progress: std::sync::Mutex::new(None),
         }
+    }
+
+    pub fn set_progress_sink(&self, f: Box<dyn Fn(&str, &str) + Send + Sync>) {
+        *self.progress.lock().unwrap() = Some(f);
+    }
+    fn phase(&self, step: &str, detail: &str) {
+        if let Some(f) = self.progress.lock().unwrap().as_ref() {
+            f(step, detail);
+        }
+    }
+
+    /// Drop the live client deliberately (app resumed after a long pause: the socket is
+    /// dead and a paused route would be a fixed address anyway). A waiter still holding
+    /// the client — a chat that was in flight when the app went to sleep — is cancelled
+    /// first; its pending request stays recorded for an idempotent Retry.
+    pub async fn drop_client(&self) {
+        self.cancel_in_flight();
+        let mut guard = self.client.lock().await;
+        if let Some(c) = guard.take() {
+            c.disconnect().await;
+        }
+        self.mark_dead();
     }
 
     /// Cancel whatever wait is in flight (see `cancel`). No-op when nothing is waiting.
@@ -386,6 +412,7 @@ impl Transport {
         // attempt just before it finishes and loop forever. Healthy-network
         // connects take 5–10s and never feel this value.
         const CONNECT_TIMEOUT: Duration = Duration::from_secs(180);
+        self.phase("keys", "");
         let connect = async {
             // No user choice → curated random (described gateways only);
             // only if even the directory fails, let the SDK pick blindly.
@@ -393,6 +420,18 @@ impl Transport {
                 Some(gw) => Some(gw),
                 None => self.random_described_gateway().await,
             };
+            self.phase("client", "");
+            let gw_label = match &gw {
+                Some(id) => match self.gateway_info(id).await {
+                    Some(info) => {
+                        let host = if info.host.is_empty() { id.chars().take(8).collect::<String>() } else { info.host.clone() };
+                        if info.country.is_empty() { host } else { format!("{} · {}", info.country, host) }
+                    }
+                    None => id.chars().take(12).collect(),
+                },
+                None => "gateway picked by the SDK".to_string(),
+            };
+            self.phase("gateway", &gw_label);
             // Apply the user's performance/privacy tradeoff to the client's cover-traffic
             // rate and per-hop mixing delay (default = Nym's max-privacy settings).
             let (cover_ms, mix_ms, send_ms, continuous) = *self.perf.lock().unwrap();
@@ -417,12 +456,25 @@ impl Transport {
                     .map_err(|e| format!("mixnet connect failed: {e}")),
             }
         };
-        let c = tokio::time::timeout(CONNECT_TIMEOUT, connect)
-            .await
-            .map_err(|_| "mixnet connect timed out — gateway unreachable, please try again".to_string())??;
+        let c = match tokio::time::timeout(CONNECT_TIMEOUT, connect).await {
+            Ok(Ok(c)) => c,
+            Ok(Err(e)) => {
+                self.phase("failed", &e);
+                return Err(e);
+            }
+            Err(_) => {
+                let e = "mixnet connect timed out — gateway unreachable, please try again".to_string();
+                self.phase("failed", &e);
+                return Err(e);
+            }
+        };
         *self.entry_cached.lock().unwrap() = Some(c.nym_address().gateway().to_base58_string());
         self.live.store(true, std::sync::atomic::Ordering::Relaxed);
         *guard = Some(c);
+        // The SDK's cover stream starts with the connection; report it as its own step,
+        // matching the boot animation's wording.
+        self.phase("cover", "");
+        self.phase("ready", "");
         Ok(())
     }
 

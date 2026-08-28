@@ -105,6 +105,8 @@ const httpBackend = {
   mixnetRoute: () => Promise.resolve({ entry: null, exit: null, chosen: null }),
   mixnetPing: () => Promise.reject(new Error("mixnet ping is native-only")),
   cancelChat: () => Promise.resolve(),
+  appResumed: () => Promise.resolve({ action: "alive", ms: 0 }),
+  onMixnetPhase: async () => () => {},
   listEntryGateways: () => Promise.resolve([]),
   setEntryGateway: () => Promise.resolve({ entry_gateway: null }),
   setMixnetPerf: () => Promise.resolve({}), // dev backend has no mixnet
@@ -158,6 +160,10 @@ const tauriBackend = (invoke) => ({
   mixnetPing: () => invoke("mixnet_ping"),
   // Stop waiting for the in-flight reply; the pending request stays replayable.
   cancelChat: () => invoke("cancel_chat"),
+  // App back in the foreground after hiddenMs; force=true rebuilds the route unconditionally.
+  appResumed: (hiddenMs, force) => invoke("app_resumed", { hiddenMs: Math.max(0, Math.round(hiddenMs||0)), force: !!force }),
+  // Rust emits mixnet-phase {step, detail} during every (re)connect — keys · client · gateway · cover · ready · failed · check.
+  onMixnetPhase: async (cb) => { const ev = window.__TAURI__ && window.__TAURI__.event; if (ev && ev.listen) return ev.listen("mixnet-phase", (e) => { try { cb(e.payload); } catch (_) {} }); return () => {}; },
   listEntryGateways: () => invoke("list_entry_gateways"),
   setEntryGateway: (id) => invoke("set_entry_gateway", { id }),
   setMixnetPerf: (coverMs, mixMs, sendMs, continuous) => invoke("set_mixnet_perf", { coverMs, mixMs, sendMs, continuous }),
@@ -187,6 +193,8 @@ const tauriBackend = (invoke) => ({
         // Big generated pictures are fetched chunk by chunk after the reply lands;
         // Rust emits {done, total} per chunk so the UI can show real download progress.
         unlisten.push(await ev.listen("image-progress", (e) => onPhase("image", e.payload)));
+        // The route is down: this request waits for the rebuild before it leaves.
+        unlisten.push(await ev.listen("chat-route", () => onPhase("route")));
       }
       const r = await invoke("chat", { model: body.model, messages: body.messages, maxTokens: body.maxTokens, free: !!body.free, live: !!body.live, thinkingBudget: (typeof body.thinkingBudget==="number"?body.thinkingBudget:null), bigReply: !!body.bigReply, retry: !!body.retry, imageSize: (typeof body.imageSize==="string"?body.imageSize:null) });
       if (onPhase) onPhase("receiving");
@@ -240,6 +248,8 @@ export const Backend = {
   mixnetRoute: () => pick("mixnetRoute"),
   mixnetPing: () => pick("mixnetPing"),
   cancelChat: () => pick("cancelChat"),
+  appResumed: (...a) => pick("appResumed", ...a),
+  onMixnetPhase: (...a) => pick("onMixnetPhase", ...a),
   listEntryGateways: () => pick("listEntryGateways"),
   setEntryGateway: (id) => pick("setEntryGateway", id),
   setMixnetPerf: (coverMs, mixMs, sendMs, continuous) => pick("setMixnetPerf", coverMs, mixMs, sendMs, continuous),

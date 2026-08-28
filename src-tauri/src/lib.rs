@@ -1084,6 +1084,11 @@ async fn chat_impl(
     // Serialise the whole command: session_status + chat must be one atomic unit,
     // or two concurrent chats race the session counter (crossed replies / hangs).
     let _op = transport.begin_op().await;
+    // Route down (app just woke up, or a drop): the send below queues behind the rebuild —
+    // say so, instead of "Sending to mixnet…" for a message that hasn't left.
+    if !transport.is_connected() {
+        let _ = app.emit("chat-route", ());
+    }
 
     // Generated pictures no longer ride in the chat reply itself: the server stages
     // anything bigger than one chunk and answers with references (fetched below with
@@ -1319,6 +1324,45 @@ fn paid_chat_reply(app: &AppHandle, resp: &Value, price_warning: Value) -> Value
         "images": resp.get("images"),
         "priceWarning": price_warning,
     })
+}
+
+/// The app came back to the foreground after `hidden_ms` in the background (iOS freezes
+/// the process ~30 s after that, and the gateway socket dies with it). Long pause, or
+/// `force`: drop the client and rebuild the route — with progress events. Short pause: one
+/// ping through the mixnet (10 s budget) decides; a failed ping drops the client too.
+/// Returns `{ action: "reconnect" | "alive", ms }`.
+#[tauri::command]
+async fn app_resumed(
+    app: AppHandle,
+    transport: State<'_, Arc<Transport>>,
+    #[allow(non_snake_case)] hiddenMs: u64,
+    force: Option<bool>,
+) -> Result<Value, String> {
+    const LONG_PAUSE_MS: u64 = 20_000;
+    let t: Arc<Transport> = transport.inner().clone();
+    if force.unwrap_or(false) || hiddenMs >= LONG_PAUSE_MS || !t.is_connected() {
+        t.drop_client().await;
+        t.spawn_reconnect();
+        return Ok(json!({ "action": "reconnect", "reason": if force.unwrap_or(false) { "requested" } else if hiddenMs >= LONG_PAUSE_MS { "long-pause" } else { "dead" } }));
+    }
+    let _ = app.emit("mixnet-phase", json!({ "step": "check", "detail": "" }));
+    let w = wallet::load(&data_dir(&app)?);
+    let srv = server_addr(&w)?;
+    let req = json!({ "v": PROTO, "kind": "ping", "id": rand_hex(8) });
+    let t0 = std::time::Instant::now();
+    // round_trip drops the client + marks it dead on a timeout, so the reconnect below is
+    // the genuine full rebuild, not a retry on a corpse.
+    match t.round_trip(&srv, &req, SURBS_SMALL, 10_000).await {
+        Ok(_) => {
+            let _ = app.emit("mixnet-phase", json!({ "step": "ready", "detail": "alive" }));
+            Ok(json!({ "action": "alive", "ms": t0.elapsed().as_millis() as u64 }))
+        }
+        Err(_) => {
+            t.drop_client().await;
+            t.spawn_reconnect();
+            Ok(json!({ "action": "reconnect", "reason": "ping-failed" }))
+        }
+    }
 }
 
 /// UI Cancel: stop waiting for the in-flight mixnet reply / chunk download. The request
@@ -2075,6 +2119,13 @@ pub fn run() {
                         .build(),
                 )?;
             }
+            // Connect progress → UI (same five steps the boot animation types).
+            {
+                let h = app.handle().clone();
+                app.state::<Arc<Transport>>().set_progress_sink(Box::new(move |step, detail| {
+                    let _ = h.emit("mixnet-phase", json!({ "step": step, "detail": detail }));
+                }));
+            }
             // Apply a previously-chosen entry gateway before the first request.
             let handle = app.handle().clone();
             let transport = app.state::<Arc<Transport>>().inner().clone();
@@ -2092,7 +2143,7 @@ pub fn run() {
             state, set_server, account_new, account_reveal, account_restore, account_delete, account_migrate_qr,
             invoice, invoice_status, invoice_cancel, ocr_scan, pdf_text, pdf_ocr, pdf_pages, collect, redeem, chat,
             smart_available, smart_detect, coconut_redeem,
-            mixnet_route, mixnet_ping, cancel_chat, list_entry_gateways, set_entry_gateway, set_mixnet_perf, open_external, save_image,
+            mixnet_route, mixnet_ping, cancel_chat, app_resumed, list_entry_gateways, set_entry_gateway, set_mixnet_perf, open_external, save_image,
             share_text, upload_begin, upload_chunk, upload_pipeline, pick_image, open_account_security
         ])
         .run(tauri::generate_context!())
