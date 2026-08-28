@@ -206,6 +206,10 @@ fn rand_hex(n: usize) -> String {
 // after the crash. The last line names the command whose IPC response was in flight.
 fn diag(app: &AppHandle, msg: &str) {
     use std::io::Write;
+    // Debug builds only: a release app must not keep a plaintext activity log on disk.
+    if !cfg!(debug_assertions) {
+        return;
+    }
     if let Ok(dir) = data_dir(app) {
         let _ = std::fs::create_dir_all(&dir);
         if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("diag.log")) {

@@ -293,7 +293,12 @@ impl Transport {
             // Stalled with chunks still open → re-fire them (a few times, then let the overall timeout win).
             if !pending.is_empty() && last_progress.elapsed() >= Duration::from_secs(10) && refires < 4 {
                 for bytes in pending.values() {
-                    let _ = sender.send_message(recipient, bytes.clone(), IncludedSurbs::new(surbs)).await;
+                    if let Err(e) = sender.send_message(recipient, bytes.clone(), IncludedSurbs::new(surbs)).await {
+                        // The client is gone — fail now instead of re-firing into the void until the deadline.
+                        *guard = None;
+                        self.mark_dead();
+                        return Err(format!("mixnet send failed: {e} — reconnecting on the next attempt"));
+                    }
                 }
                 refires += 1;
                 last_progress = tokio::time::Instant::now();
@@ -385,7 +390,13 @@ impl Transport {
                     .connect_to_mixnet()
                     .await
                     .map_err(|e| format!("mixnet connect failed: {e}")),
-                None => MixnetClient::connect_new()
+                // No described gateway available → let the SDK pick one, but KEEP the
+                // user's traffic tuple (connect_new() would silently fall back to defaults).
+                None => MixnetClientBuilder::new_ephemeral()
+                    .debug_config(dbg)
+                    .build()
+                    .map_err(|e| format!("mixnet build failed: {e}"))?
+                    .connect_to_mixnet()
                     .await
                     .map_err(|e| format!("mixnet connect failed: {e}")),
             }

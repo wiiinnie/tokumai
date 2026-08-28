@@ -497,7 +497,7 @@ pub fn settle(
         // ---- genuinely-free tier: no session, no cache ----
         let reply = match result {
             Ok((text, usage, images)) => {
-                let frame = compute_billing(&p.price, &usage, p.margin, 0, false);
+                let frame = compute_billing(&p.price, &usage, p.margin, 0, usage.estimated);
                 let usage_json = json!({
                     "inputTokens": usage.input,
                     "cachedInputTokens": usage.cached_input,
@@ -531,7 +531,7 @@ pub fn settle(
     // ---- paid session ----
     let reply = match result {
         Ok((text, usage, images)) => {
-            let mut frame = compute_billing(&p.price, &usage, p.margin, min_charge(), false);
+            let mut frame = compute_billing(&p.price, &usage, p.margin, min_charge(), usage.estimated);
             // Live grounding: only queries BEYOND the monthly free allowance cost us
             // anything, so only those are billed (per query, on top of tokens). Within
             // the allowance grounding is genuinely free → nothing added.
@@ -993,6 +993,7 @@ async fn gemini(
             input: estimate_tokens(in_chars),
             output: estimate_tokens(text.len() as u64),
             output_image: n_images * per_image,
+            estimated: true,
             ..Default::default()
         };
         eprintln!("scrai-server: gemini returned no usageMetadata — billed on an estimate");

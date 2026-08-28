@@ -806,12 +806,12 @@ for an answer that never came.
   Balance: 999,999 SCRAI              <- server-reported, authoritative
 ```
 
-> **Still missing for real money:** funding tokens are minted by the server on
-> request (`SCRAI_DEV_MINT=1`) and signed with an HMAC, so the issuer sees every
-> serial and can link a session to the mint that funded it. Blind signatures
-> replace `verify()` in `src/money/token.ts` and nothing else — the protocol,
-> the store and the escrow logic stay as they are. **Do not run a public server
-> with `SCRAI_DEV_MINT=1`.**
+> **Historical note (TypeScript prototype only):** the retired TS server minted
+> HMAC-signed funding tokens (`SCRAI_DEV_MINT=1`), which let the issuer link a
+> session to the mint that funded it. The deployed **Rust** server replaced that
+> with blind Coconut issuance (`nym-compact-ecash`, see `core/src/coconut.rs`) —
+> the issuer never sees a coin's serial. The TS stack remains only as the
+> localhost dev UI bridge (`npm run dev`) and is never deployed.
 
 ---
 

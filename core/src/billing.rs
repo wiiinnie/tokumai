@@ -23,6 +23,9 @@ pub struct TokenUsage {
     /// Web-search queries the model executed for live grounding (Gemini). Billed
     /// separately, per query — NOT a token count, so `cost_usd` ignores it.
     pub grounding_queries: u64,
+    /// True when the provider reported no usage and these counts are OUR estimate
+    /// (chars/4, typical image size). Surfaced to the client as `billing.estimated`.
+    pub estimated: bool,
 }
 
 /// A model's provider price, in USD per 1,000,000 tokens.
