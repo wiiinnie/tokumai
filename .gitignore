@@ -35,3 +35,6 @@ server/fuzz/target/
 server/fuzz/corpus/
 server/fuzz/artifacts/
 server/fuzz/coverage/
+
+# CI-built Linux bundles pulled for publish-downloads.sh
+/dist/downloads/

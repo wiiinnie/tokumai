@@ -444,6 +444,10 @@ fn site_html(dl_dir: &Path) -> String {
         }
     };
     let sha = |key: &str| files.get(key).map(|f| html_escape(&f.sha256)).filter(|x| !x.is_empty()).unwrap_or_else(|| "—".into());
+    // green card when something is actually downloadable; iOS greys until TestFlight exists
+    s = s.replace("{{CLS_MACOS}}", if files.contains_key("macos") { " has" } else { "" });
+    s = s.replace("{{CLS_LINUX}}", if files.contains_key("appimage") || files.contains_key("deb") { " has" } else { "" });
+    s = s.replace("{{CLS_IOS}}", if env_link("SCRAI_DL_IOS").is_some() { " has" } else { " soon" });
     s = s.replace("{{META_MACOS}}", &meta("macos", "Apple silicon · .dmg"));
     s = s.replace("{{META_LINUX}}", &meta("appimage", "AppImage — or the .deb for Debian/Ubuntu"));
     s = s.replace("{{SHA_MACOS}}", &sha("macos"));
