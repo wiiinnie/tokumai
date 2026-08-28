@@ -8,7 +8,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crossterm::{
@@ -165,6 +165,8 @@ struct Metrics {
     faucet_unym: u64,
     faucet_stuck: u64,
     has_faucet: bool,
+    /// invite codes (newest first) — minted here with `c`
+    faucet_codes: Vec<scrai_server::faucet::CodeRow>,
 }
 
 /// Gemini's monthly free Grounding allowance — mirror of chat::GROUNDING_FREE_PER_MONTH.
@@ -430,6 +432,7 @@ fn read_metrics(path: &PathBuf) -> Metrics {
         if fdb.exists() {
             if let Ok(fc) = Connection::open_with_flags(&fdb, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX) {
                 m.has_faucet = true;
+                m.faucet_codes = scrai_server::faucet::list_codes(&fc).unwrap_or_default();
                 if let Ok(mut st) = fc.prepare("SELECT ts, unym, stage FROM claims") {
                     if let Ok(rows) = st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?))) {
                         for (ts, unym, stage) in rows.filter_map(|r| r.ok()) {
@@ -613,8 +616,12 @@ fn ui(f: &mut Frame, m: &Metrics, path: &str, clock: &str, network: &str, status
         ur[1],
     );
 
-    // bottom row: DAILY | INTEGRITY
-    let bot = Layout::horizontal([Constraint::Min(40), Constraint::Length(30)]).split(root[2]);
+    // bottom row: DAILY | FAUCET (testnet servers only) | INTEGRITY
+    let bot = if m.has_faucet {
+        Layout::horizontal([Constraint::Min(40), Constraint::Length(36), Constraint::Length(30)]).split(root[2])
+    } else {
+        Layout::horizontal([Constraint::Min(40), Constraint::Length(30)]).split(root[2])
+    };
 
     // day · prompts · spent · cost · margin · <one column per model> · buys · buys $
     let mut header: Vec<String> = ["day", "prompts", "spent", "cost", "margin"].iter().map(|s| s.to_string()).collect();
@@ -690,7 +697,30 @@ fn ui(f: &mut Frame, m: &Metrics, path: &str, clock: &str, network: &str, status
         kv("lifetime spend", usd(m.total_spent), GOLD),
         kv("lifetime buys", format!("{} · {}", grp(m.total_purchases), usd(m.total_purchased)), GOLD),
     ];
-    f.render_widget(Paragraph::new(integ).block(block("INTEGRITY · double-spend")), bot[1]);
+    f.render_widget(Paragraph::new(integ).block(block("INTEGRITY · double-spend")), bot[bot.len() - 1]);
+
+    // FAUCET: invite codes with uses left; `c` mints one (the only write besides .env)
+    if m.has_faucet {
+        let mut lines: Vec<Line> = vec![
+            kv("funded", format!("{} · {:.1} NYM", m.faucet_claims, m.faucet_unym as f64 / 1e6), GOLD),
+            kv("open invoices", grp(m.testnet_pending as u64), if m.testnet_pending > 0 { GOLD } else { DIM }),
+            Line::from(Span::styled("codes · uses left · note", Style::default().fg(DIM))),
+        ];
+        let avail = bot[1].height.saturating_sub(2 + lines.len() as u16 + 1) as usize;
+        for c in m.faucet_codes.iter().take(avail.max(1)) {
+            let left = c.left();
+            lines.push(Line::from(vec![
+                Span::styled(format!("{:<16}", c.code), Style::default().fg(if left > 0 { BONE } else { DIM })),
+                Span::styled(format!("{:>2}  ", left), Style::default().fg(if left > 0 { SAGE } else { DIM })),
+                Span::styled(c.note.chars().take(12).collect::<String>(), Style::default().fg(DIM)),
+            ]));
+        }
+        if m.faucet_codes.len() > avail.max(1) {
+            lines.push(Line::from(Span::styled(format!("… {} more (scrai-faucet code list)", m.faucet_codes.len() - avail.max(1)), Style::default().fg(DIM))));
+        }
+        lines.push(Line::from(Span::styled("c = new code (3 uses)", Style::default().fg(GOLD))));
+        f.render_widget(Paragraph::new(lines).block(block("FAUCET · testnet")), bot[1]);
+    }
 
     // footer
     let note = Line::from(Span::styled(
@@ -737,6 +767,17 @@ fn main() -> io::Result<()> {
     res
 }
 
+/// `c`: mint an invite code into faucet.db (next to state.db). Shown in the status line
+/// so it can be copied; also listed in the FAUCET panel afterwards.
+fn mint_invite_code(state_db: &Path) -> String {
+    let Some(dir) = state_db.parent() else { return "no data dir".into() };
+    let fdb = dir.join("faucet.db");
+    match scrai_server::faucet::open_db(&fdb).and_then(|c| scrai_server::faucet::mint(&c, scrai_server::faucet::DEFAULT_CODE_USES, "admin")) {
+        Ok(code) => format!("invite code {code} ({} uses) — hand it to a tester", scrai_server::faucet::DEFAULT_CODE_USES),
+        Err(e) => format!("could not mint a code: {e}"),
+    }
+}
+
 fn run<B: Backend>(term: &mut Terminal<B>, path: &PathBuf, path_str: &str) -> io::Result<()> {
     let mut status = String::new();
     loop {
@@ -749,6 +790,7 @@ fn run<B: Backend>(term: &mut Terminal<B>, path: &PathBuf, path_str: &str) -> io
                 match k.code {
                     KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
                     KeyCode::Char('n') => status = toggle_network(),
+                    KeyCode::Char('c') => status = mint_invite_code(path),
                     _ => {}
                 }
             }

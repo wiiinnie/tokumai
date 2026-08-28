@@ -38,6 +38,25 @@ fi
 echo "→ files:"
 for f in "${files[@]}"; do printf '   %s  (%s)\n' "$(basename "$f")" "$(du -h "$f" | cut -f1)"; done
 
+# manifest.json — the site reads it on every page view (version, names, sha256, sizes),
+# so a new upload is live immediately with no .env edit and no restart.
+ver=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$SRC/src-tauri/tauri.conf.json" | head -1)
+MANIFEST="$SRC/target/publish-manifest.json"
+mkdir -p "$(dirname "$MANIFEST")"
+{
+  printf '{\n  "version": "%s",\n  "published": "%s",\n  "files": {' "$ver" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  sep=""
+  for f in "${files[@]}"; do
+    name=$(basename "$f"); sum=$(shasum -a 256 "$f" | cut -c1-64); bytes=$(stat -f%z "$f" 2>/dev/null || stat -c%s "$f")
+    case "$name" in *.dmg) key=macos;; *.AppImage) key=appimage;; *.deb) key=deb;; *) key=other;; esac
+    printf '%s\n    "%s": {"name": "%s", "sha256": "%s", "bytes": %s}' "$sep" "$key" "$name" "$sum" "$bytes"
+    sep=","
+  done
+  printf '\n  }\n}\n'
+} > "$MANIFEST"
+cp "$MANIFEST" "$SRC/target/manifest.json"
+files+=("$SRC/target/manifest.json")
+
 echo "→ upload → $TARGET:~/scrai-stage/dl/"
 ssh "${SSH_OPTS[@]}" "$TARGET" 'mkdir -p ~/scrai-stage/dl'
 rsync -a --info=progress2 -e "ssh ${SSH_OPTS[*]}" "${files[@]}" "$TARGET:~/scrai-stage/dl/"
@@ -51,18 +70,5 @@ ssh -t "${SSH_OPTS[@]}" "$TARGET" '
 '
 
 echo
-echo "→ paste into /opt/scrai/.env, then: sudo systemctl restart scrai-faucet"
-for f in "${files[@]}"; do
-  name=$(basename "$f")
-  sum=$(shasum -a 256 "$f" | cut -c1-64)
-  case "$name" in
-    *.dmg)      var=SCRAI_DL_MACOS ;;
-    *.AppImage) var=SCRAI_DL_LINUX_APPIMAGE ;;
-    *.deb)      var=SCRAI_DL_LINUX_DEB ;;
-    *)          var=SCRAI_DL_OTHER ;;
-  esac
-  echo "$var=$SITE/dl/$name"
-  [ "$var" != SCRAI_DL_LINUX_DEB ] && echo "${var}_SHA256=$sum"
-done
-ver=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$SRC/src-tauri/tauri.conf.json" | head -1)
-[ -n "$ver" ] && echo "SCRAI_SITE_VERSION=$ver testnet"
+echo "✓ published version $ver — live at $SITE (the site reads manifest.json on every view)"
+cat "$MANIFEST"

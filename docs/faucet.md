@@ -80,6 +80,22 @@ account — in the test a purchase is linkable to a tester. The site says so.
 5. Check: `curl -s https://scrai-faucet.hermes-stakepool.de/api/status` →
    `{"testnet":true,"wallet":true,"claimsToday":0,"dailyMax":20}`.
 
+## Downloads + version on the site
+
+`scripts/publish-downloads.sh hermes@<vps>` uploads the newest local `.dmg` (from
+`npm run tauri:build`) and any `dist/downloads/*.AppImage|*.deb` to `/opt/scrai/site/dl`
+(Caddy `handle_path /dl/*` → `file_server`) plus a `manifest.json` with version, file
+names, sha256 and sizes. The site reads the manifest on every page view, so the buttons,
+the checksum lines and the "Testnet build 0.2.x" label always match what is downloadable
+— no `.env` edit, no restart. Version = `src-tauri/tauri.conf.json`.
+
+## Invite codes in scrai-admin
+
+On a server with a faucet ledger the dashboard shows a FAUCET panel (funded · open
+invoices · codes with uses left). Press **`c`** to mint a code (3 uses, note "admin");
+it appears in the status line to copy and in the panel. This is scrai-admin's only
+write besides `.env` — `state.db` stays read-only; the code goes into `faucet.db`.
+
 ## Ops
 
 ```

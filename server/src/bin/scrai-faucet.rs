@@ -44,13 +44,13 @@ use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
+use scrai_server::faucet::{list_codes, mint, open_db as open_faucet_db, DEFAULT_CODE_USES};
 use scrai_server::pay::{Pay, TestnetInv, TESTNET_USD};
 
 const SITE: &str = include_str!("../../site/index.html");
 const MAX_HEAD: usize = 16 * 1024;
 const MAX_BODY: usize = 4 * 1024;
 const IP_ATTEMPTS_PER_HOUR: usize = 10;
-const DEFAULT_CODE_USES: u32 = 3;
 
 fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
@@ -76,6 +76,8 @@ struct Cfg {
     explorer: Option<String>,
     prefix: String,
     denom: String,
+    /// where publish-downloads.sh puts the bundles + manifest.json (Caddy serves it as /dl/)
+    dl_dir: PathBuf,
 }
 
 impl Cfg {
@@ -92,6 +94,7 @@ impl Cfg {
             explorer: std::env::var("SCRAI_FAUCET_EXPLORER").ok().filter(|u| u.starts_with("https://")),
             prefix: env_or("SCRAI_FAUCET_BECH32_PREFIX", "n"),
             denom: env_or("SCRAI_FAUCET_DENOM", "unym"),
+            dl_dir: PathBuf::from(env_or("SCRAI_SITE_DL_DIR", "/opt/scrai/site/dl")),
         }
     }
     fn state_db(&self) -> PathBuf {
@@ -121,36 +124,6 @@ fn server_testnet_invoices(state_db: &Path) -> Result<Vec<TestnetInv>, String> {
 // ---------------------------------------------------------------------------
 // the faucet's own ledger: invite codes + claims
 // ---------------------------------------------------------------------------
-
-fn open_faucet_db(path: &Path) -> Result<Connection, String> {
-    let conn = Connection::open(path).map_err(|e| format!("faucet.db: {e}"))?;
-    conn.execute_batch(
-        "PRAGMA journal_mode=WAL;
-         CREATE TABLE IF NOT EXISTS codes (
-           code TEXT PRIMARY KEY, max_uses INTEGER NOT NULL, uses INTEGER NOT NULL DEFAULT 0,
-           note TEXT NOT NULL DEFAULT '', created INTEGER NOT NULL);
-         CREATE TABLE IF NOT EXISTS claims (
-           memo TEXT PRIMARY KEY, invoice_id TEXT UNIQUE NOT NULL, code TEXT NOT NULL,
-           unym INTEGER NOT NULL, tx TEXT NOT NULL DEFAULT '', stage TEXT NOT NULL, ts INTEGER NOT NULL);",
-    )
-    .map_err(|e| format!("faucet.db schema: {e}"))?;
-    Ok(conn)
-}
-
-/// `SCRAI-XXXX-XXXX` from an alphabet without look-alikes (no 0/O, 1/I/L).
-fn new_code() -> String {
-    use rand::Rng;
-    const ALPHA: &[u8] = b"ABCDEFGHJKMNPQRSTUVWXYZ23456789";
-    let mut rng = rand::thread_rng();
-    let mut s = String::from("SCRAI");
-    for _ in 0..2 {
-        s.push('-');
-        for _ in 0..4 {
-            s.push(ALPHA[rng.gen_range(0..ALPHA.len())] as char);
-        }
-    }
-    s
-}
 
 fn claims_since(conn: &Connection, ts: u64) -> u32 {
     conn.query_row("SELECT COUNT(*) FROM claims WHERE ts >= ?1", [ts as i64], |r| r.get::<_, i64>(0))
@@ -389,29 +362,90 @@ fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
-fn site_html() -> String {
-    let link = |var: &str| std::env::var(var).ok().filter(|u| u.starts_with("https://")).map(|u| html_escape(&u));
-    let sha = |var: &str| std::env::var(var).ok().filter(|s| s.len() >= 16).map(|s| html_escape(&s)).unwrap_or_default();
+/// One published bundle as `publish-downloads.sh` describes it in manifest.json.
+struct DlFile {
+    name: String,
+    sha256: String,
+    bytes: u64,
+}
+
+/// `manifest.json` next to the bundles — written by publish-downloads.sh on every upload,
+/// read here on every page view, so the site always shows the version that is actually
+/// downloadable (no .env edit, no restart). Keys: macos · appimage · deb.
+fn read_manifest(dl_dir: &Path) -> (Option<String>, HashMap<String, DlFile>) {
+    let Ok(raw) = std::fs::read_to_string(dl_dir.join("manifest.json")) else {
+        return (None, HashMap::new());
+    };
+    let v: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
+    let version = v.get("version").and_then(|x| x.as_str()).map(str::to_string);
+    let mut files = HashMap::new();
+    if let Some(obj) = v.get("files").and_then(|f| f.as_object()) {
+        for (k, f) in obj {
+            let name = f.get("name").and_then(|x| x.as_str()).unwrap_or("").to_string();
+            // the name becomes a URL path segment — no separators, no dot-dot
+            if name.is_empty() || name.contains('/') || name.contains("..") || name.contains('\\') {
+                continue;
+            }
+            files.insert(
+                k.clone(),
+                DlFile {
+                    name,
+                    sha256: f.get("sha256").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                    bytes: f.get("bytes").and_then(|x| x.as_u64()).unwrap_or(0),
+                },
+            );
+        }
+    }
+    (version, files)
+}
+
+fn human_mb(bytes: u64) -> String {
+    if bytes == 0 { String::new() } else { format!("{:.0} MB", bytes as f64 / 1e6) }
+}
+
+fn site_html(dl_dir: &Path) -> String {
+    let env_link = |var: &str| std::env::var(var).ok().filter(|u| u.starts_with("https://")).map(|u| html_escape(&u));
+    let (mver, files) = read_manifest(dl_dir);
     let mut s = SITE.to_string();
-    // A button is a real link when the env has one, otherwise a greyed "not published yet".
-    for (ph, var, label) in [
-        ("{{DL_MACOS}}", "SCRAI_DL_MACOS", "Download .dmg"),
-        ("{{DL_APPIMAGE}}", "SCRAI_DL_LINUX_APPIMAGE", "AppImage"),
-        ("{{DL_DEB}}", "SCRAI_DL_LINUX_DEB", ".deb"),
-        ("{{DL_IOS}}", "SCRAI_DL_IOS", "Join on TestFlight"),
-        ("{{DL_IOS_GUIDE}}", "SCRAI_DL_IOS_GUIDE", "Sideload guide for testers"),
+    let off = |label: &str| format!(r#"<span class="btn off">{label} · not published yet</span>"#);
+    // Bundles we host ourselves: from the manifest (relative /dl/ link on this very host).
+    for (ph, key, label, primary) in [
+        ("{{DL_MACOS}}", "macos", "Download .dmg", true),
+        ("{{DL_APPIMAGE}}", "appimage", "AppImage", true),
+        ("{{DL_DEB}}", "deb", ".deb", false),
     ] {
-        let primary = ph == "{{DL_MACOS}}" || ph == "{{DL_APPIMAGE}}" || ph == "{{DL_IOS}}";
         let cls = if primary { "btn primary" } else { "btn" };
-        let html = match link(var) {
-            Some(u) => format!(r#"<a class="{cls}" href="{u}">{label}</a>"#),
-            None => format!(r#"<span class="btn off">{label} · not published yet</span>"#),
+        let html = match files.get(key) {
+            Some(f) => format!(r#"<a class="{cls}" href="/dl/{}">{label}</a>"#, html_escape(&f.name)),
+            None => off(label),
         };
         s = s.replace(ph, &html);
     }
-    s = s.replace("{{SHA_MACOS}}", &sha("SCRAI_DL_MACOS_SHA256"));
-    s = s.replace("{{SHA_APPIMAGE}}", &sha("SCRAI_DL_LINUX_APPIMAGE_SHA256"));
-    s = s.replace("{{VERSION}}", &html_escape(&env_or("SCRAI_SITE_VERSION", "testnet build")));
+    // iOS lives elsewhere (TestFlight / a guide page): env links.
+    for (ph, var, label, primary) in [
+        ("{{DL_IOS}}", "SCRAI_DL_IOS", "Join on TestFlight", true),
+        ("{{DL_IOS_GUIDE}}", "SCRAI_DL_IOS_GUIDE", "Sideload guide for testers", false),
+    ] {
+        let cls = if primary { "btn primary" } else { "btn" };
+        let html = match env_link(var) {
+            Some(u) => format!(r#"<a class="{cls}" href="{u}">{label}</a>"#),
+            None => off(label),
+        };
+        s = s.replace(ph, &html);
+    }
+    let meta = |key: &str, fallback: &str| -> String {
+        match files.get(key) {
+            Some(f) => html_escape(&format!("{}{}", f.name, if f.bytes > 0 { format!(" · {}", human_mb(f.bytes)) } else { String::new() })),
+            None => fallback.to_string(),
+        }
+    };
+    let sha = |key: &str| files.get(key).map(|f| html_escape(&f.sha256)).filter(|x| !x.is_empty()).unwrap_or_else(|| "—".into());
+    s = s.replace("{{META_MACOS}}", &meta("macos", "Apple silicon · .dmg"));
+    s = s.replace("{{META_LINUX}}", &meta("appimage", "AppImage — or the .deb for Debian/Ubuntu"));
+    s = s.replace("{{SHA_MACOS}}", &sha("macos"));
+    s = s.replace("{{SHA_APPIMAGE}}", &sha("appimage"));
+    let version = mver.map(|v| format!("Testnet build {v}")).unwrap_or_else(|| env_or("SCRAI_SITE_VERSION", "testnet build"));
+    s = s.replace("{{VERSION}}", &html_escape(&version));
     s = s.replace("{{TESTNET}}", if testnet_on() { "on" } else { "off" });
     s
 }
@@ -520,7 +554,7 @@ async fn handle(f: Arc<Faucet>, mut sock: tokio::net::TcpStream, peer: SocketAdd
     };
     let json = |v: &Value| serde_json::to_vec(v).unwrap_or_default();
     match (req.method.as_str(), req.path.as_str()) {
-        ("GET", "/") | ("GET", "/index.html") => respond(&mut sock, 200, "text/html; charset=utf-8", site_html().as_bytes()).await,
+        ("GET", "/") | ("GET", "/index.html") => respond(&mut sock, 200, "text/html; charset=utf-8", site_html(&f.cfg.dl_dir).as_bytes()).await,
         ("GET", "/health") => respond(&mut sock, 200, "text/plain", b"ok").await,
         ("GET", "/api/status") => respond(&mut sock, 200, "application/json", &json(&f.overview())).await,
         ("GET", "/api/claim") => {
@@ -594,20 +628,14 @@ fn cli(cfg: &Cfg, args: &[String]) -> Result<(), String> {
             Some("new") => {
                 let uses: u32 = args.get(2).and_then(|u| u.parse().ok()).unwrap_or(DEFAULT_CODE_USES);
                 let note = args.get(3).cloned().unwrap_or_default();
-                let code = new_code();
-                db.execute("INSERT INTO codes (code, max_uses, uses, note, created) VALUES (?1, ?2, 0, ?3, ?4)", params![code, uses, note, now() as i64])
-                    .map_err(|e| e.to_string())?;
+                let code = mint(&db, uses, &note)?;
                 println!("{code}   ({uses} use{}{})", if uses == 1 { "" } else { "s" }, if note.is_empty() { String::new() } else { format!(" · {note}") });
                 Ok(())
             }
             Some("list") => {
-                let mut st = db.prepare("SELECT code, max_uses, uses, note, created FROM codes ORDER BY created DESC").map_err(|e| e.to_string())?;
-                let rows = st
-                    .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?)))
-                    .map_err(|e| e.to_string())?;
                 println!("{:<18} {:>5}  note", "code", "left");
-                for r in rows.flatten() {
-                    println!("{:<18} {:>5}  {}", r.0, r.1 - r.2, r.3);
+                for r in list_codes(&db)? {
+                    println!("{:<18} {:>5}  {}", r.code, r.left(), r.note);
                 }
                 Ok(())
             }
