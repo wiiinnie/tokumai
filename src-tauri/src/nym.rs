@@ -486,24 +486,24 @@ impl Transport {
         *self.entry_cached.lock().unwrap() = None;
     }
 
-    /// Kick off ONE background reconnect if the connection is down. Non-blocking:
-    /// the UI's status poll calls this and returns immediately — the route flips
-    /// to green on a later poll once the task has connected.
-    pub fn spawn_reconnect(self: &std::sync::Arc<Self>) {
+    /// Claim the single background-rebuild slot (false = one is already running, or the
+    /// connection is live and needs no rebuild). Pair with `end_reconnect`.
+    pub fn try_begin_reconnect(&self) -> bool {
         use std::sync::atomic::Ordering;
         if self.live.load(Ordering::Relaxed) {
-            return;
+            return false;
         }
-        if self.reconnecting.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
-            return; // one reconnect task at a time
-        }
-        let t = self.clone();
-        tokio::spawn(async move {
-            if let Err(e) = t.ensure_connected().await {
-                log::warn!("[mixnet] background reconnect failed: {e}");
-            }
-            t.reconnecting.store(false, Ordering::SeqCst);
-        });
+        self.reconnecting.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok()
+    }
+    pub fn end_reconnect(&self) {
+        self.reconnecting.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// A round trip that does NOT drop the client on a reply timeout — for the post-connect
+    /// server probe: a fresh route that gets no answer means the server is down, not the
+    /// client. (Send failures still drop it: those are the client's own.)
+    pub async fn probe(&self, server: &str, req: &Value, surbs: u32, timeout_ms: u64) -> Result<Value, String> {
+        Box::pin(self.round_trip_notify_inner(server, req, surbs, timeout_ms, || {}, true, false)).await
     }
 
     /// The entry gateway identity of the CURRENTLY connected client, if any.
@@ -622,7 +622,7 @@ impl Transport {
         on_sent: impl FnOnce(),
     ) -> Result<Value, String> {
         // Boxed — nym's send + wait_for_messages futures are huge; see `collect_replies`.
-        Box::pin(self.round_trip_notify_inner(server, req, surbs, timeout_ms, on_sent, true)).await
+        Box::pin(self.round_trip_notify_inner(server, req, surbs, timeout_ms, on_sent, true, true)).await
     }
 
     /// Like `round_trip_notify`, but a DELIVERED server error (`kind: "error"`) comes
@@ -637,7 +637,7 @@ impl Transport {
         timeout_ms: u64,
         on_sent: impl FnOnce(),
     ) -> Result<Value, String> {
-        Box::pin(self.round_trip_notify_inner(server, req, surbs, timeout_ms, on_sent, false)).await
+        Box::pin(self.round_trip_notify_inner(server, req, surbs, timeout_ms, on_sent, false, true)).await
     }
 
     async fn round_trip_notify_inner(
@@ -648,6 +648,7 @@ impl Transport {
         timeout_ms: u64,
         on_sent: impl FnOnce(),
         errors_as_err: bool,
+        drop_on_timeout: bool,
     ) -> Result<Value, String> {
         let recipient =
             Recipient::try_from_base58_string(server).map_err(|e| format!("bad server address: {e}"))?;
@@ -685,16 +686,14 @@ impl Transport {
         loop {
             let Some(remaining) = deadline.checked_duration_since(tokio::time::Instant::now())
             else {
-                *guard = None;
-                self.mark_dead();
+                if drop_on_timeout { *guard = None; self.mark_dead(); }
                 return Err(TIMEOUT_MSG.into());
             };
             let batch = tokio::select! {
                 r = tokio::time::timeout(remaining, guard.as_mut().unwrap().wait_for_messages()) => match r {
                     Ok(b) => b,
                     Err(_) => {
-                        *guard = None;
-                        self.mark_dead();
+                        if drop_on_timeout { *guard = None; self.mark_dead(); }
                         return Err(TIMEOUT_MSG.into());
                     }
                 },

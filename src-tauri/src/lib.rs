@@ -1342,7 +1342,7 @@ async fn app_resumed(
     let t: Arc<Transport> = transport.inner().clone();
     if force.unwrap_or(false) || hiddenMs >= LONG_PAUSE_MS || !t.is_connected() {
         t.drop_client().await;
-        t.spawn_reconnect();
+        spawn_rebuild(app.clone(), t.clone());
         return Ok(json!({ "action": "reconnect", "reason": if force.unwrap_or(false) { "requested" } else if hiddenMs >= LONG_PAUSE_MS { "long-pause" } else { "dead" } }));
     }
     let _ = app.emit("mixnet-phase", json!({ "step": "check", "detail": "" }));
@@ -1359,10 +1359,43 @@ async fn app_resumed(
         }
         Err(_) => {
             t.drop_client().await;
-            t.spawn_reconnect();
+            spawn_rebuild(app.clone(), t.clone());
             Ok(json!({ "action": "reconnect", "reason": "ping-failed" }))
         }
     }
+}
+
+/// THE reconnect path (route poll + resume + "rebuild now"): rebuild the route — keys,
+/// client, gateway, cover traffic are reported by ensure_connected — then prove the far end
+/// with a ping ("Connecting to ScrambleAI server"), and only then report `online`. One at
+/// a time; a failure reports `failed` with the reason. A server that doesn't answer keeps
+/// the fresh route (probe never drops the client) so the poll doesn't rebuild in a loop.
+fn spawn_rebuild(app: AppHandle, t: Arc<Transport>) {
+    if !t.try_begin_reconnect() {
+        return;
+    }
+    tauri::async_runtime::spawn(async move {
+        let res: Result<(), String> = async {
+            t.ensure_connected().await?;
+            let _ = app.emit("mixnet-phase", json!({ "step": "server", "detail": "" }));
+            let w = wallet::load(&data_dir(&app)?);
+            let srv = server_addr(&w)?;
+            let req = json!({ "v": PROTO, "kind": "ping", "id": rand_hex(8) });
+            t.probe(&srv, &req, SURBS_SMALL, 15_000)
+                .await
+                .map(|_| ())
+                .map_err(|_| "the ScrambleAI server did not answer through the mixnet — it may be down or restarting; the route itself is up".to_string())
+        }
+        .await;
+        match res {
+            Ok(()) => { let _ = app.emit("mixnet-phase", json!({ "step": "online", "detail": "" })); }
+            Err(e) => {
+                log::warn!("[mixnet] rebuild failed: {e}");
+                let _ = app.emit("mixnet-phase", json!({ "step": "failed", "detail": e }));
+            }
+        }
+        t.end_reconnect();
+    });
 }
 
 /// UI Cancel: stop waiting for the in-flight mixnet reply / chunk download. The request
@@ -1620,7 +1653,7 @@ async fn mixnet_route(app: AppHandle, transport: State<'_, Arc<Transport>>) -> R
     // lock-free view and, when down, kicks a single background reconnect task.
     let live = transport.is_connected();
     if !live {
-        transport.spawn_reconnect();
+        spawn_rebuild(app.clone(), transport.inner().clone());
     }
 
     let entry = match transport.entry_gateway_id().await {

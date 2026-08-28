@@ -94,20 +94,26 @@
   .titlebar .env.bad{color:var(--rust)}
   .titlebar .env.wake{color:var(--signal)}
   .titlebar .env.wake .cdot{background:var(--signal);box-shadow:0 0 7px rgba(203,161,78,.7);animation:blink 1.2s ease-in-out infinite}
-  /* route card: shown in the thread (under a waiting question) or as a banner while the route is rebuilt */
-  .rc{border:1px solid var(--line);border-radius:12px;background:var(--surface-2);padding:13px 14px;margin:6px 0 14px;font-family:var(--body)}
-  .rc .t{font-size:13px;font-weight:600;color:var(--bone);display:flex;justify-content:space-between;align-items:baseline;gap:10px}
-  .rc .t .el{font-family:var(--mono);font-size:12px;color:var(--signal);font-weight:400;white-space:nowrap}
-  .rc .why{font-size:11.5px;line-height:1.45;color:var(--muted);margin:6px 0 10px}
-  .rc .steps{display:flex;flex-direction:column;gap:6px}
-  .rc .step{display:flex;align-items:center;gap:9px;font-family:var(--mono);font-size:11.5px;color:var(--muted)}
-  .rc .step i{width:14px;height:14px;border-radius:50%;border:1.5px solid var(--line);display:inline-flex;align-items:center;justify-content:center;font-size:9px;flex:none;font-style:normal}
-  .rc .step.done{color:var(--bone)}.rc .step.done i{border-color:var(--mix);background:var(--mix);color:var(--ink)}
-  .rc .step.now{color:var(--signal)}.rc .step.now i{border-color:var(--signal);animation:blink 1.2s ease-in-out infinite}
-  .rc .foot{font-family:var(--mono);font-size:10.5px;color:var(--muted);margin-top:10px;line-height:1.5}
-  .rc.bad{border-color:color-mix(in srgb,var(--rust) 45%,var(--line))}.rc.bad .t{color:var(--rust)}
-  .rc .btnrow{margin-top:12px}
-  #routeBanner{padding:10px 20px 0}#routeBanner .rc{margin:0 0 4px}
+  /* route overlay: the whole app dims (like an upload) and the reconnect narrates itself
+     with the boot animation's typewriter + ✓ per step + the green success mark */
+  #routeScrim{position:fixed;inset:0;z-index:55;background:rgba(10,8,6,.72);display:none;align-items:center;justify-content:center;padding:24px}
+  #routeScrim.open{display:flex}
+  .routebox{width:min(440px,100%);background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:20px 22px 18px;box-shadow:0 30px 70px rgba(0,0,0,.6)}
+  .routebox .t{font-family:var(--display);font-weight:700;font-size:17px;display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+  .routebox .t .el{font-family:var(--mono);font-size:12.5px;color:var(--signal);font-weight:400;white-space:nowrap}
+  .routebox .why{font-size:12.5px;line-height:1.5;color:var(--muted);margin:8px 0 12px}
+  .routebox .cons{font-family:var(--mono);font-size:13.5px;line-height:2.0;text-align:left;min-height:60px}
+  .routebox .cons .ln{white-space:pre-wrap;color:var(--muted)}
+  .routebox .cons .ln.done{color:var(--bone)}
+  .routebox .cons .ln .ok{color:var(--mix);margin-left:10px}
+  .routebox .cons .ln .bad{color:var(--rust);margin-left:10px}
+  .routebox .cons .cur{display:inline-block;width:8px;height:15px;background:var(--mix);margin-left:2px;vertical-align:-2px;animation:cblink 1s steps(1) infinite}
+  .routebox .cons .donemark{width:56px;height:56px;margin:14px auto 0;display:block;overflow:visible}
+  .routebox .cons .donemark circle{fill:none;stroke:var(--mix);stroke-width:3.5;stroke-dasharray:145;stroke-dashoffset:145;animation:dmc .5s ease forwards}
+  .routebox .cons .donemark path{fill:none;stroke:var(--mix);stroke-width:4;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:34;stroke-dashoffset:34;animation:dmk .32s .55s ease forwards}
+  .routebox .foot{font-family:var(--mono);font-size:10.5px;color:var(--muted);margin-top:12px;line-height:1.5}
+  .routebox .btnrow{margin-top:14px}
+  .routebox.bad .t{color:var(--rust)}
   .kv{display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--line);font-size:13px}
   .kv:last-child{border-bottom:none}.kv .k{color:var(--muted)}.kv .v{font-family:var(--mono);font-size:12px;color:var(--bone);text-align:right}
   .kv .v.ok{color:var(--mix)}.kv .v.sig{color:var(--signal)}.kv .v.bad{color:var(--rust)}
@@ -361,6 +367,10 @@
   .msg.err .body{color:var(--rust)}
   .msg .body a.alink{color:var(--signal);text-decoration:underline;text-underline-offset:2px;word-break:break-all;cursor:pointer}
   /* small action row under a message: Cancel while a request runs, Resend after an empty/declined answer */
+  .editpill{padding:0 0 8px}
+  .pillbtn{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:9px;padding:6px 10px;cursor:pointer}
+  .pillbtn.on{color:var(--signal);border-color:color-mix(in srgb,var(--signal) 45%,var(--line));background:color-mix(in srgb,var(--signal) 8%,transparent)}
+  .editref{font-family:var(--mono);font-size:10.5px;color:var(--signal);margin-top:6px}
   .msgacts{display:flex;gap:8px;margin-top:10px}
   .msgact{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:11px;color:var(--muted);background:transparent;border:1px solid var(--line);border-radius:7px;padding:5px 10px;cursor:pointer;min-height:30px}
   .msgact:hover{color:var(--bone);border-color:var(--muted)}
@@ -843,7 +853,6 @@
   </aside>
 
   <section class="main" id="main">
-    <div id="routeBanner" style="display:none"></div>
     <div class="dropz" id="dropz"><div class="dropcard"><span class="ic">＋</span><span>Drop a file to attach</span><small>image, PDF or text · max 10&nbsp;MB · analysed with a Gemini model</small></div></div>
     <div class="topbar">
       <div class="model">
@@ -884,6 +893,7 @@
       <button class="scrolldn" id="scrollBottom" data-click="scrollToBottom" title="Jump to latest" aria-label="Jump to latest" style="display:none"><span class="a">↓</span><span>latest</span></button>
       <div class="wrap2">
         <div id="attachRow" class="attachrow" style="display:none"></div>
+        <div id="editPill" class="editpill" style="display:none"></div>
         <div id="liveNudge" class="nudge" style="display:none">
           <span class="ni">◎</span>
           <span class="nt"><b>This looks like it needs live data.</b><small>answer with a web search? · costs a bit more, queries Google Search</small></span>
@@ -1196,6 +1206,7 @@
   </div>
 </div>
 
+<div id="routeScrim"><div class="routebox" id="routeBox"></div></div>
 <div class="scrim" id="connScrim" data-click="__backdrop__" data-close="closeConnSheet">
   <div class="modal">
     <div class="mh"><span class="ttl">Mixnet <b>connection</b></span><span class="x" data-click="closeConnSheet">✕</span></div>
@@ -1793,7 +1804,7 @@
     t.innerHTML=`<div class="wrap">`+messages.map((m,mi)=>`
       <div class="msg ${m.role}">
         <div class="who">${m.role==='you'?'you':(m.role==='err'?'error':'scrai')}${m.role==='ai'&&m.model?`<span class="viamodel">${esc(m.model)}</span>`:''}</div>
-        <div class="body">${bodyHtml(m,mi)}${(m.role==='ai'&&m.note)?`<div class="sizenote${m.noteKind?' '+m.noteKind:''}">${esc(m.note)}</div>`:''}${(devCost&&m.role==='ai'&&m.audit)?auditDiv(m.audit):''}${(devCost&&m.role==='you'&&m.xfer)?xferDiv(m.xfer):''}${(m.role==='err'&&m.retry)?`<button class="retrybtn" data-click="retryMsg" data-args="${mi}">↻ Retry</button>`:''}${(m.role==='ai'&&m.streaming)?`<div class="msgacts"><button class="msgact rust" data-click="cancelMsg" data-args="${mi}">✕ Cancel</button></div>`:''}${(m.role==='ai'&&!m.streaming&&m.canResend)?`<div class="msgacts"><button class="msgact" data-click="resendMsg" data-args="${mi}" title="Send the same question again with the currently selected model">↻ Resend</button></div>`:''}</div>
+        <div class="body">${bodyHtml(m,mi)}${(m.role==='you'&&m.editRef)?`<div class="editref">✎ edits the picture above</div>`:''}${(m.role==='ai'&&m.note)?`<div class="sizenote${m.noteKind?' '+m.noteKind:''}">${esc(m.note)}</div>`:''}${(devCost&&m.role==='ai'&&m.audit)?auditDiv(m.audit):''}${(devCost&&m.role==='you'&&m.xfer)?xferDiv(m.xfer):''}${(m.role==='err'&&m.retry)?`<button class="retrybtn" data-click="retryMsg" data-args="${mi}">↻ Retry</button>`:''}${(m.role==='ai'&&m.streaming)?`<div class="msgacts"><button class="msgact rust" data-click="cancelMsg" data-args="${mi}">✕ Cancel</button></div>`:''}${(m.role==='ai'&&!m.streaming&&m.canResend)?`<div class="msgacts"><button class="msgact" data-click="resendMsg" data-args="${mi}" title="Send the same question again with the currently selected model">↻ Resend</button></div>`:''}</div>
       </div>`).join("")+`</div>`;
     if(pinQuestion){ pinLastQuestion(t); }
     else { t.style.paddingBottom=""; setTop(t, followStream ? t.scrollHeight : prevTop); }
@@ -2178,100 +2189,102 @@
   // core the Tauri build embeds. This just animates that future path.
   let mixOn = false, mixConnected = false, routeRetry = null, everConnected = false;
 
-  // ---------- route state: what the chip says, the card explains ----------
-  // ok · checking (short pause: one ping decides) · reconnecting (route rebuilt, steps
-  // below) · offline (rebuild failed). The steps use the SAME wording as the boot animation
-  // (CONN_STEPS) so a returning user recognises them. connectedAt feeds the sheet.
-  let mixState = "ok", routeStart = 0, routeTicker = null, routeFail = "", connectedAt = 0, hiddenAt = 0, lastRtt = 0, lastRebuildSecs = 0;
-  let routeSteps = [];   // [{label, st:'done'|'now'|''}] mirrors CONN_STEPS[0..3] (+ [4] while a question waits)
-  // Only steps that REALLY run are listed: Rust reports each one as it starts. The
-  // gateway-directory fetch is an extra first line that appears only on a cold cache.
-  function routeReset(){ routeSteps = CONN_STEPS.map(l=>({label:l, st:""})); }
-  function routeMark(idx, detail){
-    const off = routeSteps.filter(s=>s.extra).length;             // extra lines sit before CONN_STEPS
-    for(let i=0;i<routeSteps.length;i++){ const k=i-off; routeSteps[i].st = routeSteps[i].extra ? "done" : (k<idx ? "done" : (k===idx ? "now" : "")); }
-    if(detail && routeSteps[idx+off]) routeSteps[idx+off].label = CONN_STEPS[idx] + " · " + detail;
-  }
-  function routeExtra(label){
-    if(!routeSteps.some(s=>s.extra && s.label===label)) routeSteps.unshift({label, st:"now", extra:true});
-    else routeSteps.forEach(s=>{ if(s.extra && s.label===label) s.st="now"; });
-  }
+  // ---------- route state: what the chip says, the overlay narrates ----------
+  // ok · checking (short pause: one ping decides, chip only) · reconnecting (overlay over the
+  // whole app: typewriter + ✓ per REAL step, same words as the boot animation) · offline.
+  // Every step is reported by Rust as it actually starts — nothing is typed on a timer.
+  let mixState = "ok", routeStart = 0, routeTicker = null, routeFail = "", connectedAt = 0, hiddenAt = 0, lastRtt = 0, lastRebuildSecs = 0, routeWhy = "";
+  const PHASE_LABEL = { directory:"Fetching the gateway directory", keys:CONN_STEPS[0], client:CONN_STEPS[1], gateway:CONN_STEPS[2], cover:CONN_STEPS[3], server:CONN_STEPS[4] };
+  let rt = { lines:[], timers:[], seq:0 };     // overlay console state: lines = [{el, tx, cur, text, typed, closed}]
   function routeSecs(){ return routeStart ? Math.max(0, Math.round((Date.now()-routeStart)/1000)) : 0; }
+  function pauseWhy(ms){
+    const m = Math.round(ms/60000), sec = Math.round(ms/1000);
+    const dur = m>=1 ? `${m} min` : `${sec} s`;
+    return `The app was paused in the background for ${dur}, so the anonymous route was dropped — on purpose: a paused route would be a fixed, traceable address. A fresh one takes about 10 s.`;
+  }
   function setMixState(st, why){
     if(st!==mixState){
-      if(st==="reconnecting"||st==="checking"){ routeStart=Date.now(); routeFail=""; routeReset(); if(st==="checking") routeMark(-1); }
-      if(st==="ok" && (mixState==="reconnecting"||mixState==="checking") && routeStart){ lastRebuildSecs = routeSecs(); }
+      if(st==="reconnecting"||st==="checking"){ routeStart=Date.now(); routeFail=""; }
+      if(st==="ok" && (mixState==="reconnecting"||mixState==="checking") && routeStart) lastRebuildSecs = routeSecs();
       mixState = st;
+      if(st==="reconnecting") routeOpen();
     }
     if(why!==undefined) routeWhy = why;
     if((st==="reconnecting"||st==="checking") && !routeTicker) routeTicker=setInterval(updateRouteUI, 1000);
     if(st==="ok"||st==="offline"){ if(routeTicker){ clearInterval(routeTicker); routeTicker=null; } }
     updateRouteUI();
   }
-  let routeWhy = "";
-  function pauseWhy(ms){
-    const m = Math.round(ms/60000), sec = Math.round(ms/1000);
-    const dur = m>=1 ? `${m} min` : `${sec} s`;
-    return `The app was paused in the background for ${dur}, so the anonymous route was dropped — on purpose: a paused route would be a fixed, traceable address. A fresh one takes about 10 s.`;
+  // ---- overlay ----
+  function routeOpen(){
+    rt.timers.forEach(clearTimeout); rt = { lines:[], timers:[], seq:rt.seq+1 };
+    const box=$("routeBox"); if(!box) return;
+    box.className="routebox";
+    box.innerHTML = `<div class="t"><span>Reconnecting to the mixnet</span><span class="el" id="routeEl">${routeSecs()} s</span></div>
+      <div class="why" id="routeWhy">${esc(routeWhy||"The route was dropped. A fresh one takes about 10 s.")}</div>
+      <div class="cons" id="routeCons"></div><div class="foot" id="routeFoot"></div><div id="routeBtns"></div>`;
+    $("routeScrim").classList.add("open");
   }
-  function rcHTML(waiting){
-    const secs = routeSecs();
-    if(mixState==="offline"){
-      return `<div class="rc bad"><div class="t">Mixnet offline <span class="el">tried for ${secs} s</span></div>
-        <div class="why">${esc(routeFail||"Could not reach an entry gateway. Usually the phone has no internet right now, or the chosen gateway is down.")}</div>
-        <div class="steps">${routeSteps.map(s=>`<div class="step ${s.st}"><i>${s.st==="done"?"✓":""}</i>${esc(s.label)}</div>`).join("")}</div>
-        <div class="btnrow"><button class="btn primary" data-click="rebuildRoute">Try again</button><button class="btn" data-click="openEntryPicker">Pick another gateway</button></div>
-        ${waiting?`<div class="foot">Your question is kept. Nothing was sent, nothing billed.</div>`:""}</div>`;
-    }
-    if(mixState==="checking"){
-      return `<div class="rc"><div class="t">Checking the route <span class="el">${secs} s</span></div>
-        <div class="why">You were away briefly. The route may still be alive — one round-trip through the mixnet tells us. If it answers, ${waiting?"your question goes right out":"you're set"}; if not, a fresh route is built (about 10 s).</div>
-        <div class="steps"><div class="step done"><i>✓</i>App back in the foreground</div><div class="step now"><i></i>Ping through the mixnet (up to 10 s)</div>${waiting?`<div class="step"><i></i>${esc(CONN_STEPS[4])}</div>`:""}</div></div>`;
-    }
-    const steps = routeSteps.filter(s=>s.extra || CONN_STEPS.indexOf(s.label.split(" · ")[0]) < (waiting?5:4));
-    return `<div class="rc"><div class="t">Reconnecting to the mixnet <span class="el">${secs} s</span></div>
-      <div class="why">${esc(routeWhy||"The route was dropped. A fresh one takes about 10 s.")}</div>
-      <div class="steps">${steps.map(s=>`<div class="step ${s.st}"><i>${s.st==="done"?"✓":""}</i>${esc(s.label)}</div>`).join("")}</div>
-      ${waiting?`<div class="foot">Your question is waiting — nothing was sent yet, nothing is billed until it is.</div>`:""}</div>`;
+  function routeClose(){ rt.timers.forEach(clearTimeout); rt.timers=[]; $("routeScrim").classList.remove("open"); }
+  // Type one console line for a step that just STARTED. The previous line's step is
+  // therefore finished → it gets its ✓ (after its own typing completes).
+  function routeLine(text){
+    const host=$("routeCons"); if(!host) return;
+    const prev = rt.lines[rt.lines.length-1]; if(prev) routeFinish(prev, true);
+    const el=document.createElement("div"); el.className="ln";
+    const tx=document.createElement("span"); const cur=document.createElement("span"); cur.className="cur";
+    el.appendChild(tx); el.appendChild(cur); host.appendChild(el);
+    const line={el, tx, cur, text:text+"…", typed:false, closed:false, ok:null}; rt.lines.push(line);
+    const my=rt.seq; let c=0;
+    (function type(){ if(my!==rt.seq) return; if(c<line.text.length){ tx.textContent+=line.text[c++]; rt.timers.push(setTimeout(type,18)); return; } line.typed=true; if(line.ok!==null) routeFinish(line, line.ok); })();
   }
-  // Repaint every route surface: chip text, the banner (no question waiting), the card
-  // inside a waiting answer, the composer status. Cheap — called per phase event + 1/s.
+  function routeFinish(line, ok){
+    line.ok = ok;
+    if(!line.typed || line.closed) return;          // stamps once its text is fully typed
+    line.closed=true; line.cur.remove();
+    const m=document.createElement("span"); m.className= ok?"ok":"bad"; m.textContent= ok?"✓":"✗"; line.el.appendChild(m); if(ok) line.el.classList.add("done");
+  }
   function updateRouteUI(){
     applyPathState();
     const waiting = busy && messages.length && messages[messages.length-1].role==="ai" && messages[messages.length-1].streaming;
-    const banner = $("routeBanner");
-    if(banner){
-      const show = everConnected && mixState!=="ok" && !waiting;
-      banner.style.display = show ? "" : "none";
-      if(show) banner.innerHTML = rcHTML(false);
-    }
-    const card = document.getElementById("routeCard");
-    if(card){ if(mixState==="ok") card.outerHTML = '<span id="mixphase" class="mixphase">'+esc(mixShown)+'<span class="cursor"></span></span>'; else card.innerHTML = rcHTML(true); }
-    else if(waiting && mixState!=="ok"){ const node=document.getElementById("mixphase"); if(node) node.outerHTML = `<div id="routeCard">${rcHTML(true)}</div>`; }
+    const el=$("routeEl"); if(el) el.textContent = (mixState==="offline" ? "tried for " : "") + routeSecs() + " s";
+    const foot=$("routeFoot"); if(foot) foot.textContent = waiting ? "Your question is waiting — nothing was sent yet, nothing is billed until it is." : "";
     if(waiting && mixState!=="ok") setStatus(mixState==="offline" ? "offline — your question is kept" : "waiting for the route…");
   }
-  // Progress events from Rust's connect (ensure_connected): keys → client → gateway →
-  // cover → ready | failed; "check" while the wake-up ping runs.
+  // Progress events from Rust — each one is a step that is REALLY starting now:
+  // directory (cold cache only) · keys · client · gateway · cover · server · online | failed.
   function onMixnetPhase(p){
     if(!p || !everConnected) return;               // the boot animation owns the first connect
     switch(p.step){
-      case "check":   setMixState("checking"); break;
-      case "directory": if(mixState!=="reconnecting") setMixState("reconnecting"); routeExtra("Fetching the gateway directory"); break;
-      case "keys":    if(mixState!=="reconnecting") setMixState("reconnecting"); routeMark(0); break;
-      case "client":  routeMark(1); break;
-      case "gateway": routeMark(2, p.detail); break;
-      case "cover":   routeMark(3); if(routeSteps[4]) routeSteps[4].st=""; break;
+      case "check": setMixState("checking"); return;
+      case "directory": case "keys": case "client": case "gateway": case "cover": case "server":
+        if(mixState!=="reconnecting") setMixState("reconnecting");
+        routeLine(PHASE_LABEL[p.step] + (p.detail ? " · " + p.detail : ""));
+        return;
       case "ready":
-        routeSteps.forEach((s)=>{ if(s.extra || CONN_STEPS.indexOf(s.label.split(" · ")[0])<4) s.st="done"; });
+        if(p.detail==="alive" && mixState==="checking"){ connectedAt=connectedAt||Date.now(); setMixState("ok"); setStatus("route alive"); }
+        return;                                     // the rebuild goes on with the server step
+      case "online": {
+        const last = rt.lines[rt.lines.length-1]; if(last) routeFinish(last, true);
         connectedAt = Date.now();
-        if(mixState!=="ok"){ setMixState("ok"); if(p.detail!=="alive" && lastRebuildSecs) setStatus(`route rebuilt · ${lastRebuildSecs} s · new session identity`); else if(p.detail==="alive") setStatus("route alive"); }
-        refreshRoute(); return;
-      case "failed":  routeFail = p.detail||""; setMixState("offline"); return;
+        const host=$("routeCons"); if(host && !host.querySelector(".donemark")){ const mk=document.createElement("div"); mk.innerHTML=DONE_MARK_SVG; host.appendChild(mk.firstElementChild); }
+        const my=rt.seq;
+        rt.timers.push(setTimeout(()=>{ if(my!==rt.seq) return; routeClose(); setMixState("ok"); if(lastRebuildSecs) setStatus(`route rebuilt · ${lastRebuildSecs} s · new session identity`); refreshRoute(); }, 1400));
+        return;
+      }
+      case "failed": {
+        routeFail = p.detail||"";
+        const last = rt.lines[rt.lines.length-1]; if(last) routeFinish(last, false);
+        const box=$("routeBox"); if(box){ box.classList.add("bad"); const t=box.querySelector(".t span"); if(t) t.textContent="Mixnet offline"; }
+        const why=$("routeWhy"); if(why) why.textContent = routeFail || "Could not reach an entry gateway. Usually the phone has no internet right now, or the chosen gateway is down.";
+        const btns=$("routeBtns"); if(btns) btns.innerHTML = `<div class="btnrow"><button class="btn primary" data-click="rebuildRoute">Try again</button><button class="btn" data-click="openEntryPicker">Pick another gateway</button><button class="btn" data-click="routeDismiss">Close</button></div>`;
+        setMixState("offline");
+        return;
+      }
     }
-    updateRouteUI();
   }
-  // Returning to the foreground (see the visibilitychange hook): tell Rust how long we
-  // were away — it decides between a quick ping and a full rebuild — and reflect it.
+  function routeDismiss(){ routeClose(); }
+  // Returning to the foreground: tell Rust how long we were away — it decides between a
+  // quick ping (chip only) and a full rebuild (overlay).
   async function appResumed(hiddenMs, force){
     if(!isTauri() || !mixOn || !everConnected) return;
     if(force || hiddenMs >= 20000){ setMixState("reconnecting", force ? "Rebuilding the route on request — new session identity, about 10 s." : pauseWhy(hiddenMs)); }
@@ -2279,7 +2292,7 @@
     try{ const r = await Backend.appResumed(hiddenMs, !!force); if(r && r.action==="alive"){ lastRtt = r.ms||lastRtt; connectedAt = connectedAt||Date.now(); setMixState("ok"); } }
     catch(e){ routeFail = (e&&e.message)||String(e); setMixState("offline"); }
   }
-  function rebuildRoute(){ appResumed(0, true); }
+  function rebuildRoute(){ routeClose(); mixState="ok"; appResumed(0, true); }
   // ---------- connection sheet (tap the chip) ----------
   function openConnSheet(){
     if(!isTauri()){ setStatus("dev bridge — no mixnet"); return; }
@@ -2396,7 +2409,7 @@
       // gateway (a dead client must not keep the route showing green).
       mixConnected = !!(r && r.entry && r.entry.id && r.live !== false);
     }catch(_){ mixConnected=false; }
-    if(mixConnected){ if(!everConnected){ connectedAt=Date.now(); routeReset(); routeSteps.forEach((s,i)=>{ if(i<4) s.st="done"; }); } everConnected=true; if(mixState==="offline") setMixState("ok"); }
+    if(mixConnected){ if(!everConnected){ connectedAt=Date.now(); } everConnected=true; if(mixState==="offline") setMixState("ok"); }
     applyPathState();
     onMixConnectChange(wasConnected);   // connecting-screen → scramble → logo
     // Poll continuously: fast (2.5s) while (re)connecting so it comes up promptly,
@@ -2487,6 +2500,7 @@
   // data we promise to remove (EXIF/GPS, PDF author/XMP) would upload intact. The attach chip
   // already shows the warning; here we also block #send so it can't be missed.
   function updateSendEnabled(){
+    renderEditPill();
     const stripFailed = !!(pendingFile && pendingFile.metaState && pendingFile.metaState.ok === false);
     $("send").disabled = busy || scanning || stripFailed || ($("input").value.trim()==="" && !pendingFile);
   }
@@ -2501,6 +2515,22 @@
   // Coarse client gate; mirrors the server allowlist. The provider is final authority.
   const ACCEPT_RE = /^(image\/(png|jpe?g|webp|heic|heif|gif)|application\/(pdf|json)|text\/)/i;
   function fileIcon(m){ if(m==="application/pdf") return "📄"; if(/^image\//.test(m)) return "🖼"; return "📝"; }
+  function b64ToBytes(b64){ const bin=atob(b64); const u8=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) u8[i]=bin.charCodeAt(i); return u8; }
+  // Iterating on a generated picture: image models edit what they are SHOWN. When the
+  // model is an image model and the conversation already holds a generated picture, the
+  // most recent one is re-sent as the reference for the next prompt (downscaled + stripped
+  // like any attachment, chunked over the mixnet). Toggle off for a fresh picture.
+  let editLast = true;
+  function lastPicture(){ for(let i=messages.length-1;i>=0;i--){ const m=messages[i]; if(m.role==="ai" && m.images && m.images.length && m.images[0].data) return m.images[0]; } return null; }
+  function renderEditPill(){
+    const el=$("editPill"); if(!el) return;
+    const show = modelKind==="image" && !pendingFile && !!lastPicture();
+    el.style.display = show ? "" : "none";
+    if(show) el.innerHTML = editLast
+      ? `<span class="pillbtn on" data-click="toggleEditLast">✎ Editing the picture above · tap for a fresh picture</span>`
+      : `<span class="pillbtn" data-click="toggleEditLast">✚ Fresh picture · tap to edit the one above</span>`;
+  }
+  function toggleEditLast(){ editLast=!editLast; renderEditPill(); setStatus(editLast ? "next prompt edits the picture above" : "next prompt draws a fresh picture"); }
   function bytesToB64(u8){ let bin=""; const CH=0x8000; for(let i=0;i<u8.length;i+=CH){ bin+=String.fromCharCode.apply(null,u8.subarray(i,i+CH)); } return btoa(bin); }
   // On iOS the web <input type=file> is unreliable (won't reopen after a cancel), so the
   // "+" opens a small chooser and photos/camera go through the NATIVE picker (pick_image
@@ -2878,6 +2908,8 @@
     if(!current){ current=newSession(); messages=current.messages; }
 
     const file=pendingFile;                            // capture (may be null)
+    // No attachment, image model, a picture already in the thread → edit it (see editLast).
+    const refPic = (!file && modelKind==="image" && editLast) ? lastPicture() : null;
     const displayAtt = file ? { mimeType:file.mimeType, name:file.name, size:file.size, thumb:file.thumb } : undefined;
     // History is sent text-only; a prior attachment is not re-uploaded in v1.
     // Empty turns stay out: a failed send leaves an answerless assistant shell.
@@ -2885,6 +2917,7 @@
       .map(m=>({ role:m.role==="you"?"user":"assistant", content:m.text }));
 
     const youMsg={role:"you",text,att:displayAtt}; if(file) youMsg.uploading={pct:0,kbps:0,name:file.name};
+    if(refPic) youMsg.editRef=true;
     messages.push(youMsg); if(!isRetry){ el.value=""; autogrow(el); }
     const ai={role:"ai",text:"",streaming:true,model:currentModel}; messages.push(ai);
     // Sending pins the new question to the TOP: the answer streams in below it and the
@@ -2910,6 +2943,17 @@
           youMsg.xfer = file.xfer;   // DEV: real transfer stats (size ÷ transfer time)
           apiAtts=[{mimeType:file.mimeType, uploadId}];
         } else { apiAtts=[{mimeType:file.mimeType, data:bytesToB64(file.bytes)}]; }   // dev: inline full file
+      } else if(refPic){
+        // the picture above, re-encoded + downscaled like any attachment, as the edit reference
+        const blob = new Blob([b64ToBytes(refPic.data)], { type: refPic.mimeType||"image/png" });
+        const clean = await stripImageMeta(blob);
+        if(isTauri()){
+          setStatus("sending the picture above as reference…");
+          const pf = { bytes:clean.bytes, mimeType:clean.mimeType, name:"previous picture" };
+          const uploadId=await uploadImageChunked(pf, (p)=>{ youMsg.uploading={...p, name:"previous picture"}; renderThread(); }, uploadAbort);
+          youMsg.uploading=null;
+          apiAtts=[{mimeType:clean.mimeType, uploadId}];
+        } else { apiAtts=[{mimeType:clean.mimeType, data:bytesToB64(clean.bytes)}]; }
       }
     }catch(e){
       stopMixPhase(); busy=false; ai.streaming=false; youMsg.uploading=null;
@@ -2960,7 +3004,7 @@
       // "Thinking…", which holds until the answer itself takes over.
       onPhase:(p,info)=>{
         if(p==="route"){ updateRouteUI(); return; }                 // queued behind a route rebuild
-        if(p==="sent"){ setMixPhase(1); tSent=performance.now(); if(routeSteps[4]) { routeSteps[4].st="done"; } }
+        if(p==="sent"){ setMixPhase(1); tSent=performance.now(); }
         else if(p==="redeeming"){ setStatus("session credit low — redeeming held credit…"); }
         else if(p==="image"&&info){
           // The picture was generated (and charged) — now its chunks trickle through the
@@ -2978,7 +3022,7 @@
         ai.streaming=false; busy=false;
         if(!tFirst) tFirst=performance.now();                       // image reply: no deltas
         if(typeof evt.balance==="number"){ balance=evt.balance; if(typeof evt.held==="number") held=evt.held; renderBal(); }
-        if(Array.isArray(evt.images) && evt.images.length) ai.images=evt.images;
+        if(Array.isArray(evt.images) && evt.images.length){ ai.images=evt.images; editLast=true; }
         if(!ai.text && !(ai.images&&ai.images.length)){
           if(modelKind==="image"){
             // a question sent to a painter — older servers answer with nothing at all
@@ -4449,7 +4493,7 @@
   // expose for inline handlers
   Object.assign(window,{ pickModel, copyPhrase, newChat, openSession, deleteSession, exportSession, toggleMenu, selectModelIdx,
     autogrow, onKey, sendMsg, retryMsg, showHandover, downloadHandover, closeHandover, pickImport, importHandover,
-    cancelMsg, resendMsg, openConnSheet, closeConnSheet, rebuildRoute, rebuildRouteFromSheet,
+    cancelMsg, resendMsg, openConnSheet, closeConnSheet, rebuildRoute, rebuildRouteFromSheet, routeDismiss, toggleEditLast,
     openBuy, closeBuy, buyTier, buyOrInvoice, copyUri, openAccount, closeAccount, doAccountNew, doAccountReveal, doAccountRestore, doAccountDelete, doMigrate, doRedeem, redeemSliderChanged, startQrScan, stopQrScan,
     showRestore, askNew, cancelAcctView, saveServer, srvSelected, qNav, scrollToBottom, reopenGuard, checkCredit,
     openEntryPicker, showExitInfo, chooseGateway, closeGw, filterGw,
