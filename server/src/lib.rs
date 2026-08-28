@@ -5,6 +5,7 @@
 pub mod catalog;
 pub mod chat;
 pub mod http;
+pub mod inflight;
 pub mod nyx;
 pub mod pay;
 pub mod replies;

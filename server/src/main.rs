@@ -14,12 +14,14 @@
 
 // The request handlers live in the library crate (server/src/lib.rs) so the fuzz targets
 // under server/fuzz/ can drive the same parsers the mixnet loop feeds.
-use scrai_server::{catalog, chat, http, pay, replies, store, uploads};
+use scrai_server::{catalog, chat, http, inflight, pay, replies, store, uploads};
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use nym_sdk::mixnet::{MixnetClientBuilder, MixnetMessageSender, StoragePaths};
+use nym_sdk::mixnet::{AnonymousSenderTag, MixnetClientBuilder, MixnetMessageSender, StoragePaths};
+use tokio::sync::Semaphore;
 use scrai_core::federation::{self, Authority};
 use scrai_core::pricing::PricingTable;
 use scrai_core::quorum::QuorumStore;
@@ -131,11 +133,10 @@ async fn main() {
             std::process::exit(1);
         }),
     };
-    let mut last_quorum_rev = quorum.revision();
-    let mut last_sessions_rev = sessions.revision();
     println!(
         "scrai-server: state loaded (quorum rev {}, sessions rev {})",
-        last_quorum_rev, last_sessions_rev
+        quorum.revision(),
+        sessions.revision()
     );
 
     // Per-model pricing (USD/1M) + retail margin — drives the catalog rates AND chat
@@ -160,7 +161,8 @@ async fn main() {
 
     // The paywall: invoices + entitlements + burned nonces (durable), and the
     // payment gateway it raises invoices on.
-    let gateway = pay::Gateway::from_env();
+    // Arc: the slow gateway HTTP (BTCPay / Nyx LCD) runs in spawned tasks (H2 for pay).
+    let gateway = Arc::new(pay::Gateway::from_env());
     let mut paywall = match db.load("pay") {
         None => pay::Pay::default(),
         Some(j) => serde_json::from_str(&j).unwrap_or_else(|e| {
@@ -169,7 +171,9 @@ async fn main() {
             std::process::exit(1);
         }),
     };
-    let mut last_pay_rev = paywall.revision();
+    // Revision marks of what is already on disk — persist_changed() re-saves a store
+    // only when its revision moved past these.
+    let mut saved = SavedRevs { sessions: sessions.revision(), quorum: quorum.revision(), pay: paywall.revision() };
     let book_scrai = TICKETBOOK_COINS * scrai_core::coconut::COIN_SCRAI;
     println!(
         "scrai-server: gateway {} · ticketbook {} coins ({} SCRAI)",
@@ -209,9 +213,36 @@ async fn main() {
     struct HttpDone {
         pending: chat::PendingChat,
         result: Result<(String, scrai_core::billing::TokenUsage, chat::Images), String>,
-        tag: nym_sdk::mixnet::AnonymousSenderTag,
+        tag: AnonymousSenderTag,
+        /// Keeps the client counted as in flight until the reply below has gone out.
+        _guard: inflight::Guard<AnonymousSenderTag>,
     }
     let (http_tx, mut http_rx) = tokio::sync::mpsc::channel::<HttpDone>(256);
+    // Same shape for the paywall: begin() on the loop, gateway HTTP spawned, finish() here.
+    struct PayDone {
+        outcome: pay::PayOutcome,
+        tag: AnonymousSenderTag,
+        _guard: inflight::Guard<AnonymousSenderTag>,
+    }
+    let (pay_tx, mut pay_rx) = tokio::sync::mpsc::channel::<PayDone>(64);
+
+    // Concurrency caps for the spawned slow paths. A chat holds its worst-case
+    // reservation while it waits for a slot; past QUEUE_WAIT it fails fast (settle()
+    // refunds it) instead of piling up behind a stalled provider. Gateway calls get a
+    // smaller pool: an unauthenticated invoice.status must not be able to open hundreds
+    // of LCD connections.
+    let max_chats = env_usize("SCRAI_MAX_INFLIGHT_CHATS", 64);
+    let max_gateway = env_usize("SCRAI_MAX_INFLIGHT_GATEWAY", 16);
+    let chat_slots = Arc::new(Semaphore::new(max_chats));
+    let gateway_slots = Arc::new(Semaphore::new(max_gateway));
+    const QUEUE_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+    println!("scrai-server: concurrency caps — chats {max_chats}, gateway calls {max_gateway}");
+
+    // Distinct clients with a spawned request in flight; the daily peak lands in the
+    // `daily` table for scrai-admin ("peak clients"). Written only when today's mark
+    // rises, so the hot path costs no extra fsync.
+    let inflight: inflight::Inflight<AnonymousSenderTag> = inflight::Inflight::default();
+    let mut peak_written: (String, usize) = (String::new(), 0);
     loop {
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {
@@ -253,19 +284,26 @@ async fn main() {
                     }
                 }
                 // Durability: persist any changed store before acknowledging (same as below).
-                let sess_snap = (sessions.revision() != last_sessions_rev).then(|| sessions.snapshot());
-                let pay_snap = (paywall.revision() != last_pay_rev).then(|| paywall.snapshot());
-                let mut changed: Vec<(&str, &str)> = Vec::new();
-                if let Some(s) = &sess_snap { changed.push(("sessions", s)); }
-                if let Some(s) = &pay_snap { changed.push(("pay", s)); }
-                if !changed.is_empty() {
-                    match db.save_many(&changed) {
-                        Ok(()) => { last_sessions_rev = sessions.revision(); last_pay_rev = paywall.revision(); }
-                        Err(e) => eprintln!("scrai-server: atomic persist failed (will retry): {e}"),
-                    }
-                }
+                persist_changed(&mut db, &sessions, &quorum, &paywall, &mut saved);
                 if let Err(e) = reply_sender.send_reply(done.tag, response).await {
                     eprintln!("scrai-server: chat reply failed: {e}");
+                }
+            }
+            // A spawned gateway call (invoice / entitlement sweep) returned → apply it here.
+            Some(done) = pay_rx.recv() => {
+                let kind = done.outcome.kind();
+                let ent_before = paywall.total_entitlement();
+                let response = paywall.finish(done.outcome, &gateway);
+                let (c0, c1) = label_color(kind);
+                println!("scrai-server: handled {c0}{kind}{c1} (→ {} bytes)", response.len());
+                // A settled invoice = one purchase + its scrai, attributed to today.
+                let delta = paywall.total_entitlement().saturating_sub(ent_before);
+                if delta > 0 {
+                    db.bump_daily(&today_utc(), 0, 0, 0, 1, delta);
+                }
+                persist_changed(&mut db, &sessions, &quorum, &paywall, &mut saved);
+                if let Err(e) = reply_sender.send_reply(done.tag, response).await {
+                    eprintln!("scrai-server: pay reply failed: {e}");
                 }
             }
             batch = client.wait_for_messages() => {
@@ -302,11 +340,14 @@ async fn main() {
             // so it never blocks chat/payment on the single dispatch loop; it replies itself.
             if kind == "models" {
                 let (p, sender, msg) = (pricing.clone(), reply_sender.clone(), m.message.clone());
+                let guard = inflight.enter(tag);
+                note_peak(&db, &inflight, &mut peak_written);
                 tokio::spawn(async move {
                     let resp = catalog::handle(&msg, &p, margin).await;
                     if let Err(e) = sender.send_reply(tag, resp).await {
                         eprintln!("scrai-server: models reply failed: {e}");
                     }
+                    drop(guard); // replied → no longer in flight
                 });
                 continue;
             }
@@ -342,28 +383,54 @@ async fn main() {
                     // Reserved → run the provider off the loop; settle() prices it later.
                     chat::Reserved::Proceed(pending) => {
                         let tx = http_tx.clone();
+                        let slots = chat_slots.clone();
+                        let guard = inflight.enter(tag);
+                        note_peak(&db, &inflight, &mut peak_written);
                         tokio::spawn(async move {
-                            let result = chat::run_provider(&pending).await;
-                            let _ = tx.send(HttpDone { pending: *pending, result, tag }).await;
+                            let result = match tokio::time::timeout(QUEUE_WAIT, slots.acquire_owned()).await {
+                                // The permit lives for the whole provider call.
+                                Ok(Ok(_permit)) => chat::run_provider(&pending).await,
+                                _ => Err("the server is busy with too many chats right now — please try again in a moment".to_string()),
+                            };
+                            let _ = tx.send(HttpDone { pending: *pending, result, tag, _guard: guard }).await;
                         });
                     }
                 }
                 continue;
             }
-            // Snapshot the entitlement a purchase can move, to attribute it to a day below.
-            // L13: only the invoice/entitlement kinds can move it, so skip the O(n) scan
-            // for uploads/coconut/gateway.
-            let ent_before = if matches!(kind.as_str(), "invoice.create" | "invoice.status" | "invoice.cancel" | "entitlement") {
-                paywall.total_entitlement()
-            } else {
-                0
-            };
+            // H2 (pay): authenticate/throttle on the loop, then run the gateway HTTP in a
+            // spawned task — its result comes back via pay_tx and finish() runs here. A slow
+            // LCD node used to stall every chat reserve/settle for up to 15 s.
+            if matches!(kind.as_str(), "invoice.create" | "invoice.status" | "invoice.cancel" | "entitlement") {
+                let response = match paywall.begin(&m.message, &gateway) {
+                    pay::PayStep::Reply(response) => response,
+                    pay::PayStep::Pending(pending) => {
+                        let (tx, gw, slots) = (pay_tx.clone(), gateway.clone(), gateway_slots.clone());
+                        let guard = inflight.enter(tag);
+                        note_peak(&db, &inflight, &mut peak_written);
+                        tokio::spawn(async move {
+                            let outcome = match tokio::time::timeout(QUEUE_WAIT, slots.acquire_owned()).await {
+                                Ok(Ok(_permit)) => pay::run_gateway(pending, &gw).await,
+                                _ => pay::gateway_busy(pending),
+                            };
+                            let _ = tx.send(PayDone { outcome, tag, _guard: guard }).await;
+                        });
+                        continue;
+                    }
+                };
+                // Cancel / validation error: nothing outbound, but the nonce burn or the
+                // cancelled invoice must still hit disk before the ack.
+                let (c0, c1) = label_color(&kind);
+                println!("scrai-server: handled {c0}{kind}{c1} ({} → {} bytes)", m.message.len(), response.len());
+                persist_changed(&mut db, &sessions, &quorum, &paywall, &mut saved);
+                if let Err(e) = reply_sender.send_reply(tag, response).await {
+                    eprintln!("scrai-server: reply failed: {e}");
+                }
+                continue;
+            }
             let response = match kind.as_str() {
                 "upload.begin" | "upload.chunk" => uploads.handle(&m.message),
                 "image.chunk" => staged.handle(&m.message),
-                "invoice.create" | "invoice.status" | "invoice.cancel" | "entitlement" => {
-                    paywall.handle(&m.message, &gateway).await
-                }
                 // Coconut issuance is gated by the paywall: a Withdraw must be
                 // account-signed and backed by a ticketbook's worth of paid
                 // entitlement, which is consumed only if issuance succeeds.
@@ -407,21 +474,6 @@ async fn main() {
                 m.message.len(),
                 response.len()
             );
-            // Per-day activity counters (aggregate only): a successful chat is one
-            // prompt + its charged SCRAI; a settled invoice is one purchase + its scrai.
-            {
-                let today = today_utc();
-                match kind.as_str() {
-                    // (chat is metered in the settle branch above, off this path)
-                    "invoice.create" | "invoice.status" | "invoice.cancel" | "entitlement" => {
-                        let delta = paywall.total_entitlement().saturating_sub(ent_before);
-                        if delta > 0 {
-                            db.bump_daily(&today, 0, 0, 0, 1, delta);
-                        }
-                    }
-                    _ => {}
-                }
-            }
             // DURABILITY: persist any changed state BEFORE acknowledging, so a crash
             // after the reply can't lose a credit the client already advanced its purse
             // for. Re-save only what actually changed (revision advanced).
@@ -429,31 +481,7 @@ async fn main() {
             // acknowledging — so a session credit and the burned-coin serial that backs
             // it commit together (never one without the other), and a crash after the
             // reply can't lose a credit the client already advanced its purse for.
-            let sess_snap = (sessions.revision() != last_sessions_rev).then(|| sessions.snapshot());
-            let quorum_snap = (quorum.revision() != last_quorum_rev).then(|| quorum.snapshot());
-            let pay_snap = (paywall.revision() != last_pay_rev).then(|| paywall.snapshot());
-            let mut changed: Vec<(&str, &str)> = Vec::new();
-            if let Some(s) = &sess_snap {
-                changed.push(("sessions", s));
-            }
-            if let Some(s) = &quorum_snap {
-                changed.push(("quorum", s));
-            }
-            if let Some(s) = &pay_snap {
-                changed.push(("pay", s));
-            }
-            if !changed.is_empty() {
-                match db.save_many(&changed) {
-                    Ok(()) => {
-                        last_sessions_rev = sessions.revision();
-                        last_quorum_rev = quorum.revision();
-                        last_pay_rev = paywall.revision();
-                    }
-                    // Leave the rev markers unadvanced so the change stays dirty and is
-                    // retried on the next request rather than silently lost.
-                    Err(e) => eprintln!("scrai-server: atomic persist failed (will retry): {e}"),
-                }
-            }
+            persist_changed(&mut db, &sessions, &quorum, &paywall, &mut saved);
                     if let Err(e) = reply_sender.send_reply(tag, response).await {
                         eprintln!("scrai-server: reply failed: {e}");
                     }
@@ -466,6 +494,67 @@ async fn main() {
     // reply-SURB sqlite) so the next start finds them consistent.
     client.disconnect().await;
     println!("scrai-server: clean shutdown — mixnet state flushed.");
+}
+
+/// Revision marks of the last persisted snapshot per store.
+struct SavedRevs {
+    sessions: u64,
+    quorum: u64,
+    pay: u64,
+}
+
+/// Persist every store whose revision moved, in ONE transaction, BEFORE the reply is
+/// acknowledged — so a session credit and the burned-coin serial that backs it commit
+/// together (never one without the other), and a crash after the reply can't lose a
+/// credit the client already advanced its purse for (H2). On failure the marks stay
+/// unadvanced so the change remains dirty and is retried on the next request.
+fn persist_changed(
+    db: &mut store::Store,
+    sessions: &SessionStore,
+    quorum: &QuorumStore,
+    paywall: &pay::Pay,
+    saved: &mut SavedRevs,
+) {
+    let sess_snap = (sessions.revision() != saved.sessions).then(|| sessions.snapshot());
+    let quorum_snap = (quorum.revision() != saved.quorum).then(|| quorum.snapshot());
+    let pay_snap = (paywall.revision() != saved.pay).then(|| paywall.snapshot());
+    let mut changed: Vec<(&str, &str)> = Vec::new();
+    if let Some(s) = &sess_snap {
+        changed.push(("sessions", s));
+    }
+    if let Some(s) = &quorum_snap {
+        changed.push(("quorum", s));
+    }
+    if let Some(s) = &pay_snap {
+        changed.push(("pay", s));
+    }
+    if changed.is_empty() {
+        return;
+    }
+    match db.save_many(&changed) {
+        Ok(()) => {
+            saved.sessions = sessions.revision();
+            saved.quorum = quorum.revision();
+            saved.pay = paywall.revision();
+        }
+        Err(e) => eprintln!("scrai-server: atomic persist failed (will retry): {e}"),
+    }
+}
+
+/// Record today's peak of simultaneously served clients — one sqlite write per NEW high
+/// (or per day), nothing on the steady state.
+fn note_peak(db: &store::Store, inflight: &inflight::Inflight<AnonymousSenderTag>, written: &mut (String, usize)) {
+    let now = inflight.current();
+    let today = today_utc();
+    if written.0 != today || now > written.1 {
+        db.bump_peak(&today, now);
+        *written = (today, now);
+    }
+}
+
+/// A positive usize from the environment, or the default.
+fn env_usize(name: &str, default: usize) -> usize {
+    std::env::var(name).ok().and_then(|v| v.trim().parse().ok()).filter(|n| *n > 0).unwrap_or(default)
 }
 
 /// Load the persisted authority, or bootstrap + persist one on first run.

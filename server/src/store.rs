@@ -92,6 +92,16 @@ impl Store {
         );
     }
 
+    /// Raise today's peak-simultaneous-clients mark to `n` if it is higher. Best-effort
+    /// like `bump_daily`.
+    pub fn bump_peak(&self, day: &str, n: usize) {
+        let _ = self.conn.execute(
+            "INSERT INTO daily (day, peak_clients) VALUES (?1, ?2) \
+             ON CONFLICT(day) DO UPDATE SET peak_clients = MAX(peak_clients, ?2)",
+            params![day, n as i64],
+        );
+    }
+
     /// The stored JSON blob for `key`, if any.
     pub fn load(&self, key: &str) -> Option<String> {
         self.conn

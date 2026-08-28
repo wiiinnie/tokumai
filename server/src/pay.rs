@@ -51,7 +51,7 @@ fn purchase_tiers() -> Vec<u32> {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-struct Inv {
+pub struct Inv {
     id: String,
     provider_ref: String,
     account_id: String,
@@ -177,33 +177,6 @@ impl Pay {
         }
     }
 
-    /// Re-check every unpaid invoice against the gateway. This is what makes a
-    /// slow confirmation safe: the client stops polling when the window closes
-    /// or the app quits, so a payment that confirms later would otherwise be
-    /// money taken and never credited. Settlement is idempotent, so racing a
-    /// polling client is harmless. Bounded to invoices younger than ~48h past
-    /// their window so the sweep stays a handful of HTTP calls.
-    /// Catch late confirmations for ONE account's still-pending invoices (bounded outbound
-    /// work). Only ever called after that account's signature checked out (H3).
-    async fn sweep_account(&mut self, account: &str, gateway: &Gateway) {
-        let now = now_ms();
-        let candidates: Vec<Inv> = self
-            .invoices
-            .values()
-            .filter(|i| {
-                i.status != "paid" && now < i.expires_at + 48 * 3_600_000 && i.account_id == account
-            })
-            .cloned()
-            .collect();
-        for inv in candidates {
-            if let Ok(s) = gateway.check_status(&inv).await {
-                if s == "paid" {
-                    self.settle(&inv.id);
-                }
-            }
-        }
-    }
-
     fn expire_stale(&mut self) {
         let now = now_ms();
         let mut changed = false;
@@ -219,53 +192,125 @@ impl Pay {
     }
 
     // ---- request handlers --------------------------------------------------
+    //
+    // Three phases, like chat::reserve / run_provider / settle: `begin()` does every
+    // state change that must be serialized (signature + nonce burn + invoice throttle)
+    // on the dispatch loop and hands back the OUTBOUND work; `run_gateway()` does that
+    // slow HTTP (BTCPay / Nyx LCD, 8–20 s timeouts) in a spawned task; `finish()` applies
+    // the result on the loop. Before this split a slow LCD node stalled every chat
+    // reserve/settle for up to 15 s (head-of-line on the single loop).
 
-    /// Handle invoice.create / invoice.status / invoice.cancel / entitlement.
+    /// Handle invoice.create / invoice.status / invoice.cancel / entitlement in one go
+    /// (begin → gateway → finish inline). Tests and the fuzz targets use this; the server
+    /// loop uses the split API so the gateway HTTP never runs on the loop.
     pub async fn handle(&mut self, request: &[u8], gateway: &Gateway) -> Vec<u8> {
+        match self.begin(request, gateway) {
+            PayStep::Reply(r) => r,
+            PayStep::Pending(p) => {
+                let outcome = run_gateway(p, gateway).await;
+                self.finish(outcome, gateway)
+            }
+        }
+    }
+
+    /// PHASE 1 (loop side, fast): authenticate + throttle + look up. Returns either a
+    /// final reply (validation error, cancel, already-paid invoice) or the outbound
+    /// gateway work that a spawned task must run.
+    pub fn begin(&mut self, request: &[u8], gateway: &Gateway) -> PayStep {
         let v: Value = serde_json::from_slice(request).unwrap_or(Value::Null);
         let id = v.get("id").cloned().unwrap_or(Value::Null);
         let reply = match v.get("kind").and_then(|k| k.as_str()).unwrap_or("") {
-            "invoice.create" => self.create(&v, &id, gateway).await,
-            "invoice.status" => self.status(&v, &id, gateway).await,
+            "invoice.create" => match self.begin_create(&v, &id) {
+                Ok(pending) => return PayStep::Pending(pending),
+                Err(reply) => reply,
+            },
+            "invoice.status" => match self.begin_status(&v, &id, gateway) {
+                Ok(pending) => return PayStep::Pending(pending),
+                Err(reply) => reply,
+            },
             "invoice.cancel" => self.cancel(&v, &id),
             // H3: authenticate BEFORE any outbound work, then sweep ONLY this account's
             // still-pending invoices. A bare/unsigned `entitlement` no longer forces N
             // serial 20s gateway calls (which, via the sequential loop, wedged the server).
             "entitlement" => match self.account_owns(&v, "entitlement") {
                 Some(account) => {
-                    self.sweep_account(&account, gateway).await;
-                    json!({ "id": id, "entitlement": self.entitlement(&account) })
+                    let candidates = self.pending_invoices_of(&account);
+                    return PayStep::Pending(PayPending::Sweep { id, account, candidates });
                 }
                 None => err(&id, "account signature does not check out, or the nonce was reused"),
             },
             other => err(&id, &format!("unknown kind: {other}")),
         };
+        PayStep::Reply(serde_json::to_vec(&reply).unwrap_or_default())
+    }
+
+    /// PHASE 3 (loop side, fast): apply what the gateway said and build the reply.
+    pub fn finish(&mut self, outcome: PayOutcome, gateway: &Gateway) -> Vec<u8> {
+        let reply = match outcome {
+            PayOutcome::Create { id, account, usd, our_id, result } => {
+                self.finish_create(&id, account, usd, our_id, result)
+            }
+            PayOutcome::Status { id, inv_id, paid } => {
+                if paid {
+                    self.settle(&inv_id);
+                }
+                self.status_reply(&id, &inv_id, gateway)
+            }
+            PayOutcome::Sweep { id, account, paid } => {
+                for inv_id in &paid {
+                    self.settle(inv_id);
+                }
+                json!({ "id": id, "entitlement": self.entitlement(&account) })
+            }
+        };
         serde_json::to_vec(&reply).unwrap_or_default()
     }
 
-    async fn create(&mut self, v: &Value, id: &Value, gateway: &Gateway) -> Value {
+    /// This account's still-pending invoices worth re-checking (bounded outbound work:
+    /// younger than ~48h past their window). Only ever called after that account's
+    /// signature checked out (H3).
+    fn pending_invoices_of(&self, account: &str) -> Vec<Inv> {
+        let now = now_ms();
+        self.invoices
+            .values()
+            .filter(|i| i.status != "paid" && now < i.expires_at + 48 * 3_600_000 && i.account_id == account)
+            .cloned()
+            .collect()
+    }
+
+    fn begin_create(&mut self, v: &Value, id: &Value) -> Result<PayPending, Value> {
         let usd = v.get("usd").and_then(|u| u.as_u64()).unwrap_or(0) as u32;
         let Some(account) = self.account_owns(v, &format!("invoice:{usd}")) else {
-            return err(id, "account signature does not check out, or the nonce was reused");
+            return Err(err(id, "account signature does not check out, or the nonce was reused"));
         };
         // Fixed amounts only, so every purchase looks like everyone else's — a
         // free-form amount would be a fingerprint.
         let tiers = purchase_tiers();
         if !tiers.contains(&usd) {
             let list = tiers.iter().map(|t| format!("${t}")).collect::<Vec<_>>().join(", ");
-            return err(id, &format!("purchases must be one of: {list}"));
+            return Err(err(id, &format!("purchases must be one of: {list}")));
         }
         // Throttle BEFORE the external BTCPay call.
         if let Err(e) = self.admit_invoice(&account) {
-            return err(id, &e);
+            return Err(err(id, &e));
         }
-
         let our_id = rand_hex(16);
         // The client picks the rail ("nyx" = native NYM on the Nyx chain); it is
         // deliberately NOT part of the account signature — it only selects HOW to
         // pay, never how much is credited.
-        let wanted = v.get("method").and_then(|m| m.as_str()).unwrap_or("btc");
-        let raised = match gateway.create_invoice(usd, &our_id, wanted).await {
+        let wanted = v.get("method").and_then(|m| m.as_str()).unwrap_or("btc").to_string();
+        Ok(PayPending::Create { id: id.clone(), account, usd, our_id, wanted })
+    }
+
+    fn finish_create(
+        &mut self,
+        id: &Value,
+        account: String,
+        usd: u32,
+        our_id: String,
+        result: Result<Raised, String>,
+    ) -> Value {
+        let raised = match result {
             Ok(r) => r,
             Err(e) => return err(id, &e),
         };
@@ -302,22 +347,25 @@ impl Pay {
 
     /// Deliberately unauthenticated (like the TS server): the invoice id is a
     /// random id the client just received, and the reply reveals nothing usable.
-    async fn status(&mut self, v: &Value, id: &Value, gateway: &Gateway) -> Value {
+    /// Ok = poll the gateway too (a webhook that never arrived must not leave a paying
+    /// customer stuck; also for locally-expired invoices — BTCPay keeps watching, and a
+    /// late on-chain confirmation still counts). Err = final reply, no outbound work.
+    fn begin_status(&mut self, v: &Value, id: &Value, gateway: &Gateway) -> Result<PayPending, Value> {
         self.expire_stale();
         let inv_id = v.get("invoiceId").and_then(|i| i.as_str()).unwrap_or("").to_string();
         let Some(inv) = self.invoices.get(&inv_id).cloned() else {
+            return Err(err(id, "unknown invoice"));
+        };
+        if inv.status == "paid" {
+            return Err(self.status_reply(id, &inv_id, gateway));
+        }
+        Ok(PayPending::Status { id: id.clone(), inv })
+    }
+
+    fn status_reply(&self, id: &Value, inv_id: &str, gateway: &Gateway) -> Value {
+        let Some(now) = self.invoices.get(inv_id) else {
             return err(id, "unknown invoice");
         };
-        if inv.status != "paid" {
-            // Poll the gateway too — a webhook that never arrived must not leave
-            // a paying customer stuck. Also for locally-expired invoices: BTCPay
-            // keeps watching, and a late on-chain confirmation still counts.
-            // Settlement is idempotent.
-            if let Ok("paid") = gateway.check_status(&inv).await.as_deref() {
-                self.settle(&inv_id);
-            }
-        }
-        let now = self.invoices.get(&inv_id).expect("checked above"); // nosemgrep: scrai-unwrap-in-server-hot-path -- proven: the invoice was looked up two lines above and settle() never removes entries
         json!({
             "kind": "invoice.state", "id": id,
             "status": now.status,
@@ -398,6 +446,78 @@ fn rand_hex(bytes: usize) -> String {
 // ---------------------------------------------------------------------------
 // Gateways
 // ---------------------------------------------------------------------------
+
+/// What `Pay::begin` hands back: a finished reply, or gateway work for a spawned task.
+pub enum PayStep {
+    Reply(Vec<u8>),
+    Pending(PayPending),
+}
+
+/// Outbound gateway work, prepared on the loop (authenticated + throttled) and run
+/// off it by `run_gateway`. Carries everything `finish` needs — no loop state.
+pub enum PayPending {
+    Create { id: Value, account: String, usd: u32, our_id: String, wanted: String },
+    Status { id: Value, inv: Inv },
+    Sweep { id: Value, account: String, candidates: Vec<Inv> },
+}
+
+/// What the gateway said, to be applied on the loop by `Pay::finish`.
+pub enum PayOutcome {
+    Create { id: Value, account: String, usd: u32, our_id: String, result: Result<Raised, String> },
+    Status { id: Value, inv_id: String, paid: bool },
+    Sweep { id: Value, account: String, paid: Vec<String> },
+}
+
+impl PayOutcome {
+    /// The request kind this settles — for the "handled …" log line.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            PayOutcome::Create { .. } => "invoice.create",
+            PayOutcome::Status { .. } => "invoice.status",
+            PayOutcome::Sweep { .. } => "entitlement",
+        }
+    }
+}
+
+/// PHASE 2 (off the loop, slow): the gateway HTTP. Pure — touches no paywall state, so
+/// any number of these can run concurrently while chats keep flowing.
+pub async fn run_gateway(pending: PayPending, gateway: &Gateway) -> PayOutcome {
+    match pending {
+        PayPending::Create { id, account, usd, our_id, wanted } => {
+            let result = gateway.create_invoice(usd, &our_id, &wanted).await;
+            PayOutcome::Create { id, account, usd, our_id, result }
+        }
+        PayPending::Status { id, inv } => {
+            let paid = matches!(gateway.check_status(&inv).await.as_deref(), Ok("paid"));
+            PayOutcome::Status { id, inv_id: inv.id, paid }
+        }
+        PayPending::Sweep { id, account, candidates } => {
+            let mut paid = Vec::new();
+            for inv in candidates {
+                if let Ok("paid") = gateway.check_status(&inv).await.as_deref() {
+                    paid.push(inv.id);
+                }
+            }
+            PayOutcome::Sweep { id, account, paid }
+        }
+    }
+}
+
+/// The outcome when no gateway slot freed up in time: a create fails visibly (the
+/// client retries), a status/sweep just reports "nothing new" — the next poll re-checks.
+pub fn gateway_busy(pending: PayPending) -> PayOutcome {
+    match pending {
+        PayPending::Create { id, account, usd, our_id, .. } => PayOutcome::Create {
+            id,
+            account,
+            usd,
+            our_id,
+            result: Err("the payment gateway is busy right now — please try again in a moment".into()),
+        },
+        PayPending::Status { id, inv } => PayOutcome::Status { id, inv_id: inv.id, paid: false },
+        PayPending::Sweep { id, account, .. } => PayOutcome::Sweep { id, account, paid: Vec::new() },
+    }
+}
 
 pub struct RaisedInvoice {
     pub provider_ref: String,
@@ -689,6 +809,42 @@ mod tests {
             assert_eq!(s.get("status").and_then(|x| x.as_str()), Some("paid"));
             assert_eq!(s.get("entitlement").and_then(|x| x.as_u64()), Some(500_000));
         }
+    }
+
+    // H2 (pay): the split API. Two status polls for the same invoice can be in flight at
+    // once (each spawned off the loop); settling both credits exactly once, and a
+    // "gateway busy" outcome leaves the invoice pending with nothing credited.
+    #[tokio::test]
+    async fn split_begin_finish_credits_once_and_busy_leaves_it_pending() {
+        let (sk, pem, aid) = account();
+        let mut pay = Pay::default();
+        let gw = Gateway { rail: Rail::Fake, nyx: None };
+        let req = json!({"kind":"invoice.create","id":"r1","publicKey":pem,"usd":5,
+            "nonce":"n1","sig":signed(&sk,&aid,"invoice:5","n1")});
+        let PayStep::Pending(p) = pay.begin(req.to_string().as_bytes(), &gw) else { panic!("create needs the gateway") };
+        assert!(matches!(p, PayPending::Create { .. }));
+        let r: Value = serde_json::from_slice(&pay.finish(run_gateway(p, &gw).await, &gw)).unwrap();
+        let inv_id = r["invoiceId"].as_str().unwrap().to_string();
+
+        let st = json!({"kind":"invoice.status","id":"r2","invoiceId":inv_id}).to_string();
+        // Busy gateway: no credit, still pending, next poll will re-check.
+        let PayStep::Pending(p) = pay.begin(st.as_bytes(), &gw) else { panic!("pending invoice polls the gateway") };
+        let busy: Value = serde_json::from_slice(&pay.finish(gateway_busy(p), &gw)).unwrap();
+        assert_eq!(busy["status"].as_str(), Some("pending"));
+        assert_eq!(busy["entitlement"].as_u64(), Some(0));
+
+        // Two polls in flight at once, both come back "paid" → credited exactly once.
+        let PayStep::Pending(a) = pay.begin(st.as_bytes(), &gw) else { panic!() };
+        let PayStep::Pending(b) = pay.begin(st.as_bytes(), &gw) else { panic!() };
+        let (oa, ob) = (run_gateway(a, &gw).await, run_gateway(b, &gw).await);
+        let ra: Value = serde_json::from_slice(&pay.finish(oa, &gw)).unwrap();
+        let rb: Value = serde_json::from_slice(&pay.finish(ob, &gw)).unwrap();
+        assert_eq!(ra["status"].as_str(), Some("paid"));
+        assert_eq!(rb["entitlement"].as_u64(), Some(500_000));
+        assert_eq!(pay.total_entitlement(), 500_000);
+
+        // Once paid, a status poll is answered on the loop — no gateway work at all.
+        assert!(matches!(pay.begin(st.as_bytes(), &gw), PayStep::Reply(_)));
     }
 
     #[tokio::test]
