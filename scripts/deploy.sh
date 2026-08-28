@@ -43,6 +43,12 @@ set -euo pipefail
 
 TARGET="${1:-${SCRAI_DEPLOY_TARGET:-}}"
 MODE="${2:-}"
+# `deploy.sh --install-apply` (flag first, target from SCRAI_DEPLOY_TARGET) is a common slip
+case "$TARGET" in --*) MODE="$TARGET"; TARGET="${SCRAI_DEPLOY_TARGET:-}";; esac
+if [ -z "$TARGET" ]; then
+  echo "usage: scripts/deploy.sh <admin_user>@<vps-host> [--install-apply]   (or set SCRAI_DEPLOY_TARGET)" >&2
+  exit 2
+fi
 if [ -z "$TARGET" ]; then
   echo "usage: scripts/deploy.sh <admin_user>@<vps-host> [--install-apply]" >&2
   exit 1
