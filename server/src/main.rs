@@ -42,7 +42,14 @@ const AUTHORITY_N: usize = 1;
 
 #[tokio::main]
 async fn main() {
-    dotenvy::dotenv().ok(); // load provider keys from .env
+    // Load provider keys etc. from .env. A parse error is NOT silent: dotenvy stops at the
+    // bad line, so everything below it would be missing (an unquoted value with spaces —
+    // a mnemonic — is the classic case).
+    if let Err(e) = dotenvy::dotenv() {
+        if !matches!(e, dotenvy::Error::Io(_)) {
+            eprintln!("scrai-server: .env PARSE ERROR — variables after the bad line are NOT loaded: {e}");
+        }
+    }
 
     // Refuse to boot with an ambiguous Gemini key configuration: a testnet key
     // AND a mainnet key both active means nobody knows which account is being

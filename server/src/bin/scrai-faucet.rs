@@ -82,7 +82,11 @@ struct Cfg {
 
 impl Cfg {
     fn load() -> Cfg {
-        let _ = dotenvy::dotenv();
+        if let Err(e) = dotenvy::dotenv() {
+            if !matches!(e, dotenvy::Error::Io(_)) {
+                eprintln!("scrai-faucet: .env PARSE ERROR — variables after the bad line are NOT loaded (quote values with spaces): {e}");
+            }
+        }
         Cfg {
             data: PathBuf::from(env_or("SCRAI_DATA", "./data")),
             listen: env_or("SCRAI_FAUCET_LISTEN", "127.0.0.1:8790"),
