@@ -50,6 +50,29 @@ fn purchase_tiers() -> Vec<u32> {
         .unwrap_or_else(|| vec![5, 10, 20, 50])
 }
 
+/// Testnet mode (`SCRAI_TESTNET=1`): the ONE extra thing it enables is a $1 invoice
+/// flagged `testnet:true`, which the faucet on the same host pays for a tester. The
+/// flag is reported to clients so the app can offer the toggle; without it a client
+/// asking for a testnet purchase is refused. This is the kill switch: unset it (or
+/// set 0) and restart, and both server and every client fall back to normal tiers.
+pub fn is_testnet_server() -> bool {
+    std::env::var("SCRAI_TESTNET")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+/// The only amount a testnet (faucet-paid) purchase may have.
+pub const TESTNET_USD: u32 = 1;
+
+/// Where testers redeem a testnet invoice (`SCRAI_FAUCET_URL`); shown in the app next to
+/// the memo. Only reported while testnet mode is on.
+pub fn faucet_url() -> Option<String> {
+    if !is_testnet_server() {
+        return None;
+    }
+    std::env::var("SCRAI_FAUCET_URL").ok().filter(|u| u.starts_with("https://"))
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Inv {
     id: String,
@@ -64,6 +87,23 @@ pub struct Inv {
     /// Lives IN the durable record so a pending payment survives restarts.
     #[serde(default)]
     expected_unym: u64,
+    /// Raised as a $1 testnet purchase (faucet-paid). Persisted so scrai-admin and the
+    /// faucet can tell test buys from real ones after a restart.
+    #[serde(default)]
+    testnet: bool,
+}
+
+/// Read-only view of a testnet invoice for the faucet (`scrai-faucet`) and scrai-admin.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TestnetInv {
+    pub id: String,
+    /// The Nyx memo the payment must carry (`provider_ref` of a native-NYM invoice).
+    pub memo: String,
+    pub amount_usd: u32,
+    /// Exact unym the server quoted — the faucet pays THIS, never a client-supplied amount.
+    pub unym: u64,
+    pub status: String,
+    pub expires_at: u64,
 }
 
 /// Durable paywall state (invoices, entitlements, burned nonces) + the volatile
@@ -247,8 +287,8 @@ impl Pay {
     /// PHASE 3 (loop side, fast): apply what the gateway said and build the reply.
     pub fn finish(&mut self, outcome: PayOutcome, gateway: &Gateway) -> Vec<u8> {
         let reply = match outcome {
-            PayOutcome::Create { id, account, usd, our_id, result } => {
-                self.finish_create(&id, account, usd, our_id, result)
+            PayOutcome::Create { id, account, usd, our_id, testnet, result } => {
+                self.finish_create(&id, account, usd, our_id, testnet, result)
             }
             PayOutcome::Status { id, inv_id, paid } => {
                 if paid {
@@ -285,10 +325,22 @@ impl Pay {
         };
         // Fixed amounts only, so every purchase looks like everyone else's — a
         // free-form amount would be a fingerprint.
-        let tiers = purchase_tiers();
-        if !tiers.contains(&usd) {
-            let list = tiers.iter().map(|t| format!("${t}")).collect::<Vec<_>>().join(", ");
-            return Err(err(id, &format!("purchases must be one of: {list}")));
+        let testnet = v.get("testnet").and_then(|t| t.as_bool()).unwrap_or(false);
+        if testnet {
+            // A tester's $1, paid by the faucet on this host. Refused outright on a
+            // production server — the flag is the server-side kill switch.
+            if !is_testnet_server() {
+                return Err(err(id, "this server does not accept testnet purchases"));
+            }
+            if usd != TESTNET_USD {
+                return Err(err(id, &format!("a testnet purchase is ${TESTNET_USD} only")));
+            }
+        } else {
+            let tiers = purchase_tiers();
+            if !tiers.contains(&usd) {
+                let list = tiers.iter().map(|t| format!("${t}")).collect::<Vec<_>>().join(", ");
+                return Err(err(id, &format!("purchases must be one of: {list}")));
+            }
         }
         // Throttle BEFORE the external BTCPay call.
         if let Err(e) = self.admit_invoice(&account) {
@@ -299,7 +351,7 @@ impl Pay {
         // deliberately NOT part of the account signature — it only selects HOW to
         // pay, never how much is credited.
         let wanted = v.get("method").and_then(|m| m.as_str()).unwrap_or("btc").to_string();
-        Ok(PayPending::Create { id: id.clone(), account, usd, our_id, wanted })
+        Ok(PayPending::Create { id: id.clone(), account, usd, our_id, wanted, testnet })
     }
 
     fn finish_create(
@@ -308,6 +360,7 @@ impl Pay {
         account: String,
         usd: u32,
         our_id: String,
+        testnet: bool,
         result: Result<Raised, String>,
     ) -> Value {
         let raised = match result {
@@ -329,6 +382,7 @@ impl Pay {
                 status: "pending".into(),
                 expires_at: raised.raised.expires_at,
                 expected_unym: raised.expected_unym,
+                testnet,
             },
         );
         self.rev += 1;
@@ -342,7 +396,29 @@ impl Pay {
             "amountUsd": usd,
             "amountScrai": amount_scrai,
             "expiresAt": raised.raised.expires_at,
+            "testnet": testnet,
         })
+    }
+
+    /// Every invoice raised as a testnet purchase, newest expiry first — for the faucet
+    /// (which pays exactly the quoted `unym` to the memo) and for scrai-admin's count.
+    /// Only native-NYM ones carry a memo/unym; the faucet ignores the rest.
+    pub fn testnet_invoices(&self) -> Vec<TestnetInv> {
+        let mut out: Vec<TestnetInv> = self
+            .invoices
+            .values()
+            .filter(|i| i.testnet)
+            .map(|i| TestnetInv {
+                id: i.id.clone(),
+                memo: if i.method == "nyx" { i.provider_ref.clone() } else { String::new() },
+                amount_usd: i.amount_usd,
+                unym: i.expected_unym,
+                status: i.status.clone(),
+                expires_at: i.expires_at,
+            })
+            .collect();
+        out.sort_by(|a, b| b.expires_at.cmp(&a.expires_at));
+        out
     }
 
     /// Deliberately unauthenticated (like the TS server): the invoice id is a
@@ -456,14 +532,14 @@ pub enum PayStep {
 /// Outbound gateway work, prepared on the loop (authenticated + throttled) and run
 /// off it by `run_gateway`. Carries everything `finish` needs — no loop state.
 pub enum PayPending {
-    Create { id: Value, account: String, usd: u32, our_id: String, wanted: String },
+    Create { id: Value, account: String, usd: u32, our_id: String, wanted: String, testnet: bool },
     Status { id: Value, inv: Inv },
     Sweep { id: Value, account: String, candidates: Vec<Inv> },
 }
 
 /// What the gateway said, to be applied on the loop by `Pay::finish`.
 pub enum PayOutcome {
-    Create { id: Value, account: String, usd: u32, our_id: String, result: Result<Raised, String> },
+    Create { id: Value, account: String, usd: u32, our_id: String, testnet: bool, result: Result<Raised, String> },
     Status { id: Value, inv_id: String, paid: bool },
     Sweep { id: Value, account: String, paid: Vec<String> },
 }
@@ -483,9 +559,9 @@ impl PayOutcome {
 /// any number of these can run concurrently while chats keep flowing.
 pub async fn run_gateway(pending: PayPending, gateway: &Gateway) -> PayOutcome {
     match pending {
-        PayPending::Create { id, account, usd, our_id, wanted } => {
+        PayPending::Create { id, account, usd, our_id, wanted, testnet } => {
             let result = gateway.create_invoice(usd, &our_id, &wanted).await;
-            PayOutcome::Create { id, account, usd, our_id, result }
+            PayOutcome::Create { id, account, usd, our_id, testnet, result }
         }
         PayPending::Status { id, inv } => {
             let paid = matches!(gateway.check_status(&inv).await.as_deref(), Ok("paid"));
@@ -507,11 +583,12 @@ pub async fn run_gateway(pending: PayPending, gateway: &Gateway) -> PayOutcome {
 /// client retries), a status/sweep just reports "nothing new" — the next poll re-checks.
 pub fn gateway_busy(pending: PayPending) -> PayOutcome {
     match pending {
-        PayPending::Create { id, account, usd, our_id, .. } => PayOutcome::Create {
+        PayPending::Create { id, account, usd, our_id, testnet, .. } => PayOutcome::Create {
             id,
             account,
             usd,
             our_id,
+            testnet,
             result: Err("the payment gateway is busy right now — please try again in a moment".into()),
         },
         PayPending::Status { id, inv } => PayOutcome::Status { id, inv_id: inv.id, paid: false },
@@ -809,6 +886,43 @@ mod tests {
             assert_eq!(s.get("status").and_then(|x| x.as_str()), Some("paid"));
             assert_eq!(s.get("entitlement").and_then(|x| x.as_u64()), Some(500_000));
         }
+    }
+
+    // Faucet: a `testnet:true` create is $1 only and only on a server with SCRAI_TESTNET=1;
+    // without the env (the kill switch) the request is refused before touching the gateway.
+    // The flag survives into the invoice and the reply so admin/faucet can see it.
+    #[tokio::test]
+    async fn testnet_create_is_one_dollar_and_gated_by_env() {
+        let (sk, pem, aid) = account();
+        let gw = Gateway { rail: Rail::Fake, nyx: None };
+        // nonces burn on first sight (even for a refused create), so every call gets its own
+        let req = |usd: u32, testnet: bool, n: &str| json!({"kind":"invoice.create","id":"r1","publicKey":pem,
+            "usd":usd,"testnet":testnet,"nonce":n,
+            "sig":signed(&sk,&aid,&format!("invoice:{usd}"),n)});
+
+        std::env::remove_var("SCRAI_TESTNET");
+        let mut pay = Pay::default();
+        let PayStep::Reply(r) = pay.begin(req(1, true, "n1").to_string().as_bytes(), &gw) else { panic!("must be refused") };
+        let r: Value = serde_json::from_slice(&r).unwrap();
+        assert!(r["error"].as_str().unwrap_or("").contains("testnet"), "{r}");
+        // $1 is not a normal tier either
+        let PayStep::Reply(r) = pay.begin(req(1, false, "n2").to_string().as_bytes(), &gw) else { panic!("must be refused") };
+        let r: Value = serde_json::from_slice(&r).unwrap();
+        assert!(r["error"].as_str().unwrap_or("").contains("one of"), "{r}");
+
+        std::env::set_var("SCRAI_TESTNET", "1");
+        let PayStep::Reply(r) = pay.begin(req(5, true, "n3").to_string().as_bytes(), &gw) else { panic!("$5 testnet must be refused") };
+        let r: Value = serde_json::from_slice(&r).unwrap();
+        assert!(r["error"].as_str().unwrap_or("").contains("$1"), "{r}");
+        let PayStep::Pending(p) = pay.begin(req(1, true, "n4").to_string().as_bytes(), &gw) else { panic!("create needs the gateway") };
+        let r: Value = serde_json::from_slice(&pay.finish(run_gateway(p, &gw).await, &gw)).unwrap();
+        std::env::remove_var("SCRAI_TESTNET");
+        assert_eq!(r["testnet"].as_bool(), Some(true));
+        assert_eq!(r["amountUsd"].as_u64(), Some(1));
+        let t = pay.testnet_invoices();
+        assert_eq!(t.len(), 1);
+        assert_eq!(t[0].amount_usd, 1);
+        assert_eq!(t[0].status, "pending");
     }
 
     // H2 (pay): the split API. Two status polls for the same invoice can be in flight at

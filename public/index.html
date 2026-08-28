@@ -248,6 +248,13 @@
   .pm.sel{border-color:var(--signal);background:color-mix(in srgb,var(--signal) 11%,var(--surface-2))}
   .pm.sel .pmtag{color:var(--signal)}
   .pm.soon{opacity:.5;cursor:not-allowed}
+  .pm.dis,.tiletier.dis{opacity:.32;pointer-events:none;filter:saturate(.4)}
+  /* Testnet purchase: the toggle card above the amounts + the memo note on the invoice */
+  #testnetRow{margin:0 0 12px;border-color:var(--gold-dim,var(--line))}
+  #testnetRow b .tpill{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:999px;font:600 9.5px var(--mono);letter-spacing:.04em;color:var(--gold);border:1px solid var(--gold);vertical-align:2px}
+  .tnote{border:1px solid var(--gold);border-radius:12px;padding:10px 12px;margin:0 0 12px;font-size:13px;line-height:1.45;background:color-mix(in srgb,var(--gold) 8%,transparent)}
+  .tnote b{color:var(--gold)}
+  .tnote .fl{display:block;margin-top:6px;font-family:var(--mono);font-size:11.5px;word-break:break-all;color:var(--bone)}
   .pm.soon .pmtag{color:var(--signal)}
   /* buy: amount tiles + coin brand colours + pay panel (Buy Credit mockup) */
   .balline{font-family:var(--mono);font-size:11.5px;color:var(--muted);margin:0 0 14px;line-height:1.55}
@@ -955,6 +962,7 @@
     <div class="mh"><span class="ttl">Buy <b>credit</b></span><span class="x" data-click="closeBuy">✕</span></div>
     <div class="mb">
       <p class="balline" id="buyBal"></p>
+      <label class="setrow" id="testnetRow" style="display:none"><input type="checkbox" id="testnetChk"><span><b>Testnet purchase<span class="tpill">TESTER</span></b><small>A <b>$1</b> credit paid for you by the ScrambleAI faucet — no real money moves. Raise the invoice, then paste its memo on the faucet page. Switch off to buy real credit at the normal amounts.</small></span></label>
       <div class="grouplbl" style="margin-top:2px">Amount</div>
       <div id="tierRow" class="tiles"></div>
 
@@ -1358,6 +1366,10 @@
   let redeemDollars = null;              // chosen redeem amount in $ (null = default to max held)
   let migrateData = null;                // {mnemonic, qr} for the "migrate to device" view
   let fakePayments = true;               // dev fake gateway vs real BTCPay
+  let serverTestnet = false;             // server runs with SCRAI_TESTNET=1 → offers the $1 faucet purchase
+  let faucetUrl = null;                  // where testers redeem the memo (server-provided, https only)
+  let testnetBuy = false;                // the toggle in the Buy dialog (only meaningful when serverTestnet)
+  const TESTNET_USD = 1;
   let server = null;                     // scrai-server Nym address (native app)
   let busy = false;
   let scanning = false;         // true while an attachment is being guard-scanned → send is locked
@@ -1408,6 +1420,9 @@
       tiers = s.tiers || tiers || [];
       account = s.account; balance = s.balance||0; held = s.held||0;
       fakePayments = s.fakePayments !== false;   // default to fake if unknown
+      serverTestnet = s.testnet === true;          // the server's kill switch: absent/false → no toggle
+      { const fu=String(s.faucetUrl||""); faucetUrl = serverTestnet && /^https:\/\/[\w.-]+/.test(fu) ? fu : null; }
+      if(!serverTestnet) testnetBuy = false;
       server = s.server || null;
       if(isTauri() && !server){
         $("env").className="env bad"; $("envText").textContent="app · no server set";
@@ -3255,6 +3270,7 @@
       b.classList.toggle("sel", b.dataset.themeOpt===curTheme);
       b.onclick = ()=>{ applyTheme(b.dataset.themeOpt); $("setStatus").textContent = "theme saved"; };
     });
+    const tchk=$("testnetChk"); if(tchk) tchk.onchange = ()=> setTestnetBuy(tchk.checked);
     $("tutChk").checked = tutorialEnabled();
     $("tutChk").onchange = ()=>{ try{ localStorage.setItem(TUT_KEY, $("tutChk").checked?"1":"0"); }catch(_){}; $("setStatus").textContent = "tutorial "+($("tutChk").checked?"on":"off"); };
     $("inpAssist").checked = inputAssistOn();
@@ -4260,14 +4276,33 @@
   // stray click can't raise an invoice (or two).
   let selectedTier = null;
   function renderTiers(){
-    $("tierRow").innerHTML = tiers.map(t=>{
+    // Testnet purchase: the $1 faucet tile joins the row and is the only one selectable —
+    // the server refuses any other amount with testnet:true, this just makes that visible.
+    const list = testnetBuy ? [TESTNET_USD, ...tiers.filter(t=>Number(t)!==TESTNET_USD)] : tiers;
+    $("tierRow").innerHTML = list.map(t=>{
       // H6: `tiers` comes from the (untrusted) server — coerce to a plain integer so a
       // non-numeric entry can never inject markup into the Buy UI.
       const n = Math.max(0, Math.floor(Number(t) || 0));
       const scr = n*100000;
       const sub = scr>=1e6 ? (scr/1e6).toFixed(1)+"M" : Math.round(scr/1e3)+"k";
-      return `<div class="tiletier${selectedTier===n?' sel':''}" data-click="selectTier" data-args="${n}"><div class="a">$${n}</div><div class="s">${sub}</div></div>`;
+      const dis = testnetBuy && n!==TESTNET_USD;
+      return `<div class="tiletier${selectedTier===n?' sel':''}${dis?' dis':''}" data-click="selectTier" data-args="${n}"><div class="a">$${n}</div><div class="s">${dis?'real':sub}</div></div>`;
     }).join("");
+    const btc = document.querySelector('#chooser .pm[data-method="btc"]');
+    if(btc) btc.classList.toggle("dis", testnetBuy);   // the faucet pays NYM only
+  }
+  function syncTestnetRow(){
+    const row=$("testnetRow"), chk=$("testnetChk"); if(!row||!chk) return;
+    row.style.display = serverTestnet ? "" : "none";
+    chk.checked = testnetBuy;
+  }
+  function setTestnetBuy(on){
+    testnetBuy = !!on && serverTestnet;
+    try{ localStorage.setItem("scrai.testnetBuy", testnetBuy?"1":"0"); }catch(_){}
+    abandonInvoice();
+    if(testnetBuy){ selectedTier=TESTNET_USD; selectMethodQuiet("nyx"); } else if(selectedTier===TESTNET_USD){ selectedTier=null; }
+    syncTestnetRow(); renderTiers(); renderContinue();
+    const s=$("buyStatus"); if(s) s.textContent = testnetBuy ? "Testnet purchase — $1, paid by the faucet. Continue to raise the invoice." : "Pick an amount and a coin.";
   }
   function renderBuyBal(){ const el=$("buyBal"); if(el) el.innerHTML = `Balance <b>${esc(scraiLine(balance))}</b> · fixed amounts only — everyone buys the same, so a purchase reveals no per-user fingerprint.`; }
   // Changing amount or coin abandons any in-flight invoice (its QR would be stale) and
@@ -4278,7 +4313,7 @@
     const el=$("continueRow"); if(!el) return;
     const coin = selectedMethod==="nyx" ? "NYM" : selectedMethod==="btc" ? "Bitcoin" : "Monero";
     el.innerHTML = selectedTier
-      ? `<button class="btn primary" style="width:100%" data-click="startPurchase">Continue — $${selectedTier} with ${coin} →</button>`
+      ? `<button class="btn primary" style="width:100%" data-click="startPurchase">Continue — $${selectedTier}${testnetBuy?' testnet':''} with ${coin} →</button>`
       : `<button class="btn" style="width:100%;opacity:.5;cursor:not-allowed" disabled>Pick an amount above</button>`;
   }
   function startPurchase(){ if(selectedTier!=null) buyOrInvoice(selectedTier); }
@@ -4291,10 +4326,17 @@
   function openBuy(){
     if(!account){ openAccount(); return; }
     stopPoll(); stopCountdown(); activeInvoice=null; selectedTier=null;
+    // On a testnet server the toggle defaults ON (that is what testers are here for) and
+    // remembers the last choice; on a production server it never renders.
+    let remembered=null; try{ remembered = localStorage.getItem("scrai.testnetBuy"); }catch(_){}
+    testnetBuy = serverTestnet && remembered !== "0";
+    if(testnetBuy){ selectedTier=TESTNET_USD; selectMethodQuiet("nyx"); }
+    syncTestnetRow();
     renderBuyBal(); showChooser(true); renderTiers(); renderContinue(); renderPending();
     $("payPanel").innerHTML="";
     $("buyStatus").textContent = fakePayments
       ? "dev mode — settles instantly, no real money moves."
+      : testnetBuy ? "Testnet purchase — $1, paid by the faucet. Continue to raise the invoice."
       : "Pick an amount and a coin.";
     stopPendRefresh(); pendRefreshTimer=setInterval(tickPending, 1000);
     openScrim("buyScrim");
@@ -4342,9 +4384,13 @@
   // Which coin the tier buttons will raise an invoice for. NYM is the default —
   // it leads the row. Bitcoin stays available; Monero is not selectable yet.
   let selectedMethod = "nyx";
-  function selectMethod(m){
+  function selectMethodQuiet(m){
     selectedMethod = m;
     document.querySelectorAll('.pm[data-method]').forEach(el=>el.classList.toggle('sel', el.dataset.method===m));
+  }
+  function selectMethod(m){
+    if(testnetBuy && m!=="nyx"){ const s=$("buyStatus"); if(s) s.textContent="Testnet purchases are paid in NYM by the faucet — switch the toggle off to pay with Bitcoin."; return; }
+    selectMethodQuiet(m);
     abandonInvoice();
     renderContinue();
   }
@@ -4385,7 +4431,7 @@
     // gateway call): gold, not muted — same for NYM, Bitcoin and, later, Monero.
     $("buyStatus").className="hint busy"; $("buyStatus").textContent="raising invoice… (a mixnet round trip plus the payment gateway — usually a few seconds)";
     let inv;
-    try{ inv=await Backend.invoice(usd, method); }catch(e){ $("buyStatus").className="hint"; $("buyStatus").textContent=e.message||String(e); return; }
+    try{ inv=await Backend.invoice(usd, method, testnetBuy && usd===TESTNET_USD); }catch(e){ $("buyStatus").className="hint"; $("buyStatus").textContent=e.message||String(e); return; }
     $("buyStatus").className="hint";
     addPending(inv);
     openPayment(inv);
@@ -4471,7 +4517,11 @@
     }).join("") || '<div class="hint">No payment method returned — is this coin’s gateway configured on the server?</div>';
     const isNymInv = onchain.some(o=>/nym/i.test(o.method||""));
     // nosemgrep: scrai-taint-untrusted-to-html -- reviewed 2026-08-27: destination/memo/amount are esc()-wrapped in `blocks`; o.qr is an SVG the app renders locally (qrcode crate), the server only sends address + memo
+    const tnote = inv.testnet
+      ? `<div class="tnote"><b>Testnet purchase</b> — don’t pay this yourself. Copy the <b>memo</b> below and paste it on the faucet page; the faucet sends the NYM with that memo and your credit lands here within a minute.${faucetUrl?`<a class="fl" href="${escAttr(faucetUrl)}" data-click="openLink" data-click-pass="href" data-prevent="1">${esc(faucetUrl)}</a>`:""}</div>`
+      : "";
     $("payPanel").innerHTML = `<div class="paypanel">
+      ${tnote}
       <div class="paylead">Pay $${inv.amountUsd.toFixed(2)} · ${formatScrai(inv.amountScrai)} SCRAI · expires <span id="payExpiry">…</span></div>
       ${blocks}
       ${isNymInv?`<div id="watchState" class="watchrow"><span class="wd"></span> connecting to the Nyx chain…</div>`:""}

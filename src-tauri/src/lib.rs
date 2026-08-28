@@ -21,6 +21,8 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 const TIERS: [u32; 4] = [5, 10, 20, 50];
+/// (server reports testnet mode, faucet URL) — learned with the model list.
+static SERVER_TESTNET: std::sync::Mutex<(bool, Option<String>)> = std::sync::Mutex::new((false, None));
 const PROTO: u64 = 1;
 
 // Reply-SURB budgets: a small answer needs few, a chat answer more.
@@ -599,6 +601,15 @@ async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<V
                 models = m.clone();
                 transport.set_cached_models(m.clone()).await;
             }
+            // Testnet servers advertise the $1 faucet purchase; remembered with the models
+            // so the flag survives the cache (no extra round trip on later `state` calls).
+            {
+                let mut t = SERVER_TESTNET.lock().unwrap_or_else(|e| e.into_inner());
+                *t = (
+                    resp.get("testnet").and_then(|b| b.as_bool()).unwrap_or(false),
+                    resp.get("faucetUrl").and_then(|u| u.as_str()).map(str::to_string),
+                );
+            }
         }
         // Balance for the active session.
         if let Some(m) = &w.mnemonic {
@@ -614,6 +625,7 @@ async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<V
     // yet redeemed (redeem is lazy — it happens on first chat — but the money is
     // already the user's, so a fresh credential shouldn't read as "0").
     balance = balance.saturating_add(coconut_held_scrai(&app));
+    let (testnet, faucet_url) = SERVER_TESTNET.lock().unwrap_or_else(|e| e.into_inner()).clone();
 
     let out = json!({
         "account": account,
@@ -622,6 +634,8 @@ async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<V
         "tiers": TIERS,
         "fakePayments": false,
         "gateway": "btcpay",
+        "testnet": testnet,
+        "faucetUrl": faucet_url,
         "models": models,
         "server": server,
     });
@@ -778,7 +792,13 @@ fn account_restore(app: AppHandle, mnemonic: String, force: Option<bool>) -> Res
 }
 
 #[tauri::command]
-async fn invoice(app: AppHandle, transport: State<'_, Arc<Transport>>, usd: u32, method: Option<String>) -> Result<Value, String> {
+async fn invoice(
+    app: AppHandle,
+    transport: State<'_, Arc<Transport>>,
+    usd: u32,
+    method: Option<String>,
+    testnet: Option<bool>,
+) -> Result<Value, String> {
     let w = wallet::load(&data_dir(&app)?);
     let srv = server_addr(&w)?;
     let m = w.mnemonic.ok_or("no account — create one first")?;
@@ -791,7 +811,12 @@ async fn invoice(app: AppHandle, transport: State<'_, Arc<Transport>>, usd: u32,
         _ => "btc",
     };
     let sig = a.sign(&format!("invoice:{}", usd), &nonce);
-    let req = json!({"v":PROTO,"kind":"invoice.create","id":rand_hex(16),"publicKey":a.public_key_pem,"usd":usd,"method":method,"nonce":nonce,"sig":sig});
+    let mut req = json!({"v":PROTO,"kind":"invoice.create","id":rand_hex(16),"publicKey":a.public_key_pem,"usd":usd,"method":method,"nonce":nonce,"sig":sig});
+    // Tester's $1 paid by the server's faucet. The server refuses it unless it runs
+    // with SCRAI_TESTNET=1 — the client only ever offers the toggle when it does.
+    if testnet == Some(true) {
+        req["testnet"] = json!(true);
+    }
     let resp = transport.round_trip(&srv, &req, SURBS_SMALL, TIMEOUT_MS).await?;
 
     let options: Vec<Value> = resp
@@ -820,6 +845,7 @@ async fn invoice(app: AppHandle, transport: State<'_, Arc<Transport>>, usd: u32,
         "instruction": resp.get("instruction"),
         "options": options,
         "checkout": "",
+        "testnet": resp.get("testnet").and_then(|b| b.as_bool()).unwrap_or(false),
     }))
 }
 

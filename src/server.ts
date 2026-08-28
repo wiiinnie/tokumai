@@ -211,6 +211,7 @@ function statePayload() {
     held: heldTotal(w),
     tiers: purchaseTiers(),
     fakePayments,
+    testnet: process.env.SCRAI_TESTNET === "1",
     gateway: issuer.gatewayName,
     models: catalog().map((m) => ({ ...m, rate: retailRate(m.model) })),
     pricingVersion: pricingVersion(),
@@ -295,8 +296,10 @@ const server = createServer(async (req, res) => {
     if (req.method === "POST" && url === "/api/invoice") {
       const w = loadWallet();
       if (!w.mnemonic) return void sendJson(res, 400, { error: "no account — create one first" });
-      const { usd, method } = await readJson<{ usd?: number; method?: string }>(req);
-      if (!purchaseTiers().includes(Number(usd))) {
+      const { usd, method, testnet } = await readJson<{ usd?: number; method?: string; testnet?: boolean }>(req);
+      // Mirrors the Rust server: a $1 testnet purchase only when the bridge runs with SCRAI_TESTNET=1.
+      const testnetOk = testnet === true && process.env.SCRAI_TESTNET === "1" && Number(usd) === 1;
+      if (!testnetOk && !purchaseTiers().includes(Number(usd))) {
         return void sendJson(res, 400, { error: `fixed amounts only: ${purchaseTiers().map((t) => `$${t}`).join(", ")}` });
       }
       try {

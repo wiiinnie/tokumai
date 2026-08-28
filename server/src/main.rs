@@ -242,6 +242,9 @@ async fn main() {
     let gateway_slots = Arc::new(Semaphore::new(max_gateway));
     const QUEUE_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
     println!("scrai-server: concurrency caps — chats {max_chats}, gateway calls {max_gateway}");
+    if pay::is_testnet_server() {
+        println!("scrai-server: TESTNET mode — $1 faucet purchases enabled (SCRAI_TESTNET=1)");
+    }
 
     // Distinct clients with a spawned request in flight; the daily peak lands in the
     // `daily` table for scrai-admin ("peak clients"). Written only when today's mark
