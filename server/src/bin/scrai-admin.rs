@@ -126,6 +126,8 @@ struct Metrics {
     peak_clients_max: u64,
     /// model ids seen in the shown days, most-used first — one table column each
     models: Vec<String>,
+    /// day-boundary zone the server buckets with (SCRAI_METRICS_TZ; "UTC" if unset/old server)
+    metrics_tz: String,
     // live-grounding queries used this UTC month (Gemini's 5,000/mo free allowance)
     grounding_used: u64,
 }
@@ -330,6 +332,9 @@ fn read_metrics(path: &PathBuf) -> Metrics {
                 Ok(())
             });
         }
+        m.metrics_tz = conn
+            .query_row("SELECT v FROM kv WHERE k = 'metrics_tz'", [], |r| r.get::<_, String>(0))
+            .unwrap_or_else(|_| "UTC".into());
         // per-model prompts for the same days (table may not exist on an older server)
         if let Ok(mut st) = conn.prepare("SELECT day, model, prompts FROM daily_model") {
             if let Ok(rows) = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)? as u64))) {
@@ -562,7 +567,7 @@ fn ui(f: &mut Frame, m: &Metrics, path: &str, clock: &str, network: &str, status
     widths.push(Constraint::Length(8));
     widths.push(Constraint::Length(5));
     f.render_widget(
-        Table::new(rows, widths).header(header_row).block(block("DAILY · per UTC day")),
+        Table::new(rows, widths).header(header_row).block(block(&format!("DAILY · per {} day", m.metrics_tz))),
         bot[0],
     );
 

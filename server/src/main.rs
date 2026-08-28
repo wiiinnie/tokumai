@@ -147,6 +147,11 @@ async fn main() {
         "scrai-server: pricing table {} (margin {margin})",
         pricing.version()
     );
+    // Metrics day boundary — echoed to scrai-admin so the table header names the zone.
+    let tz = metrics_tz_name();
+    let _ = metrics_tz_offset(0); // validates the value once at boot (logs a warning if unknown)
+    let _ = db.save_many(&[("metrics_tz", tz.as_str())]);
+    println!("scrai-server: metrics day boundary: {tz}");
 
     // Staged vision-image uploads (chunked over the mixnet, consumed by chat).
     // Ephemeral by design — never persisted.
@@ -600,14 +605,94 @@ fn write_secret(path: &Path, contents: &str) -> std::io::Result<()> {
     std::fs::write(path, contents)
 }
 
-/// Today's date in UTC as `YYYY-MM-DD`, for the per-day metrics bucket. Pure integer
-/// math (civil_from_days, Howard Hinnant) so we need no date crate on the server.
+/// The metrics day the current moment falls into, as `YYYY-MM-DD`, in the operator's
+/// chosen zone (`SCRAI_METRICS_TZ`, default UTC). Pick the zone your provider's billing
+/// view uses so `scrai-admin` and the provider agree per day: Google's Cloud Billing
+/// reports bucket by America/Los_Angeles; the AI Studio dashboard by the browser's local
+/// time (Europe/Berlin for us). Pure integer math (Howard Hinnant's civil-date
+/// algorithms), DST rules for the two zones we care about — no date crate on the server.
 fn today_utc() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0) as i64;
-    let days = secs.div_euclid(86_400);
+    civil_day(secs + metrics_tz_offset(secs))
+}
+
+/// The zone name as configured (echoed to scrai-admin's table header).
+fn metrics_tz_name() -> String {
+    std::env::var("SCRAI_METRICS_TZ").ok().filter(|v| !v.trim().is_empty()).unwrap_or_else(|| "UTC".into())
+}
+
+/// Seconds to ADD to UTC for the configured metrics zone at instant `secs`.
+fn metrics_tz_offset(secs: i64) -> i64 {
+    let tz = metrics_tz_name();
+    match tz.trim() {
+        "UTC" | "Etc/UTC" | "Z" => 0,
+        // EU rule: CEST from the last Sunday of March 01:00 UTC to the last Sunday of October 01:00 UTC.
+        "Europe/Berlin" | "Europe/Vienna" | "Europe/Zurich" | "Europe/Paris" | "Europe/Amsterdam" | "Europe/Rome" | "Europe/Madrid" => {
+            let (y, _, _) = civil_from_days(secs.div_euclid(86_400));
+            let start = last_sunday(y, 3) * 86_400 + 3_600;
+            let end = last_sunday(y, 10) * 86_400 + 3_600;
+            if secs >= start && secs < end { 7_200 } else { 3_600 }
+        }
+        // US rule: PDT from the second Sunday of March 02:00 local (10:00 UTC) to the
+        // first Sunday of November 02:00 local (09:00 UTC).
+        "America/Los_Angeles" | "US/Pacific" | "PST8PDT" => {
+            let (y, _, _) = civil_from_days(secs.div_euclid(86_400));
+            let start = nth_sunday(y, 3, 2) * 86_400 + 10 * 3_600;
+            let end = nth_sunday(y, 11, 1) * 86_400 + 9 * 3_600;
+            if secs >= start && secs < end { -7 * 3_600 } else { -8 * 3_600 }
+        }
+        // fixed offset: "+0200", "-0800", "+02:00"
+        s => {
+            let t = s.replace(':', "");
+            let sign = if t.starts_with('-') { -1 } else { 1 };
+            let digits: String = t.trim_start_matches(['+', '-']).chars().take(4).collect();
+            match (digits.get(0..2).and_then(|h| h.parse::<i64>().ok()), digits.get(2..4).and_then(|m| m.parse::<i64>().ok())) {
+                (Some(h), Some(m)) if h <= 14 && m < 60 => sign * (h * 3_600 + m * 60),
+                _ => {
+                    eprintln!("scrai-server: SCRAI_METRICS_TZ={s:?} not understood — using UTC");
+                    0
+                }
+            }
+        }
+    }
+}
+
+/// `YYYY-MM-DD` for a (zone-shifted) unix timestamp.
+fn civil_day(secs: i64) -> String {
+    let (y, m, d) = civil_from_days(secs.div_euclid(86_400));
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// Days since 1970-01-01 of the last Sunday of `month` in `year`.
+fn last_sunday(year: i64, month: u32) -> i64 {
+    let (ny, nm) = if month == 12 { (year + 1, 1) } else { (year, month + 1) };
+    let last = days_from_civil(ny, nm, 1) - 1;
+    last - (last + 4).rem_euclid(7) // 1970-01-01 was a Thursday (4)
+}
+
+/// Days since 1970-01-01 of the `n`-th Sunday of `month` in `year`.
+fn nth_sunday(year: i64, month: u32, n: i64) -> i64 {
+    let first = days_from_civil(year, month, 1);
+    let first_sunday = first + (7 - (first + 4).rem_euclid(7)) % 7;
+    first_sunday + (n - 1) * 7
+}
+
+/// Howard Hinnant's days_from_civil.
+fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let mp = if m > 2 { m - 3 } else { m + 9 } as i64;
+    let doy = (153 * mp + 2) / 5 + d as i64 - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+/// Howard Hinnant's civil_from_days → (year, month, day).
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
     let z = days + 719_468;
     let era = (if z >= 0 { z } else { z - 146_096 }) / 146_097;
     let doe = z - era * 146_097;
@@ -617,7 +702,48 @@ fn today_utc() -> String {
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = era * 400 + yoe + if m <= 2 { 1 } else { 0 };
-    format!("{y:04}-{m:02}-{d:02}")
+    (y, m as u32, d as u32)
+}
+
+#[cfg(test)]
+mod metrics_day_tests {
+    use super::*;
+    fn at(y: i64, m: u32, d: u32, h: i64) -> i64 { days_from_civil(y, m, d) * 86_400 + h * 3_600 }
+    #[test]
+    fn civil_round_trips() {
+        for &(y, m, d) in &[(1970, 1, 1), (2000, 2, 29), (2026, 8, 28), (2026, 12, 31), (2100, 3, 1)] {
+            assert_eq!(civil_from_days(days_from_civil(y, m, d)), (y, m, d));
+        }
+        assert_eq!(civil_day(at(2026, 8, 28, 10)), "2026-08-28");
+    }
+    #[test]
+    fn dst_rules_2026() {
+        // EU: 2026-03-29 and 2026-10-25 are the last Sundays; switch at 01:00 UTC
+        assert_eq!(civil_from_days(last_sunday(2026, 3)), (2026, 3, 29));
+        assert_eq!(civil_from_days(last_sunday(2026, 10)), (2026, 10, 25));
+        // US: second Sunday of March 2026 = 8th, first Sunday of November = 1st
+        assert_eq!(civil_from_days(nth_sunday(2026, 3, 2)), (2026, 3, 8));
+        assert_eq!(civil_from_days(nth_sunday(2026, 11, 1)), (2026, 11, 1));
+    }
+    #[test]
+    fn berlin_and_pacific_offsets() {
+        std::env::set_var("SCRAI_METRICS_TZ", "Europe/Berlin");
+        assert_eq!(metrics_tz_offset(at(2026, 8, 28, 10)), 7_200);   // summer
+        assert_eq!(metrics_tz_offset(at(2026, 1, 15, 10)), 3_600);   // winter
+        assert_eq!(metrics_tz_offset(at(2026, 3, 29, 0)), 3_600);    // an hour before the switch
+        assert_eq!(metrics_tz_offset(at(2026, 3, 29, 1)), 7_200);    // at the switch
+        // 23:30 UTC on the 27th is already the 28th in Berlin
+        assert_eq!(civil_day(at(2026, 8, 27, 23) + 1_800 + metrics_tz_offset(at(2026, 8, 27, 23))), "2026-08-28");
+        std::env::set_var("SCRAI_METRICS_TZ", "America/Los_Angeles");
+        assert_eq!(metrics_tz_offset(at(2026, 8, 28, 10)), -7 * 3_600);
+        assert_eq!(metrics_tz_offset(at(2026, 12, 1, 10)), -8 * 3_600);
+        // 03:00 UTC on the 28th is still the 27th in Los Angeles
+        assert_eq!(civil_day(at(2026, 8, 28, 3) + metrics_tz_offset(at(2026, 8, 28, 3))), "2026-08-27");
+        std::env::set_var("SCRAI_METRICS_TZ", "+02:00");
+        assert_eq!(metrics_tz_offset(0), 7_200);
+        std::env::set_var("SCRAI_METRICS_TZ", "UTC");
+        assert_eq!(metrics_tz_offset(0), 0);
+    }
 }
 
 /// ANSI color pair (start, reset) for a request label — one color per protocol
