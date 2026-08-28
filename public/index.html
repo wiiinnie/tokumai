@@ -340,6 +340,11 @@
   .sizenote.rust{color:var(--rust);opacity:1;font-size:12px;line-height:1.5}
   .msg.err .body{color:var(--rust)}
   .msg .body a.alink{color:var(--signal);text-decoration:underline;text-underline-offset:2px;word-break:break-all;cursor:pointer}
+  /* small action row under a message: Cancel while a request runs, Resend after an empty/declined answer */
+  .msgacts{display:flex;gap:8px;margin-top:10px}
+  .msgact{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:11px;color:var(--muted);background:transparent;border:1px solid var(--line);border-radius:7px;padding:5px 10px;cursor:pointer;min-height:30px}
+  .msgact:hover{color:var(--bone);border-color:var(--muted)}
+  .msgact.rust{color:var(--rust);border-color:color-mix(in srgb,var(--rust) 45%,var(--line))}
   .retrybtn{display:inline-flex;align-items:center;gap:6px;margin-top:10px;padding:6px 12px;border-radius:8px;
     border:1px solid var(--rust);background:transparent;color:var(--rust);font:inherit;font-size:13px;cursor:pointer;transition:.15s}
   .retrybtn:hover{background:color-mix(in srgb,var(--rust) 14%,transparent)}
@@ -1759,7 +1764,7 @@
     t.innerHTML=`<div class="wrap">`+messages.map((m,mi)=>`
       <div class="msg ${m.role}">
         <div class="who">${m.role==='you'?'you':(m.role==='err'?'error':'scrai')}${m.role==='ai'&&m.model?`<span class="viamodel">${esc(m.model)}</span>`:''}</div>
-        <div class="body">${bodyHtml(m,mi)}${(m.role==='ai'&&m.note)?`<div class="sizenote${m.noteKind?' '+m.noteKind:''}">${esc(m.note)}</div>`:''}${(devCost&&m.role==='ai'&&m.audit)?auditDiv(m.audit):''}${(devCost&&m.role==='you'&&m.xfer)?xferDiv(m.xfer):''}${(m.role==='err'&&m.retry)?`<button class="retrybtn" data-click="retryMsg" data-args="${mi}">↻ Retry</button>`:''}</div>
+        <div class="body">${bodyHtml(m,mi)}${(m.role==='ai'&&m.note)?`<div class="sizenote${m.noteKind?' '+m.noteKind:''}">${esc(m.note)}</div>`:''}${(devCost&&m.role==='ai'&&m.audit)?auditDiv(m.audit):''}${(devCost&&m.role==='you'&&m.xfer)?xferDiv(m.xfer):''}${(m.role==='err'&&m.retry)?`<button class="retrybtn" data-click="retryMsg" data-args="${mi}">↻ Retry</button>`:''}${(m.role==='ai'&&m.streaming)?`<div class="msgacts"><button class="msgact rust" data-click="cancelMsg" data-args="${mi}">✕ Cancel</button></div>`:''}${(m.role==='ai'&&!m.streaming&&m.canResend)?`<div class="msgacts"><button class="msgact" data-click="resendMsg" data-args="${mi}" title="Send the same question again with the currently selected model">↻ Resend</button></div>`:''}</div>
       </div>`).join("")+`</div>`;
     if(pinQuestion){ pinLastQuestion(t); }
     else { t.style.paddingBottom=""; setTop(t, followStream ? t.scrollHeight : prevTop); }
@@ -2626,6 +2631,22 @@
   // Re-send a prompt whose send failed. Drop the failed question + its error bubble
   // and resend the SAME text via sendMsg's override. A prior attachment is not
   // re-sent in v1 (matching how history attachments are handled).
+  // Cancel the in-flight request: Rust stops waiting (the request itself already left —
+  // it may still be processed and billed; the error bubble's Retry replays it idempotently).
+  async function cancelMsg(mi){
+    const m=messages[mi]; if(!m || !m.streaming) return;
+    setStatus("cancelling…");
+    try{ await Backend.cancelChat(); }catch(e){ setStatus("cancel failed: "+((e&&e.message)||e)); }
+  }
+  // Resend the question above this answer as a FRESH request with the currently
+  // selected model (the answer was empty/declined; the user likely switched models).
+  function resendMsg(mi){
+    const m=messages[mi]; if(!m || m.role!=='ai') return;
+    const prev=messages[mi-1]; if(!prev || prev.role!=='you' || !(prev.text||"").trim()) return;
+    const text=prev.text.trim();
+    messages.splice(mi-1, 2); renderThread();
+    guardBypass=true; sendMsg({ text, fresh:true });
+  }
   function retryMsg(mi){
     const m=messages[mi]; if(!m || m.role!=='err' || !m.retry) return;
     const text=(m.retry.text||"").trim();
@@ -2662,6 +2683,9 @@
   async function sendMsg(override){
     const el=$("input");
     const isRetry = !!(override && typeof override.text==="string");
+    // replay = resend the SAME signed request (idempotent, no second charge); a "fresh"
+    // resend (Resend button) builds a new request for the currently selected model.
+    const replay = isRetry && !(override && override.fresh);
     const text = isRetry ? override.text.trim() : el.value.trim();
     if(busy||!currentModel) return;
     if(scanning){ setStatus("scanning attachment on-device — one moment…"); return; }   // don't send until the guard scan finishes
@@ -2767,7 +2791,7 @@
     // downgrade (2K on Lite → 1K) is told to the user, not silently swallowed.
     const reqSize = imageSize(), reqLabel = $("mName").textContent || currentModel;
     dlProg=null;
-    Backend.chat({ model: currentModel, messages: sendMessages, maxTokens: 4096, free: isFree, live: useLive, thinkingBudget: thinkingBudget(), bigReply: modelKind === "image", retry: isRetry, imageSize: reqSize }, {
+    Backend.chat({ model: currentModel, messages: sendMessages, maxTokens: 4096, free: isFree, live: useLive, thinkingBudget: thinkingBudget(), bigReply: modelKind === "image", retry: replay, imageSize: reqSize }, {
       // Real lifecycle signals drive the status line: request fully sent →
       // "Thinking…", which holds until the answer itself takes over.
       onPhase:(p,info)=>{
@@ -2790,7 +2814,14 @@
         if(!tFirst) tFirst=performance.now();                       // image reply: no deltas
         if(typeof evt.balance==="number"){ balance=evt.balance; if(typeof evt.held==="number") held=evt.held; renderBal(); }
         if(Array.isArray(evt.images) && evt.images.length) ai.images=evt.images;
-        if(!ai.text && !(ai.images&&ai.images.length)) ai.text="(the model returned no content)";
+        if(!ai.text && !(ai.images&&ai.images.length)){
+          if(modelKind==="image"){
+            // a question sent to a painter — older servers answer with nothing at all
+            ai.note="This is an image model — it draws pictures from a description and can't answer questions. Pick a text model (e.g. Gemini 3.5 Flash-Lite) and tap Resend, or describe the picture you want.";
+            ai.noteKind="rust";
+          } else ai.text="(the model returned no content)";
+          ai.canResend=true;
+        }
         // Dev cost-audit: provider cost + what we charged + round-trip timings, per answer.
         const bf = evt.usage && evt.usage.billing;
         const timing = { ms: Math.round(performance.now()-t0), net: tSent ? Math.round(tFirst-tSent) : 0 };
@@ -2799,7 +2830,7 @@
         if(drawn) ai.audit.size = drawn;
         // An empty Gemini answer arrives as "Declined by Google (REASON): …" from the server
         // (finishReason / blockReason translated) — show it as a note, not as model prose.
-        if(/^Declined by Google \(/.test(ai.text||"")){ ai.note = ai.text; ai.noteKind = "rust"; ai.text = ""; }
+        if(/^(Declined by Google|No picture from Google) \(/.test(ai.text||"")){ ai.note = ai.text; ai.noteKind = "rust"; ai.text = ""; ai.canResend = true; }
         // Server clamps an unsupported size to the model's largest (Lite: 1K) instead of
         // failing — say so, and that the bill is for the size actually drawn.
         if(drawn && (ai.images&&ai.images.length) && drawn!==reqSize) ai.note = `Drawn at ${drawn} — ${reqSize} isn't supported by ${reqLabel}. Billed at ${drawn}.`;
@@ -4238,6 +4269,7 @@
   // expose for inline handlers
   Object.assign(window,{ pickModel, copyPhrase, newChat, openSession, deleteSession, exportSession, toggleMenu, selectModelIdx,
     autogrow, onKey, sendMsg, retryMsg, showHandover, downloadHandover, closeHandover, pickImport, importHandover,
+    cancelMsg, resendMsg,
     openBuy, closeBuy, buyTier, buyOrInvoice, copyUri, openAccount, closeAccount, doAccountNew, doAccountReveal, doAccountRestore, doAccountDelete, doMigrate, doRedeem, redeemSliderChanged, startQrScan, stopQrScan,
     showRestore, askNew, cancelAcctView, saveServer, srvSelected, qNav, scrollToBottom, reopenGuard, checkCredit,
     openEntryPicker, showExitInfo, chooseGateway, closeGw, filterGw,

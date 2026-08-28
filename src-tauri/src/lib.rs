@@ -1321,6 +1321,13 @@ fn paid_chat_reply(app: &AppHandle, resp: &Value, price_warning: Value) -> Value
     })
 }
 
+/// UI Cancel: stop waiting for the in-flight mixnet reply / chunk download. The request
+/// is not withdrawn (it already left); the pending chat stays set for an idempotent Retry.
+#[tauri::command]
+fn cancel_chat(transport: State<'_, Arc<Transport>>) {
+    transport.cancel_in_flight();
+}
+
 /// Resolve chunk references in a chat reply's `images[]` (server `replies.rs`): every
 /// `{mimeType, ref, chunks, bytes}` becomes a plain `{mimeType, data}` by fetching its
 /// `image.chunk` pieces and concatenating the base64 in `seq` order. Inline images pass
@@ -2085,7 +2092,7 @@ pub fn run() {
             state, set_server, account_new, account_reveal, account_restore, account_delete, account_migrate_qr,
             invoice, invoice_status, invoice_cancel, ocr_scan, pdf_text, pdf_ocr, pdf_pages, collect, redeem, chat,
             smart_available, smart_detect, coconut_redeem,
-            mixnet_route, mixnet_ping, list_entry_gateways, set_entry_gateway, set_mixnet_perf, open_external, save_image,
+            mixnet_route, mixnet_ping, cancel_chat, list_entry_gateways, set_entry_gateway, set_mixnet_perf, open_external, save_image,
             share_text, upload_begin, upload_chunk, upload_pipeline, pick_image, open_account_security
         ])
         .run(tauri::generate_context!())

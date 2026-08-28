@@ -880,11 +880,16 @@ pub fn decline_message(finish: Option<&str>, block: Option<&str>, image_model: b
             "the request tripped its content policy. Rephrase it and try again",
         "MAX_TOKENS" =>
             "the reply ran out of output budget while thinking. Lower the reasoning depth or ask for something shorter",
+        // A clean STOP with nothing in it: on an image model that is almost always a
+        // question sent to a painter — say so instead of "(no content)".
+        "STOP" if image_model =>
+            "this model draws pictures from a description and can't answer questions. Pick a text model (e.g. Gemini 3.5 Flash-Lite) and resend — or describe the picture you want",
         "STOP" => return None,
         _ => "no content came back",
     };
     let billed = if image_model { "Only the model's reasoning was billed — no picture." } else { "Only the tokens it used were billed." };
-    Some(format!("Declined by Google ({reason}): {why}. {billed}"))
+    let head = if reason == "STOP" { "No picture from Google (STOP)".to_string() } else { format!("Declined by Google ({reason})") };
+    Some(format!("{head}: {why}. {billed}"))
 }
 
 async fn gemini(
@@ -1154,9 +1159,12 @@ mod tests {
         let m = decline_message(Some("STOP"), Some("PROHIBITED_CONTENT"), false).unwrap();
         assert!(m.contains("PROHIBITED_CONTENT") && m.contains("content policy") && !m.contains("picture"));
         assert!(decline_message(Some("MAX_TOKENS"), None, false).unwrap().contains("reasoning depth"));
-        // a normal stop with nothing to say is not a decline
-        assert!(decline_message(Some("STOP"), None, true).is_none());
+        // a normal stop with nothing to say is not a decline on a TEXT model …
+        assert!(decline_message(Some("STOP"), None, false).is_none());
         assert!(decline_message(None, None, true).is_none());
+        // … but on an image model it means "you asked a painter a question"
+        let m = decline_message(Some("STOP"), None, true).unwrap();
+        assert!(m.starts_with("No picture from Google (STOP)") && m.contains("text model"));
     }
 
     use super::*;

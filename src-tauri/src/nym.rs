@@ -94,6 +94,11 @@ pub struct Transport {
     /// resumes the fetch — the picture is already paid for and staged on the server —
     /// instead of generating (and charging for) a brand-new one.
     staged_download: Mutex<Option<StagedDownload>>,
+    /// Fired by the UI's Cancel: every wait on the mixnet (chat reply, chunk download)
+    /// returns early with a "cancelled" error. The request itself is NOT withdrawn — it
+    /// already left for the mixnet and the server may still process (and bill) it; the
+    /// pending chat stays set, so Retry replays it idempotently instead of paying twice.
+    cancel: tokio::sync::Notify,
 }
 
 /// The state of a chunked picture download: the chat reply holding the chunk
@@ -119,7 +124,13 @@ impl Transport {
             perf: std::sync::Mutex::new((200, 15, 20, true)),
             pending_chat: Mutex::new(None),
             staged_download: Mutex::new(None),
+            cancel: tokio::sync::Notify::new(),
         }
+    }
+
+    /// Cancel whatever wait is in flight (see `cancel`). No-op when nothing is waiting.
+    pub fn cancel_in_flight(&self) {
+        self.cancel.notify_waiters();
     }
 
     /// Park an unfinished picture download so a retry can resume it.
@@ -265,14 +276,19 @@ impl Transport {
                 return Err("upload timed out — reconnecting on the next attempt".into());
             };
             let poll = remaining.min(Duration::from_secs(5));
-            let got = match tokio::time::timeout(poll, client.wait_for_messages()).await {
-                Ok(Some(b)) => Some(b),
-                Ok(None) => {
-                    *guard = None;
-                    self.mark_dead();
-                    return Err("mixnet stream ended — reconnecting on the next attempt".into());
-                }
-                Err(_) => None, // poll slice elapsed with no message — check the stall below
+            let got = tokio::select! {
+                r = tokio::time::timeout(poll, client.wait_for_messages()) => match r {
+                    Ok(Some(b)) => Some(b),
+                    Ok(None) => {
+                        *guard = None;
+                        self.mark_dead();
+                        return Err("mixnet stream ended — reconnecting on the next attempt".into());
+                    }
+                    Err(_) => None, // poll slice elapsed with no message — check the stall below
+                },
+                // Cancelled from the UI: the chunks received so far are kept by the caller
+                // (staged download), so Retry resumes instead of re-fetching everything.
+                _ = self.cancel.notified() => return Err("cancelled — Retry resumes the download".into()),
             };
             if let Some(batch) = got {
                 for m in batch {
@@ -608,6 +624,8 @@ impl Transport {
 
         const TIMEOUT_MSG: &str =
             "no reply from the mixnet in time — reconnecting on the next attempt";
+        const CANCELLED_MSG: &str =
+            "cancelled — the request already left for the mixnet and may still be processed; Retry replays it without a second charge";
         let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
         loop {
             let Some(remaining) = deadline.checked_duration_since(tokio::time::Instant::now())
@@ -616,18 +634,18 @@ impl Transport {
                 self.mark_dead();
                 return Err(TIMEOUT_MSG.into());
             };
-            let batch = match tokio::time::timeout(
-                remaining,
-                guard.as_mut().unwrap().wait_for_messages(),
-            )
-            .await
-            {
-                Ok(b) => b,
-                Err(_) => {
-                    *guard = None;
-                    self.mark_dead();
-                    return Err(TIMEOUT_MSG.into());
-                }
+            let batch = tokio::select! {
+                r = tokio::time::timeout(remaining, guard.as_mut().unwrap().wait_for_messages()) => match r {
+                    Ok(b) => b,
+                    Err(_) => {
+                        *guard = None;
+                        self.mark_dead();
+                        return Err(TIMEOUT_MSG.into());
+                    }
+                },
+                // Cancelled from the UI: stop waiting, keep the client alive. The pending
+                // request stays recorded so a later Retry replays it (no second charge).
+                _ = self.cancel.notified() => return Err(CANCELLED_MSG.into()),
             };
             let Some(messages) = batch else {
                 *guard = None;

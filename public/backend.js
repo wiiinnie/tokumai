@@ -104,6 +104,7 @@ const httpBackend = {
   // No mixnet in the dev web backend — report an empty route.
   mixnetRoute: () => Promise.resolve({ entry: null, exit: null, chosen: null }),
   mixnetPing: () => Promise.reject(new Error("mixnet ping is native-only")),
+  cancelChat: () => Promise.resolve(),
   listEntryGateways: () => Promise.resolve([]),
   setEntryGateway: () => Promise.resolve({ entry_gateway: null }),
   setMixnetPerf: () => Promise.resolve({}), // dev backend has no mixnet
@@ -155,6 +156,8 @@ const tauriBackend = (invoke) => ({
   redeem: () => invoke("redeem"),
   mixnetRoute: () => invoke("mixnet_route"),
   mixnetPing: () => invoke("mixnet_ping"),
+  // Stop waiting for the in-flight reply; the pending request stays replayable.
+  cancelChat: () => invoke("cancel_chat"),
   listEntryGateways: () => invoke("list_entry_gateways"),
   setEntryGateway: (id) => invoke("set_entry_gateway", { id }),
   setMixnetPerf: (coverMs, mixMs, sendMs, continuous) => invoke("set_mixnet_perf", { coverMs, mixMs, sendMs, continuous }),
@@ -236,6 +239,7 @@ export const Backend = {
   redeem: () => pick("redeem"),
   mixnetRoute: () => pick("mixnetRoute"),
   mixnetPing: () => pick("mixnetPing"),
+  cancelChat: () => pick("cancelChat"),
   listEntryGateways: () => pick("listEntryGateways"),
   setEntryGateway: (id) => pick("setEntryGateway", id),
   setMixnetPerf: (coverMs, mixMs, sendMs, continuous) => pick("setMixnetPerf", coverMs, mixMs, sendMs, continuous),
