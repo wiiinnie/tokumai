@@ -57,10 +57,11 @@ account — in the test a purchase is linkable to a tester. The site says so.
 ## VPS setup (once)
 
 1. `.env` — add the block from `.env.example` ("Testnet faucet"): `SCRAI_TESTNET=1`,
-   `SCRAI_FAUCET_URL`, `SCRAI_FAUCET_MNEMONIC` (quoted; a dedicated account holding a
-   little real NYM — the NYM rail runs on Nyx mainnet, the sandbox chain has no usable
-   public endpoints), `SCRAI_FAUCET_RPC=https://rpc.nymtech.net`, optionally explorer +
-   iOS links. The faucet prints its address at boot — fund that one.
+   `SCRAI_FAUCET_URL`, `SCRAI_FAUCET_MNEMONIC` (quoted; a dedicated account on the chain
+   the server watches — with `NYX_LCD_URL_TESTNET=https://validator-sandbox-1.nymtech.net/api`
+   that is the Nym sandbox, funded with sandbox NYM), `SCRAI_FAUCET_RPC` = the root of
+   that validator URL (`https://validator-sandbox-1.nymtech.net`; the LCD is its `/api`),
+   optionally explorer + iOS links. The faucet prints its address at boot — fund that one.
 2. `scripts/deploy.sh` builds all three binaries, installs `scrai-faucet.service` and
    enables it when `SCRAI_TESTNET=1`. The root-owned apply script changed with this
    feature — run `scripts/deploy.sh --install-apply` once (sudo prompt) before the
