@@ -120,11 +120,20 @@ echo "→ 1/4  sync sources → $TARGET:~/scrai-stage/  (core/, server/, pricing
 # --delete prunes removed source files but leaves everything excluded ('*')
 # alone on the receiver — i.e. the VPS-generated Cargo.toml and the target/
 # build cache survive between deploys.
-rsync -az --delete -e "ssh ${SSH_OPTS[*]}" \
+# server/fuzz/ is the cargo-fuzz workspace: its ASan target/ dir is gigabytes and the
+# VPS never needs any of it — excluded BEFORE the /server/*** include (first match wins).
+# Live progress so a big sync is visibly moving (progress2 needs rsync ≥ 3.1; openrsync
+# on macOS falls back to per-file --progress).
+if rsync --info=progress2 --version >/dev/null 2>&1; then PROG=(--info=progress2); else PROG=(--progress); fi
+rsync -az --delete -e "ssh ${SSH_OPTS[*]}" ${PROG[@]+"${PROG[@]}"} \
+  --exclude='/server/fuzz/' \
   --include='/core/***' --include='/server/***' \
   --include='/pricing.json' --include='/Cargo.lock' \
   --exclude='*' \
   "$SRC/" "$TARGET:~/scrai-stage/"
+# A sync that ran before the exclude existed may have left the fuzz tree (GBs) on the
+# VPS — excluded paths survive --delete, so remove it explicitly.
+ssh "${SSH_OPTS[@]}" "$TARGET" 'rm -rf ~/scrai-stage/server/fuzz'
 
 echo "→ 2/4  toolchain check (rustup + build tools)"
 ssh -t "${SSH_OPTS[@]}" "$TARGET" '
