@@ -1,6 +1,6 @@
 {
   "name": "scrambleai",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "private": true,
   "description": "Anonymer AI-Chat übers Nym-Mixnet — stateless Adapter-Server + Web-Client (murmur)",
   "type": "module",

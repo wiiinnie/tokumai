@@ -1931,7 +1931,7 @@
   // dev HTTP bridge: always) — a shipped binary hides the Developer section and never
   // renders the audit, and a release server doesn't even send the provider cost.
   let devBuild = false;
-  const APP_VERSION = "0.3.1 (peroni)";   // codename from Howard Marks' "Mr Nice"
+  const APP_VERSION = "0.3.2 (peroni)";   // codename from Howard Marks' "Mr Nice"
   let devCost = false;
   // DEV upload readout: real file size ÷ pure transfer time (excludes chunk-split +
   // uploadBegin setup). Shown under a sent image only when the dev cost-audit is on.
@@ -4389,11 +4389,13 @@
   function isCardInv(inv){ const o=(inv&&inv.options||[])[0]; return !!(o && o.method==="card"); }
   function cardCheckoutOf(inv){ const o=(inv&&inv.options||[])[0]; return safeMollieUrl(inv.checkout || (o&&o.checkout) || ""); }
   // The card row exists only when the server sells by card; on iOS additionally behind CARD_ON_IOS.
-  function cardAvailable(){ return cardInfo.enabled && !testnetBuy && (CARD_ON_IOS || !isIOSNative()); }
+  // In testnet mode it stays visible but greyed, like the Bitcoin tile (the faucet pays NYM only).
+  function cardAvailable(){ return cardInfo.enabled && (CARD_ON_IOS || !isIOSNative()); }
   function syncCardRow(){
     const el=$("pmCard"); if(!el) return;
     el.style.display = cardAvailable() ? "" : "none";
-    if(!cardAvailable() && selectedMethod==="card") selectMethodQuiet("nyx");
+    el.classList.toggle("dis", testnetBuy);
+    if((!cardAvailable() || testnetBuy) && selectedMethod==="card") selectMethodQuiet("nyx");
   }
 
   function stopPoll(){ if(pollTimer){ clearInterval(pollTimer); pollTimer=null; } stopWatchTicker(); }
@@ -4420,6 +4422,7 @@
     }).join("");
     const btc = document.querySelector('#chooser .pm[data-method="btc"]');
     if(btc) btc.classList.toggle("dis", testnetBuy);   // the faucet pays NYM only
+    syncCardRow();                                      // card row: same rule, greyed in testnet
   }
   function syncTestnetRow(){
     const row=$("testnetRow"), chk=$("testnetChk"); if(!row||!chk) return;
