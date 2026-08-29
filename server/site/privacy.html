@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Privacy Policy — ScrambleAI</title>
+<style>
+  :root{--ink:#141210;--surface:#1C1917;--surface-2:#262220;--line:#332E2A;--bone:#ECE6DC;--muted:#9C938A;--signal:#CBA14E;--mix:#8AA06B;--rust:#C15A43;
+    --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;--body:'Hanken Grotesk',system-ui,-apple-system,sans-serif;--display:'Fraunces',Georgia,serif}
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--ink);color:var(--bone);font-family:var(--body);-webkit-font-smoothing:antialiased}
+  .site{max-width:820px;margin:0 auto;padding:0 24px 60px}
+  .nav{display:flex;align-items:center;justify-content:space-between;padding:22px 0;border-bottom:1px solid var(--line)}
+  .nav .logo{font-family:var(--display);font-weight:700;font-size:22px;color:var(--bone);text-decoration:none}.nav .logo b{color:var(--mix)}
+  .nav .links{display:flex;gap:22px;font-family:var(--mono);font-size:12.5px}.nav .links a{color:var(--signal);text-decoration:none}
+  h1{font-family:var(--display);font-weight:700;font-size:34px;margin:44px 0 6px}
+  .eyebrow{font-family:var(--mono);font-size:11.5px;letter-spacing:.12em;color:var(--signal);text-transform:uppercase;margin-top:44px}
+  .eyebrow + h1{margin-top:8px}
+  h2{font-family:var(--display);font-weight:700;font-size:20px;margin:30px 0 8px}
+  p,li{font-size:15.5px;line-height:1.6;color:var(--muted)}
+  p b,li b{color:var(--bone);font-weight:600}
+  ul,ol{padding-left:22px}
+  .box{border:1px solid var(--line);border-radius:14px;background:var(--surface);padding:18px 20px;margin:14px 0}
+  .box p{margin:4px 0}
+  .ph{color:var(--rust);font-family:var(--mono);font-size:13px}
+  .price{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:14px 0}
+  .price div{border:1px solid var(--line);border-radius:12px;background:var(--surface);padding:12px;text-align:center}
+  .price b{display:block;font-family:var(--display);font-size:22px;color:var(--bone)}.price small{font-family:var(--mono);font-size:10.5px;color:var(--muted)}
+  .foot{margin-top:60px;padding-top:18px;border-top:1px solid var(--line);font-family:var(--mono);font-size:11.5px;color:var(--muted);display:flex;gap:18px;flex-wrap:wrap}
+  .foot a{color:var(--signal);text-decoration:none}
+  a{color:var(--signal)}
+</style>
+</head>
+<body>
+<div class="site">
+  <div class="nav"><a class="logo" href="/">Scramble<b>AI</b></a><span class="links"><a href="/imprint">Imprint</a><a href="/terms">Terms</a><a href="/privacy">Privacy</a></span></div>
+  <div class="eyebrow">Privacy policy · Datenschutzerklärung</div>
+  <h1>Privacy</h1>
+  <p>Controller: <b>Hermes Blockchain Ventures — Matthias Winter (sole proprietorship / Einzelunternehmen)</b>, Schraudolphstraße 2A, 80799 München, Germany, <a href="mailto:hermes-stakepool@proton.me">hermes-stakepool@proton.me</a>. Version 29 August 2026.</p>
+
+  <h2>1. The short version</h2>
+  <p>ScrambleAI is built so that we learn as little as possible. There is no account, no e-mail, no sign-up. Your questions travel through the Nym mixnet, so our server never sees your IP address. Your conversation history stays on your device, encrypted. Credit is spent as blind-signed tokens that cannot be linked to the purchase that created them.</p>
+
+  <h2>2. This website</h2>
+  <p>The site is served by us. The web server keeps <b>no access logs with IP addresses</b> and sets no cookies. The testnet faucet form sends the invite code and the invoice memo you type to our server, where they are stored together with the transaction id of the test payment (purpose: pay one test invoice per code; legal basis Art. 6 (1) (b) GDPR; kept for the duration of the test programme).</p>
+
+  <h2>3. The app</h2>
+  <ul>
+    <li><b>Requests to AI models</b> reach our server through the Nym mixnet and are forwarded to the model provider (Google Gemini, Groq — see their terms in the app). We do not store the content of requests or answers. The provider processes the content to generate the answer; providers used under API terms state that API input is not used to train their models.</li>
+    <li><b>Session and credit data:</b> the server holds anonymous session keys, balances and burned token serials — needed to bill requests and prevent double spending (Art. 6 (1) (b) GDPR). None of it contains a name, address or IP.</li>
+    <li><b>Aggregate metrics:</b> per-day totals (number of requests, cost, distinct sessions) without identifiers.</li>
+    <li><b>Data on your device:</b> recovery phrase, history and settings are stored locally by the app; the privacy guard's checks run on the device only.</li>
+  </ul>
+
+  <h2>4. Payments</h2>
+  <p><b>Coins (NYM, Bitcoin):</b> we see the transaction on the public chain and the invoice memo; no personal data is collected. <b>Cards:</b> processed by <b>Mollie B.V.</b>, Keizersgracht 126, 1015 CW Amsterdam. Mollie collects the data needed for the payment (card details, name, e-mail if asked, IP address, browser data) as an independent controller under its own privacy policy: <a href="https://www.mollie.com/privacy" rel="noopener">mollie.com/privacy</a>. We receive from Mollie only the payment status, amount and our own random order id — never card data. Legal basis: Art. 6 (1) (b) GDPR; Mollie's retention follows its legal obligations (payment records, typically 7 years).</p>
+
+  <h2>5. Recipients and transfers</h2>
+  <p>Model providers (Google LLC, Groq Inc. — USA, under the EU–US Data Privacy Framework and/or standard contractual clauses) receive request content only; Mollie B.V. (Netherlands) receives card payment data; our hosting provider OVHcloud (EU data centre) operates the server. No data is sold or used for advertising.</p>
+
+  <h2>6. Your rights</h2>
+  <p>You have the rights of access, rectification, erasure, restriction, portability and objection (Art. 15–21 GDPR) and the right to complain to a supervisory authority (for us: Bayerisches Landesamt für Datenschutzaufsicht (BayLDA), Ansbach). Note that most data we hold is anonymous by design and cannot be attributed to you; for card payments, please quote the order id from the Mollie receipt.</p>
+
+  <h2>7. Contact</h2>
+  <p><a href="mailto:hermes-stakepool@proton.me">hermes-stakepool@proton.me</a> · Hermes Blockchain Ventures, 80799 München.</p>
+  <div class="foot"><span>© 2026 Hermes Blockchain Ventures</span><a href="/imprint">Imprint</a><a href="/terms">Terms</a><a href="/privacy">Privacy</a><a href="/">Downloads</a></div>
+</div>
+</body>
+</html>

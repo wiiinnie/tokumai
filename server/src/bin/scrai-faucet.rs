@@ -48,6 +48,11 @@ use scrai_server::faucet::{list_codes, mint, open_db as open_faucet_db, DEFAULT_
 use scrai_server::pay::{Pay, TestnetInv, TESTNET_USD};
 
 const SITE: &str = include_str!("../../site/index.html");
+/// Legal pages Mollie's onboarding checks for (imprint, terms, privacy) — static, no
+/// placeholders, served as-is.
+const PAGE_IMPRINT: &str = include_str!("../../site/imprint.html");
+const PAGE_TERMS: &str = include_str!("../../site/terms.html");
+const PAGE_PRIVACY: &str = include_str!("../../site/privacy.html");
 /// The site's screenshots, baked into the binary so a deploy ships them (Caddy only knows
 /// /dl/; nothing else to upload or configure). Served as GET /img/<name>.
 /// Where Mollie's hosted checkout sends the browser afterwards (`MOLLIE_REDIRECT_URL`
@@ -658,6 +663,9 @@ async fn handle(f: Arc<Faucet>, mut sock: tokio::net::TcpStream, peer: SocketAdd
     match (req.method.as_str(), req.path.as_str()) {
         ("GET", "/") | ("GET", "/index.html") => respond(&mut sock, 200, "text/html; charset=utf-8", site_html(&f.cfg.dl_dir).as_bytes()).await,
         ("GET", "/health") => respond(&mut sock, 200, "text/plain", b"ok").await,
+        ("GET", "/imprint") | ("GET", "/impressum") => respond(&mut sock, 200, "text/html; charset=utf-8", PAGE_IMPRINT.as_bytes()).await,
+        ("GET", "/terms") | ("GET", "/agb") => respond(&mut sock, 200, "text/html; charset=utf-8", PAGE_TERMS.as_bytes()).await,
+        ("GET", "/privacy") | ("GET", "/datenschutz") => respond(&mut sock, 200, "text/html; charset=utf-8", PAGE_PRIVACY.as_bytes()).await,
         // Mollie's redirect target after a card checkout (see PAID_HTML). Any query string
         // is ignored — nothing on this page depends on it.
         ("GET", "/paid") => respond(&mut sock, 200, "text/html; charset=utf-8", PAID_HTML.as_bytes()).await,
