@@ -43,7 +43,7 @@
   <p>ScrambleAI is built so that we learn as little as possible. There is no account, no e-mail, no sign-up. Your questions travel through the Nym mixnet, so our server never sees your IP address. Your conversation history stays on your device, encrypted. Credit is spent as blind-signed tokens that cannot be linked to the purchase that created them.</p>
 
   <h2>2. This website</h2>
-  <p>The site is served by us. The web server keeps <b>no access logs with IP addresses</b> and sets no cookies. The testnet faucet form sends the invite code and the invoice memo you type to our server, where they are stored together with the transaction id of the test payment (purpose: pay one test invoice per code; legal basis Art. 6 (1) (b) GDPR; kept for the duration of the test programme).</p>
+  <p>The site is served by us. <b>No access logs are kept</b> (request logging is switched off on both the reverse proxy and the application), <b>no cookies</b> are set, and no third-party scripts or analytics are loaded. Two honest limits: the proxy's error log can briefly record the IP address of a connection that failed (for example a broken TLS handshake), and the faucet counts claim attempts per IP address for one hour to stop brute force — hashed with a random key that changes at every restart, held in memory only, never written to disk. The testnet faucet form sends the invite code and the invoice memo you type to our server, where they are stored together with the transaction id of the test payment (purpose: pay one test invoice per code; legal basis Art. 6 (1) (b) GDPR; kept for the duration of the test programme).</p>
 
   <h2>3. The app</h2>
   <ul>

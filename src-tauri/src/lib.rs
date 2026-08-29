@@ -698,7 +698,7 @@ async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<V
 }
 
 #[tauri::command]
-fn set_server(app: AppHandle, address: String) -> Result<Value, String> {
+async fn set_server(app: AppHandle, transport: State<'_, Arc<Transport>>, address: String) -> Result<Value, String> {
     let dir = data_dir(&app)?;
     let mut w = wallet::load(&dir);
     let a = address.trim().to_string();
@@ -711,6 +711,13 @@ fn set_server(app: AppHandle, address: String) -> Result<Value, String> {
         Some(a)
     };
     wallet::save(&dir, &w)?;
+    // Everything learned from the previous server is stale now: catalogue, testnet flag,
+    // card info, update notice. Without this the app kept showing the old server's
+    // "TESTER" mode until a restart.
+    transport.clear_cached_models().await;
+    *SERVER_TESTNET.lock().unwrap_or_else(|e| e.into_inner()) = (false, None);
+    *SERVER_CARD.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    *SERVER_UPDATE.lock().unwrap_or_else(|e| e.into_inner()) = None;
     Ok(json!({ "server": w.server }))
 }
 

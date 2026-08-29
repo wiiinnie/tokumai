@@ -1,6 +1,8 @@
 [package]
 name = "scrai-server"
 version = "0.1.0"
+# three binaries live here (scrai-server, scrai-admin, scrai-faucet); plain `cargo run` = the server
+default-run = "scrai-server"
 edition = "2021"
 description = "ScrambleAI server — the mixnet service provider + t-of-n issuing authority. Ports the TS server to Rust and embeds the shared core."
 

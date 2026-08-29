@@ -4377,6 +4377,7 @@
 
   // ---------- buy credit ----------
   let pollTimer=null, countdownTimer=null, pollBusy=false, payDests=[], payMemos=[], activeInvoice=null, pendRefreshTimer=null;
+  let pollNow=null, pollFails=0;   // the active invoice's poll, so the resume path can fire it at once
   // Invoices raised but not yet paid — so an abandoned payment (e.g. wrong coin)
   // can be re-opened instead of vanishing. Persisted across app reloads; each entry
   // drops off automatically once its timer runs out.
@@ -4404,7 +4405,7 @@
     if((!cardAvailable() || testnetBuy) && selectedMethod==="card") selectMethodQuiet("nyx");
   }
 
-  function stopPoll(){ if(pollTimer){ clearInterval(pollTimer); pollTimer=null; } stopWatchTicker(); }
+  function stopPoll(){ if(pollTimer){ clearInterval(pollTimer); pollTimer=null; } pollNow=null; pollFails=0; stopWatchTicker(); }
   function stopCountdown(){ if(countdownTimer){ clearInterval(countdownTimer); countdownTimer=null; } }
   function stopPendRefresh(){ if(pendRefreshTimer){ clearInterval(pendRefreshTimer); pendRefreshTimer=null; } }
   // Amounts are SELECTION items (like the coins) — clicking only highlights, it
@@ -4545,7 +4546,9 @@
 
   function setPayStatus(kind, extra){
     const s=$("buyStatus"); if(!s) return;
-    if(kind==="waiting")        s.textContent="● Pending — waiting for your payment. Detected automatically; you can close this and come back.";
+    if(kind==="waiting")        s.textContent = (activeInvoice && isCardInv(activeInvoice))
+      ? "● Checking with Mollie — finish the checkout in your browser; the credit lands here on its own, usually within seconds of paying."
+      : "● Pending — waiting for your payment. Detected automatically; you can close this and come back.";
     else if(kind==="collecting")s.textContent="✓ Payment received — collecting your credit…";
     else if(kind==="collected") s.textContent=`✓ +${formatScrai(extra||0)} SCRAI collected — held, funds your next message.`;
     else if(kind==="expired")   s.textContent="Invoice expired — pick an amount to try again.";
@@ -4596,6 +4599,7 @@
       if(pollBusy) return; pollBusy=true;
       try{
         const st=await Backend.invoiceStatus(inv.invoiceId);
+        pollFails=0;
         updateWatch(st.watch);
         if(st.status==="paid"){
           stopPoll(); stopCountdown(); activeInvoice=null; removePending(inv.invoiceId); setPayStatus("collecting");
@@ -4603,9 +4607,15 @@
         }else if(st.status==="expired"){
           stopPoll(); stopCountdown(); activeInvoice=null; removePending(inv.invoiceId); showChooser(true); renderTiers(); renderPending(); setPayStatus("expired");
         }
-      }catch(_){ /* transient mixnet hiccup — try again next tick */ }
+      }catch(_){
+        // Two misses in a row = the route is probably dead (iOS froze us while the card
+        // checkout ran in Safari). Ask the resume path for a quick ping → rebuild if needed,
+        // instead of polling a dead socket for the rest of the invoice.
+        if(++pollFails>=2 && isTauri() && mixOn && mixState==="ok"){ pollFails=0; appResumed(0); }
+      }
       finally{ pollBusy=false; }
     };
+    pollNow=tick; pollFails=0;
     tick();                                   // immediate, so the watch shows fast
     pollTimer=setInterval(tick, 10000);
   }
@@ -4895,7 +4905,8 @@
       if(document.visibilityState==="hidden"){ hiddenAt=Date.now(); return; }
       if(document.visibilityState==="visible" && isTauri() && mixOn){
         const away = hiddenAt ? Date.now()-hiddenAt : 0; hiddenAt=0;
-        if(everConnected && away > 3000) appResumed(away); else refreshRoute();
+        const after = ()=>{ if(activeInvoice && pollNow) setTimeout(pollNow, 400); }; // an open invoice? check it now
+        if(everConnected && away > 3000) Promise.resolve(appResumed(away)).finally(after); else { refreshRoute(); after(); }
       }
     });
     // Connect progress from Rust (every reconnect after the first): drives the chip + card.

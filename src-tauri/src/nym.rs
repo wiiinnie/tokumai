@@ -372,6 +372,11 @@ impl Transport {
     pub async fn set_cached_models(&self, v: Value) {
         *self.models.lock().await = Some(v);
     }
+    /// Forget the catalogue — after a server change the next `state` must ask the NEW
+    /// server (its models, testnet flag, card info and update notice all come with it).
+    pub async fn clear_cached_models(&self) {
+        *self.models.lock().await = None;
+    }
 
     /// Set (or clear) the preferred entry gateway. Drops the live client so the
     /// next request re-attaches through the chosen gateway.
