@@ -34,8 +34,13 @@
   .btn.big{padding:14px 22px;font-size:15px}
   .btn.off{opacity:.45;cursor:not-allowed}
   .btn[disabled]{opacity:.5;cursor:wait}
-  .shot{border:1px solid var(--line);border-radius:16px;background:var(--surface);padding:22px;font-family:var(--mono);font-size:12.5px;line-height:1.6;color:var(--muted)}
-  .shot .y{color:var(--signal);font-weight:700}.shot .a{color:var(--mix);font-weight:700}.shot .k{color:var(--muted);font-size:11px}
+  /* hero: ONE real screenshot of the Mac app in a quiet window frame (click = full size) */
+  .shotwrap{display:flex;flex-direction:column;gap:10px}
+  .shot{appearance:none;border:1px solid var(--line);border-radius:14px;overflow:hidden;background:#0F0D0B;box-shadow:0 30px 80px rgba(0,0,0,.55);cursor:zoom-in;padding:0;display:block;width:100%}
+  .shot img{display:block;width:100%;height:auto}
+  .shot:hover,.shot:focus-visible{border-color:var(--mix);outline:none}
+  .shotcap{font-family:var(--mono);font-size:11px;letter-spacing:.06em;color:var(--muted);display:flex;justify-content:space-between}
+  .shotcap b{color:var(--signal);font-weight:500}
   .sec{padding:44px 48px;border-top:1px solid var(--line)}
   .eyebrow{font-family:var(--mono);font-size:11.5px;letter-spacing:.12em;color:var(--signal);text-transform:uppercase;margin-bottom:10px}
   .sec h2{font-family:var(--display);font-weight:700;font-size:34px;margin:0 0 10px}.sec h2 b{color:var(--mix)}
@@ -77,39 +82,14 @@
   .foot{display:flex;justify-content:space-between;gap:16px;padding:26px 48px;border-top:1px solid var(--line);font-family:var(--mono);font-size:11.5px;color:var(--muted)}
   @media (max-width:900px){
     .nav{padding:16px 18px}.nav .links{display:none}
-    .hero{display:block;padding:28px 18px 8px}.hero h1{font-size:34px}.hero p{font-size:15px}.shot{margin-top:22px}
+    .hero{display:block;padding:28px 18px 8px}.hero h1{font-size:34px}.hero p{font-size:15px}.shotwrap{margin-top:22px}
     .sec{padding:26px 18px}.sec h2{font-size:24px}.dl{grid-template-columns:1fr}.faucet{grid-template-columns:1fr}
     .foot{padding:18px;flex-direction:column;gap:6px}
   }
 
-  /* screenshots: 2 × 3 previews between Download and Testnet credit, click = full size */
-  .gal{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
-  @media (max-width:900px){.gal{grid-template-columns:repeat(2,1fr)}}
-  @media (max-width:560px){.gal{grid-template-columns:1fr}}
-  .tile{appearance:none;border:1px solid var(--line);border-radius:14px;background:var(--surface);padding:0;text-align:left;cursor:zoom-in;color:inherit;font:inherit;display:flex;flex-direction:column;overflow:hidden;transition:border-color .15s,transform .15s}
-  .tile:hover,.tile:focus-visible{border-color:var(--mix);transform:translateY(-2px);outline:none}
-  .tile:focus-visible .frame{box-shadow:inset 0 0 0 2px var(--signal)}
-  .tile .frame{display:block;background:#0F0D0B;border-bottom:1px solid var(--line);aspect-ratio:2/1}
-  .tile.mac img{width:100%;height:100%;object-fit:cover;object-position:top left;display:block}
-  .tile .cap{display:flex;flex-direction:column;gap:3px;padding:12px 14px 13px}
-  .tile .cap .os{font:500 10.5px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
-  .tile .cap .t{font-size:14px;font-weight:600}
-  .galnote{margin:14px 0 0;font-family:var(--mono);font-size:11.5px;color:var(--muted)}
-  .lb{position:fixed;inset:0;background:rgba(10,8,6,.9);display:none;align-items:center;justify-content:center;z-index:50;padding:28px}
+  .lb{position:fixed;inset:0;background:rgba(10,8,6,.92);display:none;align-items:center;justify-content:center;z-index:50;padding:28px;cursor:zoom-out}
   .lb[data-open]{display:flex}
-  .lb .slide{margin:0;max-width:min(1600px,96vw);display:flex;flex-direction:column;align-items:center;gap:14px}
-  .lb .slide[hidden]{display:none}
-  .lb .slide img{max-width:100%;max-height:82vh;border-radius:12px;border:1px solid var(--line);box-shadow:0 30px 80px rgba(0,0,0,.6);display:block}
-  .lb figcaption{text-align:center;max-width:720px;font-size:14.5px;color:var(--bone)}
-  .lb figcaption .os{font:500 10.5px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--signal);margin-right:8px}
-  .lb figcaption .d{display:block;margin-top:4px;color:var(--muted);font-size:13.5px;line-height:1.5}
-  .lb .x,.lb .nav{position:absolute;appearance:none;border:1px solid var(--line);background:var(--surface-2);color:var(--bone);border-radius:12px;cursor:pointer;font:600 22px var(--body);min-width:52px;min-height:52px;display:grid;place-items:center;z-index:2}
-  .lb .x{font-size:16px}
-  .lb .x{top:18px;right:18px}
-  .lb .nav{top:50%;transform:translateY(-50%)}.lb .prev{left:18px}.lb .next{right:18px}
-  .lb .x:hover,.lb .nav:hover,.lb .x:focus-visible,.lb .nav:focus-visible{border-color:var(--signal);outline:none}
-  .lb .cnt{position:absolute;bottom:18px;left:50%;transform:translateX(-50%);font:500 11.5px var(--mono);color:var(--muted);letter-spacing:.08em}
-  @media (prefers-reduced-motion:reduce){.tile{transition:none}.tile:hover{transform:none}}
+  .lb img{max-width:96vw;max-height:90vh;border-radius:12px;border:1px solid var(--line);box-shadow:0 30px 80px rgba(0,0,0,.6)}
 
   /* 04 · verify: one card per platform, the command is the thing to copy */
   .vf{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
@@ -129,7 +109,7 @@
 <div class="site">
   <div class="nav">
     <span class="logo">Scramble<b>AI</b></span>
-    <span class="links"><a href="#download">Download</a><a href="#shots">Screenshots</a><a href="#faucet">Testnet credit</a><a href="#how">How it works</a><a href="#verify">Verify a download</a></span>
+    <span class="links"><a href="#download">Download</a><a href="#faucet">Testnet credit</a><a href="#how">How it works</a><a href="#verify">Verify a download</a></span>
   </div>
 
   <div class="hero">
@@ -142,10 +122,9 @@
       </div>
       <p style="font-size:12px;margin-top:14px">{{VERSION}} · built on the Nym SDK · no account, no e-mail — a 24-word phrase is all you keep.</p>
     </div>
-    <div class="shot">
-      <span class="y">YOU</span><br>what does a mixnet add over a VPN?<br><br>
-      <span class="a">SCRAI</span> · gemini-3.5-flash-lite<br>
-      A VPN moves trust to one company that still sees everything. A mixnet reshuffles and delays packets across independent nodes, so no single party sees both who sent a message and where it went …
+    <div class="shotwrap">
+      <button class="shot" type="button" id="heroShot" aria-label="Enlarge the screenshot"><img src="/img/mac-chat.jpg" alt="ScrambleAI on macOS 0.3.2: a picture generated over five mixnet hops"></button>
+      <div class="shotcap"><span>macOS · {{VERSION_SHORT}} · the app, not a mock</span><b>click to enlarge</b></div>
     </div>
   </div>
 
@@ -203,21 +182,6 @@
         <div class="row">{{DL_ANDROID}}</div>
       </div>
     </div>
-  </div>
-
-  <div class="sec" id="shots">
-    <div class="eyebrow">Screenshots</div>
-    <h2>What you'll <b>see</b></h2>
-    <p class="lead">The desktop app, as it looks today. Click a picture for the full size.</p>
-    <div class="gal" id="gal">
-      <button class="tile mac" type="button" data-i="0" aria-label="Open screenshot: Chat over five mixnet hops"><span class="frame"><img src="/img/mac-chat.jpg" alt="Chat over five mixnet hops" loading="lazy"></span><span class="cap"><span class="os">macOS</span><span class="t">Chat over five mixnet hops</span></span></button>
-      <button class="tile mac" type="button" data-i="1" aria-label="Open screenshot: Pick a model, see its price"><span class="frame"><img src="/img/mac-picker.jpg" alt="Pick a model, see its price" loading="lazy"></span><span class="cap"><span class="os">macOS</span><span class="t">Pick a model, see its price</span></span></button>
-      <button class="tile mac" type="button" data-i="2" aria-label="Open screenshot: Data guard before you send"><span class="frame"><img src="/img/mac-guard.jpg" alt="Data guard before you send" loading="lazy"></span><span class="cap"><span class="os">macOS</span><span class="t">Data guard before you send</span></span></button>
-      <button class="tile mac" type="button" data-i="3" aria-label="Open screenshot: Ask for a picture"><span class="frame"><img src="/img/mac-imagegen.jpg" alt="Ask for a picture" loading="lazy"></span><span class="cap"><span class="os">macOS</span><span class="t">Ask for a picture</span></span></button>
-      <button class="tile mac" type="button" data-i="4" aria-label="Open screenshot: Pay in NYM, memo included"><span class="frame"><img src="/img/mac-pay.jpg" alt="Pay in NYM, memo included" loading="lazy"></span><span class="cap"><span class="os">macOS</span><span class="t">Pay in NYM, memo included</span></span></button>
-      <button class="tile mac" type="button" data-i="5" aria-label="Open screenshot: Tune the mixnet"><span class="frame"><img src="/img/mac-network.jpg" alt="Tune the mixnet" loading="lazy"></span><span class="cap"><span class="os">macOS</span><span class="t">Tune the mixnet</span></span></button>
-    </div>
-    <p class="galnote">macOS · Apple silicon · 0.3.0 — the Linux and Windows builds are the same interface</p>
   </div>
 
   <div class="sec" id="faucet">
@@ -347,30 +311,14 @@
   });
 })();
 </script>
-<div class="lb" id="lb" role="dialog" aria-modal="true" aria-label="Screenshot">
-  <button class="x" type="button" id="lbx" aria-label="Close">✕</button>
-  <button class="nav prev" type="button" id="lbp" aria-label="Previous">‹</button>
-  <button class="nav next" type="button" id="lbn" aria-label="Next">›</button>
-  <figure class="slide mac" data-i="0" hidden><img src="/img/mac-chat.jpg" alt="Chat over five mixnet hops"><figcaption><span class="os">macOS</span> <b>Chat over five mixnet hops</b><span class="d">Every reply rides the sphinx path shown top right — you · entry · mix · mix · mix · exit · model.</span></figcaption></figure>
-  <figure class="slide mac" data-i="1" hidden><img src="/img/mac-picker.jpg" alt="Pick a model, see its price"><figcaption><span class="os">macOS</span> <b>Pick a model, see its price</b><span class="d">Google and Groq models with their per-1k SCRAI cost; image models beside chat models.</span></figcaption></figure>
-  <figure class="slide mac" data-i="2" hidden><img src="/img/mac-guard.jpg" alt="Data guard before you send"><figcaption><span class="os">macOS</span> <b>Data guard before you send</b><span class="d">An IBAN, a name next to an address, a phone number — flagged on-device, nothing sent, you decide.</span></figcaption></figure>
-  <figure class="slide mac" data-i="3" hidden><img src="/img/mac-imagegen.jpg" alt="Ask for a picture"><figcaption><span class="os">macOS</span> <b>Ask for a picture</b><span class="d">Image models draw over the same path; the picture comes back through the mixnet in chunks.</span></figcaption></figure>
-  <figure class="slide mac" data-i="4" hidden><img src="/img/mac-pay.jpg" alt="Pay in NYM, memo included"><figcaption><span class="os">macOS</span> <b>Pay in NYM, memo included</b><span class="d">QR, address and the memo the chain watcher matches — on the testnet this is the memo you paste into the faucet.</span></figcaption></figure>
-  <figure class="slide mac" data-i="5" hidden><img src="/img/mac-network.jpg" alt="Tune the mixnet"><figcaption><span class="os">macOS</span> <b>Tune the mixnet</b><span class="d">Cover traffic, packet mixing delay, sending rate — the defaults are the most private; every slider is reversible.</span></figcaption></figure>
-  <div class="cnt" id="lbc"></div>
-</div>
+<div class="lb" id="lb" role="dialog" aria-modal="true" aria-label="Screenshot"><img src="/img/mac-chat.jpg" alt="ScrambleAI on macOS 0.3.2, full size"></div>
 <script>
 (function(){
-  var lb=document.getElementById('lb'), slides=[].slice.call(lb.querySelectorAll('.slide')), cnt=document.getElementById('lbc'), cur=0, opener=null;
-  function show(i){ cur=(i+slides.length)%slides.length; slides.forEach(function(s,j){ s.hidden = j!==cur; }); cnt.textContent=(cur+1)+' / '+slides.length; }
-  function open(i,btn){ opener=btn||null; show(i); lb.setAttribute('data-open',''); document.body.style.overflow='hidden'; document.getElementById('lbx').focus(); }
-  function close(){ lb.removeAttribute('data-open'); document.body.style.overflow=''; if(opener) opener.focus(); }
-  document.getElementById('gal').addEventListener('click',function(e){ var t=e.target.closest('.tile'); if(t) open(+t.getAttribute('data-i'),t); });
-  document.getElementById('lbx').addEventListener('click',close);
-  document.getElementById('lbp').addEventListener('click',function(){show(cur-1);});
-  document.getElementById('lbn').addEventListener('click',function(){show(cur+1);});
-  lb.addEventListener('click',function(e){ if(e.target===lb) close(); });
-  document.addEventListener('keydown',function(e){ if(!lb.hasAttribute('data-open')) return; if(e.key==='Escape') close(); else if(e.key==='ArrowLeft') show(cur-1); else if(e.key==='ArrowRight') show(cur+1); });
+  var lb=document.getElementById('lb'), b=document.getElementById('heroShot');
+  if(!lb||!b) return;
+  b.addEventListener('click',function(){ lb.setAttribute('data-open',''); });
+  lb.addEventListener('click',function(){ lb.removeAttribute('data-open'); });
+  document.addEventListener('keydown',function(e){ if(e.key==='Escape') lb.removeAttribute('data-open'); });
 })();
 </script>
 </body>

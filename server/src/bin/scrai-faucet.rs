@@ -95,11 +95,6 @@ const PAID_HTML: &str = r##"<!doctype html>
 
 const IMAGES: &[(&str, &[u8])] = &[
     ("mac-chat.jpg", include_bytes!("../../site/img/mac-chat.jpg")),
-    ("mac-picker.jpg", include_bytes!("../../site/img/mac-picker.jpg")),
-    ("mac-guard.jpg", include_bytes!("../../site/img/mac-guard.jpg")),
-    ("mac-imagegen.jpg", include_bytes!("../../site/img/mac-imagegen.jpg")),
-    ("mac-pay.jpg", include_bytes!("../../site/img/mac-pay.jpg")),
-    ("mac-network.jpg", include_bytes!("../../site/img/mac-network.jpg")),
 ];
 const MAX_HEAD: usize = 16 * 1024;
 const MAX_BODY: usize = 4 * 1024;
@@ -542,6 +537,9 @@ fn site_html(dl_dir: &Path) -> String {
     s = s.replace("{{SHA_MACOS}}", &sha("macos"));
     s = s.replace("{{SHA_WINDOWS}}", &sha("windows"));
     s = s.replace("{{SHA_APPIMAGE}}", &sha("appimage"));
+    // hero caption: just the number ("0.3.2"), or the build label when no manifest is published
+    let short = mver.clone().unwrap_or_else(|| "testnet build".into());
+    s = s.replace("{{VERSION_SHORT}}", &html_escape(&short));
     let version = mver.map(|v| format!("Testnet build {v}")).unwrap_or_else(|| env_or("SCRAI_SITE_VERSION", "testnet build"));
     s = s.replace("{{VERSION}}", &html_escape(&version));
     s = s.replace("{{TESTNET}}", if testnet_on() { "on" } else { "off" });
