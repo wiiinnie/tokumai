@@ -2,7 +2,7 @@ name: scrambleai
 options:
   bundleIdPrefix: com.scrambleai.app
   deploymentTarget:
-    iOS: 14.0
+    iOS: "15.0"
 fileGroups: [../../src]
 configs:
   debug: debug
@@ -31,6 +31,7 @@ targets:
       - path: Sources
       - path: Assets.xcassets
       - path: Externals
+        buildPhase: none
       - path: scrambleai_iOS
       - path: assets
         buildPhase: resources
@@ -40,6 +41,9 @@ targets:
       path: scrambleai_iOS/Info.plist
       properties:
         LSRequiresIPhoneOS: true
+        # Export compliance, answered once here instead of per build in App Store Connect:
+        # standard algorithms only (Nym: X25519/ChaCha20/AES/Blake; wallet: AES-GCM) → exempt.
+        ITSAppUsesNonExemptEncryption: false
         # Privacy usage descriptions MUST live here (not just in Info.plist) — xcodegen
         # regenerates Info.plist from project.yml, so a key only in the plist gets wiped and
         # the app crashes (TCC) the moment it touches the camera / photos / local network.
@@ -71,7 +75,7 @@ targets:
         ENABLE_BITCODE: false
         # Signing baked into project.yml so `xcodegen generate` / `tauri ios build` keep it
         # (setting the team only in the Xcode UI gets wiped on the next regeneration).
-        DEVELOPMENT_TEAM: 8KS4A265N9
+        DEVELOPMENT_TEAM: T23Z4LDMGV
         CODE_SIGN_STYLE: Automatic
         ARCHS: [arm64, x86_64]
         VALID_ARCHS: arm64  x86_64 

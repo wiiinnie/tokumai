@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "ScrambleAI",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "identifier": "com.scrambleai.app",
   "build": {
     "frontendDist": "../public",
@@ -52,6 +52,9 @@
     ],
     "macOS": {
       "signingIdentity": "-"
+    },
+    "iOS": {
+      "developmentTeam": "T23Z4LDMGV"
     },
     "windows": {
       "webviewInstallMode": { "type": "downloadBootstrapper" },

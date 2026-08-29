@@ -1936,7 +1936,7 @@
   // dev HTTP bridge: always) — a shipped binary hides the Developer section and never
   // renders the audit, and a release server doesn't even send the provider cost.
   let devBuild = false;
-  const APP_VERSION = "0.4.0 (ichnusa)";   // codename from Howard Marks' "Mr Nice"
+  const APP_VERSION = "0.4.1 (ichnusa)";   // codename from Howard Marks' "Mr Nice"
   let devCost = false;
   // DEV upload readout: real file size ÷ pure transfer time (excludes chunk-split +
   // uploadBegin setup). Shown under a sent image only when the dev cost-audit is on.
@@ -4017,14 +4017,17 @@
     const opts = (selVal===""?`<option value="" selected disabled>Choose a server…</option>`:"")
       + KNOWN_SERVERS.map((s,i)=>`<option value="k${i}"${selVal==="k"+i?" selected":""}>${esc(s.name)}</option>`).join("")
       + `<option value="__custom__"${selVal==="__custom__"?" selected":""}>Custom / manual…</option>`;
+    // The manual field shows the saved address only when THAT address is a manual one; after
+    // switching away from a known server it starts empty (nothing to delete first).
+    const prefill = knownIdx>=0 ? "" : cur;
     return `<select id="srvSelect" data-change="srvSelected" style="${SRV_STYLE}">${opts}</select>
-      ${custom?`<input id="srvInput" placeholder="id.enc@gateway — from your scrai-server" value="${escAttr(cur)}"
+      ${custom?`<input id="srvInput" placeholder="id.enc@gateway — from your scrai-server" value="${escAttr(prefill)}"
           autocorrect="off" autocapitalize="off" autocomplete="off" spellcheck="false" style="${SRV_STYLE}">
         <div class="btnrow"><button class="btn" data-click="saveServer">Save server</button></div>`:``}`;
   }
   function srvSelected(){
     const el=$("srvSelect"); const v=el?el.value:"";
-    if(v==="__custom__"){ serverCustom=true; renderAccount(); return; }
+    if(v==="__custom__"){ serverCustom=true; renderAccount(); setTimeout(()=>{ const i=$("srvInput"); if(i) i.focus(); },0); return; }
     const s=KNOWN_SERVERS[parseInt(v.slice(1),10)];
     if(s){ serverCustom=false; saveServerAddr(s.address); }
   }
@@ -4401,7 +4404,7 @@
     const el=$("pmCard"); if(!el) return;
     el.style.display = cardAvailable() ? "" : "none";
     { const nm=el.querySelector(".pmname"); if(nm) nm.textContent = cardLabelShort(); el.title = cardLabelLong()+" via Mollie (EU) — opens a checkout in your browser"; }
-    el.classList.toggle("dis", testnetBuy);
+    if(testnetBuy) el.style.display = "none";           // a testnet server sells nothing — no card row either
     if((!cardAvailable() || testnetBuy) && selectedMethod==="card") selectMethodQuiet("nyx");
   }
 
@@ -4415,7 +4418,9 @@
   function renderTiers(){
     // Testnet purchase: the $1 faucet tile joins the row and is the only one selectable —
     // the server refuses any other amount with testnet:true, this just makes that visible.
-    const list = testnetBuy ? [TESTNET_USD, ...tiers.filter(t=>Number(t)!==TESTNET_USD)] : tiers;
+    // On a testnet server the app sells nothing: the faucet-funded $1 is the only tile, and the
+    // coin / card rows are hidden entirely (not greyed) — there is no purchase to make here.
+    const list = testnetBuy ? [TESTNET_USD] : tiers;
     $("tierRow").innerHTML = list.map(t=>{
       // H6: `tiers` comes from the (untrusted) server — coerce to a plain integer so a
       // non-numeric entry can never inject markup into the Buy UI.
@@ -4429,6 +4434,8 @@
     }).join("");
     const btc = document.querySelector('#chooser .pm[data-method="btc"]');
     if(btc) btc.classList.toggle("dis", testnetBuy);   // the faucet pays NYM only
+    { const pm=document.querySelector('#chooser .paymethods'), lbl=document.querySelector('#chooser .grouplbl');
+      if(pm) pm.style.display = testnetBuy ? "none" : ""; if(lbl) lbl.style.display = testnetBuy ? "none" : ""; }
     syncCardRow();                                      // card row: same rule, greyed in testnet
   }
   function syncTestnetRow(){
@@ -4454,7 +4461,7 @@
     const el=$("continueRow"); if(!el) return;
     const coin = selectedMethod==="nyx" ? "NYM" : selectedMethod==="btc" ? "Bitcoin" : selectedMethod==="card" ? "card" : "Monero";
     el.innerHTML = selectedTier
-      ? `<button class="btn primary" style="width:100%" data-click="startPurchase">Continue — $${selectedTier}${testnetBuy?' testnet':''} ${selectedMethod==="card"?"by card ↗":"with "+coin+" →"}</button>`
+      ? `<button class="btn primary" style="width:100%" data-click="startPurchase">${testnetBuy?'Continue — raise the $1 testnet invoice →':`Continue — $${selectedTier} ${selectedMethod==="card"?"by card ↗":"with "+coin+" →"}`}</button>`
       : `<button class="btn" style="width:100%;opacity:.5;cursor:not-allowed" disabled>Pick an amount above</button>`;
   }
   function startPurchase(){ if(selectedTier!=null) buyOrInvoice(selectedTier); }
