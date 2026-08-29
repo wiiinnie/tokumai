@@ -70,10 +70,69 @@ pub fn card_enabled() -> bool {
     matches!(CardRail::from_env(), CardRail::Mollie { .. })
 }
 
-/// What the catalog reply tells the app about cards: whether the row exists at all and
-/// the smallest tile it may buy (one source of truth — never hardcoded in the client).
-pub fn card_info() -> Value {
-    json!({ "enabled": card_enabled(), "minUsd": card_min_usd() })
+/// What the catalog reply tells the app about cards: whether the row exists at all, the
+/// smallest tile it may buy, and which methods Mollie's checkout will offer (one source
+/// of truth — never hardcoded in the client). `methods` is what is enabled in the Mollie
+/// dashboard right now, fetched from `GET /v2/methods` and cached for 10 minutes, so
+/// switching PayPal or Wero on there changes the app's label without a build or deploy.
+pub async fn card_info() -> Value {
+    let enabled = card_enabled();
+    let methods = if enabled { mollie_methods().await } else { Vec::new() };
+    json!({ "enabled": enabled, "minUsd": card_min_usd(), "methods": methods })
+}
+
+/// `[{id, label}]` of the checkout methods enabled for our Mollie profile. Empty on any
+/// failure (the app then says "Card & more"). Cached: the catalog is fetched by every
+/// client start, Mollie's list changes once a quarter.
+async fn mollie_methods() -> Vec<Value> {
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+    static CACHE: Mutex<Option<(Instant, Vec<Value>)>> = Mutex::new(None);
+    if let Ok(c) = CACHE.lock() {
+        if let Some((at, m)) = c.as_ref() {
+            if at.elapsed() < Duration::from_secs(600) {
+                return m.clone();
+            }
+        }
+    }
+    let CardRail::Mollie { api_key, .. } = CardRail::from_env() else { return Vec::new() };
+    let fetched = match mollie(&api_key, crate::http::client().get(format!("{MOLLIE_API}/methods"))).await {
+        Ok(v) => v
+            .pointer("/_embedded/methods")
+            .and_then(|m| m.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|m| {
+                        let id = m.get("id").and_then(|i| i.as_str())?;
+                        // Mollie's `status` is "activated" for live methods; the list is
+                        // already filtered to active ones, but don't rely on it.
+                        if m.get("status").and_then(|s| s.as_str()).is_some_and(|s| s != "activated") {
+                            return None;
+                        }
+                        let label = match id {
+                            "creditcard" => "Card",
+                            "applepay" => "Apple Pay",
+                            "googlepay" => "Google Pay",
+                            "paypal" => "PayPal",
+                            "wero" => "Wero",
+                            "ideal" => "iDEAL",
+                            "bancontact" => "Bancontact",
+                            _ => m.get("description").and_then(|d| d.as_str()).unwrap_or(id),
+                        };
+                        Some(json!({ "id": id, "label": label }))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default(),
+        Err(e) => {
+            eprintln!("scrai-server: mollie /methods failed ({e:?}) — app shows the generic card label");
+            Vec::new()
+        }
+    };
+    if let Ok(mut c) = CACHE.lock() {
+        *c = Some((Instant::now(), fetched.clone()));
+    }
+    fetched
 }
 
 /// Testnet mode (`SCRAI_TESTNET=1`): the ONE extra thing it enables is a $1 invoice
@@ -1022,7 +1081,8 @@ impl CardRail {
             "amount": { "currency": currency, "value": format!("{usd}.00") },
             "description": "ScrambleAI credit",
             "redirectUrl": redirect_url,
-            "method": "creditcard",
+            // No `method`: the hosted checkout offers every method enabled in the Mollie
+            // dashboard (cards, PayPal, later Wero) — switching one on there needs no deploy.
             // Our random invoice id only — Mollie never learns the account, a session
             // key or anything usage-related.
             "metadata": { "orderId": reference },
@@ -1099,6 +1159,7 @@ fn is_mollie_url(u: &str) -> bool {
     host == "mollie.com" || host.ends_with(".mollie.com")
 }
 
+#[derive(Debug)]
 enum MollieErr {
     RateLimited,
     Other(String),

@@ -1008,9 +1008,9 @@
         </div>
         <!-- Cards: hosted Mollie checkout in the OS browser — never card fields in this webview.
              Shown only when the server has a card rail (state.card.enabled); see syncCardRow(). -->
-        <div class="pm row" id="pmCard" data-method="card" style="display:none" title="Credit or debit card via Mollie (EU) — opens a checkout in your browser" data-click="selectMethod" data-args="&quot;card&quot;">
+        <div class="pm row" id="pmCard" data-method="card" style="display:none" title="Card, Apple Pay or Google Pay via Mollie (EU) — opens a checkout in your browser" data-click="selectMethod" data-args="&quot;card&quot;">
           <span class="pmlogo"><svg viewBox="0 0 32 32" width="26" height="26"><rect x="3" y="8" width="26" height="17" rx="3" fill="none" stroke="var(--bone)" stroke-width="1.6"/><rect x="3" y="12" width="26" height="3.5" fill="var(--bone)"/><rect x="7" y="19" width="7" height="2.2" rx="1" fill="var(--muted)"/></svg></span>
-          <span class="pmname">Credit / debit card</span>
+          <span class="pmname">Card &amp; more</span>
           <span class="pmtag less">less private</span>
         </div>
       </div>
@@ -1399,7 +1399,12 @@
   let faucetUrl = null;                  // where testers redeem the memo (server-provided, https only)
   let testnetBuy = false;                // the toggle in the Buy dialog (only meaningful when serverTestnet)
   const TESTNET_USD = 1;
-  let cardInfo = { enabled:false, minUsd:10 };   // server's card rail: {enabled, minUsd} — absent → no card row
+  let cardInfo = { enabled:false, minUsd:10, methods:[] };   // server's card rail: {enabled, minUsd, methods:[{id,label}]} — absent → no card row
+  // Labels come from what is enabled in the Mollie dashboard (server fetches /v2/methods),
+  // so switching PayPal or Wero on there relabels the row without a build.
+  function cardLabels(){ return (cardInfo.methods||[]).map(m=>String(m.label||m.id||"")).filter(Boolean).slice(0,4); }
+  function cardLabelShort(){ const l=cardLabels(); return l.length ? l.join(" · ") : "Card & more"; }
+  function cardLabelLong(){ const l=cardLabels(); if(!l.length) return "card and the other methods Mollie offers"; if(l.length===1) return l[0]; return l.slice(0,-1).join(", ")+" or "+l[l.length-1]; }
   // Apple guideline 3.1.1 (credit consumed in-app, bought outside IAP) is a review risk on
   // iOS; flip this to hide the card row there in one place while that stays undecided.
   const CARD_ON_IOS = true;
@@ -1475,7 +1480,7 @@
       { const fu=String(s.faucetUrl||""); faucetUrl = serverTestnet && /^https:\/\/[\w.-]+/.test(fu) ? fu : null; }
       if(!serverTestnet) testnetBuy = false;
       // Card rail: coerce both fields — the reply is untrusted server data.
-      { const c=s.card||{}; cardInfo={ enabled:c.enabled===true, minUsd:Math.max(1, Math.floor(Number(c.minUsd)||10)) }; }
+      { const c=s.card||{}; cardInfo={ enabled:c.enabled===true, minUsd:Math.max(1, Math.floor(Number(c.minUsd)||10)), methods:Array.isArray(c.methods)?c.methods.filter(m=>m&&typeof m==="object"):[] }; }
       server = s.server || null;
       if(isTauri() && !server){
         $("env").className="env bad"; $("envText").textContent="app · no server set";
@@ -1931,7 +1936,7 @@
   // dev HTTP bridge: always) — a shipped binary hides the Developer section and never
   // renders the audit, and a release server doesn't even send the provider cost.
   let devBuild = false;
-  const APP_VERSION = "0.3.2 (peroni)";   // codename from Howard Marks' "Mr Nice"
+  const APP_VERSION = "0.4.0 (ichnusa)";   // codename from Howard Marks' "Mr Nice"
   let devCost = false;
   // DEV upload readout: real file size ÷ pure transfer time (excludes chunk-split +
   // uploadBegin setup). Shown under a sent image only when the dev cost-audit is on.
@@ -4394,6 +4399,7 @@
   function syncCardRow(){
     const el=$("pmCard"); if(!el) return;
     el.style.display = cardAvailable() ? "" : "none";
+    { const nm=el.querySelector(".pmname"); if(nm) nm.textContent = cardLabelShort(); el.title = cardLabelLong()+" via Mollie (EU) — opens a checkout in your browser"; }
     el.classList.toggle("dis", testnetBuy);
     if((!cardAvailable() || testnetBuy) && selectedMethod==="card") selectMethodQuiet("nyx");
   }
@@ -4532,7 +4538,7 @@
     renderContinue();
     const s=$("buyStatus");
     if(s) s.textContent = m==="card"
-      ? `Card checkout opens in your browser via Mollie (EU). Mollie sees your name, card and IP — never your account or what you use it for. Coins stay more private. Card from $${cardInfo.minUsd}.`
+      ? `Checkout opens in your browser via Mollie (EU) — ${cardLabelLong()}. Mollie sees your name, payment details and IP — never your account or what you use it for. Coins stay more private. From $${cardInfo.minUsd}.`
       : "Pick an amount and a coin.";
   }
   function buyOrInvoice(usd){ return fakePayments ? buyTier(usd) : startInvoice(usd, selectedMethod); }
