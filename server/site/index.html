@@ -40,8 +40,12 @@
   .eyebrow{font-family:var(--mono);font-size:11.5px;letter-spacing:.12em;color:var(--signal);text-transform:uppercase;margin-bottom:10px}
   .sec h2{font-family:var(--display);font-weight:700;font-size:34px;margin:0 0 10px}.sec h2 b{color:var(--mix)}
   .lead{color:var(--muted);font-size:15.5px;line-height:1.55;max-width:760px;margin:0 0 26px}
-  .dl{display:grid;grid-template-columns:repeat(5,1fr);gap:16px}
-  @media (max-width:1180px){.dl{grid-template-columns:repeat(2,1fr)}}
+  .dl{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+  @media (max-width:900px){.dl{grid-template-columns:1fr}}
+  /* download rows: desktop / mobile — one label line each, same 3-column grid so every tile is equal */
+  .rowlbl{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin:22px 0 10px;display:flex;align-items:center;gap:12px}
+  .rowlbl::after{content:"";flex:1;height:1px;background:var(--line)}
+  .rowlbl.first{margin-top:0}
   .dlc{border:1px solid var(--line);border-radius:14px;background:var(--surface);padding:20px;display:flex;flex-direction:column;gap:10px;min-height:250px}
   .dlc.soon{opacity:.8}
   /* a card with a real download: green frame + tick, like the app's "connected" state */
@@ -51,6 +55,7 @@
   .os{font-family:var(--display);font-size:20px;font-weight:700;display:flex;align-items:center;gap:8px}
   .meta{font-family:var(--mono);font-size:11.5px;color:var(--muted)}
   .note{font-size:13px;line-height:1.5;color:var(--muted)}.note b{color:var(--bone)}
+  .note ol{margin:6px 0 8px;padding-left:18px}.note li{margin:3px 0}
   .sum{font-family:var(--mono);font-size:10.5px;color:var(--muted);word-break:break-all;margin-top:auto}
   .row{display:flex;gap:8px;flex-wrap:wrap}
   .faucet{display:grid;grid-template-columns:1fr 1fr;gap:28px;align-items:start}
@@ -147,7 +152,8 @@
   <div class="sec" id="download">
     <div class="eyebrow">01 · Download</div>
     <h2>Runs on your <b>machine</b></h2>
-    <p class="lead">No App Store yet — we're saving the developer fee for later. That means two honest caveats: macOS and Windows show a warning on first launch, and iPhone needs TestFlight or sideloading. Every download has a checksum you can verify.</p>
+    <p class="lead">No App Store yet — we're saving the developer fee for later. That means two honest caveats: macOS and Windows show a warning on first launch, and phones need sideloading. Every download has a checksum you can verify.</p>
+    <div class="rowlbl first">Desktop</div>
     <div class="dl">
       <div class="dlc{{CLS_MACOS}}">
         <div class="os"> macOS</div>
@@ -170,19 +176,31 @@
         <div class="sum">sha256 {{SHA_WINDOWS}}</div>
         <div class="row">{{DL_WINDOWS}}</div>
       </div>
-      <div class="dlc{{CLS_ANDROID}}">
-        <div class="os">🤖 Android · arm64</div>
-        <div class="meta">{{META_ANDROID}}</div>
-        <div class="note"><b>Sideload:</b> open the .apk from your Downloads; Android asks once to allow installs from this source (Chrome / Files). Not on Google Play yet. Android 8 or newer, 64-bit.</div>
-        <div class="sum">sha256 {{SHA_ANDROID}}</div>
-        <div class="row">{{DL_ANDROID}}</div>
-      </div>
+    </div>
+    <div class="rowlbl">Mobile</div>
+    <div class="dl">
       <div class="dlc{{CLS_IOS}}">
         <div class="os">📱 iPhone</div>
         <div class="meta">TestFlight — as soon as the developer programme is in place</div>
         <div class="note">An iPhone can't install an app from a download. Until TestFlight opens, the closed test group installs via <b>sideloading</b> (AltStore / Sideloadly, re-signed every 7 days).</div>
         <div class="sum">closed test group</div>
         <div class="row">{{DL_IOS}}{{DL_IOS_GUIDE}}</div>
+      </div>
+      <div class="dlc{{CLS_ANDROID}}">
+        <div class="os">🤖 Android · arm64</div>
+        <div class="meta">{{META_ANDROID}}</div>
+        <div class="note"><b>Install (not on Google Play yet):</b>
+          <ol>
+            <li>On the phone, open this page in Chrome and tap <b>Download .apk</b>. If Chrome warns the file "might be harmful", choose <b>Download anyway</b>.</li>
+            <li>Tap the finished download (notification, or Files → Downloads).</li>
+            <li>First time only: Android says it isn't allowed to install unknown apps from this source → <b>Settings → Allow from this source</b> → go back.</li>
+            <li>Tap <b>Install</b>. If Play Protect objects ("unrecognised developer"), tap <b>More details → Install anyway</b>.</li>
+            <li>Open ScrambleAI. Updates install over the old version — your account and history stay.</li>
+          </ol>
+          Android 8 or newer, 64-bit (arm64).
+        </div>
+        <div class="sum">sha256 {{SHA_ANDROID}}</div>
+        <div class="row">{{DL_ANDROID}}</div>
       </div>
     </div>
   </div>
