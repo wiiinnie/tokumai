@@ -28,6 +28,17 @@ refuses testnet purchases (fail closed) and says so at boot.
 | `SCRAI_TESTNET=1` | accepts ONLY `testnet:true` for exactly $1 in NYM, settles it only from `SCRAI_TESTNET_FAUCET_ADDRESS`, reports `testnet:true` + `faucetUrl` with the model list | show the testnet card (fixed on), $1 tile only, NYM only | pays open $1 testnet invoices |
 | unset / `0` | refuses `testnet:true` ("this server does not accept testnet purchases"), normal tiers only | toggle never renders; a stale client that still sends the flag gets the refusal | site serves downloads only, `/api/claim` → 403; `deploy.sh` disables the unit |
 
+## Android
+
+Built locally (no CI yet): `npm run tauri android build -- --apk --target aarch64` with
+`JAVA_HOME=/opt/homebrew/opt/openjdk@17`, `ANDROID_HOME=~/Library/Android/sdk`,
+`NDK_HOME=$ANDROID_HOME/ndk/27.3.13750724`. Output
+`src-tauri/gen/android/app/build/outputs/apk/…/release/*.apk`, signed with the release
+keystore in `~/.scrai-android/` (properties file next to it; never in the repo). Copy the
+APK into `dist/downloads/` and run `publish-downloads.sh` — manifest key `android`, the site
+shows the card and the Termux checksum line. First-build limits: no picture save/share, no
+handover export on Android (the rest — chat, buy, guard, image generation — is the same core).
+
 ## Limits — where they live and how you notice
 
 | limit | value | set where | when hit |

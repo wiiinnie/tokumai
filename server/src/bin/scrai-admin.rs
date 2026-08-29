@@ -55,6 +55,9 @@ struct Inv {
     /// raised as a $1 faucet-paid testnet purchase (SCRAI_TESTNET servers)
     #[serde(default)]
     testnet: bool,
+    /// rail that served it: "btc" | "nyx" | "card" (Mollie) — absent on pre-card records
+    #[serde(default)]
+    method: String,
 }
 #[derive(Deserialize, Default)]
 struct QuorumBlob {
@@ -136,6 +139,10 @@ struct Metrics {
     inv_expired: usize,
     purchased_scrai: u64,
     purchased_usd: u64,
+    // card rail (Mollie): separately visible because it is the one rail with chargebacks
+    card_paid: usize,
+    card_pending: usize,
+    card_usd: u64,
     entitlement_out: u64,
     withdrawn_scrai: u64,
     // usage
@@ -355,9 +362,18 @@ fn read_metrics(path: &PathBuf) -> Metrics {
                 if !inv.account_id.is_empty() {
                     payers.insert(inv.account_id.as_str());
                 }
+                if inv.method == "card" {
+                    m.card_paid += 1;
+                    m.card_usd += inv.amount_usd as u64;
+                }
             }
             "expired" => m.inv_expired += 1,
-            _ => m.inv_pending += 1,
+            _ => {
+                m.inv_pending += 1;
+                if inv.method == "card" {
+                    m.card_pending += 1;
+                }
+            }
         }
     }
     for a in pay.entitlements.keys() {
@@ -507,6 +523,17 @@ fn usd(scrai: u64) -> String {
     format!("${:.2}", scrai as f64 / SCRAI_PER_USD as f64)
 }
 
+/// € per $ for the cost columns — Google's AI Studio dashboard and invoice are in EUR at
+/// Google's own monthly rate, so the operator sets the rate they see (`SCRAI_FX_EUR_PER_USD`
+/// in .env). None → dollars only, no silent conversion.
+fn eur_per_usd() -> Option<f64> {
+    env_file_value("SCRAI_FX_EUR_PER_USD").and_then(|v| v.replace(',', ".").parse::<f64>().ok()).filter(|r| *r > 0.0)
+}
+
+fn eur(scrai: u64, rate: f64) -> String {
+    format!("€{:.2}", scrai as f64 / SCRAI_PER_USD as f64 * rate)
+}
+
 const GOLD: Color = Color::Rgb(203, 161, 78);
 const SAGE: Color = Color::Rgb(138, 160, 107);
 const RUST: Color = Color::Rgb(193, 90, 67);
@@ -578,6 +605,16 @@ fn ui(f: &mut Frame, m: &Metrics, path: &str, clock: &str, network: &str, status
         kv("paying accounts", grp(m.paying_accounts as u64), SAGE),
         kv("invoices", format!("{} paid · {} pending · {} exp", m.inv_paid, m.inv_pending, m.inv_expired), BONE),
         kv("purchased", format!("{}  ({} scrai)", usd(m.purchased_scrai), grp(m.purchased_scrai)), GOLD),
+        // cards (Mollie): the only rail money can be pulled back from — watch it separately
+        kv(
+            "-> by card",
+            if m.card_paid + m.card_pending > 0 {
+                format!("{} paid · ${} · {} open", m.card_paid, grp(m.card_usd), m.card_pending)
+            } else {
+                "none".into()
+            },
+            if m.card_paid > 0 { GOLD } else { DIM },
+        ),
         kv("entitlement open", format!("{}  ({} scrai)", usd(m.entitlement_out), grp(m.entitlement_out)), BONE),
         kv("-> withdrawn ecash", format!("{}  ({} scrai)", usd(m.withdrawn_scrai), grp(m.withdrawn_scrai)), SAGE),
         // testnet faucet: how many $1 test buys were funded, and what that cost in NYM
@@ -614,7 +651,22 @@ fn ui(f: &mut Frame, m: &Metrics, path: &str, clock: &str, network: &str, status
         kv("active sessions", grp(m.sessions as u64), BONE),
         kv("session credit", format!("{}  ({} scrai)", usd(m.session_balance), grp(m.session_balance)), GOLD),
         kv("chat revenue", format!("{}  ({} scrai)", usd(m.total_spent), grp(m.total_spent)), GOLD),
-        kv("provider cost", format!("-{}  ({} scrai)", usd(m.total_cost), grp(m.total_cost)), BONE),
+        kv(
+            "provider cost",
+            match eur_per_usd() {
+                Some(r) => format!("-{}  ≈ {}  ({} scrai)", usd(m.total_cost), eur(m.total_cost, r), grp(m.total_cost)),
+                None => format!("-{}  ({} scrai)", usd(m.total_cost), grp(m.total_cost)),
+            },
+            BONE,
+        ),
+        kv(
+            "  € rate",
+            match eur_per_usd() {
+                Some(r) => format!("{r:.3} €/$ — SCRAI_FX_EUR_PER_USD, Google's invoice rate"),
+                None => "not set (SCRAI_FX_EUR_PER_USD) — dollars only".into(),
+            },
+            DIM,
+        ),
         kv("= profit", format!("{}  ({} scrai)", usd(m.total_spent.saturating_sub(m.total_cost)), grp(m.total_spent.saturating_sub(m.total_cost))), SAGE),
         kv("  since metrics deploy", String::new(), DIM),
         kv(
@@ -662,7 +714,11 @@ fn ui(f: &mut Frame, m: &Metrics, path: &str, clock: &str, network: &str, status
     };
 
     // day · prompts · spent · cost · margin · <one column per model> · buys · buys $
+    let fx = eur_per_usd();
     let mut header: Vec<String> = ["day", "prompts", "spent", "cost", "margin"].iter().map(|s| s.to_string()).collect();
+    if fx.is_some() {
+        header.insert(4, "cost €".into()); // next to the $ figure — the number to match with AI Studio
+    }
     header.extend(m.models.iter().map(|id| model_header(id)));
     header.push("faucet".into());
     header.push("buys".into());
@@ -685,12 +741,14 @@ fn ui(f: &mut Frame, m: &Metrics, path: &str, clock: &str, network: &str, status
                     Cell::from(Span::styled(grp(d.prompts), Style::default().fg(SAGE))),
                     Cell::from(Span::styled(usd(d.spent), Style::default().fg(GOLD))),
                     Cell::from(Span::styled(usd(d.cost), Style::default().fg(BONE))),
-                    Cell::from(Span::styled(
-                        if d.cost > 0 { format!("+{:.1}%", (d.spent as f64 / d.cost as f64 - 1.0) * 100.0) } else { "—".into() },
-                        Style::default().fg(SAGE),
-                    )),
                 ]
                 .into_iter()
+                // "cost €" only when a rate is configured (the header column is added on the same condition)
+                .chain(fx.map(|r| Cell::from(Span::styled(eur(d.cost, r), Style::default().fg(GOLD)))))
+                .chain([Cell::from(Span::styled(
+                    if d.cost > 0 { format!("+{:.1}%", (d.spent as f64 / d.cost as f64 - 1.0) * 100.0) } else { "—".into() },
+                    Style::default().fg(SAGE),
+                ))])
                 .chain(m.models.iter().map(|id| {
                     // "—" for days before the per-model table existed, 0 for "not used that day"
                     let txt = if d.per_model.is_empty() { "—".to_string() } else { grp(*d.per_model.get(id).unwrap_or(&0)) };
@@ -712,12 +770,15 @@ fn ui(f: &mut Frame, m: &Metrics, path: &str, clock: &str, network: &str, status
             .collect()
     };
     let mut widths = vec![
-        Constraint::Length(12),
-        Constraint::Length(8),
-        Constraint::Length(8),
-        Constraint::Length(8),
-        Constraint::Length(8),
+        Constraint::Length(12), // day
+        Constraint::Length(8),  // prompts
+        Constraint::Length(8),  // spent
+        Constraint::Length(8),  // cost $
     ];
+    if fx.is_some() {
+        widths.push(Constraint::Length(8)); // cost €
+    }
+    widths.push(Constraint::Length(8)); // margin
     widths.extend(m.models.iter().map(|_| Constraint::Length(13)));
     widths.push(Constraint::Length(6));
     widths.push(Constraint::Length(5));

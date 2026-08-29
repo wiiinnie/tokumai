@@ -34,6 +34,8 @@ qrcode = "0.14"
 log = "0.4"
 tauri = { version = "2.11.3", features = [] }
 tauri-plugin-log = "2"
+# Opens http(s) links in the system browser on iOS/Android (desktop keeps `open`/xdg-open).
+tauri-plugin-opener = "2"
 
 # --- crypto core (byte-compatible with the TS client, so the same scrai-server
 #     verifies its accounts, sessions and ecash) ---
@@ -72,7 +74,8 @@ gline-rs = { version = "1", optional = true }
 orp = { version = "1", optional = true }
 
 # Native "save as…" dialog for downloading generated images (the webview can't).
-[target.'cfg(not(target_os = "ios"))'.dependencies]
+# Desktop only — iOS saves to Photos, Android has no dialog backend in rfd.
+[target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
 rfd = "0.15"
 
 # iOS: generated images go straight to the Photos library, handover exports

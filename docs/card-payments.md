@@ -1,6 +1,6 @@
 # Card payments via Mollie — integration check (2026-08-28)
 
-Status: **design check, nothing built.** Mockups: https://claude.ai/code/artifact/429081cc-a951-4235-b2e6-ad0e33bb455f
+Status: **built 2026-08-29 (server rail `CardRail::Mollie`, Tauri `checkout`, client card row + checkout panel, faucet `/paid`, admin column) — not yet deployed or tested against Mollie.** Decisions: card from $10 (`SCRAI_CARD_MIN_USD`), fees absorbed, hosted checkout only, card row visible on every platform (`CARD_ON_IOS` in index.html hides it on iOS in one place). Was: Mockups: https://claude.ai/code/artifact/429081cc-a951-4235-b2e6-ad0e33bb455f
 (four screens: card row below the coins · card chosen · waiting for the browser checkout · clearnet return page).
 
 Why Mollie: Dutch PSP (Amsterdam), EU-regulated, hosted checkout = zero card data on our side (PCI SAQ-A),

@@ -31,7 +31,7 @@ FORCE=0; [ "${3:-}" = "--force" ] && FORCE=1
 files=()
 dmg=$(ls -t "$SRC"/target/release/bundle/dmg/*.dmg 2>/dev/null | head -1 || true)
 [ -n "$dmg" ] && files+=("$dmg")
-for f in "$SRC"/dist/downloads/*.exe "$SRC"/dist/downloads/*.AppImage "$SRC"/dist/downloads/*.deb; do
+for f in "$SRC"/dist/downloads/*.exe "$SRC"/dist/downloads/*.AppImage "$SRC"/dist/downloads/*.deb "$SRC"/dist/downloads/*.apk; do
   [ -f "$f" ] && files+=("$f")
 done
 if [ ${#files[@]} -eq 0 ]; then
@@ -57,7 +57,8 @@ except Exception:
     remote = {}
 old = remote.get("files", {}) if isinstance(remote, dict) else {}
 key_of = lambda n: ("macos" if n.endswith(".dmg") else "windows" if n.endswith(".exe")
-                    else "appimage" if n.endswith(".AppImage") else "deb" if n.endswith(".deb") else "other")
+                    else "appimage" if n.endswith(".AppImage") else "deb" if n.endswith(".deb")
+                    else "android" if n.endswith(".apk") else "other")
 files = dict(old)          # keep what the server already has
 upload = []
 for path in sys.argv[1:]:

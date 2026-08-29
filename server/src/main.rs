@@ -286,7 +286,8 @@ async fn main() {
             // A spawned chat's provider call returned → price + settle it here on the loop.
             Some(done) = http_rx.recv() => {
                 let session_of_chat = done.pending.session_id().map(str::to_string);
-                let mut response = chat::settle(done.pending, done.result, &mut sessions, &mut chat_replies);
+                let settled = chat::settle(done.pending, done.result, &mut sessions, &mut chat_replies);
+                let mut response = settled.reply;
                 // Per-day chat metrics from the reply (spent = charged, cost = provider price).
                 if let Ok(mut rv) = serde_json::from_slice::<serde_json::Value>(&response) {
                     // Big generated pictures leave as chunk references, not as one huge reply —
@@ -300,7 +301,9 @@ async fn main() {
                     if !errored {
                         let today = today_utc();
                         let spent = rv.get("cost").and_then(|c| c.as_u64()).unwrap_or(0);
-                        let cost = rv.pointer("/usage/billing/costScrai").and_then(|c| c.as_f64()).map(|f| f.ceil() as u64).unwrap_or(0);
+                        // Provider cost from the settle result — NOT from the reply, whose
+                        // `costScrai` is null on a release server (the client never sees the margin).
+                        let cost = settled.provider_cost.map(|f| f.ceil() as u64).unwrap_or(0);
                         db.bump_daily(&today, 1, spent, cost, 0, 0);
                         if let Some(sid) = &session_of_chat {
                             db.note_user(&today, sid); // distinct paying sessions today ("users")
@@ -358,7 +361,10 @@ async fn main() {
             // notice. `models` answers with a one-entry pseudo catalogue so even a 0.2.x
             // client — which swallows a plain error on its start-up fetch — shows the
             // notice in its model header; everything else is a plain error carrying the link.
-            if kind != "ping" {
+            // Exempt: `ping` (latency probe) and the chunk follow-ups — an `image.chunk` ref
+            // only exists because a gated `chat` produced it, an `upload.chunk` only because a
+            // gated `upload.begin` reserved the slot. (0.3.0 sends both without `app`.)
+            if !matches!(kind.as_str(), "ping" | "image.chunk" | "upload.chunk") {
                 if let Some((min, url)) = scrai_server::app_outdated(&envelope) {
                     let id = envelope.get("id").cloned().unwrap_or(serde_json::Value::Null);
                     let app = envelope.get("app").and_then(|a| a.as_str()).unwrap_or("<0.3.0 (no version sent)");

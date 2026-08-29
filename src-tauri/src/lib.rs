@@ -23,6 +23,9 @@ use tauri::{AppHandle, Emitter, Manager, State};
 const TIERS: [u32; 4] = [5, 10, 20, 50];
 /// (server reports testnet mode, faucet URL) — learned with the model list.
 static SERVER_TESTNET: std::sync::Mutex<(bool, Option<String>)> = std::sync::Mutex::new((false, None));
+/// What the server said about cards with the catalog (`{enabled, minUsd}`) — the card
+/// row exists only when a server has a Mollie key, and the minimum tile is its call.
+static SERVER_CARD: std::sync::Mutex<Option<Value>> = std::sync::Mutex::new(None);
 /// The server's update notice (`update` on the catalogue reply) — set with the model list,
 /// shown by the UI as a blocking "Update available" gate.
 static SERVER_UPDATE: std::sync::Mutex<Option<Value>> = std::sync::Mutex::new(None);
@@ -645,6 +648,10 @@ async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<V
                     resp.get("faucetUrl").and_then(|u| u.as_str()).map(str::to_string),
                 );
             }
+            {
+                let mut c = SERVER_CARD.lock().unwrap_or_else(|e| e.into_inner());
+                *c = resp.get("card").filter(|c| c.is_object()).cloned();
+            }
         }
         // Balance for the active session.
         if let Some(m) = &w.mnemonic {
@@ -662,6 +669,7 @@ async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<V
     balance = balance.saturating_add(coconut_held_scrai(&app));
     let (testnet, faucet_url) = SERVER_TESTNET.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let update = SERVER_UPDATE.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let card = SERVER_CARD.lock().unwrap_or_else(|e| e.into_inner()).clone();
 
     let out = json!({
         // Developer diagnostics (cost audit, upload readout, dev dials) exist only in a
@@ -677,6 +685,7 @@ async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<V
         "gateway": "btcpay",
         "testnet": testnet,
         "faucetUrl": faucet_url,
+        "card": card,
         "models": models,
         "server": server,
     });
@@ -849,6 +858,7 @@ async fn invoice(
     // it grants no authority — so the server accepts the same account signature.
     let method = match method.as_deref() {
         Some("nyx") => "nyx",
+        Some("card") => "card",
         _ => "btc",
     };
     let sig = a.sign(&format!("invoice:{}", usd), &nonce);
@@ -869,6 +879,10 @@ async fn invoice(
                     let uri = o.get("uri").and_then(|u| u.as_str()).unwrap_or_default();
                     let is_nym = o.get("method").and_then(|x| x.as_str()) == Some("NYM");
                     let mut oo = o.clone();
+                    // A card option is a hosted-checkout link, not an address — no QR.
+                    if o.get("method").and_then(|x| x.as_str()) == Some("card") {
+                        return oo;
+                    }
                     // NYM gets the branded (purple + Nym mark) QR à la NymQR; the
                     // QR encodes the bare Nyx address, with the memo shown as text.
                     oo["qr"] = json!(if is_nym { qr_svg_nym(uri) } else { qr_svg(uri) });
@@ -878,6 +892,21 @@ async fn invoice(
         })
         .unwrap_or_default();
 
+    // Card invoices carry Mollie's hosted checkout URL; the webview opens it in the OS
+    // browser (open_external). Only an https link on mollie.com passes — the server
+    // checks the same, this is belt and braces on the untrusted reply.
+    let checkout = options
+        .iter()
+        .find(|o| o.get("method").and_then(|m| m.as_str()) == Some("card"))
+        .and_then(|o| o.get("checkout").and_then(|c| c.as_str()))
+        .filter(|u| {
+            u.strip_prefix("https://")
+                .and_then(|r| r.split('/').next())
+                .is_some_and(|h| h == "mollie.com" || h.ends_with(".mollie.com"))
+        })
+        .unwrap_or("")
+        .to_string();
+
     Ok(json!({
         "invoiceId": resp.get("invoiceId"),
         "amountUsd": resp.get("amountUsd"),
@@ -885,7 +914,7 @@ async fn invoice(
         "expiresAt": resp.get("expiresAt"),
         "instruction": resp.get("instruction"),
         "options": options,
-        "checkout": "",
+        "checkout": checkout,
         "testnet": resp.get("testnet").and_then(|b| b.as_bool()).unwrap_or(false),
     }))
 }
@@ -1771,7 +1800,7 @@ async fn set_entry_gateway(
 /// Save a base64 image to a user-chosen path via a native "save as…" dialog.
 /// The webview can't trigger downloads, so image saves route through here.
 /// Returns the chosen path, or null if the user cancelled.
-#[cfg(not(target_os = "ios"))]
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 #[tauri::command]
 async fn save_image(data: String, filename: String) -> Result<Option<String>, String> {
     use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
@@ -1787,6 +1816,15 @@ async fn save_image(data: String, filename: String) -> Result<Option<String>, St
         }
         None => Ok(None),
     }
+}
+
+/// Android (first build): pictures stay in the chat — the gallery/share path needs the
+/// MediaStore plugin, which is not wired yet. Says so instead of failing silently.
+#[cfg(target_os = "android")]
+#[tauri::command]
+async fn save_image(data: String, filename: String) -> Result<Option<String>, String> {
+    let _ = (data, filename);
+    Err("saving pictures to the gallery is not available on Android yet".into())
 }
 
 // iOS: generated images land in the Photos library (UIKit must run on the
@@ -2172,7 +2210,7 @@ fn open_account_security() -> Result<(), String> {
 /// Open an http(s) URL in the OS default browser. The webview itself won't
 /// follow target=_blank links, so provider T&C / checkout links route here.
 #[tauri::command]
-fn open_external(url: String) -> Result<(), String> {
+fn open_external(app: AppHandle, url: String) -> Result<(), String> {
     if !(url.starts_with("https://") || url.starts_with("http://")) {
         return Err("only http(s) urls are allowed".into());
     }
@@ -2182,12 +2220,16 @@ fn open_external(url: String) -> Result<(), String> {
     let spawned = std::process::Command::new("xdg-open").arg(&url).spawn();
     #[cfg(target_os = "windows")]
     let spawned = std::process::Command::new("cmd").args(["/C", "start", "", &url]).spawn();
-    // iOS cannot spawn processes; opening Safari needs UIApplication openURL
-    // (tauri-plugin-opener), which is not wired up yet.
-    #[cfg(target_os = "ios")]
-    let spawned: std::io::Result<()> = Err(std::io::Error::other(
-        "opening external links on iOS is not wired up yet",
-    ));
+    // Mobile cannot spawn processes: the opener plugin hands the URL to the system
+    // browser (UIApplication.openURL / Android Intent). Called from Rust, so the
+    // plugin's JS scope never applies — the http(s) check above is the whole policy.
+    #[cfg(mobile)]
+    let spawned: std::io::Result<()> = {
+        use tauri_plugin_opener::OpenerExt;
+        app.opener().open_url(&url, None::<&str>).map_err(std::io::Error::other)
+    };
+    #[cfg(desktop)]
+    let _ = &app;
     spawned.map(|_| ()).map_err(|e| e.to_string())
 }
 
@@ -2210,6 +2252,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .manage(Arc::new(Transport::new()))
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let _ = APP_VER.set(app.package_info().version.to_string());
             diag(&app.handle().clone(), "==== launch ====");

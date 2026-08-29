@@ -256,6 +256,14 @@
   .tnote b{color:var(--gold)}
   .tnote .fl{display:block;margin-top:6px;font-family:var(--mono);font-size:11.5px;word-break:break-all;color:var(--bone)}
   .pm.soon .pmtag{color:var(--signal)}
+  /* the card row: full width BELOW the coins, one line, tagged "less private" */
+  .pm.row{flex:1 1 100%;flex-direction:row;justify-content:flex-start;gap:12px;padding:11px 14px;min-width:0}
+  .pm.row .pmname{flex:1 1 auto}
+  .pm.row .pmtag.less{color:var(--gold)}
+  .pm.row.sel .pmtag.less{color:var(--gold)}
+  .cardwait{font-size:13.5px;line-height:1.5;color:var(--bone);margin:0 0 12px}
+  .cardwait b{color:var(--gold)}
+  .cardpriv{margin-top:12px;font-size:12px;line-height:1.45;color:var(--muted)}
   /* buy: amount tiles + coin brand colours + pay panel (Buy Credit mockup) */
   .balline{font-family:var(--mono);font-size:11.5px;color:var(--muted);margin:0 0 14px;line-height:1.55}
   .balline b{color:var(--bone)}
@@ -998,6 +1006,13 @@
           <span class="pmname">Monero</span>
           <span class="pmtag">coming soon</span>
         </div>
+        <!-- Cards: hosted Mollie checkout in the OS browser — never card fields in this webview.
+             Shown only when the server has a card rail (state.card.enabled); see syncCardRow(). -->
+        <div class="pm row" id="pmCard" data-method="card" style="display:none" title="Credit or debit card via Mollie (EU) — opens a checkout in your browser" data-click="selectMethod" data-args="&quot;card&quot;">
+          <span class="pmlogo"><svg viewBox="0 0 32 32" width="26" height="26"><rect x="3" y="8" width="26" height="17" rx="3" fill="none" stroke="var(--bone)" stroke-width="1.6"/><rect x="3" y="12" width="26" height="3.5" fill="var(--bone)"/><rect x="7" y="19" width="7" height="2.2" rx="1" fill="var(--muted)"/></svg></span>
+          <span class="pmname">Credit / debit card</span>
+          <span class="pmtag less">less private</span>
+        </div>
       </div>
       <div id="continueRow" style="margin-top:14px"></div>
       <p class="hint" id="buyStatus" style="margin:10px 0 0"></p>
@@ -1384,6 +1399,10 @@
   let faucetUrl = null;                  // where testers redeem the memo (server-provided, https only)
   let testnetBuy = false;                // the toggle in the Buy dialog (only meaningful when serverTestnet)
   const TESTNET_USD = 1;
+  let cardInfo = { enabled:false, minUsd:10 };   // server's card rail: {enabled, minUsd} — absent → no card row
+  // Apple guideline 3.1.1 (credit consumed in-app, bought outside IAP) is a review risk on
+  // iOS; flip this to hide the card row there in one place while that stays undecided.
+  const CARD_ON_IOS = true;
   let server = null;                     // scrai-server Nym address (native app)
   let busy = false;
   let scanning = false;         // true while an attachment is being guard-scanned → send is locked
@@ -1416,6 +1435,8 @@
   const escAttr = s => (s||"").replace(/[&<>"'`]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;'}[c]));
   // Only http(s) URLs may become an href — blocks javascript:/data: link injection.
   const safeHttpUrl = u => /^https?:\/\//i.test(u||"") ? u : "#";
+  // A card checkout link may only ever be Mollie's own hosted page (server-supplied → checked here too).
+  const safeMollieUrl = u => /^https:\/\/([\w-]+\.)*mollie\.com\//i.test(u||"") ? u : "#";
   const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now())+Math.random());
   const usd = scrai => (scrai/100000);
   function scraiLine(n){ return `${formatScrai(n)} SCRAI · $${usd(n).toFixed(usd(n)<0.01?5:2)}`; }
@@ -1453,6 +1474,8 @@
       serverTestnet = s.testnet === true;          // the server's kill switch: absent/false → no toggle
       { const fu=String(s.faucetUrl||""); faucetUrl = serverTestnet && /^https:\/\/[\w.-]+/.test(fu) ? fu : null; }
       if(!serverTestnet) testnetBuy = false;
+      // Card rail: coerce both fields — the reply is untrusted server data.
+      { const c=s.card||{}; cardInfo={ enabled:c.enabled===true, minUsd:Math.max(1, Math.floor(Number(c.minUsd)||10)) }; }
       server = s.server || null;
       if(isTauri() && !server){
         $("env").className="env bad"; $("envText").textContent="app · no server set";
@@ -1908,7 +1931,7 @@
   // dev HTTP bridge: always) — a shipped binary hides the Developer section and never
   // renders the audit, and a release server doesn't even send the provider cost.
   let devBuild = false;
-  const APP_VERSION = "0.3.0 (peroni)";   // codename from Howard Marks' "Mr Nice"
+  const APP_VERSION = "0.3.1 (peroni)";   // codename from Howard Marks' "Mr Nice"
   let devCost = false;
   // DEV upload readout: real file size ÷ pure transfer time (excludes chunk-split +
   // uploadBegin setup). Shown under a sent image only when the dev cost-audit is on.
@@ -4362,7 +4385,16 @@
   function pruneExpired(){ const n=pendingList.length; pendingList=pendingList.filter(p=>p.expiresAt>Date.now()); if(pendingList.length!==n) savePending(); }
   function addPending(inv){ pendingList=pendingList.filter(p=>p.invoiceId!==inv.invoiceId); pendingList.push(inv); savePending(); }
   function removePending(id){ pendingList=pendingList.filter(p=>p.invoiceId!==id); savePending(); }
-  function coinOf(inv){ const o=(inv.options||[])[0]; return o&&/nym/i.test(o.method||"")?"NYM":"Bitcoin"; }
+  function coinOf(inv){ if(isCardInv(inv)) return "Card"; const o=(inv.options||[])[0]; return o&&/nym/i.test(o.method||"")?"NYM":"Bitcoin"; }
+  function isCardInv(inv){ const o=(inv&&inv.options||[])[0]; return !!(o && o.method==="card"); }
+  function cardCheckoutOf(inv){ const o=(inv&&inv.options||[])[0]; return safeMollieUrl(inv.checkout || (o&&o.checkout) || ""); }
+  // The card row exists only when the server sells by card; on iOS additionally behind CARD_ON_IOS.
+  function cardAvailable(){ return cardInfo.enabled && !testnetBuy && (CARD_ON_IOS || !isIOSNative()); }
+  function syncCardRow(){
+    const el=$("pmCard"); if(!el) return;
+    el.style.display = cardAvailable() ? "" : "none";
+    if(!cardAvailable() && selectedMethod==="card") selectMethodQuiet("nyx");
+  }
 
   function stopPoll(){ if(pollTimer){ clearInterval(pollTimer); pollTimer=null; } stopWatchTicker(); }
   function stopCountdown(){ if(countdownTimer){ clearInterval(countdownTimer); countdownTimer=null; } }
@@ -4381,8 +4413,10 @@
       const n = Math.max(0, Math.floor(Number(t) || 0));
       const scr = n*100000;
       const sub = scr>=1e6 ? (scr/1e6).toFixed(1)+"M" : Math.round(scr/1e3)+"k";
-      const dis = testnetBuy && n!==TESTNET_USD;
-      return `<div class="tiletier${selectedTier===n?' sel':''}${dis?' dis':''}" data-click="selectTier" data-args="${n}"><div class="a">$${n}</div><div class="s">${dis?'real':sub}</div></div>`;
+      // Card: the server sells the larger tiles only (fee + chargeback exposure) — grey the rest.
+      const small = selectedMethod==="card" && n<cardInfo.minUsd;
+      const dis = (testnetBuy && n!==TESTNET_USD) || small;
+      return `<div class="tiletier${selectedTier===n?' sel':''}${dis?' dis':''}" data-click="selectTier" data-args="${n}"><div class="a">$${n}</div><div class="s">${testnetBuy&&n!==TESTNET_USD?'real':small?'coins only':sub}</div></div>`;
     }).join("");
     const btc = document.querySelector('#chooser .pm[data-method="btc"]');
     if(btc) btc.classList.toggle("dis", testnetBuy);   // the faucet pays NYM only
@@ -4408,9 +4442,9 @@
   function selectTier(t){ selectedTier=t; abandonInvoice(); renderTiers(); renderContinue(); }
   function renderContinue(){
     const el=$("continueRow"); if(!el) return;
-    const coin = selectedMethod==="nyx" ? "NYM" : selectedMethod==="btc" ? "Bitcoin" : "Monero";
+    const coin = selectedMethod==="nyx" ? "NYM" : selectedMethod==="btc" ? "Bitcoin" : selectedMethod==="card" ? "card" : "Monero";
     el.innerHTML = selectedTier
-      ? `<button class="btn primary" style="width:100%" data-click="startPurchase">Continue — $${selectedTier}${testnetBuy?' testnet':''} with ${coin} →</button>`
+      ? `<button class="btn primary" style="width:100%" data-click="startPurchase">Continue — $${selectedTier}${testnetBuy?' testnet':''} ${selectedMethod==="card"?"by card ↗":"with "+coin+" →"}</button>`
       : `<button class="btn" style="width:100%;opacity:.5;cursor:not-allowed" disabled>Pick an amount above</button>`;
   }
   function startPurchase(){ if(selectedTier!=null) buyOrInvoice(selectedTier); }
@@ -4427,7 +4461,7 @@
     // rest); on a production server the row never renders.
     testnetBuy = serverTestnet;
     if(testnetBuy){ selectedTier=TESTNET_USD; selectMethodQuiet("nyx"); }
-    syncTestnetRow();
+    syncTestnetRow(); syncCardRow();
     renderBuyBal(); showChooser(true); renderTiers(); renderContinue(); renderPending();
     $("payPanel").innerHTML="";
     $("buyStatus").textContent = fakePayments
@@ -4486,9 +4520,17 @@
   }
   function selectMethod(m){
     if(testnetBuy && m!=="nyx"){ const s=$("buyStatus"); if(s) s.textContent="Testnet purchases are paid in NYM by the faucet."; return; }
+    if(m==="card" && !cardAvailable()) return;
     selectMethodQuiet(m);
     abandonInvoice();
+    // Switching to card drops a tier the card rail won't sell; the greyed tiles say why.
+    if(m==="card" && selectedTier!=null && selectedTier<cardInfo.minUsd) selectedTier=null;
+    renderTiers();
     renderContinue();
+    const s=$("buyStatus");
+    if(s) s.textContent = m==="card"
+      ? `Card checkout opens in your browser via Mollie (EU). Mollie sees your name, card and IP — never your account or what you use it for. Coins stay more private. Card from $${cardInfo.minUsd}.`
+      : "Pick an amount and a coin.";
   }
   function buyOrInvoice(usd){ return fakePayments ? buyTier(usd) : startInvoice(usd, selectedMethod); }
 
@@ -4539,6 +4581,8 @@
     activeInvoice=inv;
     showChooser(false);
     renderPay(inv); startCountdown(inv.expiresAt); setPayStatus("waiting"); updateWatch(null);
+    // Card: the hosted checkout lives in the OS browser (fresh raise AND resume both open it).
+    if(isCardInv(inv)){ const u=cardCheckoutOf(inv); if(u!=="#") openLink(u); }
     const tick=async ()=>{
       if(pollBusy) return; pollBusy=true;
       try{
@@ -4582,6 +4626,23 @@
     }
   }
   function renderPay(inv){
+    if(isCardInv(inv)){
+      // Hosted checkout: nothing to copy or scan here — the browser does the paying, this
+      // panel only waits. The URL is server-supplied → safeMollieUrl() + escAttr(); amounts
+      // are numbers rendered via toFixed()/formatScrai().
+      const url = cardCheckoutOf(inv);
+      const btn = url!=="#"
+        ? `<a class="btn primary" style="display:block;text-align:center" href="${escAttr(url)}" data-click="openLink" data-click-pass="href" data-prevent="1">Reopen checkout ↗</a>`
+        : `<div class="hint">The checkout link is missing — cancel this payment and try again.</div>`;
+      // nosemgrep: scrai-taint-untrusted-to-html -- reviewed 2026-08-29: url is safeMollieUrl()-gated and escAttr()-wrapped; amountUsd/amountScrai are numbers (toFixed/formatScrai); nothing else from the server lands here
+      $("payPanel").innerHTML = `<div class="paypanel">
+        <div class="paylead">Pay $${Number(inv.amountUsd||0).toFixed(2)} · ${formatScrai(inv.amountScrai||0)} SCRAI by card · expires <span id="payExpiry">…</span></div>
+        <div class="cardwait"><b>Checkout opened in your browser.</b> Finish the payment there — your credit is picked up here automatically, you don’t need to come back to any page.</div>
+        ${btn}
+        <div class="cardpriv">Mollie (EU) sees your name, card and IP address — never your ScrambleAI account or what you use it for. Once collected, the credit is unlinkable, exactly like a coin purchase. No refunds after checkout.</div>
+      </div>`;
+      return;
+    }
     // On-chain only in the UI. Lightning still comes from the backend.
     const onchain = (inv.options||[]).filter(o=>!/ln|lightning/i.test(o.method));
     payDests = onchain.map(o=>o.destination);   // the BARE address — for pasting into a wallet

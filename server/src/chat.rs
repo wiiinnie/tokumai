@@ -303,7 +303,7 @@ pub async fn handle(
         Reserved::Reply(bytes) => bytes,
         Reserved::Proceed(p) => {
             let result = run_provider(&p).await;
-            settle(*p, result, sessions, replies)
+            settle(*p, result, sessions, replies).reply
         }
     }
 }
@@ -494,18 +494,29 @@ pub fn reserve(
 /// PHASE 3 (loop side, fast): price the real usage, settle the reservation (or refund
 /// it fully on a provider failure), and cache the reply for idempotent retry. Runs back
 /// on the dispatch loop, so the session counter/balance are never touched concurrently.
+/// What `settle` hands back: the reply bytes for the client, plus what the provider
+/// billed us for this answer — kept OUT of the reply (a release server never sends the
+/// margin to a client) but needed on the loop for the daily metrics.
+pub struct Settled {
+    pub reply: Vec<u8>,
+    /// provider cost in SCRAI (None when the provider failed — nothing was billed)
+    pub provider_cost: Option<f64>,
+}
+
 pub fn settle(
     p: PendingChat,
     result: Result<(String, TokenUsage, Images), String>,
     sessions: &mut scrai_core::session::SessionStore,
     replies: &mut HashMap<String, (u64, Vec<u8>)>,
-) -> Vec<u8> {
+) -> Settled {
     let id = p.id;
+    let mut provider_cost: Option<f64> = None;
     let Some(paid) = p.paid else {
         // ---- genuinely-free tier: no session, no cache ----
         let reply = match result {
             Ok((text, usage, images)) => {
                 let frame = compute_billing(&p.price, &usage, p.margin, 0, usage.estimated);
+                provider_cost = Some(frame.cost_scrai);
                 let usage_json = json!({
                     "inputTokens": usage.input,
                     "cachedInputTokens": usage.cached_input,
@@ -533,7 +544,7 @@ pub fn settle(
             }
             Err(e) => json!({ "id": id, "kind": "error", "error": e }),
         };
-        return encode(&reply);
+        return Settled { reply: encode(&reply), provider_cost };
     };
 
     // ---- paid session ----
@@ -546,6 +557,7 @@ pub fn settle(
             let billable_queries = usage.grounding_queries.saturating_sub(p.grounding_free);
             let (g_cost, g_retail) = grounding_charge(billable_queries, p.margin);
             frame.cost_scrai += g_cost;
+            provider_cost = Some(frame.cost_scrai);
             // Token cost + per-image cost (image models report zero tokens) + grounding.
             let n_images = images.as_ref().and_then(|i| i.as_array()).map(|a| a.len()).unwrap_or(0) as u64;
             let cost = frame.price_scrai + n_images * per_image_scrai(&p.price, p.margin) + g_retail;
@@ -600,7 +612,7 @@ pub fn settle(
         }
         replies.insert(paid.session_id.clone(), (paid.counter, out.clone()));
     }
-    out
+    Settled { reply: out, provider_cost }
 }
 
 fn encode(v: &Value) -> Vec<u8> {
@@ -1492,8 +1504,12 @@ mod tests {
 
         // Settle both as if the provider returned a tiny answer (order A then B).
         let usage = TokenUsage { input: 5, output: 5, ..Default::default() };
-        let ra: Value = serde_json::from_slice(&settle(*a, Ok(("hi".to_string(), usage, None)), &mut sessions, &mut replies)).unwrap();
-        let rb: Value = serde_json::from_slice(&settle(*b, Ok(("hi".to_string(), usage, None)), &mut sessions, &mut replies)).unwrap();
+        let sa = settle(*a, Ok(("hi".to_string(), usage, None)), &mut sessions, &mut replies);
+        let ra: Value = serde_json::from_slice(&sa.reply).unwrap();
+        // the provider cost travels beside the reply, never inside it (release servers)
+        assert!(sa.provider_cost.unwrap() > 0.0);
+        assert!(ra["usage"]["billing"]["costScrai"].is_null() || std::env::var("SCRAI_DEV_AUDIT").as_deref() == Ok("1"));
+        let rb: Value = serde_json::from_slice(&settle(*b, Ok(("hi".to_string(), usage, None)), &mut sessions, &mut replies).reply).unwrap();
 
         let cost_a = ra["cost"].as_u64().unwrap();
         let cost_b = rb["cost"].as_u64().unwrap();
@@ -1522,7 +1538,7 @@ mod tests {
             panic!("should reserve");
         };
         let usage = TokenUsage { input: 5, output: 5, ..Default::default() };
-        let first = settle(*p, Ok(("hi".to_string(), usage, None)), &mut sessions, &mut replies);
+        let first = settle(*p, Ok(("hi".to_string(), usage, None)), &mut sessions, &mut replies).reply;
         let bal_after = sessions.balance(&sid);
 
         // A lost-reply retry resends the SAME counter → the cached reply, and NO second charge.

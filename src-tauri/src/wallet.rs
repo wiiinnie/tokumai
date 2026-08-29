@@ -113,11 +113,11 @@ fn wallet_key() -> Result<[u8; 32], String> {
 /// the wallet: the server/seed "vanish" after a save. So iOS stores the wallet as plaintext
 /// inside its private container; desktop keeps keychain encryption, where the real threat is
 /// a world-readable file + backup/sync agents (Time Machine, iCloud Drive, Dropbox).
-#[cfg(target_os = "ios")]
+#[cfg(any(target_os = "ios", target_os = "android"))]
 fn use_keychain() -> bool {
-    false
+    false // app-private, OS-encrypted sandbox on both; `keyring` has no Android backend anyway
 }
-#[cfg(not(target_os = "ios"))]
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 fn use_keychain() -> bool {
     true
 }

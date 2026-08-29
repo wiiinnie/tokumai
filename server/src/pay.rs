@@ -14,7 +14,9 @@
 //                tied to this account — the link dies at this step.
 //
 // Gateways: BTCPay (real; BTCPAY_URL/STORE_ID/API_KEY) or the fake (dev;
-// SCRAI_FAKE_PAYMENTS=1 — settles on first poll and says so loudly).
+// SCRAI_FAKE_PAYMENTS=1 — settles on first poll and says so loudly), native NYM
+// (nyx.rs), and cards via Mollie (MOLLIE_API_KEY — hosted checkout, polled, see
+// docs/card-payments.md).
 // ---------------------------------------------------------------------------
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -29,6 +31,10 @@ use serde_json::{json, Value};
 // to make us hammer the payment gateway (the one anonymity-exposed, externally
 // costly call).
 const INVOICE_PER_ACCT: usize = 5;
+/// Card invoices get a tighter per-account budget in the same window: every one is a
+/// Mollie payment object we cannot claw back once the credit is withdrawn, and card
+/// checkouts are the one rail with a chargeback path.
+const CARD_PER_ACCT: usize = 3;
 const INVOICE_ACCT_WINDOW_MS: u64 = 600_000;
 /// H4: hard cap on the burned-nonce store (oldest evicted past this). Large enough that a
 /// legit client never bumps into it, small enough that a signed-nonce flood can't OOM.
@@ -48,6 +54,26 @@ fn purchase_tiers() -> Vec<u32> {
         .map(|s| s.split(',').filter_map(|t| t.trim().parse().ok()).collect())
         .filter(|v: &Vec<u32>| !v.is_empty())
         .unwrap_or_else(|| vec![5, 10, 20, 50])
+}
+
+/// Smallest tile a card may buy (`SCRAI_CARD_MIN_USD`, default $10). Card fees carry a
+/// fixed €0.25 part that eats a third of a $1 tile, and a card payment can be charged
+/// back for weeks after the credit has been withdrawn as unlinkable ecash — so the card
+/// rail only sells tiles where the fee is a rounding error and the exposure is bounded.
+/// Reported to clients with the catalog so the app greys the smaller tiles itself.
+pub fn card_min_usd() -> u32 {
+    std::env::var("SCRAI_CARD_MIN_USD").ok().and_then(|v| v.trim().parse().ok()).filter(|v| *v > 0).unwrap_or(10)
+}
+
+/// True when a Mollie key is configured — the client shows the card row only then.
+pub fn card_enabled() -> bool {
+    matches!(CardRail::from_env(), CardRail::Mollie { .. })
+}
+
+/// What the catalog reply tells the app about cards: whether the row exists at all and
+/// the smallest tile it may buy (one source of truth — never hardcoded in the client).
+pub fn card_info() -> Value {
+    json!({ "enabled": card_enabled(), "minUsd": card_min_usd() })
 }
 
 /// Testnet mode (`SCRAI_TESTNET=1`): the ONE extra thing it enables is a $1 invoice
@@ -133,6 +159,9 @@ pub struct Pay {
     rev: u64,
     #[serde(skip)]
     acct_hits: HashMap<String, Vec<u64>>,
+    /// card invoices per account in the window (subset of acct_hits, tighter cap)
+    #[serde(skip)]
+    card_hits: HashMap<String, Vec<u64>>,
     #[serde(skip)]
     global_hits: Vec<u64>,
     /// last "global invoice cap" log line (ms) — one per minute, not one per refused request
@@ -178,8 +207,20 @@ impl Pay {
         self.burn_nonce(&account_id, nonce).then_some(account_id)
     }
 
-    fn admit_invoice(&mut self, account_id: &str) -> Result<(), String> {
+    fn admit_invoice(&mut self, account_id: &str, card: bool) -> Result<(), String> {
         let now = now_ms();
+        if card {
+            let hits = self.card_hits.entry(account_id.to_string()).or_default();
+            hits.retain(|t| now - t < INVOICE_ACCT_WINDOW_MS);
+            if hits.len() >= CARD_PER_ACCT {
+                let retry = (INVOICE_ACCT_WINDOW_MS - (now - hits[0])).div_ceil(1000).max(1);
+                eprintln!(
+                    "scrai-server: CARD LIMIT — account {}… hit {CARD_PER_ACCT} card invoices/{} min (CARD_PER_ACCT in pay.rs, compiled in) — retry in {retry}s",
+                    &account_id[..account_id.len().min(8)], INVOICE_ACCT_WINDOW_MS / 60_000
+                );
+                return Err(format!("too many card checkouts from this account — retry in ~{retry}s, or pay with a coin"));
+            }
+        }
         self.global_hits.retain(|t| now - t < 60_000);
         if self.global_hits.len() >= INVOICE_GLOBAL_PER_MIN {
             if now - self.global_cap_logged_at > 60_000 {
@@ -200,8 +241,12 @@ impl Pay {
         }
         hits.push(now);
         self.global_hits.push(now);
-        // Opportunistic prune so a throwaway swarm cannot grow the map unboundedly.
+        if card {
+            self.card_hits.entry(account_id.to_string()).or_default().push(now);
+        }
+        // Opportunistic prune so a throwaway swarm cannot grow the maps unboundedly.
         self.acct_hits.retain(|_, v| v.iter().any(|t| now - t < INVOICE_ACCT_WINDOW_MS));
+        self.card_hits.retain(|_, v| v.iter().any(|t| now - t < INVOICE_ACCT_WINDOW_MS));
         Ok(())
     }
 
@@ -377,9 +422,20 @@ impl Pay {
                 let list = tiers.iter().map(|t| format!("${t}")).collect::<Vec<_>>().join(", ");
                 return Err(err(id, &format!("purchases must be one of: {list}")));
             }
+            if wanted == "card" {
+                // The card rail sells the larger tiles only (fee + chargeback exposure, see
+                // `card_min_usd`). The app greys smaller tiles; this is the authority.
+                if !card_enabled() {
+                    return Err(err(id, "card payments are not available on this server — pay with NYM or Bitcoin"));
+                }
+                let min = card_min_usd();
+                if usd < min {
+                    return Err(err(id, &format!("card purchases start at ${min} — pick a larger amount or pay with a coin")));
+                }
+            }
         }
-        // Throttle BEFORE the external BTCPay call.
-        if let Err(e) = self.admit_invoice(&account) {
+        // Throttle BEFORE the external gateway call.
+        if let Err(e) = self.admit_invoice(&account, wanted == "card") {
             return Err(err(id, &e));
         }
         let our_id = rand_hex(16);
@@ -652,28 +708,40 @@ pub struct Raised {
 pub struct Gateway {
     rail: Rail,
     nyx: Option<crate::nyx::Nyx>,
+    /// Cards (Mollie hosted checkout) — orthogonal to the coin rails, serves "card".
+    card: CardRail,
 }
 
 impl Gateway {
     pub fn from_env() -> Gateway {
-        Gateway { rail: Rail::from_env(), nyx: crate::nyx::Nyx::from_env() }
+        Gateway { rail: Rail::from_env(), nyx: crate::nyx::Nyx::from_env(), card: CardRail::from_env() }
     }
 
     pub fn name(&self) -> String {
-        match &self.nyx {
-            Some(_) => format!("{}+nyx", self.rail.name()),
-            None => self.rail.name().to_string(),
+        let mut n = self.rail.name().to_string();
+        if self.nyx.is_some() {
+            n.push_str("+nyx");
         }
+        if let CardRail::Mollie { .. } = self.card {
+            n.push_str("+mollie");
+        }
+        n
     }
 
     /// True only when NO real money can arrive: the fake dev rail AND no Nyx rail.
     /// A single-authority issuer may run against this (dev); against real money it
     /// must not (H9).
     pub fn is_fake(&self) -> bool {
-        self.nyx.is_none() && matches!(self.rail, Rail::Fake)
+        self.nyx.is_none() && matches!(self.card, CardRail::None) && matches!(self.rail, Rail::Fake)
     }
 
     async fn create_invoice(&self, usd: u32, reference: &str, wanted: &str, testnet: bool) -> Result<Raised, String> {
+        if wanted == "card" {
+            // Never the coin fallback: a client that asked for a card checkout must not be
+            // handed a BTC address it did not expect (begin_create refuses this earlier too).
+            let raised = self.card.create_invoice(usd, reference).await?;
+            return Ok(Raised { raised, method: "card".into(), expected_unym: 0 });
+        }
         if wanted == "nyx" {
             if let Some(nyx) = &self.nyx {
                 let (raised, expected_unym) = nyx.create_invoice(usd).await?;
@@ -702,6 +770,9 @@ impl Gateway {
             };
             return nyx.check_paid(&inv.provider_ref, inv.expected_unym, pin.as_deref()).await;
         }
+        if inv.method == "card" {
+            return self.card.check_status(&inv.provider_ref).await;
+        }
         self.rail.check_status(&inv.provider_ref).await
     }
 
@@ -729,11 +800,14 @@ impl Rail {
             // The fake rail must never coexist with a real one: with NYX_* or BTCPAY_* also
             // set, `is_fake()` would read false (real-money interlock passes) while every
             // non-nyx invoice still settled for free. Refuse to boot in that mixed state.
-            let real = ["NYX_RECEIVE_ADDRESS", "NYX_LCD_URL", "BTCPAY_URL", "BTCPAY_STORE_ID", "BTCPAY_API_KEY"]
-                .iter()
-                .any(|k| std::env::var(k).map(|v| !v.trim().is_empty()).unwrap_or(false));
+            let real = [
+                "NYX_RECEIVE_ADDRESS", "NYX_LCD_URL", "BTCPAY_URL", "BTCPAY_STORE_ID", "BTCPAY_API_KEY",
+                "MOLLIE_API_KEY", "MOLLIE_API_KEY_TESTNET", "MOLLIE_API_KEY_MAINNET",
+            ]
+            .iter()
+            .any(|k| std::env::var(k).map(|v| !v.trim().is_empty()).unwrap_or(false));
             if real {
-                eprintln!("scrai-server: FATAL: SCRAI_FAKE_PAYMENTS=1 together with a real payment rail (NYX_*/BTCPAY_*) — remove one. Refusing to start.");
+                eprintln!("scrai-server: FATAL: SCRAI_FAKE_PAYMENTS=1 together with a real payment rail (NYX_*/BTCPAY_*/MOLLIE_*) — remove one. Refusing to start.");
                 std::process::exit(1);
             }
             eprintln!("scrai-server: SCRAI_FAKE_PAYMENTS=1 — invoices settle on first poll. DEV ONLY.");
@@ -890,6 +964,209 @@ async fn btcpay(api_key: &str, req: reqwest::RequestBuilder) -> Result<Value, St
     Ok(body)
 }
 
+
+// ---------------------------------------------------------------------------
+// Cards via Mollie — hosted checkout, no card data here, no webhook (the server has
+// no clearnet port, so the client's 10 s status poll drives `GET /v2/payments/{id}`).
+// See docs/card-payments.md §4 for every fact this code leans on.
+// ---------------------------------------------------------------------------
+
+const MOLLIE_API: &str = "https://api.mollie.com/v2";
+/// Where Mollie sends the browser after checkout when MOLLIE_REDIRECT_URL is unset:
+/// the static thank-you page on the download/faucet site (no order id, no cookie).
+const DEFAULT_PAID_URL: &str = "https://scrai-faucet.hermes-stakepool.de/paid";
+
+pub enum CardRail {
+    Mollie { api_key: String, redirect_url: String },
+    None,
+}
+
+impl CardRail {
+    pub fn from_env() -> CardRail {
+        // Network-scoped like BTCPay (MOLLIE_API_KEY_MAINNET / _TESTNET, bare fallback).
+        // A `test_…` key is Mollie's test mode (EUR only, checkout lets you pick the
+        // outcome); a `live_…` key moves real money.
+        match crate::net_var("MOLLIE_API_KEY") {
+            Some(k) => {
+                let redirect_url = crate::net_var("MOLLIE_REDIRECT_URL")
+                    .filter(|u| u.starts_with("https://"))
+                    .or_else(|| {
+                        std::env::var("SCRAI_FAUCET_URL")
+                            .ok()
+                            .filter(|u| u.starts_with("https://"))
+                            .map(|u| format!("{}/paid", u.trim_end_matches('/')))
+                    })
+                    .unwrap_or_else(|| DEFAULT_PAID_URL.to_string());
+                CardRail::Mollie { api_key: k.trim().to_string(), redirect_url }
+            }
+            None => CardRail::None,
+        }
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            CardRail::Mollie { .. } => "mollie",
+            CardRail::None => "none",
+        }
+    }
+
+    async fn create_invoice(&self, usd: u32, reference: &str) -> Result<RaisedInvoice, String> {
+        let CardRail::Mollie { api_key, redirect_url } = self else {
+            return Err("card payments are not configured on this server".into());
+        };
+        // Test mode is EUR-only at Mollie, so the test rail charges the tile's number in
+        // EUR 1:1 — a placeholder amount, nothing is converted. Live charges the USD tile
+        // (the SCRAI price is fixed per USD; Mollie converts to the payout currency).
+        let currency = if api_key.starts_with("test_") { "EUR" } else { "USD" };
+        let body = json!({
+            "amount": { "currency": currency, "value": format!("{usd}.00") },
+            "description": "ScrambleAI credit",
+            "redirectUrl": redirect_url,
+            "method": "creditcard",
+            // Our random invoice id only — Mollie never learns the account, a session
+            // key or anything usage-related.
+            "metadata": { "orderId": reference },
+            "locale": "en_US",
+        });
+        let v = mollie(
+            api_key,
+            crate::http::client()
+                .post(format!("{MOLLIE_API}/payments"))
+                // Keyed by OUR invoice id: if this create is ever re-sent (a retry inside
+                // the hour), Mollie hands back the same payment instead of a second one.
+                .header("Idempotency-Key", reference)
+                .json(&body),
+        )
+        .await?;
+        let provider_ref = v.get("id").and_then(|i| i.as_str()).unwrap_or_default().to_string();
+        if !provider_ref.starts_with("tr_") {
+            return Err("Mollie returned no payment id".into());
+        }
+        let checkout = v
+            .pointer("/_links/checkout/href")
+            .and_then(|h| h.as_str())
+            .unwrap_or_default()
+            .to_string();
+        // The client opens this in the OS browser — it must be Mollie's own hosted page.
+        if !is_mollie_url(&checkout) {
+            return Err("Mollie returned no hosted checkout link".into());
+        }
+        // `expiresAt` is RFC 3339; cards expire after ~15–30 min at Mollie. Fall back to
+        // 15 min if it is missing rather than predicting.
+        let expires_at = v
+            .get("expiresAt")
+            .and_then(|e| e.as_str())
+            .and_then(rfc3339_ms)
+            .unwrap_or_else(|| now_ms() + 15 * 60_000);
+        Ok(RaisedInvoice {
+            provider_ref,
+            pay_to: String::new(),
+            instruction: "Finish the payment in your browser — the credit lands here automatically.".into(),
+            options: json!([{ "method": "card", "checkout": checkout }]),
+            expires_at,
+        })
+    }
+
+    /// "paid" | "pending" | "expired". Only Mollie's `paid` settles — `authorized` is the
+    /// capture flow we do not use. A 429 (rate limit) is "nothing new yet": the next
+    /// 10 s poll re-asks, and our volume is nowhere near the limit anyway.
+    async fn check_status(&self, provider_ref: &str) -> Result<String, String> {
+        let CardRail::Mollie { api_key, .. } = self else {
+            return Err("card payments are not configured on this server".into());
+        };
+        if !provider_ref.starts_with("tr_") || !provider_ref.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+            return Err("not a Mollie payment reference".into());
+        }
+        let v = match mollie(api_key, crate::http::client().get(format!("{MOLLIE_API}/payments/{provider_ref}"))).await {
+            Ok(v) => v,
+            Err(MollieErr::RateLimited) => return Ok("pending".into()),
+            Err(MollieErr::Other(e)) => return Err(e),
+        };
+        Ok(match v.get("status").and_then(|s| s.as_str()).unwrap_or("") {
+            "paid" => "paid",
+            "canceled" | "expired" | "failed" => "expired",
+            _ => "pending",
+        }
+        .into())
+    }
+}
+
+/// Mollie's hosted checkout lives on mollie.com (www.mollie.com/checkout/…); nothing
+/// else may be handed to the client as a link to open.
+fn is_mollie_url(u: &str) -> bool {
+    let Some(rest) = u.strip_prefix("https://") else { return false };
+    let host = rest.split('/').next().unwrap_or("");
+    host == "mollie.com" || host.ends_with(".mollie.com")
+}
+
+enum MollieErr {
+    RateLimited,
+    Other(String),
+}
+
+impl From<MollieErr> for String {
+    fn from(e: MollieErr) -> String {
+        match e {
+            MollieErr::RateLimited => "Mollie is rate-limiting us — try again in a moment".into(),
+            MollieErr::Other(s) => s,
+        }
+    }
+}
+
+async fn mollie(api_key: &str, req: reqwest::RequestBuilder) -> Result<Value, MollieErr> {
+    let res = req
+        .header("authorization", format!("Bearer {api_key}"))
+        .timeout(std::time::Duration::from_secs(20))
+        .send()
+        .await
+        .map_err(|e| MollieErr::Other(format!("Mollie unreachable: {e}")))?;
+    let status = res.status();
+    let body: Value = res.json().await.unwrap_or(Value::Null);
+    if !status.is_success() {
+        // Mollie errors are {status, title, detail}; `detail` names the offending field.
+        let detail = body.get("detail").and_then(|m| m.as_str()).unwrap_or("");
+        return Err(match status.as_u16() {
+            401 | 403 => MollieErr::Other("Mollie rejected the API key — check MOLLIE_API_KEY".into()),
+            404 => MollieErr::Other("Mollie does not know this payment".into()),
+            429 => MollieErr::RateLimited,
+            s => MollieErr::Other(format!("Mollie {s}: {}", detail.chars().take(200).collect::<String>())),
+        });
+    }
+    Ok(body)
+}
+
+/// `2026-08-29T10:47:54+00:00` → unix ms. Mollie's timestamps are RFC 3339 with a
+/// numeric offset (or `Z`); anything else parses as None and the caller falls back.
+fn rfc3339_ms(s: &str) -> Option<u64> {
+    let s = s.trim();
+    let (date, rest) = s.split_once('T')?;
+    let mut d = date.split('-').map(|x| x.parse::<i64>());
+    let (y, mo, da) = (d.next()?.ok()?, d.next()?.ok()?, d.next()?.ok()?);
+    // time part ends where the offset starts: 'Z', '+' or '-'
+    let off_pos = rest.find(['Z', '+', '-'])?;
+    let (time, off) = rest.split_at(off_pos);
+    let time = time.split('.').next()?; // drop fractional seconds
+    let mut t = time.split(':').map(|x| x.parse::<i64>());
+    let (h, mi, se) = (t.next()?.ok()?, t.next()?.ok()?, t.next().unwrap_or(Ok(0)).ok()?);
+    let off_secs: i64 = if off == "Z" {
+        0
+    } else {
+        let sign = if off.starts_with('-') { -1 } else { 1 };
+        let mut o = off[1..].split(':').map(|x| x.parse::<i64>());
+        let (oh, om) = (o.next()?.ok()?, o.next().unwrap_or(Ok(0)).ok()?);
+        sign * (oh * 3600 + om * 60)
+    };
+    // days from civil (Howard Hinnant), valid for the proleptic Gregorian calendar
+    let (y2, m2) = if mo <= 2 { (y - 1, mo + 9) } else { (y, mo - 3) };
+    let era = y2.div_euclid(400);
+    let yoe = y2 - era * 400;
+    let doy = (153 * m2 + 2) / 5 + da - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    let secs = days * 86_400 + h * 3600 + mi * 60 + se - off_secs;
+    u64::try_from(secs).ok().map(|s| s * 1000)
+}
+
 // ---------------------------------------------------------------------------
 #[cfg(test)]
 mod tests {
@@ -919,7 +1196,7 @@ mod tests {
         let _env = ENV_LOCK.read().unwrap_or_else(|e| e.into_inner());
         let (sk, pem, aid) = account();
         let mut pay = Pay::default();
-        let gw = Gateway { rail: Rail::Fake, nyx: None };
+        let gw = Gateway { rail: Rail::Fake, nyx: None, card: CardRail::None };
 
         let req = json!({"kind":"invoice.create","id":"r1","publicKey":pem,"usd":5,
             "nonce":"n1","sig":signed(&sk,&aid,"invoice:5","n1")});
@@ -944,7 +1221,7 @@ mod tests {
     async fn testnet_create_is_one_dollar_and_gated_by_env() {
         let _env = ENV_LOCK.write().unwrap_or_else(|e| e.into_inner());
         let (sk, pem, aid) = account();
-        let gw = Gateway { rail: Rail::Fake, nyx: None };
+        let gw = Gateway { rail: Rail::Fake, nyx: None, card: CardRail::None };
         // nonces burn on first sight (even for a refused create), so every call gets its own
         let req = |usd: u32, testnet: bool, method: &str, n: &str| json!({"kind":"invoice.create","id":"r1","publicKey":pem,
             "usd":usd,"testnet":testnet,"method":method,"nonce":n,
@@ -1001,7 +1278,7 @@ mod tests {
         let _env = ENV_LOCK.read().unwrap_or_else(|e| e.into_inner());
         let (sk, pem, aid) = account();
         let mut pay = Pay::default();
-        let gw = Gateway { rail: Rail::Fake, nyx: None };
+        let gw = Gateway { rail: Rail::Fake, nyx: None, card: CardRail::None };
         let req = json!({"kind":"invoice.create","id":"r1","publicKey":pem,"usd":5,
             "nonce":"n1","sig":signed(&sk,&aid,"invoice:5","n1")});
         let PayStep::Pending(p) = pay.begin(req.to_string().as_bytes(), &gw) else { panic!("create needs the gateway") };
@@ -1035,7 +1312,7 @@ mod tests {
         let _env = ENV_LOCK.read().unwrap_or_else(|e| e.into_inner());
         let (sk, pem, aid) = account();
         let mut pay = Pay::default();
-        let gw = Gateway { rail: Rail::Fake, nyx: None };
+        let gw = Gateway { rail: Rail::Fake, nyx: None, card: CardRail::None };
 
         // wrong amount signed vs requested
         let req = json!({"kind":"invoice.create","id":"r","publicKey":pem,"usd":50,
@@ -1058,12 +1335,56 @@ mod tests {
         assert!(replay.get("error").is_some());
     }
 
+    /// Card rules live in begin_create: no Mollie key → no card sales at all; with a key,
+    /// tiles below SCRAI_CARD_MIN_USD are refused BEFORE any gateway call. Env-mutating →
+    /// write lock.
+    #[tokio::test]
+    async fn card_purchases_need_a_key_and_the_minimum_tile() {
+        let _env = ENV_LOCK.write().unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var("SCRAI_TESTNET");
+        std::env::remove_var("SCRAI_CARD_MIN_USD");
+        for k in ["MOLLIE_API_KEY", "MOLLIE_API_KEY_TESTNET", "MOLLIE_API_KEY_MAINNET"] {
+            std::env::remove_var(k);
+        }
+        let (sk, pem, aid) = account();
+        let mut pay = Pay::default();
+        let gw = Gateway { rail: Rail::Fake, nyx: None, card: CardRail::None };
+
+        // no key anywhere → card is not for sale, even for a valid tile
+        let req = json!({"kind":"invoice.create","id":"r","publicKey":pem,"usd":10,"method":"card",
+            "nonce":"c1","sig":signed(&sk,&aid,"invoice:10","c1")});
+        let r: Value = serde_json::from_slice(&pay.handle(req.to_string().as_bytes(), &gw).await).unwrap();
+        assert!(r.get("error").and_then(|e| e.as_str()).unwrap().contains("not available"));
+
+        // key present → $5 is below the default $10 minimum
+        std::env::set_var("MOLLIE_API_KEY_TESTNET", "test_dummy");
+        assert!(card_enabled());
+        let req = json!({"kind":"invoice.create","id":"r","publicKey":pem,"usd":5,"method":"card",
+            "nonce":"c2","sig":signed(&sk,&aid,"invoice:5","c2")});
+        let r: Value = serde_json::from_slice(&pay.handle(req.to_string().as_bytes(), &gw).await).unwrap();
+        assert!(r.get("error").and_then(|e| e.as_str()).unwrap().contains("start at $10"));
+
+        // $10 passes the paywall rules and reaches the (unconfigured) card rail — never the coin fallback
+        let req = json!({"kind":"invoice.create","id":"r","publicKey":pem,"usd":10,"method":"card",
+            "nonce":"c3","sig":signed(&sk,&aid,"invoice:10","c3")});
+        let r: Value = serde_json::from_slice(&pay.handle(req.to_string().as_bytes(), &gw).await).unwrap();
+        assert!(r.get("error").and_then(|e| e.as_str()).unwrap().contains("not configured"));
+        assert!(r.get("invoiceId").is_none());
+
+        // the same coin tile still sells as before
+        let req = json!({"kind":"invoice.create","id":"r","publicKey":pem,"usd":5,
+            "nonce":"c4","sig":signed(&sk,&aid,"invoice:5","c4")});
+        let r: Value = serde_json::from_slice(&pay.handle(req.to_string().as_bytes(), &gw).await).unwrap();
+        assert!(r.get("invoiceId").is_some());
+        std::env::remove_var("MOLLIE_API_KEY_TESTNET");
+    }
+
     #[tokio::test]
     async fn late_confirmation_is_swept_in_by_the_entitlement_check() {
         let _env = ENV_LOCK.read().unwrap_or_else(|e| e.into_inner());
         let (sk, pem, aid) = account();
         let mut pay = Pay::default();
-        let gw = Gateway { rail: Rail::Fake, nyx: None };
+        let gw = Gateway { rail: Rail::Fake, nyx: None, card: CardRail::None };
 
         // Raise an invoice, then simulate "client stopped polling and the local
         // window closed" by force-expiring it — the exact stuck-payment case.
@@ -1107,7 +1428,7 @@ mod tests {
         assert!(matches!(pay.gate_withdraw(w.to_string().as_bytes(), book), Gate::Denied(_)));
 
         // fund via fake invoice, then the gate authorizes and consumption empties it
-        let gw = Gateway { rail: Rail::Fake, nyx: None };
+        let gw = Gateway { rail: Rail::Fake, nyx: None, card: CardRail::None };
         let req = json!({"kind":"invoice.create","id":"r","publicKey":pem,"usd":5,
             "nonce":"n1","sig":signed(&sk,&aid,"invoice:5","n1")});
         let r: Value = serde_json::from_slice(&pay.handle(req.to_string().as_bytes(), &gw).await).unwrap();
@@ -1125,5 +1446,38 @@ mod tests {
             }
             _ => panic!("expected Authorized"),
         }
+    }
+}
+
+#[cfg(test)]
+mod card_tests {
+    use super::*;
+
+    #[test]
+    fn rfc3339_parses_mollie_timestamps() {
+        // 2026-08-29T10:47:54+00:00 = 1788000474 (checked against `date -u -j`)
+        assert_eq!(rfc3339_ms("2026-08-29T10:47:54+00:00"), Some(1_788_000_474_000));
+        assert_eq!(rfc3339_ms("2026-08-29T10:47:54Z"), Some(1_788_000_474_000));
+        // +02:00 is two hours EARLIER in UTC
+        assert_eq!(rfc3339_ms("2026-08-29T12:47:54+02:00"), Some(1_788_000_474_000));
+        assert_eq!(rfc3339_ms("1970-01-01T00:00:00Z"), Some(0));
+        assert_eq!(rfc3339_ms("garbage"), None);
+        assert_eq!(rfc3339_ms(""), None);
+    }
+
+    #[test]
+    fn only_mollie_hosted_checkout_is_a_link() {
+        assert!(is_mollie_url("https://www.mollie.com/checkout/select-method/7UhSN1zuXS"));
+        assert!(is_mollie_url("https://mollie.com/x"));
+        assert!(!is_mollie_url("http://www.mollie.com/checkout"));
+        assert!(!is_mollie_url("https://evil-mollie.com/checkout"));
+        assert!(!is_mollie_url("https://mollie.com.evil.net/checkout"));
+        assert!(!is_mollie_url(""));
+    }
+
+    #[test]
+    fn card_min_defaults_to_ten() {
+        std::env::remove_var("SCRAI_CARD_MIN_USD");
+        assert_eq!(card_min_usd(), 10);
     }
 }

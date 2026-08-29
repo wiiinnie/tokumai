@@ -50,6 +50,49 @@ use scrai_server::pay::{Pay, TestnetInv, TESTNET_USD};
 const SITE: &str = include_str!("../../site/index.html");
 /// The site's screenshots, baked into the binary so a deploy ships them (Caddy only knows
 /// /dl/; nothing else to upload or configure). Served as GET /img/<name>.
+/// Where Mollie's hosted checkout sends the browser afterwards (`MOLLIE_REDIRECT_URL`
+/// defaults to this host's /paid). Static, no script, no cookie, no order id in the URL
+/// or the page — the app learns about the payment from its own status poll, so this page
+/// links nothing back to anything. Same palette as the site, no external fonts (the CSP
+/// blocks them anyway).
+const PAID_HTML: &str = r##"<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex">
+<title>Payment received — ScrambleAI</title>
+<style>
+  :root{--ink:#141210;--surface:#1C1917;--surface-2:#262220;--line:#332E2A;--bone:#ECE6DC;--muted:#9C938A;--signal:#CBA14E;--mix:#8AA06B;
+    --mono:ui-monospace,SFMono-Regular,Menlo,monospace;--body:system-ui,-apple-system,'Hanken Grotesk',sans-serif;--display:Georgia,'Fraunces',serif}
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--ink);color:var(--bone);font-family:var(--body);-webkit-font-smoothing:antialiased;min-height:100%}
+  .wrap{max-width:520px;margin:0 auto;padding:64px 22px}
+  .logo{font-family:var(--display);font-weight:700;font-size:22px;margin-bottom:38px}.logo b{color:var(--mix)}
+  .card{border:1px solid var(--line);border-radius:16px;background:var(--surface);padding:26px 24px}
+  .eyebrow{font-family:var(--mono);font-size:11.5px;letter-spacing:.12em;color:var(--mix);text-transform:uppercase;margin-bottom:10px}
+  h1{font-family:var(--display);font-weight:700;font-size:30px;line-height:1.1;margin:0 0 14px}
+  p{font-size:15px;line-height:1.55;color:var(--muted);margin:0 0 12px}
+  p b{color:var(--bone)}
+  .fine{font-family:var(--mono);font-size:11.5px;color:var(--muted);margin-top:22px;line-height:1.5}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="logo">Scramble<b>AI</b></div>
+  <div class="card">
+    <div class="eyebrow">Card checkout</div>
+    <h1>Payment received</h1>
+    <p><b>You can close this tab and return to ScrambleAI.</b> The app picks the payment up on its own and collects your credit — usually within a few seconds, no further steps.</p>
+    <p>If the checkout was cancelled or failed, nothing was charged; pick an amount in the app again.</p>
+    <div class="fine">This page holds no order details and sets no cookie. Once collected, the credit is unlinkable to this payment. No refunds after checkout.</div>
+  </div>
+</div>
+</body>
+</html>
+"##;
+
 const IMAGES: &[(&str, &[u8])] = &[
     ("mac-chat.jpg", include_bytes!("../../site/img/mac-chat.jpg")),
     ("mac-picker.jpg", include_bytes!("../../site/img/mac-picker.jpg")),
@@ -451,6 +494,7 @@ fn site_html(dl_dir: &Path) -> String {
         ("{{DL_WINDOWS}}", "windows", "Download installer (.exe)", true),
         ("{{DL_APPIMAGE}}", "appimage", "AppImage", true),
         ("{{DL_DEB}}", "deb", ".deb", false),
+        ("{{DL_ANDROID}}", "android", "Download .apk", true),
     ] {
         let cls = if primary { "btn primary" } else { "btn" };
         let html = match files.get(key) {
@@ -482,6 +526,9 @@ fn site_html(dl_dir: &Path) -> String {
     s = s.replace("{{CLS_MACOS}}", if files.contains_key("macos") { " has" } else { "" });
     s = s.replace("{{CLS_WINDOWS}}", if files.contains_key("windows") { " has" } else { "" });
     s = s.replace("{{CLS_LINUX}}", if files.contains_key("appimage") || files.contains_key("deb") { " has" } else { "" });
+    s = s.replace("{{CLS_ANDROID}}", if files.contains_key("android") { " has" } else { "" });
+    s = s.replace("{{META_ANDROID}}", &meta("android", "APK · arm64 · Android 8+"));
+    s = s.replace("{{SHA_ANDROID}}", &sha("android"));
     s = s.replace("{{CLS_IOS}}", if env_link("SCRAI_DL_IOS").is_some() { " has" } else { " soon" });
     s = s.replace("{{META_MACOS}}", &meta("macos", "Apple silicon · .dmg"));
     s = s.replace("{{META_WINDOWS}}", &meta("windows", "NSIS installer · Windows 10/11"));
@@ -491,6 +538,7 @@ fn site_html(dl_dir: &Path) -> String {
     s = s.replace("{{FILE_MACOS}}", &fname("macos"));
     s = s.replace("{{FILE_APPIMAGE}}", &fname("appimage"));
     s = s.replace("{{FILE_WINDOWS}}", &fname("windows"));
+    s = s.replace("{{FILE_ANDROID}}", &fname("android"));
     s = s.replace("{{SHA_MACOS}}", &sha("macos"));
     s = s.replace("{{SHA_WINDOWS}}", &sha("windows"));
     s = s.replace("{{SHA_APPIMAGE}}", &sha("appimage"));
@@ -612,6 +660,9 @@ async fn handle(f: Arc<Faucet>, mut sock: tokio::net::TcpStream, peer: SocketAdd
     match (req.method.as_str(), req.path.as_str()) {
         ("GET", "/") | ("GET", "/index.html") => respond(&mut sock, 200, "text/html; charset=utf-8", site_html(&f.cfg.dl_dir).as_bytes()).await,
         ("GET", "/health") => respond(&mut sock, 200, "text/plain", b"ok").await,
+        // Mollie's redirect target after a card checkout (see PAID_HTML). Any query string
+        // is ignored — nothing on this page depends on it.
+        ("GET", "/paid") => respond(&mut sock, 200, "text/html; charset=utf-8", PAID_HTML.as_bytes()).await,
         ("GET", p) if p.starts_with("/img/") => {
             // exact-name lookup in the baked-in list — no filesystem, so no traversal to worry about
             match IMAGES.iter().find(|(n, _)| *n == &p[5..]) {

@@ -278,7 +278,7 @@ impl Transport {
         let mut pending: std::collections::HashMap<String, Vec<u8>> = std::collections::HashMap::new();
         let mut replies: HashMap<String, Value> = HashMap::new();
         for req in &requests {
-            let bytes = serde_json::to_vec(req).map_err(|e| e.to_string())?;
+            let bytes = stamp_app(req)?; // 0.3.0 forgot this path → chunk downloads/uploads hit the gate
             if let Err(e) = sender.send_message(recipient, bytes.clone(), IncludedSurbs::new(surbs)).await {
                 *guard = None;
                 self.mark_dead();
@@ -653,12 +653,7 @@ impl Transport {
         let recipient =
             Recipient::try_from_base58_string(server).map_err(|e| format!("bad server address: {e}"))?;
         let id = req.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
-        // Every request carries the app version for the server's release gate.
-        let mut req = req.clone();
-        if let Some(o) = req.as_object_mut() {
-            o.insert("app".into(), serde_json::Value::String(crate::app_version().to_string()));
-        }
-        let bytes = serde_json::to_vec(&req).map_err(|e| e.to_string())?;
+        let bytes = stamp_app(req)?;
 
         self.ensure_connected().await?;
         let mut guard = self.client.lock().await;
@@ -758,4 +753,15 @@ mod tests {
         assert_eq!(z.traffic.message_sending_average_delay, Duration::from_millis(1));
         assert_eq!(z.cover_traffic.loop_cover_traffic_average_delay, Duration::from_millis(1));
     }
+}
+
+/// Serialise a request with the app version stamped in (`app`), for the server's release
+/// gate (SCRAI_MIN_APP). EVERY send path must go through here — 0.3.0 stamped only
+/// `round_trip`, so the windowed `image.chunk` / `upload.chunk` sends were refused.
+fn stamp_app(req: &Value) -> Result<Vec<u8>, String> {
+    let mut req = req.clone();
+    if let Some(o) = req.as_object_mut() {
+        o.insert("app".into(), Value::String(crate::app_version().to_string()));
+    }
+    serde_json::to_vec(&req).map_err(|e| e.to_string())
 }
