@@ -113,6 +113,12 @@ const httpBackend = {
   setMixnetPerf: () => Promise.resolve({}), // dev backend has no mixnet
   // nosemgrep: scrai-js-window-open -- dev bridge only; the app routes through open_external
   openExternal: (url) => { window.open(url, "_blank", "noopener"); return Promise.resolve(); },
+  // Browser dev keeps the IndexedDB vault (vault.js picks it when !isTauri) — never called.
+  vaultList: () => Promise.reject(new Error("native vault is Tauri-only")),
+  vaultLoad: () => Promise.reject(new Error("native vault is Tauri-only")),
+  vaultSave: () => Promise.reject(new Error("native vault is Tauri-only")),
+  vaultRemove: () => Promise.reject(new Error("native vault is Tauri-only")),
+  vaultPurgeWebdata: () => Promise.resolve(),
   // Dev has no mixnet: images ride inline in the chat instead of chunk-uploading.
   uploadBegin: () => Promise.reject(new Error("no chunked upload in dev")),
   uploadChunk: () => Promise.reject(new Error("no chunked upload in dev")),
@@ -172,6 +178,12 @@ const tauriBackend = (invoke) => ({
   openExternal: (url) => invoke("open_external", { url }),
   saveImage: (dataB64, filename) => invoke("save_image", { data: dataB64, filename }),
   shareText: (filename, text) => invoke("share_text", { filename, text }),
+  // Chat vault (Rust-side files, key in the OS keychain — see src-tauri/src/vault.rs).
+  vaultList: () => invoke("vault_list"),
+  vaultLoad: (id) => invoke("vault_load", { id }),
+  vaultSave: (session, updated) => invoke("vault_save", { session, updated: (typeof updated === "number" ? updated : null) }),
+  vaultRemove: (id) => invoke("vault_remove", { id }),
+  vaultPurgeWebdata: () => invoke("vault_purge_webdata"),
   uploadBegin: (mimeType, totalBytes) => invoke("upload_begin", { mimeType, totalBytes }),
   uploadChunk: (uploadId, seq, data) => invoke("upload_chunk", { uploadId, seq, data }),
   uploadPipeline: async (uploadId, chunks, onProgress) => {
@@ -257,6 +269,11 @@ export const Backend = {
   setEntryGateway: (id) => pick("setEntryGateway", id),
   setMixnetPerf: (coverMs, mixMs, sendMs, continuous) => pick("setMixnetPerf", coverMs, mixMs, sendMs, continuous),
   openExternal: (url) => pick("openExternal", url),
+  vaultList: () => pick("vaultList"),
+  vaultLoad: (id) => pick("vaultLoad", id),
+  vaultSave: (session, updated) => pick("vaultSave", session, updated),
+  vaultRemove: (id) => pick("vaultRemove", id),
+  vaultPurgeWebdata: () => pick("vaultPurgeWebdata"),
   saveImage: (dataB64, filename, mimeType) => pick("saveImage", dataB64, filename, mimeType),
   shareText: (filename, text) => pick("shareText", filename, text),
   uploadBegin: (mimeType, totalBytes) => pick("uploadBegin", mimeType, totalBytes),

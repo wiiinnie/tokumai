@@ -11,6 +11,7 @@ mod account;
 mod detect;
 mod nym;
 mod ocr;
+mod vault;
 mod wallet;
 
 use nym::Transport;
@@ -207,6 +208,45 @@ fn fair_price_estimate(model: &str, messages: &Value, reply_text: &str) -> Optio
 
 fn data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     app.path().app_data_dir().map_err(|e| e.to_string())
+}
+
+// ---- chat vault (vault.rs): sessions live in Rust-managed files, key in the OS keychain.
+// The webview sees plaintext sessions over IPC only — never the key.
+async fn vault_blocking<T: Send + 'static>(
+    app: &AppHandle,
+    f: impl FnOnce(&Path) -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    let dir = data_dir(app)?;
+    tauri::async_runtime::spawn_blocking(move || f(&dir)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn vault_list(app: AppHandle) -> Result<Vec<vault::Meta>, String> {
+    vault_blocking(&app, |d| vault::list(d)).await
+}
+
+#[tauri::command]
+async fn vault_load(app: AppHandle, id: String) -> Result<Option<Value>, String> {
+    vault_blocking(&app, move |d| vault::load(d, &id)).await
+}
+
+#[tauri::command]
+async fn vault_save(app: AppHandle, session: Value, updated: Option<u64>) -> Result<vault::Meta, String> {
+    vault_blocking(&app, move |d| vault::save(d, session, updated)).await
+}
+
+#[tauri::command]
+async fn vault_remove(app: AppHandle, id: String) -> Result<(), String> {
+    vault_blocking(&app, move |d| vault::remove(d, &id)).await
+}
+
+/// After the one-time IndexedDB → vault migration: drop the webview's stored site data so
+/// the old ciphertext + key do not linger in WebView2's LevelDB log files until Chromium
+/// compacts them. The webview restores its localStorage settings itself (backend.js).
+/// Unsupported on Android (wry) — the caller treats an error as "nothing to purge".
+#[tauri::command]
+async fn vault_purge_webdata(webview: tauri::Webview) -> Result<(), String> {
+    webview.clear_all_browsing_data().map_err(|e| e.to_string())
 }
 
 fn rand_hex(n: usize) -> String {
@@ -2328,7 +2368,8 @@ pub fn run() {
             invoice, invoice_status, invoice_cancel, ocr_scan, pdf_text, pdf_ocr, pdf_pages, collect, redeem, chat,
             smart_available, smart_detect, coconut_redeem,
             mixnet_route, mixnet_ping, cancel_chat, app_resumed, list_entry_gateways, set_entry_gateway, set_mixnet_perf, open_external, save_image,
-            share_text, upload_begin, upload_chunk, upload_pipeline, pick_image, open_account_security
+            share_text, upload_begin, upload_chunk, upload_pipeline, pick_image, open_account_security,
+            vault_list, vault_load, vault_save, vault_remove, vault_purge_webdata
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -77,7 +77,7 @@ const KEYCHAIN_ACCOUNT: &str = "wallet-encryption-key";
 
 /// The on-disk envelope: a versioned AEAD ciphertext, NOT the wallet in the clear.
 #[derive(Serialize, Deserialize)]
-struct EncEnvelope {
+pub(crate) struct EncEnvelope {
     v: u32,
     alg: String,
     /// base64(12-byte GCM nonce)
@@ -88,18 +88,25 @@ struct EncEnvelope {
 
 /// Fetch-or-create the 32-byte wallet key from the OS keychain.
 fn wallet_key() -> Result<[u8; 32], String> {
+    keychain_key(KEYCHAIN_ACCOUNT, "wallet")
+}
+
+/// Fetch-or-create a random 32-byte data key under `account` in the OS keychain
+/// (service `com.scrambleai.app`). Shared by the wallet and the chat vault — each has
+/// its own entry, so wiping one never affects the other.
+pub(crate) fn keychain_key(account: &str, what: &str) -> Result<[u8; 32], String> {
     use rand::RngCore;
-    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT).map_err(|e| e.to_string())?;
+    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, account).map_err(|e| e.to_string())?;
     match entry.get_password() {
         Ok(b64) => {
             let bytes = B64.decode(b64.trim()).map_err(|e| e.to_string())?;
-            bytes.try_into().map_err(|_| "wallet key in keychain has the wrong length".to_string())
+            bytes.try_into().map_err(|_| format!("{what} key in keychain has the wrong length"))
         }
         Err(keyring::Error::NoEntry) => {
             let mut key = [0u8; 32];
             rand::rngs::OsRng.fill_bytes(&mut key);
             entry.set_password(&B64.encode(key)).map_err(|e| e.to_string())?;
-            log::info!("[wallet] generated a fresh wallet encryption key in the OS keychain");
+            log::info!("[{what}] generated a fresh {what} encryption key in the OS keychain");
             Ok(key)
         }
         Err(e) => Err(format!("keychain error: {e}")),
@@ -114,11 +121,11 @@ fn wallet_key() -> Result<[u8; 32], String> {
 /// inside its private container; desktop keeps keychain encryption, where the real threat is
 /// a world-readable file + backup/sync agents (Time Machine, iCloud Drive, Dropbox).
 #[cfg(any(target_os = "ios", target_os = "android"))]
-fn use_keychain() -> bool {
+pub(crate) fn use_keychain() -> bool {
     false // app-private, OS-encrypted sandbox on both; `keyring` has no Android backend anyway
 }
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
-fn use_keychain() -> bool {
+pub(crate) fn use_keychain() -> bool {
     true
 }
 
@@ -145,7 +152,7 @@ fn write_atomic(data_dir: &Path, contents: &str) -> Result<(), String> {
     std::fs::rename(&tmp_path, &final_path).map_err(|e| e.to_string())
 }
 
-fn encrypt(key: &[u8; 32], plaintext: &str) -> Result<String, String> {
+pub(crate) fn encrypt(key: &[u8; 32], plaintext: &str) -> Result<String, String> {
     use aes_gcm::aead::{Aead, KeyInit};
     use aes_gcm::{Aes256Gcm, Nonce};
     use rand::RngCore;
@@ -164,7 +171,7 @@ fn encrypt(key: &[u8; 32], plaintext: &str) -> Result<String, String> {
     .map_err(|e| e.to_string())
 }
 
-fn decrypt(key: &[u8; 32], env: &EncEnvelope) -> Result<String, String> {
+pub(crate) fn decrypt(key: &[u8; 32], env: &EncEnvelope) -> Result<String, String> {
     use aes_gcm::aead::{Aead, KeyInit};
     use aes_gcm::{Aes256Gcm, Nonce};
     let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| e.to_string())?;
