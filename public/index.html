@@ -1748,7 +1748,7 @@
     $("acctLine").textContent = account
       ? `account ${account.fingerprint} · session #${account.sessionIndex}`
       : "no account — open Account & recovery";
-    if(held>0){ $("heldLine").style.display="flex"; $("heldText").textContent = `${formatScrai(Math.max(0,balance-held))} in session · ${formatScrai(held)} held (device-local — auto-redeems as you chat)`; }
+    if(held>0){ $("heldLine").style.display="flex"; $("heldText").textContent = `${formatScrai(Math.max(0,balance-held))} in session · ${formatScrai(held)} on this device only — redeems into your balance as you chat; redeem before deleting the app or changing device`; }
     else $("heldLine").style.display="none";
   }
   // The footer's right side shows either a status word or the price of the last
@@ -4209,7 +4209,7 @@
         + row("restore","c-restore","📥","Restore account","from phrase or QR")
         + row("migrate","c-migrate","📲","Move to another device","redeem &amp; hand over")
         + `<div class="grouplbl">Credit</div>`
-        + row("credit","c-redeem","↻","Credit","check for credit · redeem held")
+        + row("credit","c-redeem","↻","Credit","check for credit · redeem device-held coins")
         + `<div class="grouplbl dangergroup">Danger zone</div>`
         + row("danger","c-danger","⚠","New account / Delete","abandons this balance")
         + `<p class="hint" id="acctStatus" style="margin-top:12px"></p>`;
@@ -4246,7 +4246,7 @@
          <div class="btnrow"><button class="btn primary" data-click="doAccountNew" data-args="true">Yes, overwrite</button>
            <button class="btn" data-click="cancelAcctView">Cancel</button></div>`
       : acctView==="confirmDelete"
-      ? `<p class="hint" style="color:var(--rust)">Deleting wipes the recovery phrase AND any un-redeemed held credit on this device (bearer money — not recoverable). Sure?</p>
+      ? `<p class="hint" style="color:var(--rust)">Deleting wipes the recovery phrase AND any coins still held on this device (bearer money — not recoverable). Redeem them first, or use “Move to another device”. Sure?</p>
          <div class="btnrow"><button class="btn primary" data-click="doAccountDelete" data-args="true">Yes, delete</button>
            <button class="btn" data-click="cancelAcctView">Cancel</button></div>`
       : `<p class="pagelead">These abandon or wipe this account. Your balance is only recoverable via the 24-word phrase — keep it before you do either.</p>
@@ -4264,7 +4264,7 @@
       phrase:  { t:"Recovery phrase",         h:phraseBlock },
       restore: { t:"Restore account",         h:restorePage },
       migrate: { t:"Move to another device",  h:migratePage },
-      credit:  { t:"Credit",                  h:`<p class="pagelead">Recover credit paid to this account, and turn held ecash into recoverable balance.</p><div class="btnrow"><button class="btn" data-click="checkCredit">Check for credit</button></div>${redeemSection()}` },
+      credit:  { t:"Credit",                  h:`<p class="pagelead">Recover credit paid to this account, and turn coins held on this device into recoverable balance.</p><div class="btnrow"><button class="btn" data-click="checkCredit">Check for credit</button></div>${redeemSection()}` },
       danger:  { t:"Danger zone",             h:dangerPage },
     };
     const pg = pages[acctPage] || pages.server;
@@ -4289,7 +4289,8 @@
     const maxD = Math.max(1, Math.floor(held/100000));
     const d = Math.min(redeemDollars!=null?redeemDollars:maxD, maxD);
     const scrai = d>=maxD ? held : d*100000;   // at max, drain the remainder too
-    return `<div class="grouplbl">Redeem held credit</div>
+    return `<div class="grouplbl">Held on this device</div>
+    <p class="hint">${esc(formatScrai(held))} SCRAI are blind-signed coins that exist <b>only on this device</b> — like cash: not linked to your account, not restorable from your recovery phrase. They redeem into your recoverable balance in $1 steps as you chat. <b>Redeem everything before deleting the app or moving to another device</b> (“Move to another device” does that for you).</p>
     <div class="mprow">
       <div class="mptop"><b>Redeem</b></div>
       <input type="range" id="redeemSlider" min="1" max="${maxD}" value="${d}" step="1"
