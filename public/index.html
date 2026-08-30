@@ -233,6 +233,9 @@
   .gwrow .hn{flex:1 1 auto;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .gwrow .idc{font-family:var(--mono);font-size:10px;color:var(--muted);flex:0 0 auto}
   .gwrow .hn .ip{font-family:var(--mono);font-size:10.5px;color:var(--muted);margin-left:8px}
+  .gwopts{display:flex;flex-wrap:wrap;gap:6px 18px;margin:0 0 8px;font-size:12.5px;color:var(--muted)}
+  .gwopts label{display:flex;align-items:center;gap:7px;cursor:pointer}
+  .gwopts input{accent-color:var(--mix);margin:0}
   .gwrow .on{font-family:var(--mono);font-size:10px;color:var(--signal);flex:0 0 auto;margin-left:6px}
   ul.terms{list-style:none;margin:12px 0;padding:0;display:flex;flex-direction:column;gap:8px}
   ul.terms li{background:color-mix(in srgb,var(--mix) 12%,var(--surface-2));border:1px solid color-mix(in srgb,var(--mix) 50%,var(--line));border-radius:9px;padding:10px 13px}
@@ -2561,12 +2564,20 @@
     const hay = [g.country, g.moniker, g.host, g.id, ...(g.ips||[])].filter(Boolean).map(x=>String(x).toLowerCase());
     return needles.some(n => hay.some(h => h.includes(n)));
   }
+  // Picker options (tester feedback 2026-08-30): hide nodes that announce no location
+  // ("??", no flag) and nodes that announce no hostname (IP-only rows). Persisted locally.
+  function getGwOpts(){ try{ return Object.assign({loc:false,host:false}, JSON.parse(localStorage.getItem("scrai.gwopts")||"{}")); }catch(_){ return {loc:false,host:false}; } }
+  function toggleGwOpt(el){ const o=getGwOpts(); o[el.dataset.opt]=!!el.checked; try{ localStorage.setItem("scrai.gwopts", JSON.stringify(o)); }catch(_){} const f=$("gwFilter"); renderGwList(f?f.value:""); }
+  function gwHasLocation(g){ return !!(g.country && g.country!=="??"); }
+  function gwHasHostname(g){ const h=(g.host||"").trim(); return !!h && !/^[\d.]+$/.test(h) && !/^[0-9a-f:]+$/i.test(h); }
   function renderGwList(filter){
     const chosen = gwChosen();
     const f = (filter||"").trim().toLowerCase();
     const alt = f ? latinize(f) : null;
     const needles = f ? (alt ? [f, alt] : [f]) : [];
-    const list = f ? gwAll.filter(g=>gwMatches(g, needles)) : gwAll;
+    const o = getGwOpts();
+    const pool = gwAll.filter(g => (!o.loc || gwHasLocation(g)) && (!o.host || gwHasHostname(g)));
+    const list = f ? pool.filter(g=>gwMatches(g, needles)) : pool;
     const rows = list.slice(0,300).map(g=>{
       const sel = g.id===chosen;
       const ip = (g.ips||[]).find(x=>x && x!==g.host) || "";
@@ -2585,7 +2596,8 @@
       </button>`;
     $("gwList").innerHTML = auto + rows;
     const shown = Math.min(list.length,300);
-    $("gwStatus").textContent = `${gwAll.length} entry gateways${f?` · ${list.length} match “${filter}”${alt?` (read as “${alt}”)`:""}`:""}${list.length>300?` · showing first ${shown}`:""}`;
+    const hidden = gwAll.length - pool.length;
+    $("gwStatus").textContent = `${gwAll.length} entry gateways${hidden?` · ${hidden} hidden`:""}${f?` · ${list.length} match “${filter}”${alt?` (read as “${alt}”)`:""}`:""}${list.length>300?` · showing first ${shown}`:""}`;
   }
   async function openEntryPicker(){
     if(!isTauri() || !mixOn) return;
@@ -2597,6 +2609,10 @@
       The <b>exit</b> hop is the server's own gateway and can't be chosen here.</p>
       <input id="gwFilter" placeholder="filter by name, country (CH), host, IP address, or identity key…" data-input="filterGw" data-input-pass="value"
         style="width:100%;padding:9px 12px;border:1px solid var(--line);border-radius:9px;background:var(--surface-2);color:var(--bone);font:inherit;margin-bottom:8px">
+      <div class="gwopts">
+        <label><input type="checkbox" data-opt="loc" ${getGwOpts().loc?"checked":""} data-input="toggleGwOpt" data-input-pass="this"> hide nodes without a location (??)</label>
+        <label><input type="checkbox" data-opt="host" ${getGwOpts().host?"checked":""} data-input="toggleGwOpt" data-input-pass="this"> hide nodes without a hostname (IP only)</label>
+      </div>
       <p class="hint" id="gwStatus">loading gateways from the Nym directory…</p>
       <div id="gwList" style="display:flex;flex-direction:column;gap:6px;margin-top:6px"></div>`;
     try{
@@ -4754,7 +4770,7 @@
     cancelMsg, resendMsg, openConnSheet, closeConnSheet, rebuildRoute, rebuildRouteFromSheet, routeDismiss, iterateImg,
     openBuy, closeBuy, buyTier, buyOrInvoice, copyUri, openAccount, closeAccount, doAccountNew, doAccountReveal, doAccountRestore, doAccountDelete, doMigrate, doRedeem, redeemSliderChanged, startQrScan, stopQrScan,
     showRestore, askNew, cancelAcctView, saveServer, srvSelected, qNav, scrollToBottom, reopenGuard, checkCredit,
-    openEntryPicker, showExitInfo, chooseGateway, closeGw, filterGw,
+    openEntryPicker, showExitInfo, chooseGateway, closeGw, filterGw, toggleGwOpt,
     acceptTerms, declineTerms, termsAgreeToggle, chooseModel, openLink, toggleImgOvl, saveImgTap, liveNudgeUse, liveNudgeSkip, reconnectMix, runMixPing, resetMixPerf,
     pickImage, attachTap, pickNative, pickFile, closeAttachMenu, onImagePicked, clearImage, setMenuKind, toggleLatest, toggleVendorIdx, imgSettled,
     closeImport, decryptImport, selectMethod, copyMemo, openSettings, closeSettings,

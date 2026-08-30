@@ -633,6 +633,13 @@ impl Transport {
                         ) else { continue };
                         if let Some(g) = map.get_mut(id) {
                             g.moniker = name.trim().to_string();
+                            // Nodes that announce no location get the API's geo-IP country,
+                            // so the picker shows a flag instead of "??" where one is known.
+                            if g.country.is_empty() {
+                                if let Some(cc) = it.pointer("/location/two_letter_iso_country_code").and_then(|v| v.as_str()) {
+                                    g.country = cc.trim().to_uppercase();
+                                }
+                            }
                             n += 1;
                         }
                     }
