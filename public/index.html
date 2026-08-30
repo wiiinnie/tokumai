@@ -232,6 +232,7 @@
   .gwrow .cc{font-family:var(--mono);font-size:11px;color:var(--muted);width:26px;flex:0 0 auto}
   .gwrow .hn{flex:1 1 auto;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .gwrow .idc{font-family:var(--mono);font-size:10px;color:var(--muted);flex:0 0 auto}
+  .gwrow .hn .ip{font-family:var(--mono);font-size:10.5px;color:var(--muted);margin-left:8px}
   .gwrow .on{font-family:var(--mono);font-size:10px;color:var(--signal);flex:0 0 auto;margin-left:6px}
   ul.terms{list-style:none;margin:12px 0;padding:0;display:flex;flex-direction:column;gap:8px}
   ul.terms li{background:color-mix(in srgb,var(--mix) 12%,var(--surface-2));border:1px solid color-mix(in srgb,var(--mix) 50%,var(--line));border-radius:9px;padding:10px 13px}
@@ -2541,16 +2542,38 @@
   function closeGw(){ $("gwScrim").classList.remove("open"); }
   function shortId(id){ return id ? id.slice(0,6)+"…"+id.slice(-4) : ""; }
   function gwChosen(){ return routeCache.chosen || null; }
+  // Keyboard-layout rescue for the search box (tester feedback, 2026-08-30): someone on a
+  // Cyrillic (or Greek / Hebrew / Arabic) layout types "тньд" meaning the keys n-y-m-l and
+  // gets nothing. Map each character back to the QWERTY key at the same position and
+  // search with BOTH strings — hostnames, ids and IPs are Latin anyway. Standard OS layouts:
+  // ЙЦУКЕН (ru/uk/by/bg-phonetic differences are in the few letters listed), Greek, Hebrew, Arabic 101.
+  const LAYOUTS = [
+    ["йцукенгшщзхъфывапролджэячсмитьбю.ё", "qwertyuiop[]asdfghjkl;'zxcvbnm,./`"],   // Russian
+    ["їієґ", "]s'\\"],                                                                // Ukrainian extras
+    ["ў", "]"],                                                                       // Belarusian extra
+    [";ςερτυθιοπασδφγηξκλζχψωβνμ", "qwertyuiopasdfghjklzxcvbnm"],                     // Greek
+    ["/'קראטוןםפשדגכעיחלךזסבהנמצ", "qwertyuiopasdfghjklzxcvbnm"],                     // Hebrew
+    ["ضصثقفغعهخحشسيبلاتنمئءؤرىة", "qwertyuiopasdfghjklzxcvnm"],                       // Arabic (b = لا ligature, skipped)
+  ];
+  const LAYOUT_MAP = (()=>{ const m=new Map(); for(const [from,to] of LAYOUTS){ const a=[...from], b=[...to]; a.forEach((c,i)=>{ if(b[i]) m.set(c,b[i]); }); } return m; })();
+  function latinize(s){ let out="", changed=false; for(const ch of s){ const m=LAYOUT_MAP.get(ch); if(m){ out+=m; changed=true; } else out+=ch; } return changed ? out : null; }
+  function gwMatches(g, needles){
+    const hay = [g.country, g.host, g.id, ...(g.ips||[])].filter(Boolean).map(x=>String(x).toLowerCase());
+    return needles.some(n => hay.some(h => h.includes(n)));
+  }
   function renderGwList(filter){
     const chosen = gwChosen();
     const f = (filter||"").trim().toLowerCase();
-    const list = f ? gwAll.filter(g=>(g.country||"").toLowerCase().includes(f)||(g.host||"").toLowerCase().includes(f)||(g.id||"").toLowerCase().includes(f)) : gwAll;
+    const alt = f ? latinize(f) : null;
+    const needles = f ? (alt ? [f, alt] : [f]) : [];
+    const list = f ? gwAll.filter(g=>gwMatches(g, needles)) : gwAll;
     const rows = list.slice(0,300).map(g=>{
       const sel = g.id===chosen;
+      const ip = (g.ips||[]).find(x=>x && x!==g.host) || "";
       return `<button class="gwrow${sel?' sel':''}" data-click="chooseGateway" data-id="${escAttr(g.id)}" data-click-pass="id">
         <span class="fl">${flagOf(g.country)||'🏳️'}</span>
         <span class="cc">${esc(g.country||'??')}</span>
-        <span class="hn">${esc(g.host||shortId(g.id))}</span>
+        <span class="hn">${esc(g.host||shortId(g.id))}${ip?` <span class="ip">${esc(ip)}</span>`:''}</span>
         <span class="idc">${esc(shortId(g.id))}</span>
         ${sel?'<span class="on">● active</span>':''}
       </button>`;
@@ -2562,7 +2585,7 @@
       </button>`;
     $("gwList").innerHTML = auto + rows;
     const shown = Math.min(list.length,300);
-    $("gwStatus").textContent = `${gwAll.length} entry gateways${f?` · ${list.length} match “${filter}”`:""}${list.length>300?` · showing first ${shown}`:""}`;
+    $("gwStatus").textContent = `${gwAll.length} entry gateways${f?` · ${list.length} match “${filter}”${alt?` (read as “${alt}”)`:""}`:""}${list.length>300?` · showing first ${shown}`:""}`;
   }
   async function openEntryPicker(){
     if(!isTauri() || !mixOn) return;
@@ -2572,7 +2595,7 @@
       reconnects the Rust core on your next request. The two middle mix hops stay
       randomised per packet — that reshuffling is the anonymity, not something you set.
       The <b>exit</b> hop is the server's own gateway and can't be chosen here.</p>
-      <input id="gwFilter" placeholder="filter by country (e.g. CH), host, or paste an identity key…" data-input="filterGw" data-input-pass="value"
+      <input id="gwFilter" placeholder="filter by country (CH), host, IP address, or identity key…" data-input="filterGw" data-input-pass="value"
         style="width:100%;padding:9px 12px;border:1px solid var(--line);border-radius:9px;background:var(--surface-2);color:var(--bone);font:inherit;margin-bottom:8px">
       <p class="hint" id="gwStatus">loading gateways from the Nym directory…</p>
       <div id="gwList" style="display:flex;flex-direction:column;gap:6px;margin-top:6px"></div>`;

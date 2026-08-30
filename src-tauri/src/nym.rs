@@ -53,6 +53,9 @@ pub struct GatewayInfo {
     /// ISO-3166 alpha-2, self-reported by the node (e.g. "CH"). Empty if unknown.
     pub country: String,
     pub host: String,
+    /// All announced IP addresses (v4 and v6), so the picker can be searched by IP
+    /// the way node explorers allow — `host` alone is often a hostname.
+    pub ips: Vec<String>,
     /// Whether the node advertises itself as usable as an entry gateway.
     pub entry: bool,
 }
@@ -598,11 +601,16 @@ impl Transport {
                     })
                     .unwrap_or_default()
                     .to_string();
+                let ips: Vec<String> = d
+                    .pointer("/host_information/ip_address")
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.iter().filter_map(|v| v.as_str()).map(str::to_string).collect())
+                    .unwrap_or_default();
                 let entry = d
                     .pointer("/declared_role/entry")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
-                map.insert(id.clone(), GatewayInfo { id, country, host, entry });
+                map.insert(id.clone(), GatewayInfo { id, country, host, ips, entry });
             }
         }
         *guard = Some(map.clone());

@@ -38,6 +38,16 @@ if [ -e "$ARCHIVE/Products/Applications/ScrambleAI.app/libapp.a" ]; then
   exit 1
 fi
 
+# Build number: Tauri writes CFBundleVersion = the app version, so a SECOND upload of the
+# same version (a fix before the first one shipped) is rejected as a duplicate. Export
+# re-signs the bundle anyway, so stamp a monotonic timestamp build number into the archive
+# first (YYYYMMDDHHMM — one integer, always higher than any earlier build).
+BUILD_NO=$(date -u +%Y%m%d%H%M)
+APP_PLIST="$ARCHIVE/Products/Applications/ScrambleAI.app/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NO" "$APP_PLIST"
+/usr/libexec/PlistBuddy -c "Set :ApplicationProperties:CFBundleVersion $BUILD_NO" "$ARCHIVE/Info.plist" 2>/dev/null || true
+echo "→ build $(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PLIST") ($BUILD_NO)"
+
 echo "→ 2/3 export for App Store Connect"
 mkdir -p "$APPLE/build"
 cat > "$EXPORT_PLIST" <<'EOF'
