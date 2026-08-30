@@ -1,0 +1,43 @@
+# Android build notes
+
+Toolchain (this Mac): `brew install openjdk@17`, `brew install --cask android-commandlinetools`, SDK in
+`~/Library/Android/sdk` (platform-tools, platforms 34/36, build-tools 34/35/36, NDK 27.3.13750724,
+cmdline-tools;latest, emulator + `system-images;android-34;google_apis;arm64-v8a`), rustup targets
+`aarch64-linux-android` (+ armv7/x86_64). Env for every build:
+
+```
+export JAVA_HOME=/opt/homebrew/opt/openjdk@17 ANDROID_HOME=$HOME/Library/Android/sdk \
+       NDK_HOME=$ANDROID_HOME/ndk/27.3.13750724 PATH=/opt/homebrew/opt/openjdk@17/bin:$ANDROID_HOME/platform-tools:$PATH
+npm run tauri android build -- --apk --target aarch64        # release, signed with ~/.scrai-android/
+```
+
+Signing: `~/.scrai-android/scrai-release.jks` + `keystore.properties` (never in the repo); without the
+properties file the release APK is built unsigned. Debug APKs are ~1.3 GB (unoptimised nym-sdk) —
+use release APKs for emulator tests.
+
+## TLS on Android — the two things that were missing (2026-08-30)
+
+Symptom: the app connected to the mixnet but hung forever at "Connecting to ScrambleAI server".
+
+1. `nym-http-api-client` → `reqwest 0.13` verifies TLS with **rustls-platform-verifier**, which on
+   Android must be initialised with a JNI env + Context and needs its Kotlin half in the APK.
+   `lib.rs::init_android_tls_verifier()` does that from Tauri's `setup` via
+   `tauri::wry::prelude::dispatch` (Tauri does not populate `ndk_context` — that panics).
+2. Upstream's Kotlin verifier (0.1.1) marks every **Let's Encrypt** certificate "Revoked" because LE
+   stopped including OCSP URLs in 2025 and Android's revocation checker throws
+   `BasicReason.UNSPECIFIED` ("Certificate does not specify OCSP responder") —
+   rustls/rustls-platform-verifier#221, open. The Nym directory (`validator.nymtech.net`) uses LE.
+   `src-tauri/gen/android/app/libs/rustls-platform-verifier-0.1.1-scrai.aar` is our build of the
+   Kotlin component with that case treated as "revocation status unknown" (soft fail, like browsers);
+   the change is `libs/rustls-platform-verifier-0.1.1-scrai.patch`. To rebuild it:
+
+   ```
+   git clone --depth 1 --branch v/0.7.0 https://github.com/rustls/rustls-platform-verifier
+   cd rustls-platform-verifier && git apply <repo>/src-tauri/gen/android/app/libs/rustls-platform-verifier-0.1.1-scrai.patch
+   cd android && echo "sdk.dir=$ANDROID_HOME" > local.properties && ./gradlew :rustls-platform-verifier:assembleRelease
+   # → android/rustls-platform-verifier/build/outputs/aar/rustls-platform-verifier-release.aar
+   ```
+   Drop the `.aar` and switch `app/build.gradle.kts` back to the crate's maven repo once #221 is fixed upstream.
+
+Emulator: `emulator -avd scrai` (Pixel 7, API 34 arm64), `adb install -r <apk>`,
+`adb logcat | grep -E "RustStdoutStderr|rustls_platform_verifier|nym_"`.

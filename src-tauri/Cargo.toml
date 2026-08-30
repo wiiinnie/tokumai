@@ -73,6 +73,14 @@ pdf-extract = "0.9"
 gline-rs = { version = "1", optional = true }
 orp = { version = "1", optional = true }
 
+# Android: Nym's HTTP client (reqwest 0.13) verifies TLS through rustls-platform-verifier,
+# which on Android must be handed a JNI env + app Context once at start-up — otherwise every
+# TLS handshake to the Nym directory fails and the mixnet client never connects (two testers
+# hit exactly that on 2026-08-30: stuck at "Connecting to ScrambleAI server").
+[target.'cfg(target_os = "android")'.dependencies]
+rustls-platform-verifier = "0.7"
+jni = { version = "0.22", default-features = false }
+
 # Native "save as…" dialog for downloading generated images (the webview can't).
 # Desktop only — iOS saves to Photos, Android has no dialog backend in rfd.
 [target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]

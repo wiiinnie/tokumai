@@ -85,6 +85,11 @@ rust {
 }
 
 dependencies {
+    // Kotlin half of rustls-platform-verifier (TLS via the Android trust store). OUR build of
+    // it: upstream 0.1.1 marks every Let's Encrypt certificate "Revoked" on Android because LE
+    // dropped OCSP URLs in 2025 (rustls/rustls-platform-verifier#221) — libs/ carries the
+    // patched .aar (source + build notes: docs/android.md). Replace when upstream fixes #221.
+    implementation(files("libs/rustls-platform-verifier-0.1.1-scrai.aar"))
     implementation("androidx.webkit:webkit:1.14.0")
     implementation("androidx.appcompat:appcompat:1.7.1")
     implementation("androidx.activity:activity-ktx:1.10.1")

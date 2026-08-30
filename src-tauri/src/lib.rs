@@ -2240,6 +2240,35 @@ fn open_external(app: AppHandle, url: String) -> Result<(), String> {
     spawned.map(|_| ()).map_err(|e| e.to_string())
 }
 
+/// Android: hand rustls-platform-verifier the JVM + app Context so TLS verification can use
+/// the system trust store. Must run before any networking (the Nym client's first directory
+/// fetch is TLS). Tauri does not populate `ndk_context` (that panics: "android context was
+/// not initialized"); wry's `dispatch` runs a closure on the Android main thread with the
+/// JNI env (jni 0.21) and the Activity — we bridge the raw pointers into the verifier's
+/// jni 0.22 types.
+#[cfg(target_os = "android")]
+fn init_android_tls_verifier() {
+    tauri::wry::prelude::dispatch(|env, activity, _webview| {
+        let raw_vm = match env.get_java_vm() {
+            Ok(vm) => vm.get_java_vm_pointer(),
+            Err(e) => {
+                log::error!("scrai: android TLS verifier: no JavaVM from the activity env: {e}");
+                return;
+            }
+        };
+        let raw_ctx = activity.as_raw();
+        let vm = unsafe { jni::JavaVM::from_raw(raw_vm.cast()) };
+        let res: Result<(), jni::errors::Error> = vm.attach_current_thread(|env22| {
+            let context = unsafe { jni::objects::JObject::from_raw(env22, raw_ctx.cast()) };
+            rustls_platform_verifier::android::init_with_env(env22, context)
+        });
+        match res {
+            Ok(()) => log::info!("scrai: android TLS verifier initialised"),
+            Err(e) => log::error!("scrai: android TLS verifier init FAILED: {e} — mixnet directory fetches will not work"),
+        }
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // iOS gives worker/main threads far smaller stacks than macOS (main ≈1 MB vs 8 MB;
@@ -2262,6 +2291,10 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let _ = APP_VER.set(app.package_info().version.to_string());
+            // Android: TLS trust store for the Nym client's directory fetches (needs the Activity,
+            // which exists by now — the mobile entry point runs from onCreate).
+            #[cfg(target_os = "android")]
+            init_android_tls_verifier();
             diag(&app.handle().clone(), "==== launch ====");
             // Release builds log too (warn+ → the OS log dir, e.g. ~/Library/Logs/<bundle id>/):
             // a wallet/keychain problem must leave evidence, not just a blank UI.
