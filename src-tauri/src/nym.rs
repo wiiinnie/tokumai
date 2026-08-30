@@ -29,6 +29,10 @@ use tokio::sync::Mutex;
 /// declared role, and self-reported ISO country). `connect_new()` defaults to
 /// mainnet, so this is the matching directory.
 const NYM_DIRECTORY: &str = "https://validator.nymtech.net/api/v1/nym-nodes/described";
+/// Monikers live only in each node's own `/api/v1/description`; Nym's node-status API
+/// aggregates them (`name`) for every entry gateway in one unpaged list. Best effort:
+/// without it the picker simply shows hostnames, as before.
+const NYM_MONIKERS: &str = "https://mainnet-node-status-api.nymtech.cc/dvpn/v1/directory/gateways/entry";
 
 /// Build the mixnet `DebugConfig` for a performance/privacy setting. Extracted as a
 /// free function so the mapping is unit-testable without a live mixnet, and so the
@@ -56,6 +60,10 @@ pub struct GatewayInfo {
     /// All announced IP addresses (v4 and v6), so the picker can be searched by IP
     /// the way node explorers allow — `host` alone is often a hostname.
     pub ips: Vec<String>,
+    /// Operator-chosen display name (the node's `/api/v1/description` moniker), as
+    /// aggregated by Nym's node-status API — what explorers show and what testers
+    /// search for. Empty when the node set none or the lookup failed.
+    pub moniker: String,
     /// Whether the node advertises itself as usable as an entry gateway.
     pub entry: bool,
 }
@@ -610,8 +618,29 @@ impl Transport {
                     .pointer("/declared_role/entry")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
-                map.insert(id.clone(), GatewayInfo { id, country, host, ips, entry });
+                map.insert(id.clone(), GatewayInfo { id, country, host, ips, moniker: String::new(), entry });
             }
+        }
+        // Join the operator monikers (best effort, one request).
+        match reqwest::Client::new().get(NYM_MONIKERS).timeout(Duration::from_secs(30)).send().await {
+            Ok(r) => match r.json::<Value>().await {
+                Ok(Value::Array(items)) => {
+                    let mut n = 0;
+                    for it in &items {
+                        let (Some(id), Some(name)) = (
+                            it.get("identity_key").and_then(|v| v.as_str()),
+                            it.get("name").and_then(|v| v.as_str()),
+                        ) else { continue };
+                        if let Some(g) = map.get_mut(id) {
+                            g.moniker = name.trim().to_string();
+                            n += 1;
+                        }
+                    }
+                    log::info!("[nym] monikers for {n} of {} gateways", map.len());
+                }
+                other => log::warn!("[nym] moniker list unusable: {:?}", other.map(|v| v.to_string().len())),
+            },
+            Err(e) => log::warn!("[nym] moniker fetch failed: {e}"),
         }
         *guard = Some(map.clone());
         Ok(map)
