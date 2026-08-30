@@ -409,6 +409,14 @@
   .mpdesc{font-size:11.5px;line-height:1.4;color:var(--muted);margin:-6px 0 12px}
   /* the slider's value never sits top-right: it reads centred UNDER the tick labels */
   .mpout{font-family:var(--mono);font-size:12px;color:var(--signal);text-align:center;margin-top:8px;min-height:1em}
+  .mpheld{font-family:var(--mono);font-size:11px;color:var(--muted)}
+  .mprow.off{opacity:.55}
+  .mprow.off .mpslider.flat{background:var(--line)}
+  .mprow.off .mpout{color:var(--muted)}
+  .mprow.off .btn[disabled]{cursor:default}
+  #heldLine{align-items:flex-start}
+  #heldLine details.why{margin:2px 0 0}
+  #heldLine details.why .body b{color:var(--bone)}
   .mpticks .act{color:var(--signal);font-weight:700}
   .btnrow.center{justify-content:center}
   .mpval{color:var(--signal);font-family:var(--mono);font-size:13px;white-space:nowrap}
@@ -1748,7 +1756,14 @@
     $("acctLine").textContent = account
       ? `account ${account.fingerprint} · session #${account.sessionIndex}`
       : "no account — open Account & recovery";
-    if(held>0){ $("heldLine").style.display="flex"; $("heldText").textContent = `${formatScrai(Math.max(0,balance-held))} in session · ${formatScrai(held)} on this device only — redeems into your balance as you chat; redeem before deleting the app or changing device`; }
+    if(held>0){
+      $("heldLine").style.display="flex";
+      // nosemgrep: scrai-taint-untrusted-to-html -- reviewed 2026-08-30: only formatted numbers + static copy
+      $("heldText").innerHTML = `${esc(formatScrai(Math.max(0,balance-held)))} in session · ${esc(formatScrai(held))} on this device only
+        <details class="why"><summary><span class="chev">›</span> What this means</summary>
+          <div class="body">Coins on this device are blind-signed <b>cash</b>: not linked to your account, not restorable from your recovery phrase. They redeem into your recoverable balance in $1 steps as you chat. <b>Redeem everything before deleting the app or moving to another device</b> — “Move to another device” does that for you.</div>
+        </details>`;
+    }
     else $("heldLine").style.display="none";
   }
   // The footer's right side shows either a status word or the price of the last
@@ -4285,19 +4300,31 @@
   // Redeem-amount chooser: $1 (100k) minimum, all held maximum. Redeeming always uses
   // uniform $1 chunks over the mixnet — a larger amount just loops more of them.
   function redeemSection(){
-    if(held<=0) return "";
+    const why = (body)=>`<details class="why"><summary><span class="chev">›</span> What this does</summary><div class="body">${body}</div></details>`;
+    if(held<=0){
+      // Always show the control (greyed out) so people learn it exists before they need it.
+      return `<div class="grouplbl">Held on this device</div>
+      <div class="mprow off">
+        <div class="mptop"><b>Redeem</b><span class="mpheld">nothing held</span></div>
+        <input type="range" min="1" max="1" value="1" step="1" class="mpslider flat" disabled>
+        <div class="mpticks"><span>$1</span><span></span><span>$1</span></div>
+        <div class="mpout">no coins on this device — everything is in your balance</div>
+        <div class="btnrow center" style="margin-top:12px"><button class="btn primary" disabled>Redeem</button></div>
+        ${why(`After a purchase, coins arrive here as blind-signed <b>cash on this device</b> and are redeemed into your recoverable balance in $1 steps as you chat — or all at once with this slider. Redeem everything before deleting the app or moving to another device.`)}
+      </div>`;
+    }
     const maxD = Math.max(1, Math.floor(held/100000));
     const d = Math.min(redeemDollars!=null?redeemDollars:maxD, maxD);
     const scrai = d>=maxD ? held : d*100000;   // at max, drain the remainder too
     return `<div class="grouplbl">Held on this device</div>
-    <p class="hint">${esc(formatScrai(held))} SCRAI are blind-signed coins that exist <b>only on this device</b> — like cash: not linked to your account, not restorable from your recovery phrase. They redeem into your recoverable balance in $1 steps as you chat. <b>Redeem everything before deleting the app or moving to another device</b> (“Move to another device” does that for you).</p>
     <div class="mprow">
-      <div class="mptop"><b>Redeem</b></div>
+      <div class="mptop"><b>Redeem</b><span class="mpheld">${esc(formatScrai(held))} SCRAI held</span></div>
       <input type="range" id="redeemSlider" min="1" max="${maxD}" value="${d}" step="1"
         data-input="redeemSliderChanged" data-input-pass="value" class="mpslider flat">
       <div class="mpticks"><span>$1</span><span>${maxD>2?"$"+Math.ceil(maxD/2):""}</span><span>$${maxD} · all held</span></div>
       <div class="mpout" id="redeemLabel">${esc(formatScrai(scrai))} SCRAI ($${d}${d>=maxD?" · all held":""})</div>
       <div class="btnrow center" style="margin-top:12px"><button class="btn primary" data-click="doRedeem">Redeem</button></div>
+      ${why(`These coins are blind-signed <b>cash on this device</b>: not linked to your account, not restorable from your recovery phrase. Redeeming moves them into your recoverable balance in $1 steps — it also happens by itself as you chat. <b>Redeem everything before deleting the app or moving to another device</b> (“Move to another device” does that for you).`)}
     </div>`;
   }
   function redeemSliderChanged(v){
