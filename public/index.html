@@ -366,6 +366,29 @@
   .msg.you .who{color:var(--signal)}.msg.ai .who{color:var(--mix)}
   .msg .who .viamodel{display:block;margin-top:4px;font-size:9px;letter-spacing:.02em;text-transform:none;color:var(--muted);opacity:.8;line-height:1.25;word-break:break-word}
   .msg .body{font-size:14.5px;line-height:1.62;color:var(--bone);white-space:pre-wrap}
+  /* Answers are rendered from markdown (mdHtml) into real block elements, so they
+     use normal whitespace — user/error messages stay pre-wrap plain text. */
+  .msg.ai .body{white-space:normal}
+  .msg .body p.mdp{margin:0 0 10px}
+  .msg .body .mdh{font-weight:700;line-height:1.35;margin:14px 0 6px}
+  .msg .body .mdh.h1{font-size:17.5px}
+  .msg .body .mdh.h2{font-size:16.5px}
+  .msg .body .mdh.h3{font-size:15.5px}
+  .msg .body .mdh.h4,.msg .body .mdh.h5,.msg .body .mdh.h6{font-size:14.5px}
+  .msg .body ul.mdl,.msg .body ol.mdl{margin:4px 0 10px;padding-left:22px}
+  .msg .body .mdl li{margin:3px 0}
+  .msg .body code.mdi{font-family:var(--mono);font-size:12.5px;background:var(--surface-2);border:1px solid var(--line);border-radius:5px;padding:1px 5px}
+  .msg .body pre.mdcode{font-family:var(--mono);font-size:12.5px;line-height:1.5;background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:8px 0 10px;overflow-x:auto;white-space:pre}
+  .msg .body blockquote.mdq{margin:8px 0 10px;padding:2px 0 2px 12px;border-left:3px solid var(--line);color:var(--muted)}
+  .msg .body hr.mdhr{border:none;border-top:1px solid var(--line);margin:12px 0}
+  /* wide tables scroll inside their own container — the thread never scrolls sideways */
+  .msg .body .mdtwrap{overflow-x:auto;margin:8px 0 10px}
+  .msg .body table.mdt{border-collapse:collapse;font-size:13.5px;line-height:1.5}
+  .msg .body .mdt th,.msg .body .mdt td{border:1px solid var(--line);padding:5px 11px;text-align:left;vertical-align:top}
+  .msg .body .mdt th{background:var(--surface-2);font-weight:600}
+  .msg .body .mdt .ac{text-align:center}
+  .msg .body .mdt .ar{text-align:right}
+  .msg .body .mdp:last-child,.msg .body .mdl:last-child,.msg .body .mdq:last-child,.msg .body .mdcode:last-child,.msg .body .mdtwrap:last-child{margin-bottom:0}
   /* ↑/↓ question navigation overlay — floats on the right edge of the chat */
   .qnav{position:absolute;right:12px;top:92px;z-index:20;
     display:flex;flex-direction:column;align-items:center;gap:1px;
@@ -1956,9 +1979,104 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       return `<a class="alink" href="${escAttr(safe)}" data-click="openLink" data-click-pass="href" data-prevent="1">${u}</a>`+tail;
     });
   }
+  // ---------- markdown (answers only) ----------
+  // Strict lexical renderer for the model's markdown: headings, lists, bold/italic/strike,
+  // inline + fenced code, quotes, rules, [text](url) links. Every character of model text
+  // passes through esc()/escAttr(), only http(s) URLs become anchors (openLink → OS
+  // browser), and raw HTML/images in the answer stay inert text — the answer is
+  // server-controlled input and must never be able to inject markup (C1).
+  function mdInline(raw){
+    const codes=[], links=[];
+    let x = esc(String(raw||""));
+    // inline code first — its content is opaque to every other rule
+    x = x.replace(/`([^`\n]+)`/g,(_,c)=>{ codes.push('<code class="mdi">'+c+'</code>'); return "\u0000"+(codes.length-1)+"\u0000"; });
+    const mkLink=(u,label)=>{
+      const safe=safeHttpUrl(u.replace(/&amp;/g,"&"));
+      if(safe==="#") return null;
+      links.push(`<a class="alink" href="${escAttr(safe)}" data-click="openLink" data-click-pass="href" data-prevent="1">${label}</a>`);
+      return "\u0001"+(links.length-1)+"\u0001";
+    };
+    // [text](url), then bare URLs; finished anchors hide behind placeholders so the
+    // emphasis rules can never rewrite an href or link text
+    x = x.replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g,(m0,t,u)=>{ const p=mkLink(u,t); return p===null?t:p; });
+    x = x.replace(/https?:\/\/[^\s<\u0000\u0001]+/g,(u)=>{
+      let tail=""; const t=u.match(/[)\].,;:!?'"]+$/);
+      if(t){ tail=t[0]; u=u.slice(0,u.length-tail.length); }
+      const p=mkLink(u,u); return (p===null?u:p)+tail;
+    });
+    x = x.replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>')
+         .replace(/(^|[^*\w])\*([^*\n]+)\*(?!\*)/g,'$1<i>$2</i>')
+         .replace(/~~([^~\n]+)~~/g,'<s>$1</s>');
+    x = x.replace(/\u0001(\d+)\u0001/g,(_,n)=>links[+n]||"");
+    x = x.replace(/\u0000(\d+)\u0000/g,(_,n)=>codes[+n]||"");
+    return x;
+  }
+  // Line-based block pass. Tolerant of a mid-stream tail (an unclosed ``` fence renders
+  // as an open code block), so it can run on every streaming delta. `tail` (the blinking
+  // cursor) is injected inside the last block so it sits at the end of the text.
+  function mdHtml(raw, tail){
+    const lines=String(raw||"").replace(/[\u0000\u0001]/g,"").split("\n");
+    const out=[]; let para=[], list=null, items=[], quote=[], table=[], code=null, codeBuf=[];
+    const flushPara =()=>{ if(para.length){ out.push('<p class="mdp">'+para.map(mdInline).join('<br>')+'</p>'); para=[]; } };
+    const flushList =()=>{ if(list){ out.push('<'+list+' class="mdl">'+items.join('')+'</'+list+'>'); list=null; items=[]; } };
+    const flushQuote=()=>{ if(quote.length){ out.push('<blockquote class="mdq">'+quote.map(mdInline).join('<br>')+'</blockquote>'); quote=[]; } };
+    // GFM pipe table: header row + :--- separator + body rows. Anything that only looks
+    // like a table (no valid separator line yet — e.g. mid-stream) falls back to text.
+    const flushTable=()=>{
+      if(!table.length) return;
+      const rows=table; table=[];
+      const cells=ln=>ln.replace(/^\s*\|/,'').replace(/\|\s*$/,'').split('|').map(c=>c.trim());
+      const sepOk = rows.length>=2 && cells(rows[1]).length>0 && cells(rows[1]).every(c=>/^:?-{2,}:?$/.test(c));
+      if(!sepOk){ out.push('<p class="mdp">'+rows.map(mdInline).join('<br>')+'</p>'); return; }
+      const aligns=cells(rows[1]).map(c=>/^:-+:$/.test(c)?' class="ac"':(/^-+:$/.test(c)?' class="ar"':''));
+      const tr=(ln,tag)=>'<tr>'+cells(ln).map((c,i)=>'<'+tag+(aligns[i]||'')+'>'+mdInline(c)+'</'+tag+'>').join('')+'</tr>';
+      out.push('<div class="mdtwrap"><table class="mdt"><thead>'+tr(rows[0],'th')+'</thead><tbody>'
+        + rows.slice(2).map(r=>tr(r,'td')).join('')+'</tbody></table></div>');
+    };
+    const flushAll  =()=>{ flushTable(); flushPara(); flushList(); flushQuote(); };
+    for(const ln of lines){
+      if(code!==null){
+        if(/^\s*```/.test(ln)){ out.push('<pre class="mdcode"><code>'+esc(codeBuf.join('\n'))+'</code></pre>'); code=null; codeBuf=[]; }
+        else codeBuf.push(ln);
+        continue;
+      }
+      if(/^\s*```/.test(ln)){ flushAll(); code=""; continue; }
+      if(!ln.trim()){ flushAll(); continue; }
+      const isTableRow=/^\s*\|.*\|\s*$/.test(ln);
+      if(isTableRow){ flushPara(); flushList(); flushQuote(); table.push(ln); continue; }
+      flushTable();
+      const h=ln.match(/^(#{1,6})\s+(.*)$/);
+      if(h){ flushAll(); out.push('<div class="mdh h'+h[1].length+'">'+mdInline(h[2])+'</div>'); continue; }
+      if(/^\s*([*_-])\s*(\1\s*){2,}$/.test(ln)){ flushAll(); out.push('<hr class="mdhr">'); continue; }
+      const q=ln.match(/^\s*>\s?(.*)$/);
+      if(q){ flushPara(); flushList(); quote.push(q[1]); continue; }
+      const ol=ln.match(/^\s*(\d+)[.)]\s+(.*)$/);
+      const ul=ol?null:ln.match(/^\s*[*+-]\s+(.*)$/);
+      if(ol||ul){
+        flushPara(); flushQuote();
+        const want=ol?'ol':'ul';
+        if(list&&list!==want) flushList();
+        list=want; items.push('<li>'+mdInline(ol?ol[2]:ul[1])+'</li>');
+        continue;
+      }
+      flushList(); flushQuote(); para.push(ln);
+    }
+    if(code!==null) out.push('<pre class="mdcode"><code>'+esc(codeBuf.join('\n'))+'</code></pre>');
+    flushAll();
+    let html=out.join('');
+    if(tail){
+      const m2=html.match(/<\/(p|li|div|blockquote)>\s*$/);
+      html = m2 ? html.slice(0,m2.index)+tail+html.slice(m2.index) : html+tail;
+    }
+    return html;
+  }
   function bodyHtml(m,mi){
-    return linkify(esc(m.text))
-      + (m.streaming?(m.text?'<span class="cursor"></span>':'<span id="mixphase" class="mixphase">'+(dlProg?dlProgHTML(dlProg):esc(mixShown)+'<span class="cursor"></span>')+'</span>'):'')
+    const cursor='<span class="cursor"></span>';
+    const mixphase='<span id="mixphase" class="mixphase">'+(dlProg?dlProgHTML(dlProg):esc(mixShown)+cursor)+'</span>';
+    const text = m.role==='ai'
+      ? mdHtml(m.text, (m.streaming&&m.text)?cursor:'') + ((m.streaming&&!m.text)?mixphase:'')
+      : linkify(esc(m.text)) + (m.streaming?(m.text?cursor:mixphase):'');
+    return text
       + (m.att?attHtml(m.att,m.uploading):(m.uploading?uploadHtml(m.uploading):''))
       + (m.images&&m.images.length?imagesHtml(m.images,mi):'');
   }
@@ -1986,7 +2104,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // dev HTTP bridge: always) — a shipped binary hides the Developer section and never
   // renders the audit, and a release server doesn't even send the provider cost.
   let devBuild = false;
-  const APP_VERSION = "0.4.3 (ichnusa)";   // codename from Howard Marks' "Mr Nice"
+  const APP_VERSION = "0.4.4 (ichnusa)";   // codename from Howard Marks' "Mr Nice"
   let devCost = false;
   // DEV upload readout: real file size ÷ pure transfer time (excludes chunk-split +
   // uploadBegin setup). Shown under a sent image only when the dev cost-audit is on.
