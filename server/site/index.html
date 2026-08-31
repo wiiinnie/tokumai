@@ -45,24 +45,43 @@
   .eyebrow{font-family:var(--mono);font-size:11.5px;letter-spacing:.12em;color:var(--signal);text-transform:uppercase;margin-bottom:10px}
   .sec h2{font-family:var(--display);font-weight:700;font-size:34px;margin:0 0 10px}.sec h2 b{color:var(--mix)}
   .lead{color:var(--muted);font-size:15.5px;line-height:1.55;max-width:760px;margin:0 0 26px}
-  .dl{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+  /* align-items:start — an expanded "Installation notes" fold must not stretch the
+     neighbouring cards (their buttons would drift to the bottom of the taller row) */
+  .dl{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;align-items:start}
   @media (max-width:900px){.dl{grid-template-columns:1fr}}
   /* download rows: desktop / mobile — one label line each, same 3-column grid so every tile is equal */
   .rowlbl{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin:22px 0 10px;display:flex;align-items:center;gap:12px}
   .rowlbl::after{content:"";flex:1;height:1px;background:var(--line)}
   .rowlbl.first{margin-top:0}
-  .dlc{border:1px solid var(--line);border-radius:14px;background:var(--surface);padding:20px;display:flex;flex-direction:column;gap:10px;min-height:250px}
+  .dlc{position:relative;border:1px solid var(--line);border-radius:14px;background:var(--surface);padding:20px;display:flex;flex-direction:column;gap:12px;min-height:230px}
   .dlc.soon{opacity:.8}
   /* a card with a real download: green frame + tick, like the app's "connected" state */
   .dlc.has{border-color:var(--mix);background:color-mix(in srgb,var(--mix) 7%,var(--surface))}
-  .dlc.has .os::after{content:"✓";margin-left:auto;font:700 15px var(--mono);color:var(--mix)}
+  .dlc.has::after{content:"✓";position:absolute;top:14px;right:16px;font:700 14px var(--mono);color:var(--mix)}
   .dlc.has .meta{color:var(--mix)}
-  .os{font-family:var(--display);font-size:20px;font-weight:700;display:flex;align-items:center;gap:8px}
-  .meta{font-family:var(--mono);font-size:11.5px;color:var(--muted)}
+  /* icon tile + stacked title — the OS is the first read, the tech line the second */
+  .oshead{display:flex;align-items:center;gap:14px}
+  .osic{width:56px;height:56px;border-radius:13px;background:var(--surface-2);display:flex;align-items:center;justify-content:center;flex:0 0 auto}
+  .osic svg{fill:var(--bone)}
+  .ostit{display:flex;flex-direction:column;gap:3px}
+  .ostit b{font-family:var(--display);font-size:20px;font-weight:700;line-height:1.1}
+  .meta{font-family:var(--mono);font-size:11px;color:var(--muted)}
   .note{font-size:13px;line-height:1.5;color:var(--muted)}.note b{color:var(--bone)}
   .note ol{margin:6px 0 8px;padding-left:18px}.note li{margin:3px 0}
   .sum{font-family:var(--mono);font-size:10.5px;color:var(--muted);word-break:break-all;margin-top:auto}
-  .row{display:flex;gap:8px;flex-wrap:wrap}
+  .row{display:flex;gap:8px;flex-wrap:wrap;margin-top:auto}
+  /* collapsed detail rows: "Installation notes" / "Verify checksum" expand on click */
+  .fold{border-top:1px solid var(--line)}
+  .fold summary{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 0;cursor:pointer;font-size:12.5px;color:var(--signal);list-style:none}
+  .fold summary::-webkit-details-marker{display:none}
+  .fold summary .chev{font-size:10px;flex:0 0 auto;transition:transform .15s}
+  .fold[open] summary .chev{transform:rotate(90deg)}
+  .fold .fbody{padding:2px 0 12px;font-size:12.5px;line-height:1.55;color:var(--muted)}
+  .fold .fbody b{color:var(--bone)}
+  .fold .fbody ol{margin:6px 0 8px;padding-left:18px}.fold .fbody li{margin:3px 0}
+  .fold .cmd{font-family:var(--mono);font-size:11.5px;color:var(--bone);background:var(--ink);border:1px solid var(--line);border-radius:8px;padding:9px 11px;margin:8px 0;overflow-x:auto;white-space:nowrap}
+  .fold .shafull{font-family:var(--mono);font-size:10.5px;color:var(--muted);overflow-wrap:anywhere}
+  .shashort{font-family:var(--mono);font-size:10.5px;color:var(--muted);white-space:nowrap}
   .faucet{display:grid;grid-template-columns:1fr 1fr;gap:28px;align-items:start}
   .steps{display:flex;flex-direction:column;gap:14px}
   .st{display:flex;gap:14px}.st i{flex:none;width:26px;height:26px;border-radius:50%;border:1px solid var(--signal);color:var(--signal);display:grid;place-items:center;font:700 12px var(--mono);font-style:normal}
@@ -135,53 +154,86 @@
     <div class="rowlbl first">Desktop</div>
     <div class="dl">
       <div class="dlc{{CLS_MACOS}}">
-        <div class="os"> macOS</div>
-        <div class="meta">{{META_MACOS}}</div>
-        <div class="note"><b>Signed &amp; notarised</b> by Apple (Developer ID). Open the .dmg, drag ScrambleAI to Applications, double-click — no warning, no workaround. Apple silicon (M-series) only.</div>
-        <div class="sum">sha256 {{SHA_MACOS}}</div>
+        <div class="oshead">
+          <span class="osic"><svg viewBox="0 0 384 512" style="width:23px;height:31px"><path d="M318.7 268.7c-.2-36.7 16.4-64.4 50-84.8-18.8-26.9-47.2-41.7-84.7-44.6-35.5-2.9-74.3 20.7-88.5 20.7-15 0-49.4-19.7-76.4-19.7C63.3 141.2 4 184.8 4 273.5q0 39.3 14.4 81.2c12.8 36.7 59 126.7 107.2 125.2 25.2-.6 43-17.9 75.8-17.9 31.8 0 48.3 17.9 76.4 17.9 48.6-.7 90.4-82.5 102.6-119.3-65.2-30.7-61.7-90-61.7-91.9zm-56.6-164.2c27.3-32.4 24.8-61.9 24-72.5-24.1 1.4-52 16.4-67.9 34.9-17.5 19.8-27.8 44.3-25.6 71.9 26.1 2 49.9-11.4 69.5-34.3z"/></svg></span>
+          <div class="ostit"><b>macOS</b><span class="meta">{{META_MACOS}}</span></div>
+        </div>
+        <div class="note">Signed &amp; notarised by Apple. Open, drag to Applications — done. Apple silicon.</div>
         <div class="row">{{DL_MACOS}}</div>
+        <details class="fold"><summary>Installation notes<span class="chev">▸</span></summary>
+          <div class="fbody">Open the .dmg and drag ScrambleAI to Applications, then double-click to launch. No warning, no workaround — the build is signed and notarised by Apple (Developer ID). Apple silicon (M-series) only.</div>
+        </details>
+        <details class="fold"><summary>Verify checksum<span class="shashort">{{SHAS_MACOS}}</span></summary>
+          <div class="fbody"><div class="shafull">sha256 {{SHA_MACOS}}</div><div style="margin-top:6px">Check your download with the copy-paste command under <a href="#verify" style="color:var(--signal);text-decoration:none">Verify a download ↓</a>.</div></div>
+        </details>
       </div>
       <div class="dlc{{CLS_LINUX}}">
-        <div class="os">🐧 Linux · x86_64</div>
-        <div class="meta">{{META_LINUX}}</div>
-        <div class="note"><b>.deb</b> is the standard build — for <b>Debian, Ubuntu, Mint and Kali</b>: <span style="font-family:var(--mono)">sudo dpkg -i &lt;file&gt;.deb</span>, then launch ScrambleAI from the menu. It uses your system's WebKitGTK, which makes it the most reliable option.<br>
-        <b>AppImage (experimental)</b> for other distros: one file — <span style="font-family:var(--mono)">chmod +x</span>, double-click. Known issue: on VMs and older graphics stacks the window can stay grey (EGL); try <span style="font-family:var(--mono)">WEBKIT_DISABLE_DMABUF_RENDERER=1</span> before launching, or use the .deb on a Debian-based system.</div>
-        <div class="sum">sha256 (.deb) {{SHA_DEB}}</div>
-        <div class="sum">sha256 (AppImage) {{SHA_APPIMAGE}}</div>
+        <div class="oshead">
+          <span class="osic"><svg viewBox="0 0 24 24" style="width:30px;height:32px"><path fill-rule="evenodd" d="M12 1.8c-2.9 0-4.7 2.1-4.7 4.8 0 1.3-.3 2.4-1 3.7-.9 1.7-2 3.5-2 5.7 0 3.7 3.2 6.2 7.7 6.2s7.7-2.5 7.7-6.2c0-2.2-1.1-4-2-5.7-.7-1.3-1-2.4-1-3.7 0-2.7-1.8-4.8-4.7-4.8zm0 9.6c-1.9 0-3.1 1.6-3.1 3.6s1.2 3.5 3.1 3.5 3.1-1.5 3.1-3.5-1.2-3.6-3.1-3.6z"/><circle cx="10.5" cy="6.6" r=".8" style="fill:var(--surface-2)"/><circle cx="13.5" cy="6.6" r=".8" style="fill:var(--surface-2)"/><path style="fill:var(--surface-2)" d="M10.9 8.3h2.2l-1.1 1.3z"/></svg></span>
+          <div class="ostit"><b>Linux</b><span class="meta">{{META_LINUX}}</span></div>
+        </div>
+        <div class="note">For Debian, Ubuntu, Mint and Kali — installs like any system package.</div>
         <div class="row">{{DL_DEB}}{{DL_APPIMAGE}}</div>
+        <details class="fold"><summary>Installation notes<span class="chev">▸</span></summary>
+          <div class="fbody"><b>.deb</b> — install from a terminal, then launch ScrambleAI from your app menu:
+            <div class="cmd">sudo dpkg -i {{FILE_DEB}}</div>
+            It uses your system's WebKitGTK, which makes it the most reliable option.
+            <div style="border-top:1px solid var(--line);margin-top:10px;padding-top:10px"><b>AppImage (experimental)</b> for other distros: one file — <span style="font-family:var(--mono)">chmod +x</span>, double-click. On VMs and older graphics stacks the window can stay grey (EGL); try <span style="font-family:var(--mono)">WEBKIT_DISABLE_DMABUF_RENDERER=1</span> before launching, or use the .deb on a Debian-based system.</div>
+          </div>
+        </details>
+        <details class="fold"><summary>Verify checksums<span class="shashort">{{SHAS_DEB}}</span></summary>
+          <div class="fbody"><div class="shafull">.deb — {{SHA_DEB}}</div><div class="shafull" style="margin-top:4px">AppImage — {{SHA_APPIMAGE}}</div><div style="margin-top:6px">Check your download with the copy-paste command under <a href="#verify" style="color:var(--signal);text-decoration:none">Verify a download ↓</a>.</div></div>
+        </details>
       </div>
       <div class="dlc{{CLS_WINDOWS}}">
-        <div class="os">⊞ Windows · x64</div>
-        <div class="meta">{{META_WINDOWS}}</div>
-        <div class="note"><b>First launch:</b> the installer is not code-signed yet, so SmartScreen says "Windows protected your PC". Click <b>More info → Run anyway</b> once. Installs per user, no admin rights; needs the Edge WebView2 runtime (fetched automatically if missing).</div>
-        <div class="sum">sha256 {{SHA_WINDOWS}}</div>
+        <div class="oshead">
+          <span class="osic"><svg viewBox="0 0 24 24" style="width:26px;height:26px"><rect x="2.5" y="2.5" width="8.6" height="8.6" rx="1"/><rect x="12.9" y="2.5" width="8.6" height="8.6" rx="1"/><rect x="2.5" y="12.9" width="8.6" height="8.6" rx="1"/><rect x="12.9" y="12.9" width="8.6" height="8.6" rx="1"/></svg></span>
+          <div class="ostit"><b>Windows</b><span class="meta">{{META_WINDOWS}}</span></div>
+        </div>
+        <div class="note">Installs per user — no admin rights needed. Windows 10/11.</div>
         <div class="row">{{DL_WINDOWS}}</div>
+        <details class="fold"><summary>Installation notes<span class="chev">▸</span></summary>
+          <div class="fbody"><b>First launch:</b> the installer is not code-signed yet, so SmartScreen says "Windows protected your PC". Click <b>More info → Run anyway</b> once. Installs per user, no admin rights; needs the Edge WebView2 runtime (fetched automatically if missing).</div>
+        </details>
+        <details class="fold"><summary>Verify checksum<span class="shashort">{{SHAS_WINDOWS}}</span></summary>
+          <div class="fbody"><div class="shafull">sha256 {{SHA_WINDOWS}}</div><div style="margin-top:6px">Check your download with the copy-paste command under <a href="#verify" style="color:var(--signal);text-decoration:none">Verify a download ↓</a>.</div></div>
+        </details>
       </div>
     </div>
     <div class="rowlbl">Mobile</div>
     <div class="dl">
       <div class="dlc{{CLS_IOS}}">
-        <div class="os">📱 iPhone</div>
-        <div class="meta">TestFlight · public beta</div>
-        <div class="note">An iPhone can't install an app from a download, so the beta ships through Apple's <b>TestFlight</b>: install the TestFlight app, open the invitation link, tap Install. Updates arrive automatically. iOS 15 or newer.</div>
-        <div class="sum">Apple Beta App Review pending — the link appears here as soon as it is approved</div>
+        <div class="oshead">
+          <span class="osic"><svg viewBox="0 0 24 24" style="width:22px;height:32px"><rect x="6.2" y="1.8" width="11.6" height="20.4" rx="2.8" fill="none" stroke="currentColor" stroke-width="1.6" style="stroke:var(--bone)"/><path d="M10.4 18.9h3.2" fill="none" stroke-width="1.6" stroke-linecap="round" style="stroke:var(--bone)"/></svg></span>
+          <div class="ostit"><b>iPhone</b><span class="meta">TestFlight · public beta</span></div>
+        </div>
+        <div class="note">The beta ships through Apple's <b>TestFlight</b> — install TestFlight, open the invitation link, tap Install.</div>
         <div class="row">{{DL_IOS}}{{DL_IOS_GUIDE}}</div>
+        <details class="fold"><summary>Installation notes<span class="chev">▸</span></summary>
+          <div class="fbody">An iPhone can't install an app from a download, so the beta ships through Apple's <b>TestFlight</b>: install the TestFlight app from the App Store, open the invitation link, tap Install. Updates arrive automatically. iOS 15 or newer.<div style="margin-top:8px">Apple Beta App Review pending — the join link appears here as soon as it is approved.</div></div>
+        </details>
       </div>
       <div class="dlc{{CLS_ANDROID}}">
-        <div class="os">🤖 Android · arm64</div>
-        <div class="meta">{{META_ANDROID}}</div>
-        <div class="note"><b>Install (not on Google Play yet):</b>
-          <ol>
-            <li>On the phone, open this page in Chrome and tap <b>Download .apk</b>. If Chrome warns the file "might be harmful", choose <b>Download anyway</b>.</li>
-            <li>Tap the finished download (notification, or Files → Downloads).</li>
-            <li>First time only: Android says it isn't allowed to install unknown apps from this source → <b>Settings → Allow from this source</b> → go back.</li>
-            <li>Tap <b>Install</b>. If Play Protect objects ("unrecognised developer"), tap <b>More details → Install anyway</b>.</li>
-            <li>Open ScrambleAI. Updates install over the old version — your account and history stay.</li>
-          </ol>
-          Android 8 or newer, 64-bit (arm64).
+        <div class="oshead">
+          <span class="osic"><svg viewBox="0 0 24 24" style="width:30px;height:26px"><path d="M4.6 16.4a7.4 7.4 0 0 1 14.8 0z"/><path d="M7.4 8.6 5.9 6.2M16.6 8.6l1.5-2.4" fill="none" stroke-width="1.4" stroke-linecap="round" style="stroke:var(--bone)"/><circle cx="9.2" cy="13.6" r=".95" style="fill:var(--surface-2)"/><circle cx="14.8" cy="13.6" r=".95" style="fill:var(--surface-2)"/></svg></span>
+          <div class="ostit"><b>Android</b><span class="meta">{{META_ANDROID}}</span></div>
         </div>
-        <div class="sum">sha256 {{SHA_ANDROID}}</div>
+        <div class="note">Direct download (.apk) — not on Google Play yet. Android 8+, 64-bit (arm64).</div>
         <div class="row">{{DL_ANDROID}}</div>
+        <details class="fold"><summary>Installation notes<span class="chev">▸</span></summary>
+          <div class="fbody">
+            <ol>
+              <li>On the phone, open this page in Chrome and tap <b>Download .apk</b>. If Chrome warns the file "might be harmful", choose <b>Download anyway</b>.</li>
+              <li>Tap the finished download (notification, or Files → Downloads).</li>
+              <li>First time only: Android says it isn't allowed to install unknown apps from this source → <b>Settings → Allow from this source</b> → go back.</li>
+              <li>Tap <b>Install</b>. If Play Protect objects ("unrecognised developer"), tap <b>More details → Install anyway</b>.</li>
+              <li>Open ScrambleAI. Updates install over the old version — your account and history stay.</li>
+            </ol>
+          </div>
+        </details>
+        <details class="fold"><summary>Verify checksum<span class="shashort">{{SHAS_ANDROID}}</span></summary>
+          <div class="fbody"><div class="shafull">sha256 {{SHA_ANDROID}}</div><div style="margin-top:6px">Check your download with the copy-paste command under <a href="#verify" style="color:var(--signal);text-decoration:none">Verify a download ↓</a>.</div></div>
+        </details>
       </div>
     </div>
   </div>
