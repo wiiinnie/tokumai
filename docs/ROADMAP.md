@@ -36,6 +36,27 @@ and drop the override before issuing real-money credentials.
 
 ## Models / providers
 
+### TEE inference endpoint — *considering*
+Close the one gap Tinfoil-style services can point at: today the ScrambleAI server (and
+the upstream provider) sees prompt **plaintext** — unlinkable to a person, but readable.
+Run an **open-weights model inside a confidential-computing enclave** (NVIDIA
+Hopper/Blackwell CC, remote attestation) reached **through the mixnet**, so both threat
+models hold at once: *nobody knows who you are* (mixnet + blind ecash) **and** *nobody —
+us included — can read the prompt* (TEE). That union is something neither Tinfoil
+(account + card + IP visible) nor a plain mixnet proxy can offer alone.
+
+**Options:** (a) use **Tinfoil's OpenAI-compatible private inference API** as just another
+upstream behind the mixnet — fastest, but adds their availability + pricing as a
+dependency; (b) **self-host** a GPU-TEE box (H100/H200 CC) with our own attested stack —
+more control, real hardware + ops cost. Either way the **client must verify the
+attestation itself** (over the mixnet); a server-side "trust us, it's attested" claim
+would be worthless.
+
+**Caveats:** open-weights models only (Gemini/Claude can't run in our enclave — offer as a
+**"🔒 sealed"** tier beside the frontier tier, mirroring the "🌐 web — less private"
+labelling); adds a hardware trust anchor (NVIDIA/Intel attestation chain) we otherwise
+avoid; enclave GPU capacity is priced well above plain inference.
+
 ### Live / web-grounded models — *planned*
 Users want current-internet answers, not just static LLMs. Enable **Gemini Grounding with
 Google Search** on the existing integration (fastest), and optionally add **Perplexity
