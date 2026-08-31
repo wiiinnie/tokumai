@@ -51,6 +51,10 @@ const SURBS_TEXT: u32 = 150;
 // pictures now come back as `image.chunk` references fetched with SURBS_SMALL each —
 // see `fetch_staged_images` — so an image chat's own reply is text-sized.)
 const TIMEOUT_MS: u64 = 120_000;
+/// Timeout for small metadata round trips (catalogue fetch in `state`): these replies
+/// are a few KB and normally arrive in seconds — the generous chat TIMEOUT_MS here is
+/// what once delayed the "server unreachable" verdict by minutes.
+const META_TIMEOUT_MS: u64 = 30_000;
 
 /// Coins redeemed per auto-fund when a session runs dry (1 coin = 1000 SCRAI →
 /// 100 coins ≈ $1, per docs/federation-params.md). Uniform across users on
@@ -664,40 +668,53 @@ async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<V
     let mut balance: u64 = 0;
 
     if let Some(srv) = &server {
-        // Models: cached after first fetch.
+        // Assume the server answers until a fetch below says otherwise.
+        let mut server_answered = true;
+        // Models: cached after first fetch. META_TIMEOUT_MS, not the chat TIMEOUT_MS:
+        // a catalogue reply is small and normally takes seconds — waiting the full
+        // 120 s here is what once delayed the "server unreachable" verdict to ~4 min.
         if let Some(cached) = transport.cached_models().await {
             models = cached;
-        } else if let Ok(resp) = transport
-            .round_trip(srv, &json!({"v":PROTO,"kind":"models","id":rand_hex(16)}), SURBS_SMALL, TIMEOUT_MS)
-            .await
-        {
-            if let Some(m) = resp.get("models") {
-                models = m.clone();
-                transport.set_cached_models(m.clone()).await;
-            }
+        } else {
+            match transport
+                .round_trip(srv, &json!({"v":PROTO,"kind":"models","id":rand_hex(16)}), SURBS_SMALL, META_TIMEOUT_MS)
+                .await
             {
-                let mut u = SERVER_UPDATE.lock().unwrap_or_else(|e| e.into_inner());
-                *u = resp.get("update").filter(|u| u.get("required").and_then(|r| r.as_bool()) == Some(true)).cloned();
-            }
-            // Testnet servers advertise the $1 faucet purchase; remembered with the models
-            // so the flag survives the cache (no extra round trip on later `state` calls).
-            {
-                let mut t = SERVER_TESTNET.lock().unwrap_or_else(|e| e.into_inner());
-                *t = (
-                    resp.get("testnet").and_then(|b| b.as_bool()).unwrap_or(false),
-                    resp.get("faucetUrl").and_then(|u| u.as_str()).map(str::to_string),
-                );
-            }
-            {
-                let mut c = SERVER_CARD.lock().unwrap_or_else(|e| e.into_inner());
-                *c = resp.get("card").filter(|c| c.is_object()).cloned();
+                Err(_) => server_answered = false,
+                Ok(resp) => {
+                    if let Some(m) = resp.get("models") {
+                        models = m.clone();
+                        transport.set_cached_models(m.clone()).await;
+                    }
+                    {
+                        let mut u = SERVER_UPDATE.lock().unwrap_or_else(|e| e.into_inner());
+                        *u = resp.get("update").filter(|u| u.get("required").and_then(|r| r.as_bool()) == Some(true)).cloned();
+                    }
+                    // Testnet servers advertise the $1 faucet purchase; remembered with the models
+                    // so the flag survives the cache (no extra round trip on later `state` calls).
+                    {
+                        let mut t = SERVER_TESTNET.lock().unwrap_or_else(|e| e.into_inner());
+                        *t = (
+                            resp.get("testnet").and_then(|b| b.as_bool()).unwrap_or(false),
+                            resp.get("faucetUrl").and_then(|u| u.as_str()).map(str::to_string),
+                        );
+                    }
+                    {
+                        let mut c = SERVER_CARD.lock().unwrap_or_else(|e| e.into_inner());
+                        *c = resp.get("card").filter(|c| c.is_object()).cloned();
+                    }
+                }
             }
         }
-        // Balance for the active session.
-        if let Some(m) = &w.mnemonic {
-            if let Ok(sk) = account::derive_session_keys(m, w.session_index) {
-                if let Ok((b, _)) = session_status(&transport, srv, &sk).await {
-                    balance = b;
+        // Balance for the active session — skipped when the catalogue fetch above already
+        // got no answer: the balance request would only stack a second long timeout onto
+        // a server that is clearly not answering right now.
+        if server_answered {
+            if let Some(m) = &w.mnemonic {
+                if let Ok(sk) = account::derive_session_keys(m, w.session_index) {
+                    if let Ok((b, _)) = session_status(&transport, srv, &sk).await {
+                        balance = b;
+                    }
                 }
             }
         }
@@ -758,6 +775,13 @@ async fn set_server(app: AppHandle, transport: State<'_, Arc<Transport>>, addres
     *SERVER_TESTNET.lock().unwrap_or_else(|e| e.into_inner()) = (false, None);
     *SERVER_CARD.lock().unwrap_or_else(|e| e.into_inner()) = None;
     *SERVER_UPDATE.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    // Check the NEW address right away: over the live route it's a single ping, and a
+    // dead route (e.g. the previous server was unreachable) is rebuilt first instead of
+    // leaving the old reconnect loop to time out. No-op while a rebuild is in flight —
+    // that one reloads the wallet per attempt, so it sees the new server on its next go.
+    if w.server.is_some() {
+        spawn_server_check(app.clone(), transport.inner().clone());
+    }
     Ok(json!({ "server": w.server }))
 }
 
@@ -1517,28 +1541,74 @@ fn spawn_rebuild(app: AppHandle, t: Arc<Transport>) {
     if !t.try_begin_reconnect() {
         return;
     }
+    tauri::async_runtime::spawn(async move { run_check(app, t).await });
+}
+
+/// Server-switch path: prove the (new) server answers. A LIVE route is reused as-is —
+/// only a dead one is rebuilt first — so the common switch is a single ping (~2-5 s).
+/// Runs on the same single slot as `spawn_rebuild`, so the two never stack. Any stale
+/// round trip against the OLD server (a 30 s catalogue fetch, a reconnect probe) is
+/// cancelled first: one of those once held the client lock and left "Use official
+/// server" stuck on "reusing it…" with no check line until the fetch timed out and
+/// needlessly dropped the route.
+fn spawn_server_check(app: AppHandle, t: Arc<Transport>) {
     tauri::async_runtime::spawn(async move {
-        let res: Result<(), String> = async {
-            t.ensure_connected().await?;
-            let _ = app.emit("mixnet-phase", json!({ "step": "server", "detail": "" }));
-            let w = wallet::load(&data_dir(&app)?);
-            let srv = server_addr(&w)?;
-            let req = json!({ "v": PROTO, "kind": "ping", "id": rand_hex(8) });
-            t.probe(&srv, &req, SURBS_SMALL, 15_000)
-                .await
-                .map(|_| ())
-                .map_err(|_| "the ScrambleAI server did not answer through the mixnet — it may be down or restarting; the route itself is up".to_string())
+        t.cancel_in_flight();
+        // The cancelled rebuild/check frees the slot within moments — wait briefly.
+        // If it stays claimed longer, a live rebuild owns the flow: it reloads the
+        // wallet after connecting, so it already probes the NEW server and narrates
+        // the same overlay to its end.
+        let mut claimed = t.try_begin_check();
+        for _ in 0..40 {
+            if claimed {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            claimed = t.try_begin_check();
         }
-        .await;
-        match res {
-            Ok(()) => { let _ = app.emit("mixnet-phase", json!({ "step": "online", "detail": "" })); }
-            Err(e) => {
-                log::warn!("[mixnet] rebuild failed: {e}");
-                let _ = app.emit("mixnet-phase", json!({ "step": "failed", "detail": e }));
+        if !claimed {
+            return;
+        }
+        run_check(app, t).await;
+    });
+}
+
+/// One rebuild-or-check pass: reuse/rebuild the route, then prove the server answers.
+/// Caller must hold the reconnect slot; this releases it.
+async fn run_check(app: AppHandle, t: Arc<Transport>) {
+    let res: Result<(), String> = async {
+        if t.is_connected() {
+            // Narrate the fast path — the overlay shows this instead of the rebuild steps.
+            let _ = app.emit("mixnet-phase", json!({ "step": "reuse", "detail": "" }));
+        }
+        t.ensure_connected().await?;
+        let _ = app.emit("mixnet-phase", json!({ "step": "server", "detail": "" }));
+        let w = wallet::load(&data_dir(&app)?);
+        let srv = server_addr(&w)?;
+        let req = json!({ "v": PROTO, "kind": "ping", "id": rand_hex(8) });
+        match t.probe(&srv, &req, SURBS_SMALL, 15_000).await {
+            Ok(_) => Ok(()),
+            Err(e) if e.starts_with("cancelled") => Err(e), // superseded by a newer check
+            Err(_) => {
+                let short = if srv.len() > 12 { format!("{}…{}", &srv[..4], &srv[srv.len() - 5..]) } else { srv.clone() };
+                Err(format!("the route is fine — the server at {short} did not answer through the mixnet; the address may have a typo, or that server is down or restarting"))
             }
         }
-        t.end_reconnect();
-    });
+    }
+    .await;
+    match res {
+        Ok(()) => { let _ = app.emit("mixnet-phase", json!({ "step": "online", "detail": "" })); }
+        // Cancelled = a newer server check took over the overlay — emit nothing, the
+        // new check narrates from here; a "failed" now would flash a stale error.
+        Err(e) if e.starts_with("cancelled") => { log::info!("[mixnet] check superseded"); }
+        Err(e) => {
+            log::warn!("[mixnet] rebuild failed: {e}");
+            // srv: the route is up, only the server stayed silent — the UI titles
+            // this "Server not answering" and offers the official server instead.
+            let _ = app.emit("mixnet-phase", json!({ "step": "failed", "detail": e, "srv": t.is_connected() }));
+        }
+    }
+    t.end_reconnect();
 }
 
 /// UI Cancel: stop waiting for the in-flight mixnet reply / chunk download. The request

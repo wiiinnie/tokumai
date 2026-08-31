@@ -196,11 +196,15 @@
         <div class="st"><i>3</i><div><b>Wait — both sides tell you</b><small>This page follows the payment (sent → credited); the app's chain watcher matches the memo and shows the credit as "held", spent as blind-signed coins from your next message.</small></div></div>
         <p class="note" style="font-size:12px;margin-top:6px">Honest note: the faucet knows memo ↔ invite code, the server knows memo ↔ account, and both are ours — in this test, a purchase is linkable to a tester. Real purchases on mainnet are not routed through anything like this.</p>
       </div>
-      <form class="form" id="f" autocomplete="off">
+      <!-- No `name` attributes and method="post" on purpose: if the JS handler ever
+           fails to run, a native submit must NOT fall back to a GET that writes the
+           invite code and memo into the address bar / browser history / access logs. -->
+      <form class="form" id="f" method="post" autocomplete="off">
+        <noscript><div class="state"><span class="bad">This form needs JavaScript — enable it for this page, or ask us for the manual claim command.</span></div></noscript>
         <label for="code">Invite code</label>
-        <input id="code" name="code" placeholder="SCRAI-XXXX-XXXX" maxlength="32" spellcheck="false" autocapitalize="characters">
+        <input id="code" placeholder="SCRAI-XXXX-XXXX" maxlength="32" spellcheck="false" autocapitalize="characters">
         <label for="memo">Memo from the app</label>
-        <input id="memo" name="memo" placeholder="the memo shown under “Memo — required”" maxlength="64" spellcheck="false">
+        <input id="memo" placeholder="the memo shown under “Memo — required”" maxlength="64" spellcheck="false">
         <div class="note" style="margin-top:12px;font-size:12px">Amount: read from the invoice the app created — $1 at today's rate, pinned by the server. Nothing to type.</div>
         <button class="btn primary" id="go" type="submit">Fund this invoice</button>
         <div class="state" id="state"></div>

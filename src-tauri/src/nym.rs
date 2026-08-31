@@ -372,9 +372,17 @@ impl Transport {
     /// persisting or routing to it, so a malformed or malicious `set_server` value is
     /// rejected at the boundary instead of being silently stored and used (H5).
     pub fn validate_address(addr: &str) -> Result<(), String> {
-        Recipient::try_from_base58_string(addr.trim())
-            .map(|_| ())
-            .map_err(|e| format!("invalid scrai-server address: {e}"))
+        Recipient::try_from_base58_string(addr.trim()).map(|_| ()).map_err(|e| {
+            // The SDK's error text is crypto jargon ("Cannot decompress Edwards
+            // point") — log it, but tell the user what it means in plain words.
+            log::info!("[server] address rejected: {e}");
+            let why = if addr.trim().contains('@') {
+                "this is not a valid public key — check for a typo"
+            } else {
+                "the '@gateway' part is missing — copy the full address from your scrai-server"
+            };
+            format!("invalid scrai-server address: {why}")
+        })
     }
 
     pub async fn cached_models(&self) -> Option<Value> {
@@ -509,6 +517,13 @@ impl Transport {
         if self.live.load(Ordering::Relaxed) {
             return false;
         }
+        self.reconnecting.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok()
+    }
+    /// Claim the same slot even while the route is LIVE — the server-switch liveness
+    /// check reuses a live route instead of rebuilding it, but must still be the only
+    /// rebuild/check running. Pair with `end_reconnect`.
+    pub fn try_begin_check(&self) -> bool {
+        use std::sync::atomic::Ordering;
         self.reconnecting.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok()
     }
     pub fn end_reconnect(&self) {
@@ -814,3 +829,4 @@ fn stamp_app(req: &Value) -> Result<Vec<u8>, String> {
     }
     serde_json::to_vec(&req).map_err(|e| e.to_string())
 }
+

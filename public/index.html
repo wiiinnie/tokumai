@@ -199,7 +199,7 @@
   .mchip.txt.on{background:var(--mix);border-color:var(--mix);color:var(--ink)}
   .mchip.img.on{background:var(--signal);border-color:var(--signal);color:var(--ink)}
   .mchip.lat.on{background:var(--rust);border-color:var(--rust);color:var(--bone)}
-  .menu{position:absolute;top:46px;left:0;width:max-content;min-width:300px;max-width:min(620px,calc(100vw - 32px));max-height:72vh;overflow-y:auto;background:var(--surface-2);border:1px solid var(--line);
+  .menu{position:absolute;top:46px;left:0;width:max-content;min-width:300px;max-width:min(620px,calc(100vw - 32px));max-height:72vh;overflow-y:auto;overflow-x:hidden;background:var(--surface-2);border:1px solid var(--line);
     border-radius:var(--radius);padding:6px;z-index:20;box-shadow:0 18px 40px rgba(0,0,0,.5);display:none}
   .menu.open{display:block}
   /* Three-line row: (1) marketing name + kind badge inline, (2) vendor · technical
@@ -210,10 +210,17 @@
   .mi.disabled{opacity:.45;cursor:not-allowed}
   .mi .l1{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
   .mi .n{font-size:14px;font-weight:600;color:var(--bone);line-height:1.15}
-  .mi .l2{font-family:var(--mono);font-size:11px;color:var(--muted);line-height:1.3}
-  .mi .l3{font-family:var(--mono);font-size:11px;color:color-mix(in srgb,var(--bone) 45%,var(--muted));line-height:1.3}
+  .mi .l2{font-family:var(--mono);font-size:11px;color:var(--muted);line-height:1.3;overflow-wrap:anywhere}
+  .mi .l3{font-family:var(--mono);font-size:11px;color:color-mix(in srgb,var(--bone) 45%,var(--muted));line-height:1.3;overflow-wrap:anywhere}
   .mi .l3 .u{color:var(--muted)}
   .mi .soon{font-family:var(--mono);font-size:9.5px;color:var(--muted);border:1px solid var(--line);padding:2px 6px;border-radius:4px}
+  /* Windows (WebView2): classic scrollbars render as chunky opaque boxes inside panels
+     and dropdowns — restyle them thin and dark. macOS/iOS overlay bars are untouched
+     (the .win class is only set on Windows). */
+  html.win ::-webkit-scrollbar{width:10px;height:10px}
+  html.win ::-webkit-scrollbar-track,html.win ::-webkit-scrollbar-corner{background:transparent}
+  html.win ::-webkit-scrollbar-thumb{background:var(--surface-2);border:2px solid transparent;background-clip:padding-box;border-radius:6px}
+  html.win ::-webkit-scrollbar-thumb:hover{background:var(--line);border:2px solid transparent;background-clip:padding-box}
   .mix{margin-left:auto;display:flex;align-items:center;gap:14px}
   .path{display:flex;align-items:center;gap:0}
   .hop{display:flex;flex-direction:column;align-items:center;gap:5px;position:relative}
@@ -852,7 +859,8 @@
      the desktop boots straight into the normal UI. -->
 <script>if (matchMedia("(max-width: 700px)").matches) document.documentElement.classList.add("boot");
 // Apply the saved appearance theme before the chrome paints (default A — in-app warm).
-(function(){try{var t=localStorage.getItem("scrai.theme");document.documentElement.setAttribute("data-theme",(t==="A"||t==="B"||t==="E"||t==="F")?t:"A");}catch(e){document.documentElement.setAttribute("data-theme","A");}})();</script>
+(function(){try{var t=localStorage.getItem("scrai.theme");document.documentElement.setAttribute("data-theme",(t==="A"||t==="B"||t==="E"||t==="F")?t:"A");}catch(e){document.documentElement.setAttribute("data-theme","A");}
+try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.add("win");}catch(e){}})();</script>
 
 <div class="titlebar" data-tauri-drag-region>
   <button class="mburger" data-click="toggleRail" aria-label="Conversations">☰</button>
@@ -1080,7 +1088,7 @@
       </div>
       <div class="mpage" data-page="general">
       <div class="grouplbl" style="margin-top:2px">Tutorial</div>
-      <label class="setrow"><input type="checkbox" id="tutChk"><span><b>Show the tutorial on start</b><small>The quick 5-step intro to getting set up. On by default. Turn it off once you know the ropes.</small></span></label>
+      <label class="setrow"><input type="checkbox" id="tutChk"><span><b>Show the tutorial on start</b><small>The quick 5-step intro to getting set up. Shows once on first start — tick this to see it again on the next start.</small></span></label>
       <button class="btn" data-click="tutShow" style="margin-top:4px">Replay tutorial now</button>
 
       <div class="grouplbl">Typing</div>
@@ -1519,9 +1527,11 @@
       $("mName").textContent="no backend"; $("mVend").textContent="see status ↗";
     }
   }
+  // Image models bill the flat per-image rate PLUS the (small) text tokens around it
+  // (prompt + any caption) — say so up front, or the final charge reads ~4% "too high".
   function rateHint(rate){
     if(!rate) return "";
-    if(rate.image) return `${rate.image} SCRAI / image`;
+    if(rate.image) return `${rate.image} SCRAI / image + text tokens`;
     if(!rate.in && !rate.out) return "";
     const per1k = v => (v/1000<1 ? (v/1000).toFixed(2) : Math.round(v/1000).toLocaleString());
     return `${per1k(rate.in)} / ${per1k(rate.out)} SCRAI / 1k`;
@@ -1531,7 +1541,7 @@
   // price table) — safe to interpolate without escaping.
   function rateLineHtml(rate){
     if(!rate) return "";
-    if(rate.image) return `${rate.image} <span class="u">SCRAI / image</span>`;
+    if(rate.image) return `${rate.image} <span class="u">SCRAI / image + text tokens</span>`;
     if(!rate.in && !rate.out) return "";
     const per1k = v => (v/1000<1 ? (v/1000).toFixed(2) : Math.round(v/1000).toLocaleString());
     return `${per1k(rate.in)} / ${per1k(rate.out)} <span class="u">SCRAI / 1k</span>`;
@@ -1644,12 +1654,29 @@
   // Open external links in the OS browser (the webview won't follow target=_blank).
   // nosemgrep: scrai-js-window-open -- the app path is open_external (http/https only, OS browser); window.open is the dev-bridge fallback
   function openLink(url){ try{ Backend.openExternal(url); }catch(_){ try{ window.open(url,"_blank","noopener"); }catch(__){} } return false; }
-  // Consent is SESSION-ONLY and never persisted: the set starts empty on every app
-  // launch, so provider terms must be re-accepted after each restart (and on every
-  // switch to a model not yet consented this session).
-  // Terms are agreed per PROVIDER, not per model: every Google model shares Google's
-  // terms, so once you've agreed for one, switching between Google models won't re-prompt.
-  let acceptedVendors = new Set();
+  // Consent is persisted per PROVIDER + terms version: every Google model shares
+  // Google's terms, so once you've agreed for one, switching between Google models
+  // won't re-prompt — and neither will an app restart. The stored value is a
+  // fingerprint of the provider's terms links; if we ever update those links the
+  // fingerprint changes and the sheet re-surfaces once for the new terms.
+  const TERMS_STORE_KEY = "scrai.termsAccepted";
+  function termsFingerprint(vk){ const t=VENDOR_TERMS[vk]; return t&&t.links ? t.links.map(l=>l.url).join("|") : "none"; }
+  function loadAcceptedVendors(){
+    const out=new Set();
+    try{
+      const o=JSON.parse(localStorage.getItem(TERMS_STORE_KEY)||"{}");
+      for(const vk of Object.keys(o)) if(o[vk]===termsFingerprint(vk)) out.add(vk);
+    }catch(_){}
+    return out;
+  }
+  function persistVendorAccept(vk){
+    try{
+      const o=JSON.parse(localStorage.getItem(TERMS_STORE_KEY)||"{}");
+      o[vk]=termsFingerprint(vk);
+      localStorage.setItem(TERMS_STORE_KEY, JSON.stringify(o));
+    }catch(_){}
+  }
+  let acceptedVendors = loadAcceptedVendors();
   const vendorKey = (m)=> (m && m.vendor ? String(m.vendor).toLowerCase() : "");
   function modelByName(name){ return models.find(m=>m.model===name); }
   let pendingTermsModel = null;
@@ -1692,14 +1719,18 @@
     const cb = $("termsAgree"), btn = $("termsAcceptBtn");
     if(btn) btn.disabled = !(cb && cb.checked);
   }
+  // Set when the terms sheet interrupted an actual send: the message is re-sent
+  // automatically after Accept, so the user never has to press Send twice.
+  let sendAfterTerms = null;
   function acceptTerms(){
     const m = pendingTermsModel;
     if(!m){ closeTerms(); return; }
     if(!($("termsAgree") && $("termsAgree").checked)) return;   // guard: require the tick
-    acceptedVendors.add(vendorKey(m)); selectModel(m);
+    acceptedVendors.add(vendorKey(m)); persistVendorAccept(vendorKey(m)); selectModel(m);
     closeTerms();
+    if(sendAfterTerms){ const p=sendAfterTerms; sendAfterTerms=null; setTimeout(()=>sendMsg(p.override), 0); }
   }
-  function declineTerms(){ closeTerms(); }   // selection unchanged; sending stays gated
+  function declineTerms(){ sendAfterTerms=null; closeTerms(); }   // selection unchanged; sending stays gated
   // True once the active model's terms are accepted; otherwise re-surfaces the nag.
   function ensureTermsForCurrent(){
     if(!currentModel) return true;
@@ -1955,7 +1986,7 @@
   // dev HTTP bridge: always) — a shipped binary hides the Developer section and never
   // renders the audit, and a release server doesn't even send the provider cost.
   let devBuild = false;
-  const APP_VERSION = "0.4.2 (ichnusa)";   // codename from Howard Marks' "Mr Nice"
+  const APP_VERSION = "0.4.3 (ichnusa)";   // codename from Howard Marks' "Mr Nice"
   let devCost = false;
   // DEV upload readout: real file size ÷ pure transfer time (excludes chunk-split +
   // uploadBegin setup). Shown under a sent image only when the dev cost-audit is on.
@@ -2304,7 +2335,11 @@
   // whole app: typewriter + ✓ per REAL step, same words as the boot animation) · offline.
   // Every step is reported by Rust as it actually starts — nothing is typed on a timer.
   let mixState = "ok", routeStart = 0, routeTicker = null, routeFail = "", connectedAt = 0, hiddenAt = 0, lastRtt = 0, lastRebuildSecs = 0, routeWhy = "";
-  const PHASE_LABEL = { directory:"Fetching the gateway directory", keys:CONN_STEPS[0], client:CONN_STEPS[1], gateway:CONN_STEPS[2], cover:CONN_STEPS[3], server:CONN_STEPS[4] };
+  // "server" reads as a liveness check here (the boot animation keeps "Connecting to
+  // ScrambleAI server"): the step sends a tiny ping through the mixnet and waits for
+  // the answer — "reuse" narrates the fast path where the live route is kept as-is.
+  const PHASE_LABEL = { directory:"Fetching the gateway directory", keys:CONN_STEPS[0], client:CONN_STEPS[1], gateway:CONN_STEPS[2], cover:CONN_STEPS[3], server:"Checking the server is alive", reuse:"Route is up — reusing it" };
+  let routeTitle = "";                          // "" → default "Reconnecting to the mixnet"
   let rt = { lines:[], timers:[], seq:0 };     // overlay console state: lines = [{el, tx, cur, text, typed, closed}]
   function routeSecs(){ return routeStart ? Math.max(0, Math.round((Date.now()-routeStart)/1000)) : 0; }
   function pauseWhy(ms){
@@ -2313,13 +2348,13 @@
     return `The app was paused in the background for ${dur}, so the anonymous route was dropped — on purpose: a paused route would be a fixed, traceable address. A fresh one takes about 10 s.`;
   }
   function setMixState(st, why){
+    if(why!==undefined) routeWhy = why;   // before routeOpen below — it renders routeWhy
     if(st!==mixState){
       if(st==="reconnecting"||st==="checking"){ routeStart=Date.now(); routeFail=""; }
       if(st==="ok" && (mixState==="reconnecting"||mixState==="checking") && routeStart) lastRebuildSecs = routeSecs();
       mixState = st;
       if(st==="reconnecting") routeOpen();
     }
-    if(why!==undefined) routeWhy = why;
     if((st==="reconnecting"||st==="checking") && !routeTicker) routeTicker=setInterval(updateRouteUI, 1000);
     if(st==="ok"||st==="offline"){ if(routeTicker){ clearInterval(routeTicker); routeTicker=null; } }
     updateRouteUI();
@@ -2330,9 +2365,10 @@
     if(routeQuiet) return;                        // user closed it — retry in the background
     const box=$("routeBox"); if(!box) return;
     box.className="routebox";
-    box.innerHTML = `<div class="t"><span>Reconnecting to the mixnet</span><span class="el" id="routeEl">${routeSecs()} s</span></div>
+    box.innerHTML = `<div class="t"><span>${esc(routeTitle||"Reconnecting to the mixnet")}</span><span class="el" id="routeEl">${routeSecs()} s</span></div>
       <div class="why" id="routeWhy">${esc(routeWhy||"The route was dropped. A fresh one takes about 10 s.")}</div>
-      <div class="cons" id="routeCons"></div><div class="foot" id="routeFoot"></div><div id="routeBtns"></div>`;
+      <div class="cons" id="routeCons"></div><div class="foot" id="routeFoot"></div>
+      <div id="routeBtns"><div class="btnrow"><button class="btn" data-click="routeDismiss">Close</button></div></div>`;
     $("routeScrim").classList.add("open");
   }
   function routeClose(){ rt.timers.forEach(clearTimeout); rt.timers=[]; $("routeScrim").classList.remove("open"); }
@@ -2390,7 +2426,7 @@
     if(!p || !everConnected) return;               // the boot animation owns the first connect
     switch(p.step){
       case "check": setMixState("checking"); return;
-      case "directory": case "keys": case "client": case "gateway": case "cover": case "server":
+      case "directory": case "keys": case "client": case "gateway": case "cover": case "server": case "reuse":
         if(mixState!=="reconnecting") setMixState("reconnecting");
         routeLine(PHASE_LABEL[p.step] + (p.detail ? " · " + p.detail : ""));
         return;
@@ -2402,15 +2438,24 @@
         connectedAt = Date.now(); autoRetryN=0; clearAutoRetry(); routeQuiet=false;
         const host=$("routeCons"); if(host && !host.querySelector(".donemark")){ const mk=document.createElement("div"); mk.innerHTML=DONE_MARK_SVG; host.appendChild(mk.firstElementChild); }
         const my=rt.seq;
-        rt.timers.push(setTimeout(()=>{ if(my!==rt.seq) return; routeClose(); setMixState("ok"); if(lastRebuildSecs) setStatus(`route rebuilt · ${lastRebuildSecs} s · new session identity`); refreshRoute(); }, 1400));
+        rt.timers.push(setTimeout(()=>{ if(my!==rt.seq) return; routeClose(); setMixState("ok");
+          if(routeTitle) setStatus("server is alive ✓");
+          else if(lastRebuildSecs) setStatus(`route rebuilt · ${lastRebuildSecs} s · new session identity`);
+          routeTitle="";
+          refreshRoute(); }, 1400));
         return;
       }
       case "failed": {
         routeFail = p.detail||"";
+        // srv: the route itself is up — the SERVER didn't answer the liveness check.
+        // Different title, and "Use official server" as the escape hatch after a bad
+        // custom address (a gateway change wouldn't help, so that button is dropped).
+        const srvFail = p.srv===true;
+        const canOfficial = srvFail && KNOWN_SERVERS.length && server!==KNOWN_SERVERS[0].address;
         const last = rt.lines[rt.lines.length-1]; if(last) routeFinish(last, false);
-        const box=$("routeBox"); if(box){ box.classList.add("bad"); const t=box.querySelector(".t span"); if(t) t.textContent="Mixnet offline"; }
+        const box=$("routeBox"); if(box){ box.classList.add("bad"); const t=box.querySelector(".t span"); if(t) t.textContent = srvFail ? "Server not answering" : "Mixnet offline"; }
         const why=$("routeWhy"); if(why) why.textContent = routeFail || "Could not reach an entry gateway. Usually the phone has no internet right now, or the chosen gateway is down.";
-        const btns=$("routeBtns"); if(btns) btns.innerHTML = `<div class="btnrow"><button class="btn primary" data-click="rebuildRoute">Try again</button><button class="btn" data-click="openEntryPicker">Pick another gateway</button><button class="btn" data-click="routeDismiss">Close</button></div><div class="hint" id="routeAuto" style="margin-top:8px"></div>`;
+        const btns=$("routeBtns"); if(btns) btns.innerHTML = `<div class="btnrow"><button class="btn primary" data-click="rebuildRoute">Try again</button>${canOfficial?`<button class="btn" data-click="useOfficialServer">Use official server</button>`:``}${srvFail?``:`<button class="btn" data-click="openEntryPicker">Pick another gateway</button>`}<button class="btn" data-click="routeDismiss">Close</button></div><div class="hint" id="routeAuto" style="margin-top:8px"></div>`;
         setMixState("offline");
         scheduleAutoRetry();
         return;
@@ -2422,6 +2467,7 @@
   // quick ping (chip only) and a full rebuild (overlay).
   async function appResumed(hiddenMs, force, auto){
     if(!isTauri() || !mixOn || !everConnected) return;
+    routeTitle = "";                       // normal reconnects own the default title
     if(force || hiddenMs >= 20000){ setMixState("reconnecting", auto ? "Retrying the route automatically — new session identity, about 10 s." : force ? "Rebuilding the route on request — new session identity, about 10 s." : pauseWhy(hiddenMs)); }
     else setMixState("checking");
     try{ const r = await Backend.appResumed(hiddenMs, !!force); if(r && r.action==="alive"){ lastRtt = r.ms||lastRtt; connectedAt = connectedAt||Date.now(); autoRetryN=0; clearAutoRetry(); setMixState("ok"); } }
@@ -3066,7 +3112,9 @@
     if(!isRetry && !liveNudgeBypass && !liveDataOn() && text && isGeminiTextModel() && looksTimeSensitive(text)){
       showLiveNudge(); return;
     }
-    if(!ensureTermsForCurrent()) return;               // must accept the provider's terms first
+    // Provider terms not accepted yet → the sheet opens; remember this send so Accept
+    // fires it automatically (the input keeps the text for the override-less case).
+    if(!ensureTermsForCurrent()){ sendAfterTerms = { override }; setStatus("accept the provider's terms — your message sends right after"); return; }
     if(!account){ openAccount(); return; }             // must have an account to spend
     if(pendingFile && !isVisionModel()){ setStatus("this model can’t read files — pick one that can (e.g. Gemini)"); renderAttach(); return; }
     // Privacy guard — local scan of the prompt before it leaves the device.
@@ -4086,8 +4134,32 @@
     if(s){ serverCustom=false; saveServerAddr(s.address); }
   }
   async function saveServerAddr(addr){
-    try{ await Backend.setServer(addr); await refreshState(); renderAccount(); acctStatus(addr?"server saved ✓":"server cleared"); }
-    catch(e){ acctStatus("failed: "+(e.message||e)); }
+    try{
+      await Backend.setServer(addr);
+      // The wallet is persisted at this point — reflect it NOW. refreshState() below can
+      // block for minutes while the route is down (models/balance round trips), and
+      // awaiting it before the re-render once left the old manual input on screen after
+      // a switch back to the official server, looking like the switch never took.
+      server = addr || null; serverCustom = false;
+      renderAccount(); acctStatus(addr?"server saved ✓":"server cleared");
+      // "server saved" is on screen — now narrate the liveness check the Rust side
+      // just started (spawn_server_check): the overlay stays up until the server
+      // answers ("online") or the check gives up ("failed" with the srv flag).
+      if(isTauri() && mixOn && addr){
+        routeQuiet=false; routeTitle="Switching server";
+        clearAutoRetry(); autoRetryN=0;
+        setMixState("reconnecting", "Server saved. Checking it answers through the mixnet — nothing is sent, nothing is billed.");
+      }
+      refreshState().then(renderAccount).catch(()=>{});
+    }
+    catch(e){ renderAccount(); acctStatus("failed: "+(e.message||e)); }
+  }
+  // Escape hatch on the "Server not answering" overlay: back to the official server,
+  // which re-runs the same save + liveness-check flow with the known-good address.
+  function useOfficialServer(){
+    if(!KNOWN_SERVERS.length) return;
+    routeClose(); mixState="ok";           // let the new check re-open the overlay cleanly
+    saveServerAddr(KNOWN_SERVERS[0].address);
   }
   function serverBlock(){
     if(!isTauri()) return "";
@@ -4795,7 +4867,7 @@
   // expose for inline handlers
   Object.assign(window,{ pickModel, copyPhrase, newChat, openSession, deleteSession, exportSession, toggleMenu, selectModelIdx,
     autogrow, onKey, sendMsg, retryMsg, showHandover, downloadHandover, closeHandover, pickImport, importHandover,
-    cancelMsg, resendMsg, openConnSheet, closeConnSheet, rebuildRoute, rebuildRouteFromSheet, routeDismiss, iterateImg,
+    cancelMsg, resendMsg, openConnSheet, closeConnSheet, rebuildRoute, rebuildRouteFromSheet, routeDismiss, useOfficialServer, iterateImg,
     openBuy, closeBuy, buyTier, buyOrInvoice, copyUri, openAccount, closeAccount, doAccountNew, doAccountReveal, doAccountRestore, doAccountDelete, doMigrate, doRedeem, redeemSliderChanged, startQrScan, stopQrScan,
     showRestore, askNew, cancelAcctView, saveServer, srvSelected, qNav, scrollToBottom, reopenGuard, checkCredit,
     openEntryPicker, showExitInfo, chooseGateway, closeGw, filterGw, toggleGwOpt,
@@ -4855,8 +4927,8 @@
   }, true);
 
   // ---------- first-run tutorial ----------
-  // Shows on every start by default (handy while testing). The Settings toggle
-  // writes "0" to disable it; anything else (incl. missing) means "show".
+  // Shows once: dismissing it (finish or skip) writes "0", so it stays gone on the
+  // next start. The Settings toggle re-arms it ("1"/missing = show, "0" = don't).
   const TUT_KEY = "scrai.tutorial";
   function tutorialEnabled(){ try{ return localStorage.getItem(TUT_KEY) !== "0"; }catch(_){ return true; } }
   const TUT_STEPS = [
@@ -4914,7 +4986,7 @@
   }
   function tutNext(){ if(tutI<TUT_STEPS.length-1) tutGo(tutI+1); else tutClose(); }
   function tutBack(){ tutGo(tutI-1); }
-  function tutClose(){ $("tutScrim").classList.remove("open"); armTermsGate(); }
+  function tutClose(){ try{ localStorage.setItem(TUT_KEY,"0"); }catch(_){} $("tutScrim").classList.remove("open"); armTermsGate(); }
   function tutSkip(){ tutClose(); }
   // Show the tutorial ONCE, only after the app has finished loading (called from
   // finishLogo) — so it floats over the loaded UI instead of covering the bootup.
