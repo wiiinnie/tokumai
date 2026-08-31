@@ -144,9 +144,11 @@
       <div class="dlc{{CLS_LINUX}}">
         <div class="os">🐧 Linux · x86_64</div>
         <div class="meta">{{META_LINUX}}</div>
-        <div class="note"><b>AppImage:</b> one file — <span style="font-family:var(--mono)">chmod +x</span>, double-click. Needs WebKitGTK (present on GNOME/KDE desktops).</div>
-        <div class="sum">sha256 {{SHA_APPIMAGE}}</div>
-        <div class="row">{{DL_APPIMAGE}}{{DL_DEB}}</div>
+        <div class="note"><b>.deb</b> is the standard build — for <b>Debian, Ubuntu, Mint and Kali</b>: <span style="font-family:var(--mono)">sudo dpkg -i &lt;file&gt;.deb</span>, then launch ScrambleAI from the menu. It uses your system's WebKitGTK, which makes it the most reliable option.<br>
+        <b>AppImage (experimental)</b> for other distros: one file — <span style="font-family:var(--mono)">chmod +x</span>, double-click. Known issue: on VMs and older graphics stacks the window can stay grey (EGL); try <span style="font-family:var(--mono)">WEBKIT_DISABLE_DMABUF_RENDERER=1</span> before launching, or use the .deb on a Debian-based system.</div>
+        <div class="sum">sha256 (.deb) {{SHA_DEB}}</div>
+        <div class="sum">sha256 (AppImage) {{SHA_APPIMAGE}}</div>
+        <div class="row">{{DL_DEB}}{{DL_APPIMAGE}}</div>
       </div>
       <div class="dlc{{CLS_WINDOWS}}">
         <div class="os">⊞ Windows · x64</div>
@@ -232,8 +234,9 @@
       <div class="vfc">
         <div class="os">🐧 Linux</div>
         <div class="shell">Shell · file in ~/Downloads</div>
-        <pre id="vfLinux">cd ~/Downloads &amp;&amp; echo "<b>{{SHA_APPIMAGE}}</b>  {{FILE_APPIMAGE}}" | sha256sum -c</pre>
-        <div class="row"><button class="btn" type="button" data-copy="vfLinux">Copy command</button><span class="ok">expect <b>{{FILE_APPIMAGE}}: OK</b></span></div>
+        <pre id="vfLinux">cd ~/Downloads &amp;&amp; echo "<b>{{SHA_DEB}}</b>  {{FILE_DEB}}" | sha256sum -c</pre>
+        <div class="row"><button class="btn" type="button" data-copy="vfLinux">Copy command</button><span class="ok">expect <b>{{FILE_DEB}}: OK</b></span></div>
+        <div class="note" style="font-size:12px">Got the AppImage instead? Same command with <span style="font-family:var(--mono)">{{FILE_APPIMAGE}}</span> and its sha256 from the download card.</div>
       </div>
       <div class="vfc">
         <div class="os">⊞ Windows</div>

@@ -492,8 +492,11 @@ fn site_html(dl_dir: &Path) -> String {
     for (ph, key, label, primary) in [
         ("{{DL_MACOS}}", "macos", "Download .dmg", true),
         ("{{DL_WINDOWS}}", "windows", "Download installer (.exe)", true),
-        ("{{DL_APPIMAGE}}", "appimage", "AppImage", true),
-        ("{{DL_DEB}}", "deb", ".deb", false),
+        // .deb is the STANDARD Linux download (host WebKit/GTK — robust); the AppImage
+        // stays offered but experimental (bundled libs clash with newer stacks, see the
+        // 2026-08-31 Kali report: grey window from a gvfs/EGL collision).
+        ("{{DL_DEB}}", "deb", "Download .deb", true),
+        ("{{DL_APPIMAGE}}", "appimage", "AppImage (experimental)", false),
         ("{{DL_ANDROID}}", "android", "Download .apk", true),
     ] {
         let cls = if primary { "btn primary" } else { "btn" };
@@ -532,16 +535,18 @@ fn site_html(dl_dir: &Path) -> String {
     s = s.replace("{{CLS_IOS}}", if env_link("SCRAI_DL_IOS").is_some() { " has" } else { " soon" });
     s = s.replace("{{META_MACOS}}", &meta("macos", "Apple silicon · .dmg"));
     s = s.replace("{{META_WINDOWS}}", &meta("windows", "NSIS installer · Windows 10/11"));
-    s = s.replace("{{META_LINUX}}", &meta("appimage", "AppImage — or the .deb for Debian/Ubuntu"));
+    s = s.replace("{{META_LINUX}}", &meta("deb", ".deb — Debian, Ubuntu, Mint, Kali"));
     // 04 · verify: the exact published file name goes into the copy-paste command
     let fname = |key: &str| files.get(key).map(|f| html_escape(&f.name)).unwrap_or_else(|| "<file>".into());
     s = s.replace("{{FILE_MACOS}}", &fname("macos"));
     s = s.replace("{{FILE_APPIMAGE}}", &fname("appimage"));
+    s = s.replace("{{FILE_DEB}}", &fname("deb"));
     s = s.replace("{{FILE_WINDOWS}}", &fname("windows"));
     s = s.replace("{{FILE_ANDROID}}", &fname("android"));
     s = s.replace("{{SHA_MACOS}}", &sha("macos"));
     s = s.replace("{{SHA_WINDOWS}}", &sha("windows"));
     s = s.replace("{{SHA_APPIMAGE}}", &sha("appimage"));
+    s = s.replace("{{SHA_DEB}}", &sha("deb"));
     // hero caption: just the number ("0.3.2"), or the build label when no manifest is published
     let short = mver.clone().unwrap_or_else(|| "testnet build".into());
     s = s.replace("{{VERSION_SHORT}}", &html_escape(&short));
