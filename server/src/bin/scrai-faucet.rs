@@ -525,17 +525,6 @@ fn site_html(dl_dir: &Path) -> String {
         }
     };
     let sha = |key: &str| files.get(key).map(|f| html_escape(&f.sha256)).filter(|x| !x.is_empty()).unwrap_or_else(|| "—".into());
-    // Shortened form for the collapsed "Verify checksum" row — the full value sits
-    // inside the fold and in the Verify section.
-    let sha_short = |key: &str| {
-        files
-            .get(key)
-            .map(|f| f.sha256.clone())
-            .filter(|x| !x.is_empty())
-            .map(|x| if x.len() > 14 { format!("{}…{}", &x[..6], &x[x.len() - 4..]) } else { x })
-            .map(|x| html_escape(&x))
-            .unwrap_or_else(|| "—".into())
-    };
     // green card when something is actually downloadable; iOS greys until TestFlight exists
     s = s.replace("{{CLS_MACOS}}", if files.contains_key("macos") { " has" } else { "" });
     s = s.replace("{{CLS_WINDOWS}}", if files.contains_key("windows") { " has" } else { "" });
@@ -558,10 +547,6 @@ fn site_html(dl_dir: &Path) -> String {
     s = s.replace("{{SHA_WINDOWS}}", &sha("windows"));
     s = s.replace("{{SHA_APPIMAGE}}", &sha("appimage"));
     s = s.replace("{{SHA_DEB}}", &sha("deb"));
-    s = s.replace("{{SHAS_MACOS}}", &sha_short("macos"));
-    s = s.replace("{{SHAS_WINDOWS}}", &sha_short("windows"));
-    s = s.replace("{{SHAS_DEB}}", &sha_short("deb"));
-    s = s.replace("{{SHAS_ANDROID}}", &sha_short("android"));
     // hero caption: just the number ("0.3.2"), or the build label when no manifest is published
     let short = mver.clone().unwrap_or_else(|| "testnet build".into());
     s = s.replace("{{VERSION_SHORT}}", &html_escape(&short));
