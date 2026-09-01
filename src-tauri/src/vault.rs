@@ -185,6 +185,39 @@ pub fn save(data_dir: &Path, session: Value, updated: Option<u64>) -> Result<Met
     Ok(meta)
 }
 
+// ---- pending payments --------------------------------------------------------
+// Open invoices (incl. the testnet faucet memo) used to persist in webview
+// localStorage — plaintext in WebView2/WebKit LevelDB files, where "deleted" values
+// linger until compaction (Windows tester finding, 2026-09-01). They now live here:
+// one encrypted file beside the chat vault, removed outright once nothing is pending.
+// The ".enc" extension keeps list() (which only reads *.json) from ever showing it
+// as a conversation.
+const PENDING_FILE: &str = "pending.enc";
+
+pub fn pending_load(data_dir: &Path) -> Result<Value, String> {
+    let p = dir(data_dir).join(PENDING_FILE);
+    let raw = match std::fs::read_to_string(&p) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Value::Array(Vec::new())),
+        Err(e) => return Err(e.to_string()),
+    };
+    Ok(open(key()?.as_ref(), &raw)?.session)
+}
+
+pub fn pending_save(data_dir: &Path, list: Value) -> Result<(), String> {
+    let p = dir(data_dir).join(PENDING_FILE);
+    if list.as_array().map(|a| a.is_empty()).unwrap_or(false) {
+        // nothing pending — leave no file behind at all
+        return match std::fs::remove_file(&p) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e.to_string()),
+        };
+    }
+    let rec = Record { updated: now_ms(), session: list };
+    write_atomic(&p, &seal(key()?.as_ref(), &rec)?)
+}
+
 pub fn remove(data_dir: &Path, id: &str) -> Result<(), String> {
     let p = path(data_dir, id)?;
     match std::fs::remove_file(&p) {

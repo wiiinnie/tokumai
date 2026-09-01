@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex">
+<title>ScrambleAI — load credits</title>
+<style>
+  /* Same murmur tokens as the main site — this page is the future iOS payment page
+     (placeholder: tiles render, no rail is wired yet). */
+  :root{
+    --ink:#141210; --surface:#1C1917; --surface-2:#262220; --line:#332E2A;
+    --bone:#ECE6DC; --muted:#9C938A; --signal:#CBA14E; --mix:#8AA06B; --rust:#C15A43;
+    --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+    --body:'Hanken Grotesk',system-ui,-apple-system,sans-serif;
+    --display:'Fraunces',Georgia,serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--ink);color:var(--bone);font-family:var(--body);-webkit-font-smoothing:antialiased}
+  a{color:var(--signal)}
+  .wrap{max-width:560px;margin:0 auto;padding:0 20px 60px}
+  .nav{display:flex;align-items:center;justify-content:center;padding:26px 20px 22px}
+  .nav .logo{font-family:var(--display);font-weight:700;font-size:22px;text-decoration:none;color:var(--bone)}
+  .nav .logo b{color:var(--mix)}
+  h1{font-family:var(--display);font-weight:700;font-size:30px;margin:8px 0 8px;text-align:center}
+  .lead{color:var(--muted);font-size:14.5px;line-height:1.55;text-align:center;margin:0 0 26px}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:20px;margin-bottom:14px}
+  .grouplbl{font-family:var(--mono);font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--muted);margin:0 0 8px}
+  .idfield{width:100%;background:var(--surface-2);border:1px solid var(--line);border-radius:10px;color:var(--bone);
+    font-family:var(--mono);font-size:14px;letter-spacing:.03em;padding:12px 14px;text-align:center}
+  .idfield:focus{outline:none;border-color:var(--mix)}
+  .idhint{font-size:12px;color:var(--muted);margin:8px 2px 0;line-height:1.5;text-align:center}
+  .idhint.ok{color:var(--mix)}
+  .tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+  .tile{border:1px solid var(--line);border-radius:10px;background:var(--surface-2);padding:12px 6px;text-align:center;cursor:pointer;
+    font:600 14px var(--body);color:var(--bone)}
+  .tile.sel{border-color:var(--signal);background:color-mix(in srgb,var(--signal) 11%,var(--surface-2))}
+  .pmgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+  .pm{border:1px solid var(--line);border-radius:12px;background:var(--surface-2);padding:14px 12px;cursor:pointer;
+    display:flex;flex-direction:column;align-items:center;gap:6px}
+  .pm.sel{border-color:var(--signal);background:color-mix(in srgb,var(--signal) 11%,var(--surface-2))}
+  .pm .pmname{font:600 14px var(--body)}
+  .pm .pmtag{font-family:var(--mono);font-size:10.5px;color:var(--muted)}
+  .pm .pmtag.less{color:var(--rust)}
+  .pm.soon{opacity:.55;cursor:default}
+  .paybtn{width:100%;min-height:48px;margin-top:16px;border-radius:10px;border:1px solid var(--mix);background:var(--mix);
+    color:var(--ink);font:600 15px var(--body);cursor:pointer}
+  .paybtn[disabled]{opacity:.45;cursor:not-allowed}
+  .notice{display:none;margin-top:12px;border:1px solid var(--signal);border-radius:10px;padding:12px 14px;
+    font-size:13px;line-height:1.5;color:var(--bone);background:color-mix(in srgb,var(--signal) 8%,var(--surface))}
+  .notice b{color:var(--signal)}
+  .foot{display:flex;justify-content:center;gap:22px;padding:26px 0 0;font-family:var(--mono);font-size:11.5px}
+  .foot a{color:var(--muted);text-decoration:none}
+  .foot a:hover{color:var(--bone)}
+</style>
+</head>
+<body>
+<div class="nav"><a class="logo" href="./">Scramble<b>AI</b></a></div>
+<div class="wrap">
+  <h1>Load credits</h1>
+  <p class="lead">Credit is tied to your top-up ID and appears in the app shortly after payment.<br>Your recovery phrase is never needed here — <b>never enter it on any website</b>.</p>
+
+  <div class="card">
+    <div class="grouplbl">Top-up ID</div>
+    <input class="idfield" id="topupId" spellcheck="false" autocomplete="off" placeholder="open the app → Buy credit → Copy top-up ID">
+    <div class="idhint" id="idHint">The ID identifies your account for this top-up only — it can’t spend anything.</div>
+  </div>
+
+  <div class="card">
+    <div class="grouplbl">Amount</div>
+    <div class="tiles" id="amounts">
+      <div class="tile" data-usd="5">$5</div>
+      <div class="tile sel" data-usd="10">$10</div>
+      <div class="tile" data-usd="25">$25</div>
+      <div class="tile" data-usd="50">$50</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="grouplbl">Pay with</div>
+    <div class="pmgrid" id="methods">
+      <div class="pm sel" data-m="nym">
+        <svg viewBox="0 0 32 32" width="26" height="26"><circle cx="16" cy="16" r="15" fill="none" stroke="#7A5FFF" stroke-width="1.5"/><path fill="none" stroke="#7A5FFF" stroke-width="2.6" stroke-linejoin="round" stroke-linecap="round" d="M11 22V10l10 12V10"/></svg>
+        <span class="pmname">NYM</span><span class="pmtag">native · Nyx</span>
+      </div>
+      <div class="pm" data-m="btc">
+        <svg viewBox="0 0 32 32" width="26" height="26"><circle cx="16" cy="16" r="16" fill="#F7931A"/><path fill="#fff" d="M23 14.1c.3-2-1.3-3-3.4-3.8l.7-2.7-1.7-.4-.7 2.6c-.4-.1-.9-.2-1.3-.3l.7-2.7-1.6-.4-.7 2.7-1.1-.3-2.3-.6-.4 1.8s1.2.3 1.2.3c.7.2.8.6.8.9l-.8 3.1v.2l-1.2 4.6c-.1.2-.3.5-.7.4 0 0-1.2-.3-1.2-.3l-.8 1.9 2.1.6 1.2.3-.7 2.7 1.6.4.7-2.7c.5.1.9.2 1.4.3l-.7 2.7 1.7.4.7-2.7c2.8.5 4.9.3 5.8-2.2.7-2 0-3.2-1.5-3.9 1.1-.3 1.9-1 2.1-2.5zm-3.7 5.2c-.5 2-3.9.9-5 .6l.9-3.6c1.2.3 4.7.8 4.1 3zm.5-5.2c-.5 1.8-3.3.9-4.2.6l.8-3.3c.9.2 3.9.7 3.4 2.7z"/></svg>
+        <span class="pmname">Bitcoin</span><span class="pmtag">on-chain · LN</span>
+      </div>
+      <div class="pm" data-m="xmr">
+        <svg viewBox="0 0 32 32" width="26" height="26"><circle cx="16" cy="16" r="16" fill="#FF6600"/><path fill="none" stroke="#fff" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" d="M9.5 23V10l6.5 6.5L22.5 10v13"/></svg>
+        <span class="pmname">Monero</span><span class="pmtag">private</span>
+      </div>
+      <div class="pm" data-m="card">
+        <svg viewBox="0 0 32 32" width="26" height="26"><rect x="3" y="8" width="26" height="17" rx="3" fill="none" stroke="#ECE6DC" stroke-width="1.6"/><rect x="3" y="12" width="26" height="3.5" fill="#ECE6DC"/><rect x="7" y="19" width="7" height="2.2" rx="1" fill="#9C938A"/></svg>
+        <span class="pmname">Card &amp; more</span><span class="pmtag less">less private</span>
+      </div>
+    </div>
+    <button class="paybtn" id="payBtn">Continue</button>
+    <div class="notice" id="notice"><b>Preview.</b> This page is the future top-up flow for the iOS app — no payment rail is connected to it yet. Nothing was charged. Testers keep using the in-app purchase against the faucet.</div>
+  </div>
+
+  <div class="foot">
+    <a href="https://scrai-faucet.hermes-stakepool.de/imprint.html">imprint</a>
+    <a href="https://scrai-faucet.hermes-stakepool.de/privacy.html">privacy</a>
+    <a href="https://scrai-faucet.hermes-stakepool.de/terms.html">terms</a>
+  </div>
+</div>
+<script>
+  // Prefill the top-up ID from the app's deep link (?id=…). The ID is public — it can
+  // only receive credit — but never log or store it anywhere.
+  const $ = id => document.getElementById(id);
+  try{
+    const id = new URLSearchParams(location.search).get("id") || "";
+    if(id){ $("topupId").value = id; $("idHint").textContent = "Filled in from the app — check it matches, then pick an amount."; $("idHint").className = "idhint ok"; }
+  }catch(_){}
+  const selIn = (host, el) => { host.querySelectorAll(".sel").forEach(x=>x.classList.remove("sel")); el.classList.add("sel"); };
+  $("amounts").addEventListener("click", e => { const t = e.target.closest(".tile"); if(t) selIn($("amounts"), t); });
+  $("methods").addEventListener("click", e => { const t = e.target.closest(".pm"); if(t && !t.classList.contains("soon")) selIn($("methods"), t); });
+  $("payBtn").addEventListener("click", () => { $("notice").style.display = "block"; $("notice").scrollIntoView({behavior:"smooth", block:"nearest"}); });
+</script>
+</body>
+</html>

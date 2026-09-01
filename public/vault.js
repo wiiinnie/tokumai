@@ -218,7 +218,7 @@ async function migrateLegacy() {
 // key + ciphertext do not survive in WebView2's LevelDB log files until compaction.
 // localStorage (settings) goes with it, so it is snapshotted and written back once the
 // clear has landed (the platform clears asynchronously; we wait for it to take effect).
-async function purgeWebData() {
+export async function purgeWebData() {
   let snapshot = [];
   try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); snapshot.push([k, localStorage.getItem(k)]); } }
   catch (_) { return; }

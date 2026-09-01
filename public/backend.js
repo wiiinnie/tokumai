@@ -119,6 +119,9 @@ const httpBackend = {
   vaultSave: () => Promise.reject(new Error("native vault is Tauri-only")),
   vaultRemove: () => Promise.reject(new Error("native vault is Tauri-only")),
   vaultPurgeWebdata: () => Promise.resolve(),
+  // Dev pending store: plain localStorage is fine — dev payments are fake.
+  pendingLoad: () => { try { return Promise.resolve(JSON.parse(localStorage.getItem("scrai.pending") || "[]")); } catch (_) { return Promise.resolve([]); } },
+  pendingSave: (list) => { try { localStorage.setItem("scrai.pending", JSON.stringify(list)); } catch (_) {} return Promise.resolve(); },
   // Dev has no mixnet: images ride inline in the chat instead of chunk-uploading.
   uploadBegin: () => Promise.reject(new Error("no chunked upload in dev")),
   uploadChunk: () => Promise.reject(new Error("no chunked upload in dev")),
@@ -184,6 +187,8 @@ const tauriBackend = (invoke) => ({
   vaultSave: (session, updated) => invoke("vault_save", { session, updated: (typeof updated === "number" ? updated : null) }),
   vaultRemove: (id) => invoke("vault_remove", { id }),
   vaultPurgeWebdata: () => invoke("vault_purge_webdata"),
+  pendingLoad: () => invoke("pending_load"),
+  pendingSave: (list) => invoke("pending_save", { list }),
   uploadBegin: (mimeType, totalBytes) => invoke("upload_begin", { mimeType, totalBytes }),
   uploadChunk: (uploadId, seq, data) => invoke("upload_chunk", { uploadId, seq, data }),
   uploadPipeline: async (uploadId, chunks, onProgress) => {
@@ -274,6 +279,8 @@ export const Backend = {
   vaultSave: (session, updated) => pick("vaultSave", session, updated),
   vaultRemove: (id) => pick("vaultRemove", id),
   vaultPurgeWebdata: () => pick("vaultPurgeWebdata"),
+  pendingLoad: () => pick("pendingLoad"),
+  pendingSave: (list) => pick("pendingSave", list),
   saveImage: (dataB64, filename, mimeType) => pick("saveImage", dataB64, filename, mimeType),
   shareText: (filename, text) => pick("shareText", filename, text),
   uploadBegin: (mimeType, totalBytes) => pick("uploadBegin", mimeType, totalBytes),

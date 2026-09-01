@@ -428,6 +428,13 @@
   .msgact{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:11px;color:var(--muted);background:transparent;border:1px solid var(--line);border-radius:7px;padding:5px 10px;cursor:pointer;min-height:30px}
   .msgact:hover{color:var(--bone);border-color:var(--muted)}
   .msgact.rust{color:var(--rust);border-color:color-mix(in srgb,var(--rust) 45%,var(--line))}
+  /* ✕ Dismiss flow: billing hint beside the in-flight button, collapsed states after */
+  .billhint{font-family:var(--mono);font-size:10.5px;color:var(--signal);opacity:.9}
+  .dismissedline{font-family:var(--mono);font-size:12px;color:var(--muted)}
+  .dismissedline b{color:var(--rust);font-weight:500}
+  .arrival{display:flex;align-items:center;gap:10px;background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-top:8px;color:var(--muted)}
+  .arrival .t{font-family:var(--mono);font-size:11.5px;color:var(--muted);flex:1;line-height:1.5}
+  .arrival .t b{color:var(--signal);font-weight:500}
   .retrybtn{display:inline-flex;align-items:center;gap:6px;margin-top:10px;padding:6px 12px;border-radius:8px;
     border:1px solid var(--rust);background:transparent;color:var(--rust);font:inherit;font-size:13px;cursor:pointer;transition:.15s}
   .retrybtn:hover{background:color-mix(in srgb,var(--rust) 14%,transparent)}
@@ -637,6 +644,13 @@
   .pill.count{background:color-mix(in srgb,var(--signal) 22%,transparent);color:var(--signal)}
   .mpage{display:none}
   .pagelead{margin:2px 4px 14px;color:var(--muted);font-size:12.5px;line-height:1.5}
+  /* iOS web top-up: ID line in the buy sheet + the leave-the-app sheet */
+  .topupid{font-family:var(--mono);font-size:13px;letter-spacing:.03em;word-break:break-all;text-align:center;color:var(--bone);margin:12px 0}
+  .sheetgrab{width:36px;height:4px;border-radius:2px;background:var(--line);margin:2px auto 14px}
+  .sheett{font-size:15px;font-weight:600;text-align:center;margin:0 0 8px}
+  .sheetd{font-size:12.5px;color:var(--muted);line-height:1.55;text-align:center;margin:0 0 18px}
+  .sheetbtns{display:flex;flex-direction:column;gap:8px}
+  .sheetbtns .btn{width:100%;min-height:44px}
   /* category icon tints — fixed hues, mixed low over the surface so they read on light + dark themes */
   .ic.c-appear,.ic.c-key,.ic.c-buy{background:color-mix(in srgb,#CBA14E 22%,transparent);color:#CBA14E}
   .ic.c-net,.ic.c-redeem{background:color-mix(in srgb,#8AA06B 24%,transparent);color:#8AA06B}
@@ -1027,8 +1041,9 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     <div class="mh"><span class="ttl">Buy <b>credit</b></span><span class="x" data-click="closeBuy">✕</span></div>
     <div class="mb">
       <p class="balline" id="buyBal"></p>
+      <div id="iosTopup" style="display:none"></div>
       <label class="setrow" id="testnetRow" style="display:none;cursor:default"><input type="checkbox" id="testnetChk" style="display:none"><span><b>Testnet purchase<span class="tpill">TESTER</span></b><small>This server is in testnet mode: every purchase is a <b>$1</b> credit paid for you by the ScrambleAI faucet against your invite code — no real money moves. Raise the invoice, then paste its memo on the faucet page.</small></span></label>
-      <div class="grouplbl" style="margin-top:2px">Amount</div>
+      <div class="grouplbl" id="amountLbl" style="margin-top:2px">Amount</div>
       <div id="tierRow" class="tiles"></div>
 
       <div id="chooser">
@@ -1062,6 +1077,20 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       <div id="payPanel" style="display:none"></div>
       <div id="pendingBox"></div>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- iOS web top-up: our own leave-the-app sheet (US-storefront behaviour; the EU build
+     will get Apple's DMA system sheet via the entitlement instead — no double sheet). -->
+<div class="scrim" id="topupScrim" data-click="__backdrop__" data-close="closeTopupSheet">
+  <div class="modal" style="padding:14px 20px 26px">
+    <div class="sheetgrab"></div>
+    <div class="sheett">You’re leaving the app</div>
+    <div class="sheetd">The top-up page opens in Safari with your top-up ID already filled in. Credit appears in the app shortly after payment.</div>
+    <div class="sheetbtns">
+      <button class="btn primary" data-click="confirmTopup">Continue</button>
+      <button class="btn" data-click="closeTopupSheet">Cancel</button>
     </div>
   </div>
 </div>
@@ -1421,7 +1450,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
 </script>
 
 <script type="module">
-  import { Vault, PassphraseCrypto } from "./vault.js";
+  import { Vault, PassphraseCrypto, purgeWebData } from "./vault.js";
   import { Handover } from "./handover.js";
   import { Backend, isTauri } from "./backend.js";
   import { formatScrai, formatTokens, billingNotes, billingDetail } from "./billing.js";
@@ -1959,7 +1988,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     t.innerHTML=`<div class="wrap">`+messages.map((m,mi)=>`
       <div class="msg ${m.role}">
         <div class="who">${m.role==='you'?'you':(m.role==='err'?'error':'scrai')}${m.role==='ai'&&m.model?`<span class="viamodel">${esc(m.model)}</span>`:''}</div>
-        <div class="body">${bodyHtml(m,mi)}${(m.role==='you'&&m.editRef)?`<div class="editref">✎ edits the selected picture</div>`:''}${(m.role==='ai'&&m.note)?`<div class="sizenote${m.noteKind?' '+m.noteKind:''}">${esc(m.note)}</div>`:''}${(devCost&&m.role==='ai'&&m.audit)?auditDiv(m.audit):''}${(devCost&&m.role==='you'&&m.xfer)?xferDiv(m.xfer):''}${(m.role==='err'&&m.retry)?`<button class="retrybtn" data-click="retryMsg" data-args="${mi}">↻ Retry</button>`:''}${(m.role==='ai'&&m.streaming)?`<div class="msgacts"><button class="msgact rust" data-click="cancelMsg" data-args="${mi}">✕ Cancel</button></div>`:''}${(m.role==='ai'&&!m.streaming&&m.canResend)?`<div class="msgacts"><button class="msgact" data-click="resendMsg" data-args="${mi}" title="Send the same question again with the currently selected model">↻ Resend</button></div>`:''}</div>
+        <div class="body">${bodyHtml(m,mi)}${(m.role==='you'&&m.editRef)?`<div class="editref">✎ edits the selected picture</div>`:''}${(m.role==='ai'&&m.note)?`<div class="sizenote${m.noteKind?' '+m.noteKind:''}">${esc(m.note)}</div>`:''}${(devCost&&m.role==='ai'&&m.audit)?auditDiv(m.audit):''}${(devCost&&m.role==='you'&&m.xfer)?xferDiv(m.xfer):''}${(m.role==='err'&&m.retry)?`<button class="retrybtn" data-click="retryMsg" data-args="${mi}">↻ Retry</button>`:''}${(m.role==='ai'&&m.streaming&&!m.dismissed)?`<div class="msgacts"><button class="msgact rust" data-click="cancelMsg" data-args="${mi}">✕ Dismiss</button>${m.img?'<span class="billhint">billing has started — this only stops the wait</span>':''}</div>`:''}${(m.role==='ai'&&!m.streaming&&m.canResend)?`<div class="msgacts"><button class="msgact" data-click="resendMsg" data-args="${mi}" title="Send the same question again with the currently selected model">↻ Resend</button></div>`:''}</div>
       </div>`).join("")+`</div>`;
     if(pinQuestion){ pinLastQuestion(t); }
     else { t.style.paddingBottom=""; setTop(t, followStream ? t.scrollHeight : prevTop); }
@@ -2071,6 +2100,20 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     return html;
   }
   function bodyHtml(m,mi){
+    // Dismissed answers (✕ Dismiss while in flight): the request was already billed,
+    // so the reply is kept — collapsed — instead of pretending it was stopped.
+    if(m.role==='ai' && m.dismissed){
+      if(m.streaming)
+        return `<div class="dismissedline"><b>✕ dismissed</b> — already billed. The answer will appear here, collapsed, when it arrives.</div>`;
+      if(m.dismissFailed)
+        return `<div class="dismissedline"><b>✕ dismissed</b> — already billed. The reply wasn’t retrieved.</div><div class="msgacts"><button class="msgact" data-click="retrieveMsg" data-args="${mi}" title="Fetches the same answer again — no second charge">↻ Retrieve</button></div>`;
+      if(m.collapsed){
+        const what=(m.images&&m.images.length)?'picture':'answer';
+        const cost=(typeof m.paidScrai==="number"&&m.paidScrai>0)?' · '+esc(formatScrai(m.paidScrai))+' SCRAI':'';
+        return `<div class="dismissedline"><b>✕ dismissed</b></div><div class="arrival"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"></rect><circle cx="9" cy="10" r="1.6"></circle><path d="M3 17l5-5 4 4 3-3 6 6"></path></svg><span class="t">${what} arrived after dismiss — <b>already billed${cost}</b></span><button class="msgact" data-click="showDismissed" data-args="${mi}">Show</button></div>`;
+      }
+      // expanded after "Show" → normal rendering plus a quiet provenance note below
+    }
     const cursor='<span class="cursor"></span>';
     const mixphase='<span id="mixphase" class="mixphase">'+(dlProg?dlProgHTML(dlProg):esc(mixShown)+cursor)+'</span>';
     const text = m.role==='ai'
@@ -2078,7 +2121,8 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       : linkify(esc(m.text)) + (m.streaming?(m.text?cursor:mixphase):'');
     return text
       + (m.att?attHtml(m.att,m.uploading):(m.uploading?uploadHtml(m.uploading):''))
-      + (m.images&&m.images.length?imagesHtml(m.images,mi):'');
+      + (m.images&&m.images.length?imagesHtml(m.images,mi):'')
+      + (m.role==='ai'&&m.dismissed&&!m.streaming&&!m.collapsed?'<div class="sizenote">arrived after dismiss — already billed</div>':'');
   }
   // Streaming delta: update ONLY the last answer's body in place — no full innerHTML
   // rebuild, so the scroll position (the pinned question) never resets and a 50-message
@@ -2104,7 +2148,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // dev HTTP bridge: always) — a shipped binary hides the Developer section and never
   // renders the audit, and a release server doesn't even send the provider cost.
   let devBuild = false;
-  const APP_VERSION = "0.4.4 (ichnusa)";   // codename from Howard Marks' "Mr Nice"
+  const APP_VERSION = "0.4.5 (ichnusa)";   // codename from Howard Marks' "Mr Nice"
   let devCost = false;
   // DEV upload readout: real file size ÷ pure transfer time (excludes chunk-split +
   // uploadBegin setup). Shown under a sent image only when the dev cost-audit is on.
@@ -3169,10 +3213,25 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // re-sent in v1 (matching how history attachments are handled).
   // Cancel the in-flight request: Rust stops waiting (the request itself already left —
   // it may still be processed and billed; the error bubble's Retry replays it idempotently).
+  // ✕ Dismiss: by now the request has left the device and is billed on arrival at the
+  // server — no button can save money any more, only waiting time. So: mark the answer
+  // dismissed (it renders collapsed from here on) and free the transport slot. If the
+  // reply still makes it through, onDone tucks it in collapsed; if the transport drops
+  // it, onError leaves a Retrieve button (idempotent replay — no second charge).
   async function cancelMsg(mi){
-    const m=messages[mi]; if(!m || !m.streaming) return;
-    setStatus("cancelling…");
-    try{ await Backend.cancelChat(); }catch(e){ setStatus("cancel failed: "+((e&&e.message)||e)); }
+    const m=messages[mi]; if(!m || !m.streaming || m.dismissed) return;
+    m.dismissed=true; renderThread();
+    try{ await Backend.cancelChat(); }catch(_){}
+  }
+  function showDismissed(mi){ const m=messages[mi]; if(!m||!m.dismissed) return; m.collapsed=false; renderThread(); }
+  // Fetch a dismissed-and-dropped answer again: replay the SAME signed request
+  // (retry:true) — the server treats it as idempotent, so nothing is charged twice.
+  function retrieveMsg(mi){
+    const m=messages[mi]; if(!m || m.role!=='ai') return;
+    const prev=messages[mi-1]; if(!prev || prev.role!=='you' || !(prev.text||"").trim()) return;
+    const text=prev.text.trim();
+    messages.splice(mi-1, 2); renderThread();
+    guardBypass=true; sendMsg({ text, retry:true });
   }
   // Resend the question above this answer as a FRESH request with the currently
   // selected model (the answer was empty/declined; the user likely switched models).
@@ -3265,7 +3324,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     const youMsg={role:"you",text,att:displayAtt}; if(file) youMsg.uploading={pct:0,kbps:0,name:file.name};
     if(refPic) youMsg.editRef=true;
     messages.push(youMsg); if(!isRetry){ el.value=""; autogrow(el); }
-    const ai={role:"ai",text:"",streaming:true,model:currentModel}; messages.push(ai);
+    const ai={role:"ai",text:"",streaming:true,model:currentModel,img:modelKind==="image"}; messages.push(ai);
     // Sending pins the new question to the TOP: the answer streams in below it and the
     // view does NOT chase the bottom (read-from-top, like other chatbots).
     followStream=false; pinQuestion=true;
@@ -3366,6 +3425,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         stopMixPhase();
         dlProg=null;
         ai.streaming=false; busy=false;
+        if(ai.dismissed){ ai.collapsed=true; if(evt.usage&&typeof evt.usage.priceScrai==="number") ai.paidScrai=evt.usage.priceScrai; }
         if(!tFirst) tFirst=performance.now();                       // image reply: no deltas
         if(typeof evt.balance==="number"){ balance=evt.balance; if(typeof evt.held==="number") held=evt.held; renderBal(); }
         if(Array.isArray(evt.images) && evt.images.length){ ai.images=evt.images; }
@@ -3410,6 +3470,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
           renderMenu();
           err=`“${dead}” is no longer available from the provider — removed it and switched to ${alt?alt.model:'no model'}. Please resend.`;
         }
+        if(ai.dismissed){ ai.dismissFailed=true; renderThread(); await persist(text); updateSendEnabled(); return; }
         messages[messages.length-1]={role:"err",text:err,retry:{text}};
         renderThread(); setStatus("error"); await persist(text);
         updateSendEnabled();
@@ -4642,12 +4703,33 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // can be re-opened instead of vanishing. Persisted across app reloads; each entry
   // drops off automatically once its timer runs out.
   const PENDING_KEY = "scrai.pending";
-  let pendingList = loadPending();
-  function loadPending(){
-    try{ return (JSON.parse(localStorage.getItem(PENDING_KEY)||"[]")).filter(p=>p && p.expiresAt>Date.now()); }
-    catch(_){ return []; }
+  let pendingList = [];
+  initPending();
+  // Pending invoices (incl. the testnet faucet memo) live in the ENCRYPTED native
+  // store (vault::pending_save), not in webview localStorage: WebView2/WebKit back
+  // localStorage with LevelDB, where "deleted" values linger in the .log files until
+  // compaction — a Windows tester recovered a settled faucet memo that way. Dev
+  // (no Tauri) keeps plain localStorage via the backend.js facade; payments are fake there.
+  async function initPending(){
+    let stored=[];
+    try{ stored = await Backend.pendingLoad(); }catch(_){}
+    pendingList = (Array.isArray(stored)?stored:[]).filter(p=>p && p.expiresAt>Date.now());
+    if(!isTauri()) return;
+    // One-time migration off localStorage: import still-open invoices, drop the key,
+    // then purge the webview's site data so the plaintext ghosts in LevelDB go with it
+    // (purgeWebData snapshots and restores every OTHER localStorage setting).
+    let hadLegacy=false, legacy=[];
+    try{
+      hadLegacy = localStorage.getItem(PENDING_KEY)!==null;
+      legacy = (JSON.parse(localStorage.getItem(PENDING_KEY)||"[]")).filter(p=>p && p.expiresAt>Date.now());
+    }catch(_){}
+    if(!hadLegacy) return;
+    try{ localStorage.removeItem(PENDING_KEY); }catch(_){}
+    for(const p of legacy) if(!pendingList.some(q=>q.invoiceId===p.invoiceId)) pendingList.push(p);
+    savePending();
+    try{ await purgeWebData(); }catch(_){}
   }
-  function savePending(){ try{ localStorage.setItem(PENDING_KEY, JSON.stringify(pendingList)); }catch(_){} }
+  function savePending(){ try{ Backend.pendingSave(pendingList).catch(()=>{}); }catch(_){} }
   function pruneExpired(){ const n=pendingList.length; pendingList=pendingList.filter(p=>p.expiresAt>Date.now()); if(pendingList.length!==n) savePending(); }
   function addPending(inv){ pendingList=pendingList.filter(p=>p.invoiceId!==inv.invoiceId); pendingList.push(inv); savePending(); }
   function removePending(id){ pendingList=pendingList.filter(p=>p.invoiceId!==id); savePending(); }
@@ -4728,6 +4810,36 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
 
   // The coin/amount picker is always the landing view; an in-flight payment is
   // reached from "Pending payments", never sprung on the user.
+  // ---------- iOS web top-up ----------
+  // The App Store forbids in-app purchase mechanics outside IAP (3.1.1 — crypto invoices
+  // included), so on iOS the buy sheet becomes a web top-up: the public account
+  // fingerprint is the top-up ID, payment happens on the payment site in Safari
+  // (Mullvad model — the seed never leaves the device). The testnet faucet flow stays
+  // available alongside so testers are not blocked.
+  // TODO storefront split via StoreKit (US: this sheet · EU: Apple's DMA sheet through
+  // the entitlement · RoW: ID only, no link). This build shows the US behaviour.
+  const PAYMENT_SITE = "https://payment.hermes-stakepool.de/";
+  const topupId = () => (account && account.fingerprint) || "";
+  function renderIosTopup(){
+    $("iosTopup").innerHTML = `
+      <div class="grouplbl" style="margin-top:2px">Top-up</div>
+      <div class="mprow">
+        <div class="mptop"><b>Top-up ID</b></div>
+        <div class="mpdesc">Safe to share — it can only receive credit, never spend it.</div>
+        <div class="topupid">${esc(topupId())}</div>
+        <button class="btn" style="width:100%" id="copyTopupBtn" data-click="copyTopupId">Copy top-up ID</button>
+      </div>
+      <div class="mprow">
+        <div class="mptop"><b>Load credits on the web</b></div>
+        <div class="mpdesc">Opens in Safari with your top-up ID already filled in. Credit appears in the app shortly after payment.</div>
+        <button class="btn primary" style="width:100%" data-click="openTopupSheet">Load credits on payment.hermes-stakepool.de ↗</button>
+      </div>`;
+  }
+  function copyTopupId(){ copyText(topupId(), $("copyTopupBtn")); }
+  function openTopupSheet(){ $("topupScrim").classList.add("open"); }
+  function closeTopupSheet(){ $("topupScrim").classList.remove("open"); }
+  function confirmTopup(){ closeTopupSheet(); openLink(PAYMENT_SITE+"?id="+encodeURIComponent(topupId())); }
+
   function openBuy(){
     if(!account){ openAccount(); return; }
     stopPoll(); stopCountdown(); activeInvoice=null; selectedTier=null;
@@ -4736,6 +4848,15 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     testnetBuy = serverTestnet;
     if(testnetBuy){ selectedTier=TESTNET_USD; selectMethodQuiet("nyx"); }
     syncTestnetRow(); syncCardRow();
+    // iOS: web top-up on top; the legacy amount/method chooser stays only for the
+    // testnet faucet flow (a production iOS build hides in-app purchasing entirely).
+    const iosWeb = isIOSNative();
+    $("iosTopup").style.display = iosWeb ? "" : "none";
+    if(iosWeb) renderIosTopup();
+    const legacy = !iosWeb || testnetBuy;
+    $("amountLbl").style.display = legacy ? "" : "none";
+    $("tierRow").style.display   = legacy ? "" : "none";
+    $("chooser").style.display   = legacy ? "" : "none";
     renderBuyBal(); showChooser(true); renderTiers(); renderContinue(); renderPending();
     $("payPanel").innerHTML="";
     $("buyStatus").textContent = fakePayments
@@ -4985,8 +5106,8 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // expose for inline handlers
   Object.assign(window,{ pickModel, copyPhrase, newChat, openSession, deleteSession, exportSession, toggleMenu, selectModelIdx,
     autogrow, onKey, sendMsg, retryMsg, showHandover, downloadHandover, closeHandover, pickImport, importHandover,
-    cancelMsg, resendMsg, openConnSheet, closeConnSheet, rebuildRoute, rebuildRouteFromSheet, routeDismiss, useOfficialServer, iterateImg,
-    openBuy, closeBuy, buyTier, buyOrInvoice, copyUri, openAccount, closeAccount, doAccountNew, doAccountReveal, doAccountRestore, doAccountDelete, doMigrate, doRedeem, redeemSliderChanged, startQrScan, stopQrScan,
+    cancelMsg, resendMsg, showDismissed, retrieveMsg, openConnSheet, closeConnSheet, rebuildRoute, rebuildRouteFromSheet, routeDismiss, useOfficialServer, iterateImg,
+    openBuy, closeBuy, buyTier, buyOrInvoice, copyUri, copyTopupId, openTopupSheet, closeTopupSheet, confirmTopup, openAccount, closeAccount, doAccountNew, doAccountReveal, doAccountRestore, doAccountDelete, doMigrate, doRedeem, redeemSliderChanged, startQrScan, stopQrScan,
     showRestore, askNew, cancelAcctView, saveServer, srvSelected, qNav, scrollToBottom, reopenGuard, checkCredit,
     openEntryPicker, showExitInfo, chooseGateway, closeGw, filterGw, toggleGwOpt,
     acceptTerms, declineTerms, termsAgreeToggle, chooseModel, openLink, toggleImgOvl, saveImgTap, liveNudgeUse, liveNudgeSkip, reconnectMix, runMixPing, resetMixPerf,

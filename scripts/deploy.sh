@@ -88,6 +88,12 @@ install -o scrai -g scrai -m 755 \
 mv /opt/scrai/bin/scrai-faucet.new /opt/scrai/bin/scrai-faucet
 install -o scrai -g scrai -m 644 \
   "$SCRAI_ADMIN_HOME/scrai-stage/pricing.json" /opt/scrai/pricing.json
+# payment placeholder page (Caddy serves /opt/scrai/site/payment as its own vhost);
+# tolerated missing so an older stage without the file still deploys
+if [ -f "$SCRAI_ADMIN_HOME/scrai-stage/server/site/payment/index.html" ]; then
+  install -D -o scrai -g scrai -m 644 \
+    "$SCRAI_ADMIN_HOME/scrai-stage/server/site/payment/index.html" /opt/scrai/site/payment/index.html
+fi
 # retire the Node deployment (keep .env, data/, images/, and our bin/)
 rm -rf /opt/scrai/node_modules /opt/scrai/dist /opt/scrai/src /opt/scrai/scripts \
   /opt/scrai/public /opt/scrai/package.json /opt/scrai/package-lock.json \

@@ -244,6 +244,18 @@ async fn vault_remove(app: AppHandle, id: String) -> Result<(), String> {
     vault_blocking(&app, move |d| vault::remove(d, &id)).await
 }
 
+// Pending payments (open invoices + faucet memos): encrypted beside the chat vault
+// instead of webview localStorage — see vault::pending_save for the why.
+#[tauri::command]
+async fn pending_load(app: AppHandle) -> Result<Value, String> {
+    vault_blocking(&app, |d| vault::pending_load(d)).await
+}
+
+#[tauri::command]
+async fn pending_save(app: AppHandle, list: Value) -> Result<(), String> {
+    vault_blocking(&app, move |d| vault::pending_save(d, list)).await
+}
+
 /// After the one-time IndexedDB → vault migration: drop the webview's stored site data so
 /// the old ciphertext + key do not linger in WebView2's LevelDB log files until Chromium
 /// compacts them. The webview restores its localStorage settings itself (backend.js).
@@ -2439,7 +2451,7 @@ pub fn run() {
             smart_available, smart_detect, coconut_redeem,
             mixnet_route, mixnet_ping, cancel_chat, app_resumed, list_entry_gateways, set_entry_gateway, set_mixnet_perf, open_external, save_image,
             share_text, upload_begin, upload_chunk, upload_pipeline, pick_image, open_account_security,
-            vault_list, vault_load, vault_save, vault_remove, vault_purge_webdata
+            vault_list, vault_load, vault_save, vault_remove, vault_purge_webdata, pending_load, pending_save
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
