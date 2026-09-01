@@ -533,6 +533,16 @@ fn site_html(dl_dir: &Path) -> String {
     s = s.replace("{{META_ANDROID}}", &meta("android", "APK · arm64 · Android 8+"));
     s = s.replace("{{SHA_ANDROID}}", &sha("android"));
     s = s.replace("{{CLS_IOS}}", if env_link("SCRAI_DL_IOS").is_some() { " has" } else { " soon" });
+    // Only say "review pending" while there is no join link — once SCRAI_DL_IOS is set
+    // the sentence would contradict the button right above it.
+    s = s.replace(
+        "{{NOTE_IOS_PENDING}}",
+        if env_link("SCRAI_DL_IOS").is_some() {
+            ""
+        } else {
+            r#"<div style="margin-top:8px">Apple Beta App Review pending — the join link appears here as soon as it is approved.</div>"#
+        },
+    );
     s = s.replace("{{META_MACOS}}", &meta("macos", "Apple silicon · .dmg"));
     s = s.replace("{{META_WINDOWS}}", &meta("windows", "NSIS installer · Windows 10/11"));
     s = s.replace("{{META_LINUX}}", &meta("deb", ".deb — Debian, Ubuntu, Mint, Kali"));
