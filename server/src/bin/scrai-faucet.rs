@@ -99,8 +99,23 @@ const PAID_HTML: &str = r##"<!doctype html>
 "##;
 
 const IMAGES: &[(&str, &[u8])] = &[
-    ("mac-chat.jpg", include_bytes!("../../site/img/mac-chat.jpg")),
-];
+    ("flow-account-dark.jpg", include_bytes!("../../site/img/flow-account-dark.jpg")),
+    ("flow-account-light.jpg", include_bytes!("../../site/img/flow-account-light.jpg")),
+    ("flow-ready-dark.jpg", include_bytes!("../../site/img/flow-ready-dark.jpg")),
+    ("flow-ready-light.jpg", include_bytes!("../../site/img/flow-ready-light.jpg")),
+    ("flow-topup-dark.jpg", include_bytes!("../../site/img/flow-topup-dark.jpg")),
+    ("flow-topup-light.jpg", include_bytes!("../../site/img/flow-topup-light.jpg")),
+    ("hero-imagegen-dark.jpg", include_bytes!("../../site/img/hero-imagegen-dark.jpg")),
+    ("hero-imagegen-light.jpg", include_bytes!("../../site/img/hero-imagegen-light.jpg")),
+    ("how-mac-chat-dark.jpg", include_bytes!("../../site/img/how-mac-chat-dark.jpg")),
+    ("how-mac-chat-light.jpg", include_bytes!("../../site/img/how-mac-chat-light.jpg")),
+    ("how-mac-image-dark.jpg", include_bytes!("../../site/img/how-mac-image-dark.jpg")),
+    ("how-mac-image-light.jpg", include_bytes!("../../site/img/how-mac-image-light.jpg")),
+    ("how-phone-chat-dark.jpg", include_bytes!("../../site/img/how-phone-chat-dark.jpg")),
+    ("how-phone-chat-light.jpg", include_bytes!("../../site/img/how-phone-chat-light.jpg")),
+    ("how-phone-image-dark.jpg", include_bytes!("../../site/img/how-phone-image-dark.jpg")),
+    ("how-phone-image-light.jpg", include_bytes!("../../site/img/how-phone-image-light.jpg")),
+]; // screenshots for the homepage, dark + light of each (the page shows one per theme)
 const MAX_HEAD: usize = 16 * 1024;
 const MAX_BODY: usize = 4 * 1024;
 const IP_ATTEMPTS_PER_HOUR: usize = 10;

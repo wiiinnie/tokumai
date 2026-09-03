@@ -15,9 +15,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.1.0</string>
+	<string>0.4.6</string>
 	<key>CFBundleVersion</key>
-	<string>0.1.0</string>
+	<string>0.4.6</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>LSRequiresIPhoneOS</key>
@@ -25,7 +25,7 @@
 	<key>NSCameraUsageDescription</key>
 	<string>Scans a migration QR code to move your account to this device. The camera is used only while you scan; nothing is recorded or sent.</string>
 	<key>NSFaceIDUsageDescription</key>
-	<string>Face ID confirms it's you before your 24-word recovery phrase is shown on this device.</string>
+	<string>Face ID confirms it&apos;s you before your 24-word recovery phrase is shown on this device.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Development builds load the UI from the dev server on your Mac. Release builds never use the local network.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
