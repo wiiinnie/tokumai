@@ -5,6 +5,7 @@
 #   Cargo.lock        the workspace members' entries
 #   package.json      + package-lock.json
 #   src-tauri/tauri.conf.json   (what the app reports as `app` / shows in Settings)
+#   public/index.html           (footer fallback until the backend reports its version)
 #
 # Usage:  scripts/bump-version.sh 0.4.6
 # Then:   git commit -am "0.4.6: …" && git tag v0.4.6
@@ -35,5 +36,9 @@ grep -q "\"version\": \"$V\"" src-tauri/tauri.conf.json || { echo "tauri.conf.js
 # package.json + package-lock.json
 npm version "$V" --no-git-tag-version --allow-same-version >/dev/null
 
-echo "✓ Cargo.toml · Cargo.lock · package.json · package-lock.json · src-tauri/tauri.conf.json = $V"
-git --no-pager diff --stat -- Cargo.toml Cargo.lock package.json package-lock.json src-tauri/tauri.conf.json
+# public/index.html — the footer fallback shown before the backend reports its version.
+perl -pi -e 's/(let APP_VERSION = versionLabel\(")[^"]+("\);)/${1}'"$V"'${2}/' public/index.html
+grep -q "versionLabel(\"$V\")" public/index.html || { echo "index.html: APP_VERSION fallback not updated" >&2; exit 1; }
+
+echo "✓ Cargo.toml · Cargo.lock · package.json · package-lock.json · src-tauri/tauri.conf.json · public/index.html = $V"
+git --no-pager diff --stat -- Cargo.toml Cargo.lock package.json package-lock.json src-tauri/tauri.conf.json public/index.html

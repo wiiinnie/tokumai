@@ -20,6 +20,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFile } from "node:fs/promises";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+const APP_VERSION: string = (() => { try { return String(JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version || ""); } catch { return ""; } })();
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 
@@ -211,6 +212,7 @@ function statePayload() {
     held: heldTotal(w),
     tiers: purchaseTiers(),
     devBuild: true,
+    appVersion: APP_VERSION,
     fakePayments,
     testnet: process.env.SCRAI_TESTNET === "1",
     gateway: issuer.gatewayName,

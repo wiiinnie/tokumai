@@ -756,7 +756,10 @@
   /* ---------- mobile (≤700px): phone layout, additive only ----------
      The desktop rail becomes an off-canvas drawer (hamburger in the title
      bar), the mixnet path collapses to the toggle, and every modal becomes
-     a bottom sheet. Desktop rules above are untouched. */
+     a bottom sheet. Desktop rules above are untouched. NOTE: the boot script
+     below the styles widens this rule to "always" on touch devices whose
+     screen's short side is ≤520px (phones + phone-density tablets sideways),
+     so it must stay the only @media with "max-width:700px". */
   .mburger{display:none}
   .railscrim{display:none}
   .swipe{position:relative}
@@ -894,7 +897,27 @@
 <!-- Set before the chrome exists in the DOM, so the splash never flashes it.
      Phones only: on desktop the rail column keeps the splash off-centre, so
      the desktop boots straight into the normal UI. -->
-<script>if (matchMedia("(max-width: 700px)").matches) document.documentElement.classList.add("boot");
+<script>(function(){
+  // Phone-class screens keep the phone layout in landscape too. A phone turned sideways
+  // or a tablet at a phone-like density (Redmi Pad: 727×436 CSS px in landscape) is
+  // wider than the 700px rule but has no room for the desktop rail beside the chat.
+  // Decided once, from screen.* (keyboard-independent — Android's adjustResize shrinks
+  // the viewport, so a max-height query would flip the layout while typing): touch
+  // device with a short side ≤ 520px → the phone media rule gets an always-true medium.
+  var phone = matchMedia("(max-width: 700px)").matches;
+  try {
+    if (!phone && matchMedia("(pointer: coarse)").matches && Math.min(screen.width, screen.height) <= 520) {
+      for (var i = 0; i < document.styleSheets.length; i++) {
+        var rules = document.styleSheets[i].cssRules;
+        for (var j = 0; j < rules.length; j++) {
+          var m = rules[j].media;
+          if (m && /max-width:\s*700px/.test(m.mediaText)) { m.appendMedium("(min-width: 0px)"); phone = true; }
+        }
+      }
+    }
+  } catch (e) {}
+  if (phone) document.documentElement.classList.add("boot");
+})();
 // Apply the saved appearance theme before the chrome paints (default A — in-app warm).
 (function(){try{var t=localStorage.getItem("scrai.theme");document.documentElement.setAttribute("data-theme",(t==="A"||t==="B"||t==="E"||t==="F")?t:"A");}catch(e){document.documentElement.setAttribute("data-theme","A");}
 try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.add("win");}catch(e){}})();</script>
@@ -1555,7 +1578,8 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       if(s.update && s.update.required) showUpdateGate(s.update);
       // Settings footer: app + server version (server absent on the web dev bridge / old servers).
       { const av=String(s.appVersion||"").slice(0,32), sv=String(s.serverVersion||"").slice(0,32);
-        $("verLine").textContent = av ? ("ScrambleAI "+av+(sv?" · server "+sv:"")) : ""; }
+        $("verLine").textContent = av ? ("ScrambleAI "+av+(sv?" · server "+sv:"")) : "";
+        if(/^\d+\.\d+\.\d+/.test(av)){ APP_VERSION = versionLabel(av); const v=$("appVer"); if(v) v.textContent="v"+APP_VERSION; } }
       serverTestnet = s.testnet === true;          // the server's kill switch: absent/false → no toggle
       storefront = /^[A-Z]{3}$/.test(String(s.storefront||"")) ? String(s.storefront) : null;
       { const fu=String(s.faucetUrl||""); faucetUrl = serverTestnet && /^https:\/\/[\w.-]+/.test(fu) ? fu : null; }
@@ -2162,7 +2186,13 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // dev HTTP bridge: always) — a shipped binary hides the Developer section and never
   // renders the audit, and a release server doesn't even send the provider cost.
   let devBuild = false;
-  const APP_VERSION = "0.4.5 (ichnusa)";   // codename from Howard Marks' "Mr Nice"
+  // Footer/update-gate version: the build's real version comes from the backend's
+  // `state` reply (Tauri package_info / dev bridge package.json) and replaces this
+  // fallback on the first status. Codenames per minor series from Howard Marks'
+  // "Mr Nice". The fallback string is rewritten by scripts/bump-version.sh.
+  const APP_CODENAMES = { "0.2": "kash", "0.3": "peroni", "0.4": "ichnusa", "0.5": "moretti" };
+  const versionLabel = v => { const m = /^(\d+\.\d+)\.\d+/.exec(v); const c = m && APP_CODENAMES[m[1]]; return c ? v + " (" + c + ")" : v; };
+  let APP_VERSION = versionLabel("0.4.6");   // bump-version.sh: fallback
   let devCost = false;
   // DEV upload readout: real file size ÷ pure transfer time (excludes chunk-split +
   // uploadBegin setup). Shown under a sent image only when the dev cost-audit is on.
