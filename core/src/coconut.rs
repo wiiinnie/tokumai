@@ -25,11 +25,11 @@ use ce::scheme::expiration_date_signatures::{
 };
 use ce::scheme::identify::{identify, IdentifyResult};
 use ce::scheme::keygen::{PublicKeyUser, SecretKeyAuth, SecretKeyUser, VerificationKeyAuth};
-use ce::scheme::withdrawal::{
-    issue, issue_verify, withdrawal_request, RequestInfo, WithdrawalRequest,
-};
+use ce::scheme::withdrawal::{issue, issue_verify, withdrawal_request};
 use ce::scheme::{PartialWallet, Wallet};
 pub use ce::scheme::{PayInfo, Payment};
+// The client persists an in-flight withdrawal (M-cl-2): request + blinding openings.
+pub use ce::scheme::withdrawal::{RequestInfo, WithdrawalRequest};
 use ce::setup::Parameters;
 
 // ---- economic parameters (docs/federation-params.md) ----------------------

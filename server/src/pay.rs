@@ -237,6 +237,16 @@ pub struct Pay {
     // are additionally guarded by entitlement consumption + burned ecash serials.
     #[serde(default)]
     nonce_fifo: VecDeque<String>,
+    /// M-cl-2: withdraw idempotency. Keyed by the hash of the Withdraw body (user key +
+    /// blinded request). Entitlement is consumed the FIRST time a body is seen; a client
+    /// that never saw the reply (dropped SURB, timeout, crash before the purse was saved)
+    /// re-sends the SAME body and gets the SAME credential back without paying again.
+    /// `fed` is None between consumption and issuance (a server restart in that window
+    /// makes the replay issue without consuming again). Bounded FIFO + age.
+    #[serde(default)]
+    issued: HashMap<String, Issued>,
+    #[serde(default)]
+    issued_fifo: VecDeque<String>,
     #[serde(default)]
     rev: u64,
     #[serde(skip)]
@@ -249,6 +259,29 @@ pub struct Pay {
     /// last "global invoice cap" log line (ms) — one per minute, not one per refused request
     #[serde(skip)]
     global_cap_logged_at: u64,
+}
+
+/// One withdrawal the paywall has charged for (M-cl-2). `fed` is the cached
+/// `FedResponse` value once issuance succeeded.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Issued {
+    pub account: String,
+    #[serde(default)]
+    pub fed: Option<Value>,
+    pub at_ms: u64,
+}
+/// Issued records kept for replays: ~350 B each inside the pay snapshot.
+pub const MAX_ISSUED: usize = 1024;
+/// A replay older than this is treated as a new request (the record is gone).
+pub const ISSUED_TTL_MS: u64 = 30 * 86_400_000;
+
+/// The idempotency key of a Withdraw envelope: sha256 of its `fed.Withdraw` body as
+/// received. A client retry re-sends the identical body (same user key, same blinded
+/// request), so the same key comes back; a fresh withdrawal has a fresh user key.
+pub fn withdraw_key(envelope: &Value) -> Option<String> {
+    let body = envelope.pointer("/fed/Withdraw")?;
+    let bytes = serde_json::to_vec(body).ok()?;
+    Some(hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&bytes)))
 }
 
 impl Pay {
@@ -355,6 +388,50 @@ impl Pay {
         let e = self.entitlements.entry(account_id.to_string()).or_default();
         *e = e.saturating_add(amount);
         self.rev += 1;
+    }
+
+    /// The issuance record for a Withdraw body, if this server charged for it (M-cl-2).
+    pub fn issuance(&self, key: &str) -> Option<&Issued> {
+        self.issued.get(key)
+    }
+
+    /// Record that `account` has been charged for the Withdraw body `key`. Called in the
+    /// same loop turn as `consume_entitlement`, so both land in one snapshot. Keeps an
+    /// existing record (a replay after a mid-issuance restart must not reset it).
+    pub fn begin_issuance(&mut self, key: &str, account: &str) {
+        if self.issued.contains_key(key) {
+            return;
+        }
+        let now = now_ms();
+        self.issued.insert(key.to_string(), Issued { account: account.to_string(), fed: None, at_ms: now });
+        self.issued_fifo.push_back(key.to_string());
+        // Bound by count and by age (the FIFO is insertion-ordered, so the front is oldest).
+        while self.issued_fifo.len() > MAX_ISSUED
+            || self.issued_fifo.front().and_then(|k| self.issued.get(k)).is_some_and(|r| now.saturating_sub(r.at_ms) > ISSUED_TTL_MS)
+        {
+            match self.issued_fifo.pop_front() {
+                Some(k) => { self.issued.remove(&k); }
+                None => break,
+            }
+        }
+        self.rev += 1;
+    }
+
+    /// The credential for `key` was issued: cache the reply so a replay gets it verbatim.
+    pub fn finish_issuance(&mut self, key: &str, fed: Value) {
+        if let Some(r) = self.issued.get_mut(key) {
+            r.fed = Some(fed);
+            self.rev += 1;
+        }
+    }
+
+    /// Issuance failed after the charge: the entitlement is restored by the caller and
+    /// the record is dropped, so the client's retry is treated as a new request.
+    pub fn abort_issuance(&mut self, key: &str) {
+        if self.issued.remove(key).is_some() {
+            self.issued_fifo.retain(|k| k != key);
+            self.rev += 1;
+        }
     }
 
     /// Settle one invoice (idempotent): anything-but-paid → paid credits the
@@ -667,6 +744,17 @@ impl Pay {
                 "a withdrawal must be signed by the paying account",
             )));
         };
+        let Some(req_key) = withdraw_key(&v) else {
+            return Gate::Denied(encode(&err(&id, "malformed withdrawal request")));
+        };
+        // M-cl-2: a body this server already charged for is a retry, not a new purchase —
+        // it passes without entitlement (and only for the account that paid).
+        if let Some(rec) = self.issued.get(&req_key) {
+            if rec.account != account {
+                return Gate::Denied(encode(&err(&id, "this withdrawal request belongs to another account")));
+            }
+            return Gate::Authorized { account_id: account, req_key, prepaid: true };
+        }
         let held = self.entitlement(&account);
         if held < book_scrai {
             return Gate::Denied(encode(&err(
@@ -674,14 +762,16 @@ impl Pay {
                 &format!("not enough entitlement: a ticketbook costs {book_scrai} SCRAI, this account holds {held} — buy credit first"),
             )));
         }
-        Gate::Authorized { account_id: account }
+        Gate::Authorized { account_id: account, req_key, prepaid: false }
     }
 }
 
 pub enum Gate {
     NotAWithdraw,
     Denied(Vec<u8>),
-    Authorized { account_id: String },
+    /// `req_key` = idempotency key of the body; `prepaid` = this body was charged
+    /// before (a retry) — the caller must not consume entitlement again.
+    Authorized { account_id: String, req_key: String, prepaid: bool },
 }
 
 fn err(id: &Value, msg: &str) -> Value {
@@ -1562,14 +1652,61 @@ mod tests {
 
         let w = json!({"kind":"coconut","id":"x","fed":{"Withdraw":{}},"publicKey":pem,
             "nonce":"w2","sig":signed(&sk,&aid,"withdraw:coconut","w2")});
-        match pay.gate_withdraw(w.to_string().as_bytes(), book) {
-            Gate::Authorized { account_id } => {
+        let req_key = match pay.gate_withdraw(w.to_string().as_bytes(), book) {
+            Gate::Authorized { account_id, req_key, prepaid } => {
                 assert_eq!(account_id, aid);
+                assert!(!prepaid);
                 pay.consume_entitlement(&account_id, book);
+                pay.begin_issuance(&req_key, &account_id);
                 assert_eq!(pay.entitlement(&aid), 0);
+                req_key
             }
             _ => panic!("expected Authorized"),
+        };
+
+        // M-cl-2: the SAME body (fresh nonce) is a retry — authorized with zero
+        // entitlement, marked prepaid, and once issued the cached reply is there.
+        let w2 = json!({"kind":"coconut","id":"y","fed":{"Withdraw":{}},"publicKey":pem,
+            "nonce":"w3","sig":signed(&sk,&aid,"withdraw:coconut","w3")});
+        match pay.gate_withdraw(w2.to_string().as_bytes(), book) {
+            Gate::Authorized { req_key: k2, prepaid, .. } => {
+                assert_eq!(k2, req_key);
+                assert!(prepaid);
+            }
+            _ => panic!("retry must pass the gate without entitlement"),
         }
+        assert!(pay.issuance(&req_key).unwrap().fed.is_none());
+        pay.finish_issuance(&req_key, json!({"Withdraw":{"blinded":"…"}}));
+        assert_eq!(pay.issuance(&req_key).unwrap().fed.as_ref().unwrap()["Withdraw"]["blinded"], "…");
+
+        // a DIFFERENT body from the same broke account is a new purchase → denied
+        let w3 = json!({"kind":"coconut","id":"z","fed":{"Withdraw":{"user_pk":"other"}},"publicKey":pem,
+            "nonce":"w4","sig":signed(&sk,&aid,"withdraw:coconut","w4")});
+        assert!(matches!(pay.gate_withdraw(w3.to_string().as_bytes(), book), Gate::Denied(_)));
+
+        // the record survives a snapshot round-trip and abort drops it
+        let mut back: Pay = serde_json::from_str(&pay.snapshot()).unwrap();
+        assert!(back.issuance(&req_key).is_some());
+        back.abort_issuance(&req_key);
+        assert!(back.issuance(&req_key).is_none());
+    }
+
+    #[test]
+    fn issued_records_are_bounded_and_keyed_by_body() {
+        let a = json!({"kind":"coconut","fed":{"Withdraw":{"user_pk":"u1","req":{"x":1}}}});
+        let b = json!({"kind":"coconut","id":"other-id","nonce":"n","fed":{"Withdraw":{"user_pk":"u1","req":{"x":1}}}});
+        let c = json!({"kind":"coconut","fed":{"Withdraw":{"user_pk":"u2","req":{"x":1}}}});
+        assert_eq!(withdraw_key(&a), withdraw_key(&b)); // envelope id/nonce don't matter
+        assert_ne!(withdraw_key(&a), withdraw_key(&c)); // the body does
+        assert!(withdraw_key(&json!({"fed":"Keys"})).is_none());
+
+        let mut pay = Pay::default();
+        for i in 0..(MAX_ISSUED + 5) {
+            pay.begin_issuance(&format!("k{i}"), "acct");
+        }
+        assert_eq!(pay.issued.len(), MAX_ISSUED);
+        assert!(pay.issuance("k0").is_none()); // oldest evicted
+        assert!(pay.issuance(&format!("k{}", MAX_ISSUED + 4)).is_some());
     }
 }
 

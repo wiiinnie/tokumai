@@ -494,6 +494,7 @@ async fn withdraw_purse(
     t: &Transport,
     srv: &str,
     auth: &account::Account,
+    dir: &std::path::Path,
 ) -> Result<scrai_core::purse::Purse, String> {
     use scrai_core::coconut;
     use scrai_core::federation::{FedRequest, FedResponse};
@@ -524,9 +525,58 @@ async fn withdraw_purse(
         ));
     }
 
-    let user = coconut::new_user();
-    let (req, req_info) =
-        coconut::make_withdrawal_request(user.secret_key(), expiration_date, coconut::DEFAULT_T_TYPE)?;
+    // M-cl-2: the request is persisted BEFORE it leaves the device. If we never see the
+    // reply (dropped SURB, timeout, crash before the purse is saved), the next collect
+    // re-sends this exact body and the server answers it from its issued cache instead of
+    // charging a second book. A pending request for another server is left alone.
+    let mut w = wallet::load(dir);
+    let resume = w.pending_withdraw.clone().filter(|p| p.server == srv);
+    let (user, req, req_info, resumed): (coconut::KeyPairUser, coconut::WithdrawalRequest, coconut::RequestInfo, bool) =
+        match resume {
+            Some(p) if p.expiration_date == expiration_date => {
+                let user = serde_json::from_value(p.user).map_err(|e| format!("pending withdrawal: {e}"))?;
+                let req = serde_json::from_value(p.req).map_err(|e| format!("pending withdrawal: {e}"))?;
+                let req_info = serde_json::from_value(p.req_info).map_err(|e| format!("pending withdrawal: {e}"))?;
+                log::info!("[coconut] resuming an interrupted withdrawal with the same request");
+                (user, req, req_info, true)
+            }
+            Some(_) => {
+                // The issuing epoch moved on; the old request can no longer become a usable
+                // book. Drop it rather than block every future withdraw — and say so.
+                w.pending_withdraw = None;
+                wallet::save(dir, &w)?;
+                return Err("an interrupted withdrawal could not be resumed because the server's \
+                            issuing keys changed in the meantime. If your balance is short one book, \
+                            contact support with this message.".into());
+            }
+            None => {
+                let user = coconut::new_user();
+                let (req, req_info) =
+                    coconut::make_withdrawal_request(user.secret_key(), expiration_date, coconut::DEFAULT_T_TYPE)?;
+                w.pending_withdraw = Some(wallet::PendingWithdraw {
+                    server: srv.to_string(),
+                    user: serde_json::to_value(&user).map_err(|e| e.to_string())?,
+                    req: serde_json::to_value(&req).map_err(|e| e.to_string())?,
+                    req_info: serde_json::to_value(&req_info).map_err(|e| e.to_string())?,
+                    expiration_date,
+                    created_ms: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0),
+                });
+                wallet::save(dir, &w)?;
+                (user, req, req_info, false)
+            }
+        };
+    // Drop the pending record on a DEFINITIVE outcome that a retry cannot improve; keep it
+    // on transport/busy errors so the next collect resumes it.
+    let clear_pending = |why: &str| {
+        let mut w = wallet::load(dir);
+        if w.pending_withdraw.as_ref().is_some_and(|p| p.server == srv) {
+            w.pending_withdraw = None;
+            let _ = wallet::save(dir, &w);
+            if resumed {
+                log::warn!("[coconut] interrupted withdrawal dropped ({why}) — if the server had charged for it, one book is lost");
+            }
+        }
+    };
     let mut shares = Vec::new();
     for (i, vk_auth) in auth_vks.iter().enumerate() {
         // 1-of-1 test server = one address; multi-server sends to each authority's.
@@ -539,6 +589,8 @@ async fn withdraw_purse(
             "nonce": nonce,
             "sig": auth.sign("withdraw:coconut", &nonce),
         });
+        // A transport error (no verdict) keeps the pending record: the reply may have
+        // been lost AFTER the server charged, and only a resend of this body recovers it.
         let reply = t.round_trip(srv, &env, SURBS_SMALL, TIMEOUT_MS).await?;
         let resp: FedResponse = serde_json::from_value(reply.get("fed").cloned().ok_or("no fed in reply")?)
             .map_err(|e| format!("bad fed response: {e}"))?;
@@ -546,6 +598,10 @@ async fn withdraw_purse(
             FedResponse::Withdraw { blinded } => blinded,
             FedResponse::Error { message } => {
                 forget_keys(srv); // a rotated key would surface here — refetch on retry
+                // "still being issued"/busy: the server is working on this body — resume later.
+                if !(message.contains("retry") || message.contains("busy")) {
+                    clear_pending(&message);
+                }
                 return Err(format!("server: {message}"));
             }
             _ => return Err("unexpected response to Withdraw".into()),
@@ -557,6 +613,7 @@ async fn withdraw_purse(
             .map_err(|e| {
                 forget_keys(srv);
                 flag_server(srv, &format!("invalid withdrawal share: {e}"));
+                clear_pending("invalid share"); // a resend would get the same garbage back
                 format!("server issued an invalid credential share (server flagged as dishonest): {e}")
             })?;
         shares.push(share);
@@ -566,6 +623,7 @@ async fn withdraw_purse(
         .map_err(|e| {
             forget_keys(srv);
             flag_server(srv, &format!("credential shares don't aggregate: {e}"));
+            clear_pending("shares don't aggregate");
             format!("server credential failed to aggregate (server flagged as dishonest): {e}")
         })?;
     Ok(scrai_core::purse::Purse::new(
@@ -922,7 +980,7 @@ async fn set_mixnet_perf(
 /// any held purse, or a spend still in flight. Held ecash is NOT seed-rebuildable
 /// (`wallet.rs` header) — dropping it is an irreversible money loss (M-cl-1).
 fn has_held_value(w: &wallet::Wallet) -> bool {
-    !w.coconut_purses.is_empty() || w.pending_spend.is_some()
+    !w.coconut_purses.is_empty() || w.pending_spend.is_some() || w.pending_withdraw.is_some()
 }
 
 /// Distinct, machine-parseable prefix so the frontend can recognise "you'd lose held
@@ -1265,6 +1323,20 @@ async fn collect(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result
     let w0 = wallet::load(&dir);
     let srv = server_addr(&w0)?;
     let a = wallet_account(&app)?;
+    let mut collected = 0u64;
+
+    // M-cl-2: an interrupted withdrawal is finished FIRST, before asking what is owed —
+    // the server may already have charged for it, so it must not count as owed again.
+    if w0.pending_withdraw.as_ref().is_some_and(|p| p.server == srv) {
+        let purse = withdraw_purse(&transport, &srv, &a, &dir).await?;
+        let book_scrai = purse.total_coins() * scrai_core::coconut::COIN_SCRAI;
+        let mut w = wallet::load(&dir);
+        w.coconut_purses.push(purse.persist()?);
+        w.pending_withdraw = None;
+        wallet::save(&dir, &w)?;
+        collected += book_scrai;
+        log::info!("[coconut] recovered an interrupted {book_scrai}-SCRAI book");
+    }
 
     // How much is owed?
     let nonce = rand_hex(16);
@@ -1273,10 +1345,9 @@ async fn collect(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result
         .round_trip(&srv, &json!({"v":PROTO,"kind":"entitlement","id":rand_hex(16),"publicKey":a.public_key_pem,"nonce":nonce,"sig":sig}), SURBS_SMALL, TIMEOUT_MS)
         .await?;
     let mut owed = resp.get("entitlement").and_then(|e| e.as_u64()).unwrap_or(0);
-    let mut collected = 0u64;
 
     while owed > 0 {
-        let purse = match withdraw_purse(&transport, &srv, &a).await {
+        let purse = match withdraw_purse(&transport, &srv, &a, &dir).await {
             Ok(p) => p,
             // The tail below one book (or a race) is not an error — it just
             // stays as entitlement until the next purchase tops it up.
@@ -1286,6 +1357,7 @@ async fn collect(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result
         let book_scrai = purse.total_coins() * scrai_core::coconut::COIN_SCRAI;
         let mut w = wallet::load(&dir);
         w.coconut_purses.push(purse.persist()?);
+        w.pending_withdraw = None; // the book is on disk — the retry window is closed
         wallet::save(&dir, &w)?;
         collected += book_scrai;
         owed = owed.saturating_sub(book_scrai);

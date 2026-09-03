@@ -33,6 +33,25 @@ pub struct PendingSpend {
     pub session_id: Option<String>,
 }
 
+/// A withdrawal whose request has LEFT the device but whose credential is not persisted
+/// yet (M-cl-2). The server consumes paid entitlement the first time it sees the request,
+/// so a lost reply or a crash before the purse is saved would lose a whole book. Kept so
+/// the next collect re-sends the SAME request (same user key, same blinded request); the
+/// server answers a known body from its issued cache without charging again. Cleared once
+/// the purse is persisted or the server definitively refuses.
+#[derive(Serialize, Deserialize, Clone)]
+pub struct PendingWithdraw {
+    pub server: String,
+    /// `scrai_core::coconut::KeyPairUser` (JSON).
+    pub user: serde_json::Value,
+    /// `WithdrawalRequest` — the exact body the server keys its issued cache on.
+    pub req: serde_json::Value,
+    /// `RequestInfo` — the blinding openings needed to unblind the reply.
+    pub req_info: serde_json::Value,
+    pub expiration_date: u32,
+    pub created_ms: u64,
+}
+
 #[derive(Default, Serialize, Deserialize)]
 pub struct Wallet {
     #[serde(default)]
@@ -56,6 +75,9 @@ pub struct Wallet {
     /// An in-flight spend/redeem awaiting its server reply — retried idempotently (H4).
     #[serde(default)]
     pub pending_spend: Option<PendingSpend>,
+    /// An in-flight withdrawal awaiting its credential — resumed idempotently (M-cl-2).
+    #[serde(default)]
+    pub pending_withdraw: Option<PendingWithdraw>,
     /// Every Nym address of the CURRENT server (its multi-identity front doors, from the
     /// catalog reply's `identities`). Same server, same money — so when the one we use
     /// stops answering, the liveness check switches to another without any user action.

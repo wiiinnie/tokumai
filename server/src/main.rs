@@ -466,7 +466,7 @@ async fn main() {
     // and every chat/status waited with them (load test 2026-09-02). Now: gate + reserve
     // on the loop, crypto in spawn_blocking, apply/persist/reply back here.
     enum CryptoKind {
-        Withdraw { id: serde_json::Value, account_id: String, result: Result<federation::FedResponse, String> },
+        Withdraw { id: serde_json::Value, account_id: String, req_key: String, result: Result<federation::FedResponse, String> },
         Redeem { id: serde_json::Value, req: scrai_core::gateway::RedeemRequest, verified: Result<(), String> },
     }
     struct CryptoDone {
@@ -477,6 +477,9 @@ async fn main() {
         _guard: inflight::Guard<ReplyTo>,
     }
     let (crypto_tx, mut crypto_rx) = tokio::sync::mpsc::channel::<CryptoDone>(64);
+    // M-cl-2: Withdraw bodies whose issuance is running right now — a replay that lands
+    // meanwhile is told to retry rather than charged or issued twice.
+    let mut inflight_withdraws: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     // Concurrency caps for the spawned slow paths. A chat holds its worst-case
     // reservation while it waits for a slot; past QUEUE_WAIT it fails fast (settle()
@@ -583,15 +586,22 @@ async fn main() {
             // A spawned BLS job returned → apply its outcome to the money state here.
             Some(done) = crypto_rx.recv() => {
                 let (label, response) = match done.kind {
-                    CryptoKind::Withdraw { id, account_id, result } => {
+                    CryptoKind::Withdraw { id, account_id, req_key, result } => {
+                        inflight_withdraws.remove(&req_key);
                         let resp = match result {
                             Ok(r) => r,
                             Err(message) => federation::FedResponse::Error { message },
                         };
                         // The book's entitlement was reserved before issuance; anything but
-                        // an issued credential gives it back.
-                        if !matches!(resp, federation::FedResponse::Withdraw { .. }) {
+                        // an issued credential gives it back (and forgets the charge record,
+                        // so the client's retry is a fresh purchase). An issued credential is
+                        // cached under the body's key: the same request again gets the same
+                        // reply without a second charge (M-cl-2).
+                        if matches!(resp, federation::FedResponse::Withdraw { .. }) {
+                            paywall.finish_issuance(&req_key, serde_json::to_value(&resp).unwrap_or(serde_json::Value::Null));
+                        } else {
                             paywall.restore_entitlement(&account_id, book_scrai);
+                            paywall.abort_issuance(&req_key);
                         }
                         let reply = serde_json::json!({ "id": id, "fed": serde_json::to_value(&resp).unwrap_or(serde_json::Value::Null) });
                         ("coconut.Withdraw", serde_json::to_vec(&reply).unwrap_or_default())
@@ -851,7 +861,7 @@ async fn main() {
                     pay::Gate::NotAWithdraw => {
                         scrai_core::gateway::handle(&authority, &mut quorum, &mut sessions, &m.message).await
                     }
-                    pay::Gate::Authorized { account_id } => {
+                    pay::Gate::Authorized { account_id, req_key, prepaid } => {
                         let id = envelope.get("id").cloned().unwrap_or(serde_json::Value::Null);
                         let fed = serde_json::from_value::<federation::FedRequest>(
                             envelope.get("fed").cloned().unwrap_or(serde_json::Value::Null),
@@ -866,8 +876,23 @@ async fn main() {
                                 // M1: a key caught double-spending may not withdraw fresh books.
                                 if quorum.is_blacklisted(&user_pk) {
                                     fed_error(&id, "blacklisted: this key was caught double-spending and may not withdraw".into())
+                                } else if let Some(fed) = paywall.issuance(&req_key).and_then(|r| r.fed.clone()) {
+                                    // M-cl-2 replay: this body was charged AND issued before — the
+                                    // client lost the reply. Same credential back, no new charge.
+                                    println!("scrai-server: withdraw retry answered from the issued cache");
+                                    serde_json::to_vec(&serde_json::json!({ "id": id, "fed": fed })).unwrap_or_default()
+                                } else if inflight_withdraws.contains(&req_key) {
+                                    fed_error(&id, "this credential is still being issued — please retry in a moment".into())
                                 } else {
-                                    paywall.consume_entitlement(&account_id, book_scrai);
+                                    // `prepaid`: charged earlier, but the server went down before
+                                    // issuing — issue now without charging again.
+                                    if !prepaid {
+                                        paywall.consume_entitlement(&account_id, book_scrai);
+                                    } else {
+                                        println!("scrai-server: withdraw retry for a charged-but-unissued body — issuing without a second charge");
+                                    }
+                                    paywall.begin_issuance(&req_key, &account_id);
+                                    inflight_withdraws.insert(req_key.clone());
                                     let (tx, auth, slots) = (crypto_tx.clone(), authority.clone(), crypto_slots.clone());
                                     let guard = inflight.enter(to);
                                     note_peak(&db, &inflight, &mut peak_written);
@@ -886,7 +911,7 @@ async fn main() {
                                             _ => (Err("the server is busy issuing credentials right now — please try again in a moment".into()), t0.elapsed().as_millis()),
                                         };
                                         let timing = (waited, t0.elapsed().as_millis() - waited);
-                                        let _ = tx.send(CryptoDone { kind: CryptoKind::Withdraw { id, account_id, result }, to, timing, _guard: guard }).await;
+                                        let _ = tx.send(CryptoDone { kind: CryptoKind::Withdraw { id, account_id, req_key, result }, to, timing, _guard: guard }).await;
                                     });
                                     // The reservation must be on disk before anything else happens.
                                     persist_changed(&mut db, &sessions, &quorum, &paywall, &mut saved);
