@@ -144,7 +144,7 @@ export class MoneyStore {
   // ---- invoices and entitlements -----------------------------------------
   //
   // This is the ONLY place an account id appears. It records that an account
-  // bought SCRAI — never what was asked, never which session spent it. The
+  // bought TOKU — never what was asked, never which session spent it. The
   // blind issuance in between is what keeps those two halves apart.
 
   createInvoice(inv: {

@@ -1,4 +1,4 @@
-# ScrambleAI / Murmur
+# tokumai / Murmur
 
 Anonymous AI chat over the [Nym mixnet](https://nymtech.net).
 
@@ -164,7 +164,7 @@ npm run client -- chat "Explain a mixnet in two sentences."
 A mixnet is a routing protocol that encrypts and shuffles data through a series
 of intermediate nodes to obscure the connection between senders and receivers…
 
-  12 SCRAI · USD 0.00012  ·  19 in · 115 out
+  12 TOKU · USD 0.00012  ·  19 in · 115 out
 ```
 
 **Step 8.** Images (Nano Banana). Same command — pick an image model and the
@@ -486,9 +486,9 @@ the Google Cloud project. Text models are unaffected.
 
 ---
 
-## SCRAI — the unit
+## TOKU — the unit
 
-**1 SCRAI = USD 0.00001**, so **10 USD = 1,000,000 SCRAI**. SCRAI is the only
+**1 TOKU = USD 0.00001**, so **10 USD = 1,000,000 TOKU**. TOKU is the only
 money unit in this codebase — there is no second one and no conversion.
 
 The unit is deliberately fine. Every exchange is priced with `ceil()`, so the
@@ -517,40 +517,40 @@ set `PRICING_URL` to a table **you** publish and the server re-fetches on a TTL
 (`PRICING_TTL_SEC`, default 3600 — once an hour). That does not solve the
 underlying problem; it just moves the hand-maintenance somewhere central.
 
-The `/model` listing shows retail SCRAI per 1M tokens, in/out, margin included:
+The `/model` listing shows retail TOKU per 1M tokens, in/out, margin included:
 
 ```
   MODEL                        KIND   VENDOR            PROMPT      ANSWER  PRIVACY
-                                                  SCRAI per 1,000 tokens
+                                                  TOKU per 1,000 tokens
   gemini-3.5-flash-lite        text   google                33         275  trains on input
   llama-3.3-70b-versatile      text   groq                free        free  zero-retention
 ```
 
 Read the two number columns as **two independent prices**, not a ratio: sending
-1,000 prompt tokens costs 33 SCRAI, receiving 1,000 answer tokens costs 275.
+1,000 prompt tokens costs 33 TOKU, receiving 1,000 answer tokens costs 275.
 Answers are the expensive half — roughly 8x here — which is why `maxTokens`
 dominates the cost ceiling.
 
-Per million tokens that is 33,000 / 275,000 SCRAI, i.e. USD 0.33 / 2.75 — which
+Per million tokens that is 33,000 / 275,000 TOKU, i.e. USD 0.33 / 2.75 — which
 is Google's published $0.30 / $2.50 plus the 10% margin.
 
 Worked example, verified against a live request:
 
 ```
-  6 prompt tokens  × 0.033 = 0.198 SCRAI
-  1 answer token   × 0.275 = 0.275 SCRAI
+  6 prompt tokens  × 0.033 = 0.198 TOKU
+  1 answer token   × 0.275 = 0.275 TOKU
                             ───────────
-                             0.473  ->  ceil  ->  1 SCRAI  (USD 0.00001)
+                             0.473  ->  ceil  ->  1 TOKU  (USD 0.00001)
 ```
 
-A more typical turn — 500 in, 800 out — costs 237 SCRAI (USD 0.00237), so 10 USD
+A more typical turn — 500 in, 800 out — costs 237 TOKU (USD 0.00237), so 10 USD
 buys roughly 4,200 of them.
 
 **`maxTokens` is not a price.** It is the output ceiling per request (4096 by
 default), and it exists so a worst-case cost can be computed at all — without a
 ceiling there is no upper bound to check a balance against.
 
-### Buying SCRAI
+### Buying TOKU
 
 Two layers, and they must not collapse into one:
 
@@ -588,7 +588,7 @@ settle command is what a BTCPay webhook will do on its own.
 ```bash
 # terminal 1
 npm run client -- credit 10
-#   Pay USD 10.00 for 1,000,000 SCRAI
+#   Pay USD 10.00 for 1,000,000 TOKU
 #   DEV MODE — no real payment. In ANOTHER terminal, run:
 #         npm run issuer -- settle fake-a861826a-…
 #   ⠹ waiting for payment · checked 3× · 9m18s left · 45s
@@ -700,7 +700,7 @@ adding one later is safe — both paths can fire.
 ### Test top-ups
 
 ```bash
-npm run client -- credit 10        # +1,000,000 SCRAI, simulates a 10 USD purchase
+npm run client -- credit 10        # +1,000,000 TOKU, simulates a 10 USD purchase
 npm run client -- balance
 ```
 
@@ -710,8 +710,8 @@ Before each turn the client quotes a **ceiling** and refuses to send if the
 balance cannot cover it:
 
 ```
-  Not enough SCRAI: 50 SCRAI (USD 0.0005)
-  This request costs up to 4,057 SCRAI (USD 0.04057).
+  Not enough TOKU: 50 TOKU (USD 0.0005)
+  This request costs up to 4,057 TOKU (USD 0.04057).
   Top up with:  /credit 10
 ```
 
@@ -719,8 +719,8 @@ After each turn it books the price **the server sent** — never a number comput
 on this side:
 
 ```
-  96 SCRAI · USD 0.00096  ·  8 in · 95 out · 94 thinking
-  Balance: 999,861 SCRAI (USD 9.99861)
+  96 TOKU · USD 0.00096  ·  8 in · 95 out · 94 thinking
+  Balance: 999,861 TOKU (USD 9.99861)
 ```
 
 ### Recovering a balance on another device
@@ -731,7 +731,7 @@ The 24 words rebuild everything:
 npm run client -- account restore "word1 word2 … word24"
 #   restored account 6889-c6f2
 #   searching for funded sessions …
-#   session 0: 1,600,000 SCRAI (USD 16.00)  ← now active
+#   session 0: 1,600,000 TOKU (USD 16.00)  ← now active
 ```
 
 Session keys are **derived from the phrase by index**, so recovery is a scan:
@@ -801,9 +801,9 @@ overspending. A provider failure returns the whole reservation — you pay nothi
 for an answer that never came.
 
 ```
-  up to 1,127 SCRAI (USD 0.01127)     <- reserved
-  1 SCRAI · USD 0.00001               <- actually charged
-  Balance: 999,999 SCRAI              <- server-reported, authoritative
+  up to 1,127 TOKU (USD 0.01127)     <- reserved
+  1 TOKU · USD 0.00001               <- actually charged
+  Balance: 999,999 TOKU              <- server-reported, authoritative
 ```
 
 > **Historical note (TypeScript prototype only):** the retired TS server minted
@@ -818,7 +818,7 @@ for an answer that never came.
 ## What a price line means
 
 ```
-  96 SCRAI · USD 0.00096  ·  8 in · 95 out · 94 thinking
+  96 TOKU · USD 0.00096  ·  8 in · 95 out · 94 thinking
 ```
 
 `8 in` / `115 out` are the tokens the provider reported; `thinking` is a subset
@@ -836,13 +836,13 @@ first, so genuine fractions round up and float noise does not.
 
 ### Estimating before you send
 
-The catalog carries retail rates (SCRAI per 1M tokens, margin applied), so the
+The catalog carries retail rates (TOKU per 1M tokens, margin applied), so the
 client can quote a ceiling without a second round trip:
 
 ```
-  up to 1,127 SCRAI (USD 0.01127)
+  up to 1,127 TOKU (USD 0.01127)
   ...
-  1 SCRAI · USD 0.00001  ·  6 in · 1 out
+  1 TOKU · USD 0.00001  ·  6 in · 1 out
 ```
 
 The ceiling assumes a full `maxTokens` of output; real answers are shorter and
@@ -852,7 +852,7 @@ changes the displayed number and nothing else — verified:
 ```
   Client manipuliert: gemini-3.5-flash Tarif auf 0/0 gesetzt
   free                 <- what the client believed
-  14 SCRAI             <- what the server charged
+  14 TOKU             <- what the server charged
 ```
 
 The server prices every exchange from its own table. A client can lie to its
@@ -868,7 +868,7 @@ src/
   assembler.ts      reorders streamed chunks (see note below)
   adapter.ts        provider contract + registry
   adapters/         one file per provider (gemini text, gemini image)
-  billing.ts        token counts -> SCRAI; margin lives here
+  billing.ts        token counts -> TOKU; margin lives here
   pricing.ts        provider price table, margin-free
   types.ts          neutral internal shapes
   nym/              nym-client lifecycle, websocket, installer

@@ -44,7 +44,7 @@ carries a `checkout` field (`src-tauri/src/lib.rs` ≈ l. 869, currently always 
 becomes the real card pay panel from the mockup.
 
 **Privacy of the reference.** Mollie gets `metadata.orderId = our_id` (the random invoice id the paywall already
-generates via `rand_hex`, same as for BTCPay) and `description = "ScrambleAI credit"`. It never sees the account
+generates via `rand_hex`, same as for BTCPay) and `description = "tokumai credit"`. It never sees the account
 id, a session key or anything usage-related. Mollie *does* see: name, card number, IP, browser fingerprint,
 e-mail if the checkout asks for it — that is what the "less private" tag and the note on the card-chosen screen
 say. After WITHDRAW the coins are unlinkable, exactly as for a coin purchase.
@@ -63,8 +63,8 @@ say. After WITHDRAW the coins are unlinkable, exactly as for a coin purchase.
   [[scrambleai-ios-attach-picker]]). On macOS/Linux/Windows it works today.
 - **Return page.** Mollie needs a `redirectUrl`. The app has no clearnet endpoint, so the redirect goes to a
   static thank-you page served by `scrai-faucet` (it already serves the site on
-  `scrai-faucet.hermes-stakepool.de`): `GET /paid` → "Payment received — back to ScrambleAI", no cookie, no
-  order id, no JS. Optionally the button on that page is a `scrambleai://paid` deep link so the app comes
+  `scrai-faucet.hermes-stakepool.de`): `GET /paid` → "Payment received — back to tokumai", no cookie, no
+  order id, no JS. Optionally the button on that page is a `tokumai://paid` deep link so the app comes
   to the front (see §4 for whether Mollie accepts custom schemes as redirectUrl directly).
 - **Pending list** (`renderPending`): `coinOf()` currently says "NYM" or "Bitcoin" — add "Card". Resume
   re-opens the checkout URL (Mollie keeps a payment `open` until it expires).
@@ -92,7 +92,7 @@ say. After WITHDRAW the coins are unlinkable, exactly as for a coin purchase.
 
 **API — what the rail calls**
 - `POST https://api.mollie.com/v2/payments`, header `Authorization: Bearer live_…` (or `test_…`), body
-  `{ "amount": {"currency":"USD","value":"5.00"}, "description":"ScrambleAI credit", "redirectUrl": …,
+  `{ "amount": {"currency":"USD","value":"5.00"}, "description":"tokumai credit", "redirectUrl": …,
   "method":"creditcard", "metadata": {"orderId": our_id}, "locale":"en_US" }`. Add `Idempotency-Key: <uuid4>`
   (cached 1 h) so a mixnet retry of `invoice.create` cannot raise two payments.
   https://docs.mollie.com/reference/create-payment · https://docs.mollie.com/reference/api-idempotency
@@ -111,7 +111,7 @@ say. After WITHDRAW the coins are unlinkable, exactly as for a coin purchase.
 **redirectUrl / mobile**
 - Custom URL schemes are accepted as `redirectUrl` ("Mollie's API accepts custom URL schemes"), and Mollie
   recommends opening the checkout in the **default browser, not a WebView** — which is what `open_external`
-  does. So `scrambleai://paid` would work on phones once the scheme is registered; on desktop a plain
+  does. So `tokumai://paid` would work on phones once the scheme is registered; on desktop a plain
   `https://scrai-faucet…/paid` page is the safer default (no scheme registration on Linux/Windows).
   https://docs.mollie.com/docs/integrating-mollie-in-your-mobile-app
 - **App Store caveat (same page):** Mollie points at Apple's DMA / Google Play billing constraints for

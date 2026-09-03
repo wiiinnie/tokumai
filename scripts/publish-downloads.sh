@@ -43,7 +43,7 @@ fi
 # tree already carries the next version), else tauri.conf.json.
 ver="${SCRAI_PUBLISH_VERSION:-$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$SRC/src-tauri/tauri.conf.json" | head -1)}"
 for f in "${files[@]}"; do
-  case "$(basename "$f")" in ScrambleAI_${ver}_*) ;; *) echo "   ! $(basename "$f") is not version $ver — set SCRAI_PUBLISH_VERSION or remove the file" >&2;; esac
+  case "$(basename "$f")" in tokumai_${ver}_*) ;; *) echo "   ! $(basename "$f") is not version $ver — set SCRAI_PUBLISH_VERSION or remove the file" >&2;; esac
 done
 echo "→ version $ver · local files:"
 for f in "${files[@]}"; do printf '   %s  (%s)\n' "$(basename "$f")" "$(du -h "$f" | cut -f1)"; done

@@ -100,7 +100,7 @@ rm -rf /opt/scrai/node_modules /opt/scrai/dist /opt/scrai/src /opt/scrai/scripts
   /opt/scrai/tsconfig.json /opt/scrai/.nym
 cat > /etc/systemd/system/scrai.service <<UNIT
 [Unit]
-Description=scrai-server (ScrambleAI mixnet service provider, Rust)
+Description=scrai-server (tokumai mixnet service provider, Rust)
 After=network-online.target
 Wants=network-online.target
 
@@ -119,7 +119,7 @@ WantedBy=multi-user.target
 UNIT
 cat > /etc/systemd/system/scrai-faucet.service <<UNIT
 [Unit]
-Description=scrai-faucet (ScrambleAI testnet faucet + download site, loopback only — Caddy in front)
+Description=scrai-faucet (tokumai testnet faucet + download site, loopback only — Caddy in front)
 After=network-online.target scrai.service
 Wants=network-online.target
 

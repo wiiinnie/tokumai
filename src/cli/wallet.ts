@@ -173,13 +173,13 @@ export function scraiFor(usd: number): number {
   return Math.floor(usd * SCRAI_PER_USD);
 }
 
-/** "1,000,000 SCRAI (USD 10.00)" */
+/** "1,000,000 TOKU (USD 10.00)" */
 export function format(scrai: number): string {
-  return `${fmt(scrai)} SCRAI (USD ${usd(scrai)})`;
+  return `${fmt(scrai)} TOKU (USD ${usd(scrai)})`;
 }
 
 /**
- * USD value of a SCRAI amount, at enough precision to stay honest.
+ * USD value of a TOKU amount, at enough precision to stay honest.
  *
  * Two decimals is wrong in both directions: a single prompt costs a fraction of
  * a cent and would read as "0.00", and a balance of 999 916 after a 10 USD

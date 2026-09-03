@@ -17,7 +17,7 @@ use release APKs for emulator tests.
 
 ## TLS on Android — the two things that were missing (2026-08-30)
 
-Symptom: the app connected to the mixnet but hung forever at "Connecting to ScrambleAI server".
+Symptom: the app connected to the mixnet but hung forever at "Connecting to tokumai server".
 
 1. `nym-http-api-client` → `reqwest 0.13` verifies TLS with **rustls-platform-verifier**, which on
    Android must be initialised with a JNI env + Context and needs its Kotlin half in the APK.

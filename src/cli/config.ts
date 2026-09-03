@@ -19,7 +19,7 @@ export interface Config {
   model?: string;
   /** What that model produces — decides the SURB budget. Learned from `models`. */
   modelKind?: "text" | "image";
-  /** Retail SCRAI per 1M tokens for the chosen model, as the server quoted it. */
+  /** Retail TOKU per 1M tokens for the chosen model, as the server quoted it. */
   modelRate?: { in: number; out: number };
   /**
    * Output ceiling per request. Without one there is no upper bound on what an

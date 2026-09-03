@@ -4,7 +4,7 @@
 security packs plus the two rule files here, then `cargo audit`. CI runs the same script
 (`.github/workflows/security.yml`) and fails on ERROR/WARNING findings.
 
-- `scrambleai.yml` — project invariants no generic pack knows: no key material in logs, the
+- `tokumai.yml` — project invariants no generic pack knows: no key material in logs, the
   fake payment rail gated in exactly one place, no clearnet HTTP in the app, no panics on the
   server request path, `unsafe` only in the FFI modules, no eval/`document.write` in the
   webview, HTML sinks only with escaped interpolations, external links only via `openLink()`.

@@ -1,5 +1,5 @@
 <!--
-  ScrambleAI — client UI (wired to the local dev backend + encrypted local vault)
+  tokumai — client UI (wired to the local dev backend + encrypted local vault)
   Served by the server at GET / (same-origin with /chat, /api/*, and the JS modules).
   Persistence & crypto live behind vault.js / handover.js — swappable for mobile.
 -->
@@ -7,7 +7,7 @@
 <!-- maximum-scale=1 stops iOS from auto-zooming into focused inputs (the zoom
      otherwise sticks after blur); pinch-zoom in Safari stays available. -->
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
-<title>ScrambleAI</title>
+<title>tokumai</title>
 <style>
   /* C1 fix (audit 2026-08-24): fonts vendored locally under public/vendor/fonts — the
      webview makes NO clearnet request to Google, so the user's real IP never leaks. */
@@ -18,49 +18,31 @@
   @font-face { font-family: 'Hanken Grotesk'; font-style: normal; font-weight: 500; font-display: swap; src:url('./vendor/fonts/hanken-grotesk-500-normal.woff2') format('woff2'); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
   @font-face { font-family: 'Hanken Grotesk'; font-style: normal; font-weight: 600; font-display: swap; src:url('./vendor/fonts/hanken-grotesk-600-normal.woff2') format('woff2'); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
   @font-face { font-family: 'Hanken Grotesk'; font-style: normal; font-weight: 700; font-display: swap; src:url('./vendor/fonts/hanken-grotesk-700-normal.woff2') format('woff2'); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
-  @font-face { font-family: 'IBM Plex Mono'; font-style: normal; font-weight: 400; font-display: swap; src:url('./vendor/fonts/ibm-plex-mono-400-normal.woff2') format('woff2'); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
-  @font-face { font-family: 'IBM Plex Mono'; font-style: normal; font-weight: 500; font-display: swap; src:url('./vendor/fonts/ibm-plex-mono-500-normal.woff2') format('woff2'); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
-  @font-face { font-family: 'IBM Plex Mono'; font-style: normal; font-weight: 600; font-display: swap; src:url('./vendor/fonts/ibm-plex-mono-600-normal.woff2') format('woff2'); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
-  @font-face { font-family: 'Inter'; font-style: normal; font-weight: 400; font-display: swap; src:url('./vendor/fonts/inter-400-normal.woff2') format('woff2'); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
-  @font-face { font-family: 'Inter'; font-style: normal; font-weight: 500; font-display: swap; src:url('./vendor/fonts/inter-500-normal.woff2') format('woff2'); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
-  @font-face { font-family: 'Inter'; font-style: normal; font-weight: 600; font-display: swap; src:url('./vendor/fonts/inter-600-normal.woff2') format('woff2'); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
-  @font-face { font-family: 'Inter'; font-style: normal; font-weight: 700; font-display: swap; src:url('./vendor/fonts/inter-700-normal.woff2') format('woff2'); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
   @font-face { font-family: 'JetBrains Mono'; font-style: normal; font-weight: 400; font-display: swap; src:url('./vendor/fonts/jetbrains-mono-400-normal.woff2') format('woff2'); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
   @font-face { font-family: 'JetBrains Mono'; font-style: normal; font-weight: 500; font-display: swap; src:url('./vendor/fonts/jetbrains-mono-500-normal.woff2') format('woff2'); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
   @font-face { font-family: 'JetBrains Mono'; font-style: normal; font-weight: 600; font-display: swap; src:url('./vendor/fonts/jetbrains-mono-600-normal.woff2') format('woff2'); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
-  @font-face { font-family: 'Space Grotesk'; font-style: normal; font-weight: 400; font-display: swap; src:url('./vendor/fonts/space-grotesk-400-normal.woff2') format('woff2'); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
-  @font-face { font-family: 'Space Grotesk'; font-style: normal; font-weight: 500; font-display: swap; src:url('./vendor/fonts/space-grotesk-500-normal.woff2') format('woff2'); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
-  @font-face { font-family: 'Space Grotesk'; font-style: normal; font-weight: 600; font-display: swap; src:url('./vendor/fonts/space-grotesk-600-normal.woff2') format('woff2'); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
-  @font-face { font-family: 'Space Grotesk'; font-style: normal; font-weight: 700; font-display: swap; src:url('./vendor/fonts/space-grotesk-700-normal.woff2') format('woff2'); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
   :root{
     --ink:#141210; --surface:#1C1917; --surface-2:#262220; --line:#332E2A;
-    --bone:#ECE6DC; --muted:#9C938A; --signal:#CBA14E; --mix:#8AA06B; --rust:#C15A43;
+    --bone:#ECE6DC; --muted:#9C938A; --signal:#B9A3FF; --mix:#7A5FFF; --rust:#C15A43;
     --radius:10px; --mono:'JetBrains Mono',ui-monospace,monospace; --body:'Hanken Grotesk',system-ui,sans-serif;
     --display:'Fraunces',Georgia,serif;
     /* translucent bands behind the model bar / composer — a tint of the page, never a fixed dark */
     --band-top:rgba(28,25,23,.5); --band-bottom:rgba(18,15,12,.6);
   }
-  /* ---- Appearance themes (Settings). data-theme is set on <html> before paint; default B. ---- */
-  :root[data-theme="A"]{ /* In-app warm */
+  /* ---- Appearance themes (Settings). data-theme is set on <html> before paint; default A.
+     Two themes only: A = dark (ink / bone / violet), F = light (bone / ink / violet). Same type
+     in both: Fraunces display, Hanken Grotesk body, JetBrains Mono. Legacy keys B/E fall back to A. ---- */
+  :root[data-theme="A"]{ /* Dark — ink, bone, violet */
     --ink:#141210; --surface:#1C1917; --surface-2:#262220; --line:#332E2A;
-    --bone:#ECE6DC; --muted:#9C938A; --signal:#CBA14E; --mix:#8AA06B; --rust:#C15A43;
+    --bone:#ECE6DC; --muted:#9C938A; --signal:#B9A3FF; --mix:#7A5FFF; --rust:#C15A43;
+    --band-top:rgba(28,25,23,.5); --band-bottom:rgba(18,15,12,.6);
     --mono:'JetBrains Mono',ui-monospace,monospace; --body:'Hanken Grotesk',system-ui,sans-serif; --display:'Fraunces',Georgia,serif;
   }
-  :root[data-theme="B"]{ /* Terminal green (default) */
-    --ink:#0A0D0B; --surface:#0F1512; --surface-2:#152019; --line:#1E2822;
-    --bone:#DFE7E0; --muted:#7D938A; --signal:#54E08A; --mix:#54E08A; --rust:#E0655C;
-    --mono:'JetBrains Mono',ui-monospace,monospace; --body:'JetBrains Mono',ui-monospace,monospace; --display:'JetBrains Mono',ui-monospace,monospace;
-  }
-  :root[data-theme="E"]{ /* Terminal, refined */
-    --ink:#0F1319; --surface:#161C24; --surface-2:#1C242E; --line:#242D38;
-    --bone:#C7D1DC; --muted:#6E7C8C; --signal:#E3B341; --mix:#7EE787; --rust:#E5786A;
-    --mono:'IBM Plex Mono',ui-monospace,monospace; --body:'IBM Plex Mono',ui-monospace,monospace; --display:'IBM Plex Mono',ui-monospace,monospace;
-  }
-  :root[data-theme="F"]{ /* Nordic frost (light) */
-    --ink:#EDF1F4; --surface:#FFFFFF; --surface-2:#F1F5F7; --line:#DBE3E9;
-    --bone:#1B2A33; --muted:#586975; --signal:#2F6E82; --mix:#357C70; --rust:#B8503A;
-    --band-top:rgba(255,255,255,.55); --band-bottom:rgba(255,255,255,.65);
-    --mono:'JetBrains Mono',ui-monospace,monospace; --body:'Inter',system-ui,sans-serif; --display:'Space Grotesk',system-ui,sans-serif;
+  :root[data-theme="F"]{ /* Light — bone, ink, violet */
+    --ink:#ECE6DC; --surface:#F4F0E8; --surface-2:#E4DDD1; --line:#D6CEC0;
+    --bone:#141210; --muted:#6F6A62; --signal:#4636B0; --mix:#5B45D6; --rust:#B8503A;
+    --band-top:rgba(244,240,232,.55); --band-bottom:rgba(236,230,220,.65);
+    --mono:'JetBrains Mono',ui-monospace,monospace; --body:'Hanken Grotesk',system-ui,sans-serif; --display:'Fraunces',Georgia,serif;
   }
   /* Light theme: the fine print was tuned for dark backgrounds (low opacity on a muted
      grey) — lift it just enough to be legible, same size and placement. */
@@ -68,15 +50,15 @@
   :root[data-theme="F"] .catrow .chev,:root[data-theme="F"] .tut-hint{opacity:.85}
   :root[data-theme="F"] .costaudit{opacity:1}
   :root[data-theme="F"] .sizenote{opacity:.85}
-  :root[data-theme="F"] .scrim{background:rgba(27,42,51,.45)}
+  :root[data-theme="F"] .scrim{background:rgba(20,18,16,.45)}
   :root[data-theme="F"] body{ background:
-      radial-gradient(1000px 520px at 82% -10%, rgba(58,124,144,.08), transparent 60%),
-      radial-gradient(820px 440px at -8% 110%, rgba(76,154,142,.06), transparent 55%), var(--ink); }
+      radial-gradient(1000px 520px at 82% -10%, rgba(91,69,214,.08), transparent 60%),
+      radial-gradient(820px 440px at -8% 110%, rgba(91,69,214,.05), transparent 55%), var(--ink); }
   *{box-sizing:border-box}
   html,body{margin:0;height:100%;overflow-x:hidden;max-width:100%}
   body{background:
-      radial-gradient(1200px 600px at 80% -10%, rgba(138,160,107,.06), transparent 60%),
-      radial-gradient(900px 500px at -10% 110%, rgba(203,161,78,.05), transparent 55%), var(--ink);
+      radial-gradient(1200px 600px at 80% -10%, rgba(122,95,255,.06), transparent 60%),
+      radial-gradient(900px 500px at -10% 110%, rgba(185,163,255,.05), transparent 55%), var(--ink);
     color:var(--bone);font-family:var(--body);-webkit-font-smoothing:antialiased;
     display:flex;flex-direction:column;height:100vh;overflow:hidden;}
   @media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important}}
@@ -87,13 +69,13 @@
   .titlebar .wordmark{margin-left:10px;font-family:var(--display);font-weight:600;letter-spacing:.005em;font-size:16px}
   .titlebar .wordmark b{color:var(--mix)}
   .titlebar .env{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--muted);display:flex;align-items:center;gap:7px;cursor:pointer}
-  body.tauri .titlebar .env:hover .cdot{box-shadow:0 0 9px rgba(138,160,107,.9)}
+  body.tauri .titlebar .env:hover .cdot{box-shadow:0 0 9px rgba(122,95,255,.9)}
   .titlebar .env .cdot{width:7px;height:7px;border-radius:50%;background:var(--muted)}
-  .titlebar .env.ok .cdot{background:var(--mix);box-shadow:0 0 7px rgba(138,160,107,.7)}
+  .titlebar .env.ok .cdot{background:var(--mix);box-shadow:0 0 7px rgba(122,95,255,.7)}
   .titlebar .env.bad .cdot{background:#C15A43;box-shadow:0 0 7px rgba(193,90,67,.7)}
   .titlebar .env.bad{color:var(--rust)}
   .titlebar .env.wake{color:var(--signal)}
-  .titlebar .env.wake .cdot{background:var(--signal);box-shadow:0 0 7px rgba(203,161,78,.7);animation:blink 1.2s ease-in-out infinite}
+  .titlebar .env.wake .cdot{background:var(--signal);box-shadow:0 0 7px rgba(185,163,255,.7);animation:blink 1.2s ease-in-out infinite}
   /* route overlay: the whole app dims (like an upload) and the reconnect narrates itself
      with the boot animation's typewriter + ✓ per step + the green success mark */
   #routeScrim{position:fixed;inset:0;z-index:55;background:rgba(10,8,6,.72);display:none;align-items:center;justify-content:center;padding:24px}
@@ -184,10 +166,10 @@
   .badge{font-family:var(--mono);font-size:10px;padding:3px 7px;border-radius:5px;border:1px solid;
     display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
   .badge.train{color:var(--rust);border-color:rgba(193,90,67,.4);background:rgba(193,90,67,.08)}
-  .badge.zr{color:var(--mix);border-color:rgba(138,160,107,.4);background:rgba(138,160,107,.08)}
+  .badge.zr{color:var(--mix);border-color:rgba(122,95,255,.4);background:rgba(122,95,255,.08)}
   .badge.kind{color:var(--muted);border-color:var(--line);background:var(--surface-2)}
-  .badge.kind.txt{color:var(--mix);border-color:rgba(138,160,107,.45);background:rgba(138,160,107,.10)}
-  .badge.kind.img{color:var(--signal);border-color:rgba(203,161,78,.45);background:rgba(203,161,78,.10)}
+  .badge.kind.txt{color:var(--mix);border-color:rgba(122,95,255,.45);background:rgba(122,95,255,.10)}
+  .badge.kind.img{color:var(--signal);border-color:rgba(185,163,255,.45);background:rgba(185,163,255,.10)}
   .mhead{position:sticky;top:-6px;margin:-6px -6px 6px -6px;border-bottom:1px solid var(--line);background:var(--surface-2);z-index:2}
   .mfilter{display:flex;align-items:center;gap:6px;padding:9px 10px}
   .mfilter.vrow{padding-top:0;flex-wrap:wrap}
@@ -203,10 +185,10 @@
     border-radius:var(--radius);padding:6px;z-index:20;box-shadow:0 18px 40px rgba(0,0,0,.5);display:none}
   .menu.open{display:block}
   /* Three-line row: (1) marketing name + kind badge inline, (2) vendor · technical
-     name, (3) the SCRAI rate on its own line. */
+     name, (3) the TOKU rate on its own line. */
   .mi{padding:11px 12px;border-radius:8px;cursor:pointer;display:flex;flex-direction:column;gap:3px}
   .mi:hover{background:var(--surface)}
-  .mi.on{background:rgba(138,160,107,.10);outline:1px solid color-mix(in srgb,var(--mix) 40%,transparent)}
+  .mi.on{background:rgba(122,95,255,.10);outline:1px solid color-mix(in srgb,var(--mix) 40%,transparent)}
   .mi.disabled{opacity:.45;cursor:not-allowed}
   .mi .l1{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
   .mi .n{font-size:14px;font-weight:600;color:var(--bone);line-height:1.15}
@@ -228,13 +210,13 @@
   .hop .cap{font-family:var(--mono);font-size:8.5px;color:var(--muted);letter-spacing:.04em}
   .hop .gw{position:absolute;top:calc(100% + 3px);left:50%;transform:translateX(-50%);font-size:14px;line-height:1;cursor:default}
   .path.on .hop.pick{cursor:pointer}
-  .path.on .hop.pick:hover .node{box-shadow:0 0 10px rgba(203,161,78,.85)}
+  .path.on .hop.pick:hover .node{box-shadow:0 0 10px rgba(185,163,255,.85)}
   .path.on .hop.pick:hover .cap{color:var(--signal)}
   .path.off .hop.pick{cursor:default}
   .gwrow{display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:var(--surface-2);
     border:1px solid var(--line);border-radius:9px;padding:9px 12px;cursor:pointer;color:var(--bone);font:inherit}
   .gwrow:hover{border-color:var(--mix)}
-  .gwrow.sel{border-color:var(--signal);background:rgba(203,161,78,.08)}
+  .gwrow.sel{border-color:var(--signal);background:rgba(185,163,255,.08)}
   .gwrow .fl{font-size:18px;line-height:1;flex:0 0 auto}
   .gwrow .cc{font-family:var(--mono);font-size:11px;color:var(--muted);width:26px;flex:0 0 auto}
   .gwrow .hn{flex:1 1 auto;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -289,7 +271,7 @@
   .paypanel .qrbox{margin-top:0}
   .link{width:11px;height:1.5px;background:var(--line);margin:0 1px;position:relative;top:-8px;transition:background .3s}
   /* connected (green) */
-  .path.on .hop.mixhop .node{background:var(--mix);border-color:var(--mix);box-shadow:0 0 8px rgba(138,160,107,.6)}
+  .path.on .hop.mixhop .node{background:var(--mix);border-color:var(--mix);box-shadow:0 0 8px rgba(122,95,255,.6)}
   .path.on .hop.endhop .node{background:var(--signal);border-color:var(--signal)}
   .path.on .link{background:var(--mix)}
   /* one glow "packet" travels you→model via staggered node pulses — smooth, no jump */
@@ -324,20 +306,17 @@
   .thread.threadEmpty{display:flex;align-items:center;justify-content:center}
   .empty{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:14px;padding:0 40px}
   .empty .logo{display:flex;flex-direction:column;align-items:center;gap:2px}
-  .empty .lmark{width:116px;height:116px;filter:drop-shadow(0 8px 22px rgba(203,161,78,.16))}
-  .blogo .bub{stroke:var(--bone)}
-  .blogo text{font-family:var(--mono);font-size:5px;font-weight:500}
+  .empty .lmark{width:96px;height:96px;filter:drop-shadow(0 8px 22px rgba(122,95,255,.18))}
   .blogo .bl{fill:var(--bone)}
-  .blogo .ba{fill:var(--signal)}
-  .blogo .bseam{stroke:var(--muted)}
+  .blogo .ba{fill:var(--mix)}
   .empty .mark{font-family:var(--display);font-weight:600;font-size:44px;letter-spacing:.005em}
-  .empty .mark b{color:#CBA14E}
+  .empty .mark{font-weight:600}.empty .mark b{color:var(--mix);font-weight:600}
   .empty p{color:var(--muted);max-width:420px;line-height:1.55;font-size:14px;margin:0}
   .empty .note{font-family:var(--mono);font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:8px;padding:9px 13px;display:flex;gap:8px;align-items:center}
   .empty .note .d{width:6px;height:6px;border-radius:50%;background:var(--mix);flex:0 0 auto}
   /* mixnet connecting screen: typed line + blinking cursor (same green as the
      chat status line), then a "stir" transition — scrambled egg style — whisks
-     the letters around until they settle into the ScrambleAI logo. */
+     the letters around until they settle into the tokumai logo. */
   /* connect console: each real step types out, then gets its green ✓; the LAST step
      (server reachable) holds its cursor until the mixnet is actually up, then draws
      a success circle + check. min-height reserves the mark's room so nothing shifts. */
@@ -527,7 +506,7 @@
     color:var(--mix);background:rgba(122,158,110,.16);border:1px solid var(--mix);transition:.12s}
   .sbtn:hover .sic{background:rgba(122,158,110,.30)}
   .sbtn .stx{font-size:12px;color:var(--bone);letter-spacing:.03em}
-  .sovl.done .sic{color:var(--signal);border-color:var(--signal);background:rgba(203,161,78,.18)}
+  .sovl.done .sic{color:var(--signal);border-color:var(--signal);background:rgba(185,163,255,.18)}
   @media (prefers-reduced-motion:reduce){.genimg img,.sovl{transition:opacity .16s ease}}
   @keyframes blink{50%{opacity:0}}
   .composer{position:relative;flex:0 0 auto;border-top:1px solid var(--line);padding:16px 24px 20px;background:var(--band-bottom)}
@@ -652,8 +631,8 @@
   .sheetbtns{display:flex;flex-direction:column;gap:8px}
   .sheetbtns .btn{width:100%;min-height:44px}
   /* category icon tints — fixed hues, mixed low over the surface so they read on light + dark themes */
-  .ic.c-appear,.ic.c-key,.ic.c-buy{background:color-mix(in srgb,#CBA14E 22%,transparent);color:#CBA14E}
-  .ic.c-net,.ic.c-redeem{background:color-mix(in srgb,#8AA06B 24%,transparent);color:#8AA06B}
+  .ic.c-appear,.ic.c-key,.ic.c-buy{background:color-mix(in srgb,var(--signal) 22%,transparent);color:var(--signal)}
+  .ic.c-net,.ic.c-redeem{background:color-mix(in srgb,var(--mix) 24%,transparent);color:var(--mix)}
   .ic.c-guard,.ic.c-restore,.ic.c-pend{background:color-mix(in srgb,#6E9CC4 24%,transparent);color:#6E9CC4}
   .ic.c-eff,.ic.c-migrate{background:color-mix(in srgb,#B08AD0 26%,transparent);color:#B08AD0}
   .ic.c-gen{background:color-mix(in srgb,var(--muted) 32%,transparent);color:var(--muted)}
@@ -919,13 +898,13 @@
   if (phone) document.documentElement.classList.add("boot");
 })();
 // Apply the saved appearance theme before the chrome paints (default A — in-app warm).
-(function(){try{var t=localStorage.getItem("scrai.theme");document.documentElement.setAttribute("data-theme",(t==="A"||t==="B"||t==="E"||t==="F")?t:"A");}catch(e){document.documentElement.setAttribute("data-theme","A");}
+(function(){try{var t=localStorage.getItem("scrai.theme");document.documentElement.setAttribute("data-theme",(t==="A"||t==="F")?t:"A");}catch(e){document.documentElement.setAttribute("data-theme","A");}
 try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.add("win");}catch(e){}})();</script>
 
 <div class="titlebar" data-tauri-drag-region>
   <button class="mburger" data-click="toggleRail" aria-label="Conversations">☰</button>
   <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
-  <span class="wordmark" id="wordmark">Scramble<b>AI</b></span>
+  <span class="wordmark" id="wordmark">tokum<b>ai</b></span>
   <span class="env" id="env" data-click="openConnSheet" title="mixnet status — tap for details"><span class="cdot"></span><span id="envText">connecting…</span></span>
 </div>
 
@@ -941,7 +920,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     <div class="railhead">On this device <span id="saveStatus" style="color:var(--mix);opacity:0;transition:opacity .2s">· saved ✓</span></div>
     <div class="sessions" id="sessions"></div>
     <div class="ticket">
-      <div class="row"><span class="lbl">Balance</span><span class="bal" id="bal">0<small> SCRAI</small></span></div>
+      <div class="row"><span class="lbl">Balance</span><span class="bal" id="bal">0<small> TOKU</small></span></div>
       <div class="bar"><i id="balbar"></i></div>
       <div class="meta"><span class="d"></span> <span id="acctLine">no account</span></div>
       <div class="meta" id="heldLine" style="display:none"><span class="d" style="background:var(--signal)"></span> <span id="heldText"></span></div>
@@ -1052,7 +1031,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   <div class="modal" role="alertdialog" aria-labelledby="updTtl">
     <div class="mh"><span class="ttl" id="updTtl">Update <b>available</b></span></div>
     <div class="mb">
-      <p class="lead" style="margin:0 0 12px">This version of ScrambleAI (<span id="updHave"></span>) is no longer accepted by the server. Please install <b id="updMin"></b> or newer, then open the app again.</p>
+      <p class="lead" style="margin:0 0 12px">This version of tokumai (<span id="updHave"></span>) is no longer accepted by the server. Please install <b id="updMin"></b> or newer, then open the app again.</p>
       <a class="btn primary" id="updLink" href="#" style="display:inline-block;word-break:break-all" data-click="openLink" data-click-pass="href" data-prevent="1"></a>
       <p class="hint" style="margin:12px 0 0">Your account, history and credit stay on this device — the update keeps them.</p>
     </div>
@@ -1065,7 +1044,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     <div class="mb">
       <p class="balline" id="buyBal"></p>
       <div id="iosTopup" style="display:none"></div>
-      <label class="setrow" id="testnetRow" style="display:none;cursor:default"><input type="checkbox" id="testnetChk" style="display:none"><span><b>Testnet purchase<span class="tpill">TESTER</span></b><small>This server is in testnet mode: every purchase is a <b>$1</b> credit paid for you by the ScrambleAI faucet against your invite code — no real money moves. Raise the invoice, then paste its memo on the faucet page.</small></span></label>
+      <label class="setrow" id="testnetRow" style="display:none;cursor:default"><input type="checkbox" id="testnetChk" style="display:none"><span><b>Testnet purchase<span class="tpill">TESTER</span></b><small>This server is in testnet mode: every purchase is a <b>$1</b> credit paid for you by the tokumai faucet against your invite code — no real money moves. Raise the invoice, then paste its memo on the faucet page.</small></span></label>
       <div class="grouplbl" id="amountLbl" style="margin-top:2px">Amount</div>
       <div id="tierRow" class="tiles"></div>
 
@@ -1154,10 +1133,8 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       <div class="mpage" data-page="appearance">
       <p class="pagelead">Theme for the whole app, including the connect screen. Saved on this device.</p>
       <div class="themepick" id="themePick">
-        <button class="topt" data-theme-opt="B"><span class="sw"><i style="background:#0A0D0B"></i><i style="background:#54E08A"></i><i style="background:#DFE7E0"></i></span><span class="nm">Terminal green<small>terminal · mono</small></span></button>
-        <button class="topt" data-theme-opt="A"><span class="sw"><i style="background:#141210"></i><i style="background:#CBA14E"></i><i style="background:#8AA06B"></i></span><span class="nm">In-app warm<small>default · gold</small></span></button>
-        <button class="topt" data-theme-opt="E"><span class="sw"><i style="background:#0F1319"></i><i style="background:#E3B341"></i><i style="background:#7EE787"></i></span><span class="nm">Terminal, refined<small>amber · plex mono</small></span></button>
-        <button class="topt" data-theme-opt="F"><span class="sw"><i style="background:#EDF1F4"></i><i style="background:#3A7C90"></i><i style="background:#1B2A33"></i></span><span class="nm">Nordic frost<small>light · teal</small></span></button>
+        <button class="topt" data-theme-opt="A"><span class="sw"><i style="background:#141210"></i><i style="background:#7A5FFF"></i><i style="background:#ECE6DC"></i></span><span class="nm">Dark<small>ink · violet · bone</small></span></button>
+        <button class="topt" data-theme-opt="F"><span class="sw"><i style="background:#ECE6DC"></i><i style="background:#5B45D6"></i><i style="background:#141210"></i></span><span class="nm">Light<small>bone · violet · ink</small></span></button>
       </div>
 
       </div>
@@ -1486,7 +1463,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   let tiers = [];                        // fixed purchase amounts, USD
   let currentModel = null, modelVendor = "", modelTrains = false, modelRate = null, modelAcceptsImages = false, modelTier = "paid", modelKind = "text";
   let account = null;                    // { fingerprint, sessionIndex } | null
-  let balance = 0, held = 0;             // SCRAI: funded session, and held ecash
+  let balance = 0, held = 0;             // TOKU: funded session, and held ecash
   let redeeming = false;                 // re-entrancy guard for the manual redeem button
   let redeemDollars = null;              // chosen redeem amount in $ (null = default to max held)
   let migrateData = null;                // {mnemonic, qr} for the "migrate to device" view
@@ -1544,7 +1521,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   const safeMollieUrl = u => /^https:\/\/([\w-]+\.)*mollie\.com\//i.test(u||"") ? u : "#";
   const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now())+Math.random());
   const usd = scrai => (scrai/100000);
-  function scraiLine(n){ return `${formatScrai(n)} SCRAI · $${usd(n).toFixed(usd(n)<0.01?5:2)}`; }
+  function scraiLine(n){ return `${formatScrai(n)} TOKU · $${usd(n).toFixed(usd(n)<0.01?5:2)}`; }
 
   // ---------- backend state ----------
   let modelRetries = 0;
@@ -1578,7 +1555,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       if(s.update && s.update.required) showUpdateGate(s.update);
       // Settings footer: app + server version (server absent on the web dev bridge / old servers).
       { const av=String(s.appVersion||"").slice(0,32), sv=String(s.serverVersion||"").slice(0,32);
-        $("verLine").textContent = av ? ("ScrambleAI "+av+(sv?" · server "+sv:"")) : "";
+        $("verLine").textContent = av ? ("tokumai "+av+(sv?" · server "+sv:"")) : "";
         if(/^\d+\.\d+\.\d+/.test(av)){ APP_VERSION = versionLabel(av); const v=$("appVer"); if(v) v.textContent="v"+APP_VERSION; } }
       serverTestnet = s.testnet === true;          // the server's kill switch: absent/false → no toggle
       storefront = /^[A-Z]{3}$/.test(String(s.storefront||"")) ? String(s.storefront) : null;
@@ -1617,20 +1594,20 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // (prompt + any caption) — say so up front, or the final charge reads ~4% "too high".
   function rateHint(rate){
     if(!rate) return "";
-    if(rate.image) return `${rate.image} SCRAI / image + text tokens`;
+    if(rate.image) return `${rate.image} TOKU / image + text tokens`;
     if(!rate.in && !rate.out) return "";
     const per1k = v => (v/1000<1 ? (v/1000).toFixed(2) : Math.round(v/1000).toLocaleString());
-    return `${per1k(rate.in)} / ${per1k(rate.out)} SCRAI / 1k`;
+    return `${per1k(rate.in)} / ${per1k(rate.out)} TOKU / 1k`;
   }
   // Same numbers as rateHint, but the unit is wrapped in a dimmer <span> so the
   // figure reads first on its own line in the dropdown. Values are numeric (server
   // price table) — safe to interpolate without escaping.
   function rateLineHtml(rate){
     if(!rate) return "";
-    if(rate.image) return `${rate.image} <span class="u">SCRAI / image + text tokens</span>`;
+    if(rate.image) return `${rate.image} <span class="u">TOKU / image + text tokens</span>`;
     if(!rate.in && !rate.out) return "";
     const per1k = v => (v/1000<1 ? (v/1000).toFixed(2) : Math.round(v/1000).toLocaleString());
-    return `${per1k(rate.in)} / ${per1k(rate.out)} <span class="u">SCRAI / 1k</span>`;
+    return `${per1k(rate.in)} / ${per1k(rate.out)} <span class="u">TOKU / 1k</span>`;
   }
   let menuKind = "all";        // "all" | "text" | "image"
   let menuLatestOnly = true;   // collapse to the newest version of each family
@@ -1782,7 +1759,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     // nosemgrep: scrai-taint-untrusted-to-html -- reviewed 2026-08-27: every interpolation is esc()/escAttr()/safeHttpUrl()-wrapped (links built inside .map(), which taint can't see through)
     $("termsBody").innerHTML = `
       <p>You're about to use <b>${esc(m.label||m.model)}</b> (<code>${esc(m.model)}</code>), served by
-      <b>${esc(t.name)}</b>. ScrambleAI's mixnet hides <i>who</i> is asking, but the prompt itself is
+      <b>${esc(t.name)}</b>. tokumai's mixnet hides <i>who</i> is asking, but the prompt itself is
       processed by this third party under <b>their</b> terms. Review each document below, then confirm
       you have read and agree to them before this model can be used:</p>
       <ul class="terms">${links}</ul>
@@ -1872,7 +1849,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     flashSaved._t=setTimeout(()=>{ s.style.opacity="0"; },1400);
   }
   function renderBal(){
-    $("bal").innerHTML = formatScrai(balance)+'<small> SCRAI</small>';
+    $("bal").innerHTML = formatScrai(balance)+'<small> TOKU</small>';
     $("balbar").style.width = Math.max(2,Math.min(100, balance/10000))+'%';
     $("acctLine").textContent = account
       ? `account ${account.fingerprint} · session #${account.sessionIndex}`
@@ -1896,7 +1873,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   function setPrice(usage){
     const frame = usage && usage.billing;
     if(!frame){ setStatus(usage ? formatTokens(usage) : "done"); return; }
-    $("price").textContent = frame.priceScrai===0 ? "free" : formatScrai(frame.priceScrai)+" SCRAI";
+    $("price").textContent = frame.priceScrai===0 ? "free" : formatScrai(frame.priceScrai)+" TOKU";
     $("price").title = billingDetail(frame);   // model + price-table version
     $("tok").textContent = formatTokens(usage);
     $("billNote").textContent = billingNotes(frame);
@@ -2147,7 +2124,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         return `<div class="dismissedline"><b>✕ dismissed</b> — already billed. The reply wasn’t retrieved.</div><div class="msgacts"><button class="msgact" data-click="retrieveMsg" data-args="${mi}" title="Fetches the same answer again — no second charge">↻ Retrieve</button></div>`;
       if(m.collapsed){
         const what=(m.images&&m.images.length)?'picture':'answer';
-        const cost=(typeof m.paidScrai==="number"&&m.paidScrai>0)?' · '+esc(formatScrai(m.paidScrai))+' SCRAI':'';
+        const cost=(typeof m.paidScrai==="number"&&m.paidScrai>0)?' · '+esc(formatScrai(m.paidScrai))+' TOKU':'';
         return `<div class="dismissedline"><b>✕ dismissed</b></div><div class="arrival"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"></rect><circle cx="9" cy="10" r="1.6"></circle><path d="M3 17l5-5 4 4 3-3 6 6"></path></svg><span class="t">${what} arrived after dismiss — <b>already billed${cost}</b></span><button class="msgact" data-click="showDismissed" data-args="${mi}">Show</button></div>`;
       }
       // expanded after "Show" → normal rendering plus a quiet provenance note below
@@ -2203,7 +2180,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   }
   function auditDiv(a){
     if(!a) return "";
-    const usd = s => "$"+(((s||0)/100000)).toFixed(6);            // SCRAI → USD (1 SCRAI = $1e-5)
+    const usd = s => "$"+(((s||0)/100000)).toFixed(6);            // TOKU → USD (1 TOKU = $1e-5)
     // Round-trip timing: total (send→done) and, when known, first-byte latency
     // (request-left→first-reply) which isolates mixnet+provider from local time.
     const secs = ms => (ms/1000).toFixed(ms<10000?2:1)+"s";
@@ -2343,18 +2320,18 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   let connTimer=null;
   // Brand mark — the liquid-gold "whirl" ribbon. Path generated once.
   const RIBBON_D = (function(){ const C=50; const rib=(a,b,t0,t1,w0,w1,steps)=>{ const out=[],inn=[]; for(let i=0;i<=steps;i++){ const f=i/steps,t=t0+(t1-t0)*f,r=a*Math.exp(b*t),th=t,w=w0+(w1-w0)*f; out.push([C+(r+w/2)*Math.cos(th),C+(r+w/2)*Math.sin(th)]); inn.push([C+(r-w/2)*Math.cos(th),C+(r-w/2)*Math.sin(th)]); } let p="M"+out[0][0].toFixed(2)+" "+out[0][1].toFixed(2); for(let i=1;i<out.length;i++)p+="L"+out[i][0].toFixed(2)+" "+out[i][1].toFixed(2); for(let i=inn.length-1;i>=0;i--)p+="L"+inn[i][0].toFixed(2)+" "+inn[i][1].toFixed(2); return p+"Z"; }; return rib(3.2,0.2,0.2*Math.PI,3.5*Math.PI,1.2,13,180); })();
-  // Brand mark — the app-icon speech bubble (readable left, scrambled gold asterisks
+  // Brand mark — the app icon: four redacted lines, readable start in bone, unreadable end in the accent
   // right), theme-aware via CSS classes. This IS the app icon, minus its background.
-  const LOGO_SVG = `<svg class="lmark blogo" viewBox="14 14 72 70" aria-hidden="true"><path class="bub" d="M26 20 H74 A8 8 0 0 1 82 28 V60 A8 8 0 0 1 74 68 H44 L33 78 V68 H26 A8 8 0 0 1 18 60 V28 A8 8 0 0 1 26 20 Z" fill="none" stroke-width="2.4" stroke-linejoin="round"/><g xml:space="preserve"><text class="bl" x="24" y="34.5">lorem ip</text><text class="ba" x="54" y="34.5">*******</text><text class="bl" x="24" y="39.2">sum dol</text><text class="ba" x="51" y="39.2">********</text><text class="bl" x="24" y="43.9">or sit</text><text class="ba" x="48" y="43.9">*********</text><text class="bl" x="24" y="48.6">amet </text><text class="ba" x="45" y="48.6">**********</text><text class="bl" x="24" y="53.3">cons</text><text class="ba" x="42" y="53.3">***********</text><text class="bl" x="24" y="58">ect</text><text class="ba" x="39" y="58">************</text></g><line class="bseam" x1="53.1" y1="31.21" x2="33.9" y2="61.29" stroke-width="1" opacity="0.6" stroke-linecap="round"/></svg>`;
+  const LOGO_SVG = `<svg class="lmark blogo" viewBox="0 0 100 100" aria-hidden="true"><rect class="bl" x="19" y="28" width="27" height="9" rx="4.5"/><rect class="ba" x="49" y="28" width="31" height="9" rx="4.5"/><rect class="bl" x="25" y="40" width="17" height="9" rx="4.5"/><rect class="ba" x="45" y="40" width="30" height="9" rx="4.5"/><rect class="bl" x="19" y="52" width="36" height="9" rx="4.5"/><rect class="ba" x="58" y="52" width="20" height="9" rx="4.5"/><rect class="bl" x="28" y="64" width="22" height="9" rx="4.5"/><rect class="ba" x="54" y="64" width="26" height="9" rx="4.5"/></svg>`;
   function emptyLogoHTML(){
-    // Slick: just the bubble mark, centred — no wordmark, tagline or mixnet note.
-    return `<div class="empty"><div class="logo">${LOGO_SVG}</div></div>`;
+    return `<div class="empty"><div class="logo">${LOGO_SVG}</div><div class="mark fadein">tokum<b>ai</b></div><p class="fadein">Ask anything. Nobody can tie the question to you.</p><div class="note fadein"><span class="d"></span>connected through the Nym mixnet · no IP, no identity, no profile</div></div>`;
   }
+
   function emptyConnectingHTML(){
     return `<div class="empty connecting"><div class="cons" id="connCons"></div></div>`;
   }
   // The connect sequence — the milestones nym-client-core really runs, in order.
-  const CONN_STEPS = ["Generating encryption keys","Starting Nym client","Connecting to entry gateway","Activating cover traffic","Connecting to ScrambleAI server"];
+  const CONN_STEPS = ["Generating encryption keys","Starting Nym client","Connecting to entry gateway","Activating cover traffic","Connecting to tokumai server"];
   const DONE_MARK_SVG = '<svg class="donemark" viewBox="0 0 52 52"><circle cx="26" cy="26" r="23"/><path d="M15 27 L23 35 L37 18"/></svg>';
   let connState = { timers:[], seq:0, awaiting:false, lastLine:null, lastCur:null };
   function stopConnType(){ connState.timers.forEach(clearTimeout); connState.timers=[]; connState.seq++; connState.awaiting=false; }
@@ -2404,13 +2381,13 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     setTimeout(()=>{ if(document.getElementById("connCons")) scrambleToLogo(); }, 1300);
   }
 
-  // Connected → show the static ScrambleAI logo. No scramble/churn — straight to the mark.
+  // Connected → show the static tokumai logo. No scramble/churn — straight to the mark.
   function scrambleToLogo(){ stopConnType(); finishLogo(); }
   function finishLogo(){
     const t=$("thread");
     if(messages.length!==0) return;            // a message arrived mid-animation
     t.classList.add("threadEmpty");
-    t.innerHTML=emptyLogoHTML(true);           // static ScrambleAI logo, tagline fades in
+    t.innerHTML=emptyLogoHTML(true);           // static tokumai logo, tagline fades in
     endBoot(800);
     // Tutorial first (only after the app has loaded); terms come after — either when the
     // tutorial is dismissed (tutClose arms the gate) or, if no tutorial, right now.
@@ -2542,7 +2519,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // Every step is reported by Rust as it actually starts — nothing is typed on a timer.
   let mixState = "ok", routeStart = 0, routeTicker = null, routeFail = "", connectedAt = 0, hiddenAt = 0, lastRtt = 0, lastRebuildSecs = 0, routeWhy = "";
   // "server" reads as a liveness check here (the boot animation keeps "Connecting to
-  // ScrambleAI server"): the step sends a tiny ping through the mixnet and waits for
+  // tokumai server"): the step sends a tiny ping through the mixnet and waits for
   // the answer — "reuse" narrates the fast path where the live route is kept as-is.
   const PHASE_LABEL = { directory:"Fetching the gateway directory", keys:CONN_STEPS[0], client:CONN_STEPS[1], gateway:CONN_STEPS[2], cover:CONN_STEPS[3], server:"Checking the server is alive", reuse:"Route is up — reusing it" };
   let routeTitle = "";                          // "" → default "Reconnecting to the mixnet"
@@ -3678,7 +3655,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   function saveGuardOpts(o){ try{ localStorage.setItem(GUARD_KEY, JSON.stringify(o)); }catch(_){} }
   // Appearance theme — applied on <html data-theme>, persisted locally.
   function applyTheme(t){
-    if(!["A","B","E","F"].includes(t)) t="A";
+    if(!["A","F"].includes(t)) t="A";
     document.documentElement.setAttribute("data-theme", t);
     try{ localStorage.setItem("scrai.theme", t); }catch(_){}
     document.querySelectorAll("#themePick .topt").forEach(b=>b.classList.toggle("sel", b.dataset.themeOpt===t));
@@ -4338,7 +4315,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // server directory). Not a secret: a Nym address is public (it's how clients reach the
   // server). Risk is centralisation + clients break if the address rotates — tracked in notes.
   const KNOWN_SERVERS = [
-    { name: "ScrambleAI (official)", address: "4LjM6dbZ9Pu4hS7hg3AHAK4YLkRfsdH8U5Bi1E9CPBA7.BLpmR82Up6HiucSBLGJQRys6ZHVNZF2doZLPoZFSwTpC@38zcSsvjXsAX7C28ko2H3Lt55X4TYxfZYkPADxKXZHUj" },
+    { name: "tokumai (official)", address: "4LjM6dbZ9Pu4hS7hg3AHAK4YLkRfsdH8U5Bi1E9CPBA7.BLpmR82Up6HiucSBLGJQRys6ZHVNZF2doZLPoZFSwTpC@38zcSsvjXsAX7C28ko2H3Lt55X4TYxfZYkPADxKXZHUj" },
   ].filter(s=>s.address);
   let serverCustom=false;
   const SRV_STYLE="width:100%;background:var(--ink);border:1px solid var(--line);border-radius:8px;color:var(--bone);font-family:var(--mono);font-size:11px;padding:8px;outline:none;margin-top:8px";
@@ -4549,10 +4526,10 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
            <button class="btn" data-click="cancelAcctView">Cancel</button></div>`
       : acctView==="migrate"
       ? (migrateData && migrateData.native
-         ? `<p class="hint">✓ All credit is now on your recoverable balance. Your 24-word phrase is shown on <b>this device</b> (verify with Face ID). On the OTHER device: install ScrambleAI → <b>Restore</b> → <b>type the 24 words</b>, and set the <b>same server</b>. Then use that device and stop using this one.</p>
+         ? `<p class="hint">✓ All credit is now on your recoverable balance. Your 24-word phrase is shown on <b>this device</b> (verify with Face ID). On the OTHER device: install tokumai → <b>Restore</b> → <b>type the 24 words</b>, and set the <b>same server</b>. Then use that device and stop using this one.</p>
             <p class="hint" style="color:var(--rust)">Anyone who sees the phrase controls the account. Don't photograph or store it.</p>
             <div class="btnrow"><button class="btn" data-click="cancelAcctView">Done</button></div>`
-         : `<p class="hint">✓ All credit is now on your recoverable balance. On the OTHER device: install ScrambleAI → <b>Restore</b> → scan this QR (or type the phrase), and set the <b>same server</b>. Then use that device and stop using this one.</p>
+         : `<p class="hint">✓ All credit is now on your recoverable balance. On the OTHER device: install tokumai → <b>Restore</b> → scan this QR (or type the phrase), and set the <b>same server</b>. Then use that device and stop using this one.</p>
             <div class="qrbox" style="display:flex;justify-content:center;margin:10px 0">${migrateData?migrateData.qr:""}</div>
             <pre>${esc(migrateData?migrateData.mnemonic:"")}</pre>
             <p class="hint" style="color:var(--rust)">Anyone who sees this QR or phrase controls the account. Don't photograph or store it.</p>
@@ -4622,11 +4599,11 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     const scrai = d>=maxD ? held : d*100000;   // at max, drain the remainder too
     return `<div class="grouplbl">Held on this device</div>
     <div class="mprow">
-      <div class="mptop"><b>Redeem</b><span class="mpheld">${esc(formatScrai(held))} SCRAI held</span></div>
+      <div class="mptop"><b>Redeem</b><span class="mpheld">${esc(formatScrai(held))} TOKU held</span></div>
       <input type="range" id="redeemSlider" min="1" max="${maxD}" value="${d}" step="1"
         data-input="redeemSliderChanged" data-input-pass="value" class="mpslider flat">
       <div class="mpticks"><span>$1</span><span>${maxD>2?"$"+Math.ceil(maxD/2):""}</span><span>$${maxD} · all held</span></div>
-      <div class="mpout" id="redeemLabel">${esc(formatScrai(scrai))} SCRAI ($${d}${d>=maxD?" · all held":""})</div>
+      <div class="mpout" id="redeemLabel">${esc(formatScrai(scrai))} TOKU ($${d}${d>=maxD?" · all held":""})</div>
       <div class="btnrow center" style="margin-top:12px"><button class="btn primary" data-click="doRedeem">Redeem</button></div>
       ${why(`These coins are blind-signed <b>cash on this device</b>: not linked to your account, not restorable from your recovery phrase. Redeeming moves them into your recoverable balance in $1 steps — it also happens by itself as you chat. <b>Redeem everything before deleting the app or moving to another device</b> (“Move to another device” does that for you).`)}
     </div>`;
@@ -4637,7 +4614,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     const maxD = Math.max(1, Math.floor(held/100000));
     const d = Math.min(redeemDollars, maxD);
     const scrai = d>=maxD ? held : d*100000;
-    const lbl = $("redeemLabel"); if(lbl) lbl.textContent = `${formatScrai(scrai)} SCRAI ($${d}${d>=maxD?" · all held":""})`;
+    const lbl = $("redeemLabel"); if(lbl) lbl.textContent = `${formatScrai(scrai)} TOKU ($${d}${d>=maxD?" · all held":""})`;
   }
   function showRestore(){ acctView="restore"; acctPhrase=null; renderAccount(); }
   function askNew(){ acctView="confirmNew"; acctPhrase=null; renderAccount(); }
@@ -4687,7 +4664,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     redeeming = true;
     const maxD = Math.max(1, Math.floor(held/100000));
     const d = Math.min(redeemDollars!=null?redeemDollars:maxD, maxD);
-    const target = d>=maxD ? held : d*100000;   // SCRAI to move onto the session layer
+    const target = d>=maxD ? held : d*100000;   // TOKU to move onto the session layer
     const startHeld = held;
     const totalChunks = Math.max(1, Math.ceil(target/100000));
     try{
@@ -4745,7 +4722,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   async function checkCredit(){
     acctStatus("checking the mixnet for settled payments…");
     try{ const r=await Backend.collect(); await refreshState(); renderAccount();
-      acctStatus(r&&r.collected>0?`+${formatScrai(r.collected)} SCRAI collected — held, funds your next message.`:"no outstanding credit");
+      acctStatus(r&&r.collected>0?`+${formatScrai(r.collected)} TOKU collected — held, funds your next message.`:"no outstanding credit");
     }catch(e){ acctStatus("failed: "+(e.message||e)); }
   }
 
@@ -4924,7 +4901,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     // EU: Apple's disclosure wording for external purchase links (DMA terms). US: ours.
     $("topupTitle").textContent = eu ? "You’re about to go to an external website" : "You’re leaving the app";
     $("topupDesc").textContent = eu
-      ? "You will no longer be transacting with Apple. Any accounts or purchases made outside of this app will be managed by the developer “ScrambleAI”. Your App Store account, stored payment methods, and related features, such as subscription management and refund requests, will not be available. Apple is not responsible for the privacy or security of transactions made with this developer."
+      ? "You will no longer be transacting with Apple. Any accounts or purchases made outside of this app will be managed by the developer “tokumai”. Your App Store account, stored payment methods, and related features, such as subscription management and refund requests, will not be available. Apple is not responsible for the privacy or security of transactions made with this developer."
       : "The top-up page opens in Safari with your top-up ID already filled in. Credit appears in the app shortly after payment.";
     $("topupScrim").classList.add("open");
   }
@@ -4968,7 +4945,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     const rows = pendingList.slice().sort((a,b)=>a.expiresAt-b.expiresAt).map(p=>`
       <div class="pendrow" data-id="${escAttr(p.invoiceId)}" data-click="resumePayment" data-click-pass="id">
         <span class="pcoin">${esc(coinOf(p))}</span>
-        <span class="pamt">$${(p.amountUsd||0).toFixed(2)} · ${formatScrai(p.amountScrai||0)} SCRAI</span>
+        <span class="pamt">$${(p.amountUsd||0).toFixed(2)} · ${formatScrai(p.amountScrai||0)} TOKU</span>
         <span class="pleft">${fmtCountdown(p.expiresAt-Date.now())}</span>
         <span class="presume">Resume ▸</span>
         <button class="pcancel" title="Cancel this payment" data-click="cancelPending" data-id="${escAttr(p.invoiceId)}" data-click-pass="id" data-stop="1">✕</button>
@@ -5026,7 +5003,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       ? "● Checking with Mollie — finish the checkout in your browser; the credit lands here on its own, usually within seconds of paying."
       : "● Pending — waiting for your payment. Detected automatically; you can close this and come back.";
     else if(kind==="collecting")s.textContent="✓ Payment received — collecting your credit…";
-    else if(kind==="collected") s.textContent=`✓ +${formatScrai(extra||0)} SCRAI collected — held, funds your next message.`;
+    else if(kind==="collected") s.textContent=`✓ +${formatScrai(extra||0)} TOKU collected — held, funds your next message.`;
     else if(kind==="expired")   s.textContent="Invoice expired — pick an amount to try again.";
   }
   function fmtCountdown(ms){
@@ -5046,7 +5023,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     try{
       const r=await Backend.credit(usd);
       await refreshState();
-      $("buyStatus").textContent=`+${formatScrai(r.collected)} SCRAI collected — held, funds your next message.`;
+      $("buyStatus").textContent=`+${formatScrai(r.collected)} TOKU collected — held, funds your next message.`;
     }catch(e){ $("buyStatus").textContent=e.message||String(e); }
   }
 
@@ -5131,10 +5108,10 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         : `<div class="hint">The checkout link is missing — cancel this payment and try again.</div>`;
       // nosemgrep: scrai-taint-untrusted-to-html -- reviewed 2026-08-29: url is safeMollieUrl()-gated and escAttr()-wrapped; amountUsd/amountScrai are numbers (toFixed/formatScrai); nothing else from the server lands here
       $("payPanel").innerHTML = `<div class="paypanel">
-        <div class="paylead">Pay $${Number(inv.amountUsd||0).toFixed(2)} · ${formatScrai(inv.amountScrai||0)} SCRAI by card · expires <span id="payExpiry">…</span></div>
+        <div class="paylead">Pay $${Number(inv.amountUsd||0).toFixed(2)} · ${formatScrai(inv.amountScrai||0)} TOKU by card · expires <span id="payExpiry">…</span></div>
         <div class="cardwait"><b>Checkout opened in your browser.</b> Finish the payment there — your credit is picked up here automatically, you don’t need to come back to any page.</div>
         ${btn}
-        <div class="cardpriv">Mollie (EU) sees your name, card and IP address — never your ScrambleAI account or what you use it for. Once collected, the credit is unlinkable, exactly like a coin purchase. No refunds after checkout.</div>
+        <div class="cardpriv">Mollie (EU) sees your name, card and IP address — never your tokumai account or what you use it for. Once collected, the credit is unlinkable, exactly like a coin purchase. No refunds after checkout.</div>
       </div>`;
       return;
     }
@@ -5176,7 +5153,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     // nosemgrep: scrai-taint-untrusted-to-html -- reviewed 2026-08-28: destination/memo/amount are esc()-wrapped in `blocks`, tnote's URL is escAttr()/esc()-wrapped; o.qr is an SVG the app renders locally (qrcode crate), the server only sends address + memo
     $("payPanel").innerHTML = `<div class="paypanel">
       ${tnote}
-      <div class="paylead">Pay $${inv.amountUsd.toFixed(2)} · ${formatScrai(inv.amountScrai)} SCRAI · expires <span id="payExpiry">…</span></div>
+      <div class="paylead">Pay $${inv.amountUsd.toFixed(2)} · ${formatScrai(inv.amountScrai)} TOKU · expires <span id="payExpiry">…</span></div>
       ${blocks}
       ${isNymInv?`<div id="watchState" class="watchrow"><span class="wd"></span> connecting to the Nyx chain…</div>`:""}
       ${inv.checkout?`<a class="btn" style="display:inline-block;margin:2px 0 4px" href="${escAttr(safeHttpUrl(inv.checkout))}" data-click="openLink" data-click-pass="href" data-prevent="1">Open BTCPay checkout (dev shortcut)</a>`:""}
@@ -5262,9 +5239,9 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   const TUT_KEY = "scrai.tutorial";
   function tutorialEnabled(){ try{ return localStorage.getItem(TUT_KEY) !== "0"; }catch(_){ return true; } }
   const TUT_STEPS = [
-    { t:"Welcome to ScrambleAI", x:"Private AI over the <b>Nym mixnet</b> — your prompts are mixed through relays, so the server never learns who you are. No login, no tracking. Four quick steps and you're set." },
+    { t:"Welcome to tokumai", x:"Private AI over the <b>Nym mixnet</b> — your prompts are mixed through relays, so the server never learns who you are. No login, no tracking. Four quick steps and you're set." },
     { t:"Create your account",   x:"Open <b>Account &amp; recovery</b> and create one. You get a <b>recovery phrase</b> — that phrase <i>is</i> your account and your funds. Write it down; no one can restore it for you." },
-    { t:"Choose a server",       x:"Pick the <b>official ScrambleAI server</b> from the route dropdown, or paste a custom Nym address if you run your own. It's the exit the mixnet routes your chats to." },
+    { t:"Choose a server",       x:"Pick the <b>official tokumai server</b> from the route dropdown, or paste a custom Nym address if you run your own. It's the exit the mixnet routes your chats to." },
     { t:"Buy some credit",       x:"Tap <b>Buy credit</b> and top up with crypto. It becomes <b>scrai</b> — anonymous, unlinkable spending tokens, so paying never reveals what you asked." },
     { t:"Start chatting",        x:"That's it — ask anything. The <b>privacy guard</b> warns before you send sensitive data, and <b>smart pruning</b> trims each request so it costs less. All on this device." },
   ];
@@ -5272,11 +5249,11 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // namespaced so nothing collides with the app's own CSS.
   const _tutWords = ["anchor","pilot","ridge","cobalt","meadow","spruce","lantern","harbor","violet","circuit","ember","tide"];
   const TUT_SHOTS = [
-    `<div class="tutshot"><div class="ts-bar"><i></i><i></i><i></i><span class="ts-t">ScrambleAI</span></div><div class="ts-b"><div class="ts-sw"><div class="ts-logo">Scramble<b>AI</b></div><div class="ts-tag">A crowd of voices, none traceable to you — private AI over the Nym mixnet.</div><div class="ts-pill"><span class="ts-d"></span>routing through the mixnet · 5 hops</div></div></div></div>`,
+    `<div class="tutshot"><div class="ts-bar"><i></i><i></i><i></i><span class="ts-t">tokum<b>ai</b></span></div><div class="ts-b"><div class="ts-sw"><div class="ts-logo">tokum<b>ai</b></div><div class="ts-tag">Ask anything. Nobody can tie the question to you.</div><div class="ts-pill"><span class="ts-d"></span>routing through the mixnet · 5 hops</div></div></div></div>`,
     `<div class="tutshot"><div class="ts-bar"><i></i><i></i><i></i><span class="ts-t">Account &amp; recovery</span></div><div class="ts-b"><div class="ts-mt">Your <b>account</b></div><div class="ts-phrase">${_tutWords.map((w,i)=>'<span><b>'+(i+1)+'</b>'+w+'</span>').join("")}</div><div class="ts-pbtn">Create account</div></div></div>`,
-    `<div class="tutshot"><div class="ts-bar"><i></i><i></i><i></i><span class="ts-t">Route · server</span></div><div class="ts-b"><div class="ts-mt">Choose a <b>server</b></div><div class="ts-drop"><div class="ts-opt ts-on">ScrambleAI (official)<span class="ts-c">✓</span></div><div class="ts-opt">Custom Nym address…</div></div><div class="ts-addr">4LjM…@38zcSsvjX…</div></div></div>`,
+    `<div class="tutshot"><div class="ts-bar"><i></i><i></i><i></i><span class="ts-t">Route · server</span></div><div class="ts-b"><div class="ts-mt">Choose a <b>server</b></div><div class="ts-drop"><div class="ts-opt ts-on">tokumai (official)<span class="ts-c">✓</span></div><div class="ts-opt">Custom Nym address…</div></div><div class="ts-addr">4LjM…@38zcSsvjX…</div></div></div>`,
     `<div class="tutshot"><div class="ts-bar"><i></i><i></i><i></i><span class="ts-t">Buy credit</span></div><div class="ts-b"><div class="ts-mt">Buy <b>credit</b></div><div class="ts-tiers"><div class="ts-ti">€5<b>50k scrai</b></div><div class="ts-ti ts-on">€10<b>110k scrai</b></div><div class="ts-ti">€25<b>290k scrai</b></div></div><div class="ts-meth"><span class="ts-on">NYM</span><span>BTC</span></div></div></div>`,
-    `<div class="tutshot"><div class="ts-bar"><i></i><i></i><i></i><span class="ts-t">ScrambleAI</span></div><div class="ts-b"><div class="ts-bub ts-u">Explain zero-knowledge proofs simply.</div><div class="ts-bub ts-a">You prove you know a secret without revealing it — like proving you know a password without ever typing it.</div><div class="ts-comp"><span>Message ScrambleAI…</span><span class="ts-s">↑</span></div></div></div>`,
+    `<div class="tutshot"><div class="ts-bar"><i></i><i></i><i></i><span class="ts-t">tokum<b>ai</b></span></div><div class="ts-b"><div class="ts-bub ts-u">Explain zero-knowledge proofs simply.</div><div class="ts-bub ts-a">You prove you know a secret without revealing it — like proving you know a password without ever typing it.</div><div class="ts-comp"><span>Message tokumai…</span><span class="ts-s">↑</span></div></div></div>`,
   ];
   let tutI = 0, tutW = 0, tutWired = false;
   function tutMeasure(){ const s=$("tutShots"); tutW = s ? s.clientWidth : 0; }

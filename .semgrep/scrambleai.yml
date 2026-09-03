@@ -1,4 +1,4 @@
-# ScrambleAI project invariants — things no generic ruleset knows about.
+# tokumai project invariants — things no generic ruleset knows about.
 # Run: semgrep scan --metrics=off --config .semgrep/scrambleai.yml <paths>
 # (also loaded by scripts/semgrep.sh together with the public security packs)
 rules:

@@ -9,7 +9,7 @@ name = "scrai-loadtest"
 version.workspace = true
 edition = "2021"
 publish = false
-description = "ScrambleAI load-test harness — N simulated users against one scrai-server over the mixnet"
+description = "tokumai load-test harness — N simulated users against one scrai-server over the mixnet"
 
 [[bin]]
 name = "scrai-loadtest"

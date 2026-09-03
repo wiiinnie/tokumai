@@ -1,6 +1,6 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "ScrambleAI",
+  "productName": "tokumai",
   "version": "0.4.6",
   "identifier": "com.scrambleai.app",
   "build": {
@@ -12,7 +12,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "ScrambleAI",
+        "title": "tokumai",
         "width": 1120,
         "height": 760,
         "minWidth": 900,

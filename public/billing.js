@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// billing.js — SCRAI on the client side.
+// billing.js — TOKU on the client side.
 //
 // Pure helpers plus a ticketbook. All DOM lives in index.html, same as every
 // other concern in this UI; this module never touches the document.
@@ -11,13 +11,13 @@
 //     our own accounting and stays out of the interface.
 //
 // The balance is bookkeeping, not a gate. Until zk-nym tickets replace the
-// dev-ticket stub, a patched client can hand itself SCRAI — the real limit is
+// dev-ticket stub, a patched client can hand itself TOKU — the real limit is
 // that the server holds the API key.
 // ---------------------------------------------------------------------------
 
 const fmt = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
 
-/** "1,204" — SCRAI amounts are whole numbers by construction. */
+/** "1,204" — TOKU amounts are whole numbers by construction. */
 export function formatScrai(scrai) {
   return fmt.format(Math.max(0, Math.round(scrai || 0)));
 }
@@ -83,8 +83,8 @@ export function createTicketbook({ initial = 0, onChange = null } = {}) {
     },
 
     /** Enough for one more turn? Cosmetic until tickets are enforced server-side. */
-    canSpend(SCRAI = 1) {
-      return balance >= SCRAI;
+    canSpend(TOKU = 1) {
+      return balance >= TOKU;
     },
 
     /** Book a finished turn. Never goes below zero. */
@@ -97,8 +97,8 @@ export function createTicketbook({ initial = 0, onChange = null } = {}) {
     },
 
     /** Dev refill today; redeeming a zk-nym ticket later. */
-    add(SCRAI) {
-      balance += Math.max(0, Math.round(SCRAI || 0));
+    add(TOKU) {
+      balance += Math.max(0, Math.round(TOKU || 0));
       notify();
       return balance;
     },

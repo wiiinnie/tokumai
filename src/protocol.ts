@@ -172,7 +172,7 @@ export interface ModelInfo {
   /** Whether this model accepts file inputs (images/PDF/text) — gates the "+". */
   acceptsImages?: boolean;
   /**
-   * Retail price in SCRAI per 1M tokens, margin already applied.
+   * Retail price in TOKU per 1M tokens, margin already applied.
    *
    * Sent so the client can estimate a price before spending a mixnet round
    * trip on it. It is advisory only: the server prices every exchange from its

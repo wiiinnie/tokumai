@@ -2,7 +2,7 @@
 // billing.rs — the pricing MATH, ported from src/billing.ts (byte-for-byte
 // behaviour, so the Rust server prices an exchange exactly like the TS server did).
 //
-// This is the pure computation: provider cost in USD → SCRAI, noise-safe rounding,
+// This is the pure computation: provider cost in USD → TOKU, noise-safe rounding,
 // margin, and a per-request floor. The pricing TABLE (which model costs what) is a
 // separate data port; here `ModelPrice` is passed in explicitly.
 // ---------------------------------------------------------------------------
@@ -80,9 +80,9 @@ impl Tier {
 /// The billing frame for one exchange.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BillingFrame {
-    /// Provider cost to us, in SCRAI, kept to 4 decimals (no rounding accretion).
+    /// Provider cost to us, in TOKU, kept to 4 decimals (no rounding accretion).
     pub cost_scrai: f64,
-    /// What the user pays: whole SCRAI, margin applied, floored — never free once a
+    /// What the user pays: whole TOKU, margin applied, floored — never free once a
     /// request actually reached the provider.
     pub price_scrai: u64,
     pub fallback_price: bool,
@@ -102,7 +102,7 @@ pub fn cost_usd(usage: &TokenUsage, price: &ModelPrice) -> f64 {
         / 1_000_000.0
 }
 
-/// Round a SCRAI amount UP at 4 decimals, WITHOUT inventing money out of float noise.
+/// Round a TOKU amount UP at 4 decimals, WITHOUT inventing money out of float noise.
 ///
 /// The naive `(x * 10_000).ceil() / 10_000` is wrong: e.g. a value that computes to
 /// `17100.000000000004` would ceil to `17101` and invent a cost the provider never
@@ -128,7 +128,7 @@ pub fn clamp_margin(margin: f64) -> f64 {
     }
 }
 
-/// Build the billing frame. `cost` keeps 4 decimals; `price` is whole SCRAI, rounded
+/// Build the billing frame. `cost` keeps 4 decimals; `price` is whole TOKU, rounded
 /// up with margin, floored at `min_charge` — a request that reached the provider is
 /// never free (unless the model itself is free AND min_charge is 0).
 pub fn compute_billing(
@@ -172,7 +172,7 @@ mod tests {
 
     #[test]
     fn cost_and_price_with_margin() {
-        // 1M input tokens @ $0.10/1M = $0.10 → 10_000 SCRAI cost; ×1.1 margin → 11_000
+        // 1M input tokens @ $0.10/1M = $0.10 → 10_000 TOKU cost; ×1.1 margin → 11_000
         let u = TokenUsage { input: 1_000_000, ..Default::default() };
         let f = compute_billing(&P, &u, 1.1, 0, false);
         assert_eq!(f.cost_scrai, 10_000.0);
@@ -184,7 +184,7 @@ mod tests {
     fn empty_usage_is_free_but_tiny_paid_is_floored_to_one() {
         // no tokens → 0
         assert_eq!(compute_billing(&P, &TokenUsage::default(), 1.1, 0, false).price_scrai, 0);
-        // 1 input token @ $0.10/1M = 0.01 SCRAI cost → ceil(0.01×1.1)=ceil(0.011)=1
+        // 1 input token @ $0.10/1M = 0.01 TOKU cost → ceil(0.01×1.1)=ceil(0.011)=1
         let tiny = TokenUsage { input: 1, ..Default::default() };
         let f = compute_billing(&P, &tiny, 1.1, 0, false);
         assert_eq!(f.cost_scrai, 0.01);
@@ -232,7 +232,7 @@ mod tests {
     #[test]
     fn cached_and_audio_rates_default_to_input() {
         let u = TokenUsage { cached_input: 1_000_000, audio_input: 1_000_000, ..Default::default() };
-        // both fall back to the $0.10 input rate → 0.10 + 0.10 = $0.20 → 20_000 SCRAI
+        // both fall back to the $0.10 input rate → 0.10 + 0.10 = $0.20 → 20_000 TOKU
         assert_eq!(cost_usd(&u, &P), 0.20);
     }
 

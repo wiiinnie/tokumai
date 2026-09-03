@@ -624,7 +624,7 @@ impl Pay {
             Ok(r) => r,
             Err(e) => return err(id, &e),
         };
-        // The SCRAI amount is fixed HERE, not at settlement, so the user gets
+        // The TOKU amount is fixed HERE, not at settlement, so the user gets
         // exactly what they were quoted regardless of the exchange rate.
         let amount_scrai = usd as u64 * SCRAI_PER_USD;
         self.invoices.insert(
@@ -759,7 +759,7 @@ impl Pay {
         if held < book_scrai {
             return Gate::Denied(encode(&err(
                 &id,
-                &format!("not enough entitlement: a ticketbook costs {book_scrai} SCRAI, this account holds {held} — buy credit first"),
+                &format!("not enough entitlement: a ticketbook costs {book_scrai} TOKU, this account holds {held} — buy credit first"),
             )));
         }
         Gate::Authorized { account_id: account, req_key, prepaid: false }
@@ -968,7 +968,7 @@ impl Gateway {
 }
 
 /// BTCPay (real) or the fake (dev). Selection fails loudly when nothing is
-/// configured — an issuer that hands out SCRAI for imaginary money must never
+/// configured — an issuer that hands out TOKU for imaginary money must never
 /// be a silent default.
 pub enum Rail {
     Fake,
@@ -1018,7 +1018,7 @@ impl Rail {
 
     async fn create_invoice(&self, usd: u32, reference: &str) -> Result<RaisedInvoice, String> {
         match self {
-            Rail::None => Err("this server cannot sell SCRAI — no payment gateway configured".into()),
+            Rail::None => Err("this server cannot sell TOKU — no payment gateway configured".into()),
             Rail::Fake => Ok(RaisedInvoice {
                 provider_ref: format!("fake:{reference}"),
                 pay_to: "fake — settles on first status poll".into(),
@@ -1225,11 +1225,11 @@ impl CardRail {
         };
         // Test mode is EUR-only at Mollie, so the test rail charges the tile's number in
         // EUR 1:1 — a placeholder amount, nothing is converted. Live charges the USD tile
-        // (the SCRAI price is fixed per USD; Mollie converts to the payout currency).
+        // (the TOKU price is fixed per USD; Mollie converts to the payout currency).
         let currency = if api_key.starts_with("test_") { "EUR" } else { "USD" };
         let body = json!({
             "amount": { "currency": currency, "value": format!("{usd}.00") },
-            "description": "ScrambleAI credit",
+            "description": "tokumai credit",
             "redirectUrl": redirect_url,
             // No `method`: the hosted checkout offers every method enabled in the Mollie
             // dashboard (cards, PayPal, later Wero) — switching one on there needs no deploy.

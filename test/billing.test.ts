@@ -1,5 +1,5 @@
 /**
- * billing.test.ts — the money layer: SCRAI maths, Gemini usageMetadata, and the
+ * billing.test.ts — the money layer: TOKU maths, Gemini usageMetadata, and the
  * metering wrapper.
  *
  * Run from the repo root (`npm test`), not from inside test/: pricing.ts
@@ -18,7 +18,7 @@ process.env.MARGIN = "1.4";
 process.env.MIN_CHARGE_SCRAI = "1";
 
 /* 1) Ordinary in/out on flash-lite:
-      (1000×0.30 + 500×2.50)/1M = $0.00155 = 155 SCRAI */
+      (1000×0.30 + 500×2.50)/1M = $0.00155 = 155 TOKU */
 const u1: TokenUsage = { ...EMPTY_USAGE, inputTokens: 1000, outputTokens: 500, totalTokens: 1500 };
 const b1 = computeBilling("gemini-3.5-flash-lite", u1);
 assert.equal(b1.costScrai, 155);
@@ -27,12 +27,12 @@ assert.equal(b1.fallbackPrice, false);
 assert.equal(b1.estimated, false);
 
 /* 2) Cache hits are cheaper: 200 fresh + 800 cached + 500 out
-      (200×0.30 + 800×0.03 + 500×2.50)/1M = (60 + 24 + 1250)/1M = 133.4 SCRAI */
+      (200×0.30 + 800×0.03 + 500×2.50)/1M = (60 + 24 + 1250)/1M = 133.4 TOKU */
 const u2: TokenUsage = { ...EMPTY_USAGE, inputTokens: 200, cachedInputTokens: 800, outputTokens: 500 };
 assert.equal(computeBilling("gemini-3.5-flash-lite", u2).costScrai, 133.4);
 
 /* 3) An unknown model falls back to the expensive default and says so:
-      (1000×1.50 + 500×9.00)/1M = $0.0060 = 600 SCRAI */
+      (1000×1.50 + 500×9.00)/1M = $0.0060 = 600 TOKU */
 const b3 = computeBilling("gemini-9-imaginary", u1);
 assert.equal(b3.fallbackPrice, true);
 assert.equal(b3.costScrai, 600);
@@ -163,8 +163,8 @@ assert.equal(ceilScrai(0), 0);
 /* 12) Retail rates carry the margin and round up */
 process.env.MARGIN = "1.1";
 const rate = retailRate("gemini-3.5-flash");
-assert.equal(rate.in, 165000);   // 1.5 USD/1M × 100000 SCRAI/USD × 1.1
-assert.equal(rate.out, 990000);  // 9.0 USD/1M × 100000 SCRAI/USD × 1.1
+assert.equal(rate.in, 165000);   // 1.5 USD/1M × 100000 TOKU/USD × 1.1
+assert.equal(rate.out, 990000);  // 9.0 USD/1M × 100000 TOKU/USD × 1.1
 const freeRate = retailRate("pollinations-1024");
 assert.equal(freeRate.in, 0);
 assert.equal(freeRate.out, 0);

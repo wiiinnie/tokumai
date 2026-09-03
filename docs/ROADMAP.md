@@ -1,4 +1,4 @@
-# ScrambleAI — Roadmap
+# tokumai — Roadmap
 
 Living list of planned work. Newest thinking at the top of each section.
 
@@ -16,7 +16,7 @@ chats. Use Mollie **hosted checkout** (no PCI on us), require **zero account/ema
 label the option clearly as **"less private than crypto."**
 
 **Privacy caveats to surface in the UI:** the buyer is identified to Mollie + card networks
-+ bank (name, IP, 3-D-Secure); being a ScrambleAI customer is visible on the statement;
++ bank (name, IP, 3-D-Secure); being a tokumai customer is visible on the statement;
 chargebacks/fraud pressure the unlinkability; EU SCA is mandatory. None of this is fixable
 from our side — only disclosed. Privacy-max users stay on crypto (and can use a virtual
 disposable card).
@@ -72,7 +72,7 @@ never be able to mint or consume entitlement alone.
 ## Models / providers
 
 ### TEE inference endpoint — *considering*
-Close the one gap Tinfoil-style services can point at: today the ScrambleAI server (and
+Close the one gap Tinfoil-style services can point at: today the tokumai server (and
 the upstream provider) sees prompt **plaintext** — unlinkable to a person, but readable.
 Run an **open-weights model inside a confidential-computing enclave** (NVIDIA
 Hopper/Blackwell CC, remote attestation) reached **through the mixnet**, so both threat

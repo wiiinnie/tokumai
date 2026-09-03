@@ -263,7 +263,7 @@ export function verifyToken(a: bigint, secret: Uint8Array, C_bytes: Uint8Array):
 //
 // A blind signature hides its message, so value is carried by WHICH key signed
 // the token. Amounts are therefore split into power-of-two denominations, each
-// with its own key. 2^30 ≈ 1.07e9 SCRAI (~USD 10.7k) is well above any single
+// with its own key. 2^30 ≈ 1.07e9 TOKU (~USD 10.7k) is well above any single
 // balance, so a normal withdrawal is a handful of tokens (the binary digits of
 // the amount); only absurd amounts ever repeat the top denomination.
 
@@ -272,7 +272,7 @@ export const DENOMINATIONS: number[] = Array.from({ length: 31 }, (_, i) => 2 **
 /** Split a positive integer amount into denominations that sum to it. */
 export function decompose(amount: number): number[] {
   if (!Number.isInteger(amount) || amount <= 0) {
-    throw new Error("amount must be a positive whole number of SCRAI");
+    throw new Error("amount must be a positive whole number of TOKU");
   }
   const out: number[] = [];
   let rem = amount;

@@ -22,8 +22,8 @@ use std::collections::HashMap;
 const MAX_CACHED_REPLY: usize = 256 * 1024;
 const MAX_CACHED_SESSIONS: usize = 64;
 
-/// A request that reached the provider is never free, even if it rounds to sub-1 SCRAI.
-/// Default 1 SCRAI ($0.00001); override per-operator with the `MIN_CHARGE_SCRAI` env var
+/// A request that reached the provider is never free, even if it rounds to sub-1 TOKU.
+/// Default 1 TOKU ($0.00001); override per-operator with the `MIN_CHARGE_SCRAI` env var
 /// (e.g. a larger floor to cover per-request overhead / discourage dust spam).
 const MIN_CHARGE_DEFAULT: u64 = 1;
 fn min_charge() -> u64 {
@@ -152,7 +152,7 @@ fn effective_thinking(v: &Value) -> u64 {
 /// over-reserves rather than risk billing above the ceiling.
 const ATTACHMENT_INPUT_TOKENS: u64 = 4096;
 
-/// Worst-case price of a request, in SCRAI — the amount to reserve. Byte length,
+/// Worst-case price of a request, in TOKU — the amount to reserve. Byte length,
 /// not chars/4: a byte-level BPE token decodes to at least one byte, so the byte
 /// count is a GUARANTEED upper bound on the real input token count (an
 /// adversarial multibyte prompt tokenises far above chars/4, and the user is
@@ -167,7 +167,7 @@ const MAX_GROUNDING_QUERIES: u64 = 10;
 /// them — only queries beyond it bill at $14/1k. Tracked per UTC month in the store.
 pub const GROUNDING_FREE_PER_MONTH: u64 = 5000;
 
-/// (provider cost in SCRAI, retail SCRAI charged) for `queries` executed grounding
+/// (provider cost in TOKU, retail TOKU charged) for `queries` executed grounding
 /// searches. Zero queries → no charge, so a live-enabled prompt the model chose NOT
 /// to search on costs nothing extra.
 /// Per-query search price for a model's provider: Gemini grounding or OpenAI web search.
@@ -243,7 +243,7 @@ fn ceiling_for(
     tokens + per_image_scrai(price, margin) + grounding
 }
 
-/// Retail SCRAI for ONE generated image (0 for text models).
+/// Retail TOKU for ONE generated image (0 for text models).
 pub fn per_image_scrai(price: &scrai_core::billing::ModelPrice, margin: f64) -> u64 {
     use scrai_core::billing::{ceil_scrai, clamp_margin};
     use scrai_core::coconut::SCRAI_PER_USD;
@@ -498,6 +498,8 @@ pub fn reserve(
         }
         Reserve::Insufficient { balance } => {
             return err(&format!(
+                // Wire string. 0.4.x clients match `contains("not enough SCRAI")` to trigger the
+                // auto-redeem; keep that phrase until they are gated out (SCRAI_MIN_APP).
                 "not enough SCRAI: this request reserves up to {ceiling}, balance is {balance}"
             ))
         }
@@ -523,7 +525,7 @@ pub fn reserve(
 /// margin to a client) but needed on the loop for the daily metrics.
 pub struct Settled {
     pub reply: Vec<u8>,
-    /// provider cost in SCRAI (None when the provider failed — nothing was billed)
+    /// provider cost in TOKU (None when the provider failed — nothing was billed)
     pub provider_cost: Option<f64>,
 }
 
@@ -1395,8 +1397,8 @@ mod tests {
         let msgs = json!([{ "role": "user", "content": "a cat" }]);
         let old = ceiling_for(&text, 1.0, &msgs, Some(1024), false, 5000, 2048, "4K", "gemini-x");
         let new = ceiling_for(&nb2, 1.0, &msgs, Some(1024), false, 5000, 2048, "4K", "gemini-x");
-        // old: 3072 output tokens × $60/1M = $0.184 (≈ 18_432 SCRAI) — all at the image rate
-        // new: 3072 × $3/1M + 2520 × $60/1M = $0.0092 + $0.1512 ≈ 16_044 SCRAI
+        // old: 3072 output tokens × $60/1M = $0.184 (≈ 18_432 TOKU) — all at the image rate
+        // new: 3072 × $3/1M + 2520 × $60/1M = $0.0092 + $0.1512 ≈ 16_044 TOKU
         assert!(new < old, "split reserve {new} should be below the all-image-rate reserve {old}");
         assert!(new >= 2520 * 60 / 10, "reserve must still cover a 4K image: {new}");
         // The reserve follows the requested size: 1K (1120 tokens) reserves less than 4K.
@@ -1481,7 +1483,7 @@ mod tests {
     #[test]
     fn grounding_charge_bills_per_query_and_zero_is_free() {
         assert_eq!(grounding_charge_at(0, GROUNDING_USD_PER_QUERY, 1.1), (0.0, 0));
-        // 2 queries × $0.014 = $0.028 → provider SCRAI > 0, retail = ceil(cost×1.1)
+        // 2 queries × $0.014 = $0.028 → provider TOKU > 0, retail = ceil(cost×1.1)
         let (cost, retail) = grounding_charge_at(2, GROUNDING_USD_PER_QUERY, 1.1);
         assert!(cost > 0.0);
         assert!(retail as f64 >= cost); // margin never lowers the charge
@@ -1663,7 +1665,7 @@ mod tests {
         let pd = effective_price(pricing.price("pd"));
         assert_eq!(pd.input, 1.0); // paid: untouched
         assert_eq!(pd.output, 4.0);
-        // Per-image retail: 0.0005 USD × 100_000 SCRAI/USD × margin 1.4 = 70 SCRAI.
+        // Per-image retail: 0.0005 USD × 100_000 TOKU/USD × margin 1.4 = 70 TOKU.
         assert_eq!(per_image_scrai(&ft, 1.4), 70);
         assert_eq!(per_image_scrai(&pd, 1.4), 0);
     }

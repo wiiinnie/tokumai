@@ -67,7 +67,7 @@ const PAID_HTML: &str = r##"<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex">
-<title>Payment received — ScrambleAI</title>
+<title>Payment received — tokumai</title>
 <style>
   :root{--ink:#141210;--surface:#1C1917;--surface-2:#262220;--line:#332E2A;--bone:#ECE6DC;--muted:#9C938A;--signal:#CBA14E;--mix:#8AA06B;
     --mono:ui-monospace,SFMono-Regular,Menlo,monospace;--body:system-ui,-apple-system,'Hanken Grotesk',sans-serif;--display:Georgia,'Fraunces',serif}
@@ -89,7 +89,7 @@ const PAID_HTML: &str = r##"<!doctype html>
   <div class="card">
     <div class="eyebrow">Card checkout</div>
     <h1>Payment received</h1>
-    <p><b>You can close this tab and return to ScrambleAI.</b> The app picks the payment up on its own and collects your credit — usually within a few seconds, no further steps.</p>
+    <p><b>You can close this tab and return to tokumai.</b> The app picks the payment up on its own and collects your credit — usually within a few seconds, no further steps.</p>
     <p>If the checkout was cancelled or failed, nothing was charged; pick an amount in the app again.</p>
     <div class="fine">This page holds no order details and sets no cookie. Once collected, the credit is unlinkable to this payment. No refunds after checkout.</div>
   </div>

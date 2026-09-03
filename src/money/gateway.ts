@@ -22,7 +22,7 @@
 // A note on what settles: BTCPay prices an invoice in USD and receives BTC.
 // The operator therefore carries the exchange risk between payment and
 // conversion, and that is a business decision this file cannot make. What it
-// does guarantee is that the SCRAI amount is fixed when the invoice is RAISED,
+// does guarantee is that the TOKU amount is fixed when the invoice is RAISED,
 // so a user always gets what they were quoted.
 // ---------------------------------------------------------------------------
 
@@ -325,7 +325,7 @@ function explainBTCPay(status: number, body: string, path: string): string {
  * Pick the gateway from the environment.
  *
  * Fails loudly when nothing is configured rather than quietly falling back to
- * the fake — an issuer that hands out SCRAI for imaginary money should never be
+ * the fake — an issuer that hands out TOKU for imaginary money should never be
  * the default.
  */
 export function selectGateway(): PaymentGateway {

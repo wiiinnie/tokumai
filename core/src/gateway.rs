@@ -27,7 +27,7 @@ const MARGIN: f64 = 1.4;
 const THIS_SERVER: ServerId = 1;
 
 /// Route one request. `request` is the raw envelope bytes; returns the reply bytes.
-/// `quorum` records coconut serials (double-spend); `sessions` holds redeemed SCRAI
+/// `quorum` records coconut serials (double-spend); `sessions` holds redeemed TOKU
 /// balances that `chat` draws down (charging lives in the async chat handler).
 pub async fn handle(
     authority: &Authority,
@@ -147,7 +147,7 @@ pub async fn redeem_apply(
     }
 }
 
-/// Retail rate in SCRAI per 1M tokens (provider USD price × peg × margin, rounded).
+/// Retail rate in TOKU per 1M tokens (provider USD price × peg × margin, rounded).
 fn retail(usd_per_million: f64) -> u64 {
     ceil_scrai(usd_per_million * SCRAI_PER_USD as f64 * MARGIN) as u64
 }
@@ -287,7 +287,7 @@ mod tests {
         let first = redeem(&mut quorum, &mut sessions);
         assert_eq!(first["accepted"], true);
         assert_eq!(first["coins"], 3);
-        assert_eq!(first["balance"], 3 * COIN_SCRAI); // 3000 SCRAI
+        assert_eq!(first["balance"], 3 * COIN_SCRAI); // 3000 TOKU
 
         // replay the SAME payment → idempotent, no double-credit
         let again = redeem(&mut quorum, &mut sessions);

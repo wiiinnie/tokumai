@@ -41,7 +41,7 @@ echo "→ notarising with $APPLE_ID (team $APPLE_TEAM_ID)"
 
 npm run -s tauri:build
 
-APP="$SRC/target/release/bundle/macos/ScrambleAI.app"
+APP="$SRC/target/release/bundle/macos/tokumai.app"
 DMG=$(ls -t "$SRC"/target/release/bundle/dmg/*.dmg | head -1)
 echo "→ verifying"
 codesign --verify --deep --strict "$APP" && echo "   codesign: ok"

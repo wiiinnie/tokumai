@@ -44,12 +44,12 @@ code (`core/src/federation.rs`) means the Coconut authority set, nothing more.
 
 | Name | Value | Meaning / rationale |
 |---|---|---|
-| `SCRAI_PER_USD` | `100_000` | existing peg: 10 USD = 1,000,000 SCRAI |
-| `COIN_SCRAI` | `1_000` | 1 ecash coin = 1000 SCRAI = **$0.01** (one cent). Coarse on purpose: compact-ecash carries one serial PER coin, so fine coins → huge proofs. |
+| `SCRAI_PER_USD` | `100_000` | existing peg: 10 USD = 1,000,000 TOKU |
+| `COIN_SCRAI` | `1_000` | 1 ecash coin = 1000 TOKU = **$0.01** (one cent). Coarse on purpose: compact-ecash carries one serial PER coin, so fine coins → huge proofs. |
 | ticketbook size `L` | `tier_scrai / COIN_SCRAI` | e.g. $10 → 1000 coins, $5 → 500, $20 → 2000, $50 → 5000. |
 | `REDEEM_CHUNK_COINS` | `100` | redeem ~$1 (100 coins) into a session at a time, **uniform** across users. Not "all at once" (leaks balance + one big pseudonym + 1000-serial proof), not tiny bits (many shows + mixnet round-trips). |
 
-SCRAI stays the **fine accounting unit on the SESSION layer** (redeem coarse coins →
+TOKU stays the **fine accounting unit on the SESSION layer** (redeem coarse coins →
 session balance → per-chat reserve/settle). The coin only sizes the redemption chunk.
 
 ## Privacy timing (unchanged by Coconut)

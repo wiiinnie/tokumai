@@ -71,14 +71,14 @@ const money = new MoneyStore(process.env.SCRAI_MONEY_DB ?? "./data/money.db");
 // set (keeps the seed out of the DB); otherwise a persisted random seed, so
 // tokens survive a restart. The mint exists independently of the gateway so
 // that redeeming already-bought tokens and serving the keyset keep working on a
-// server that cannot sell new SCRAI.
+// server that cannot sell new TOKU.
 const mintSeed = process.env.SCRAI_ISSUER_SECRET
   ? Buffer.from(process.env.SCRAI_ISSUER_SECRET, "utf8")
   : money.getOrCreateMintSeed();
 const mint = new Mint(mintSeed);
 
 // The issuer is only wired up when a gateway is configured. Without one the
-// server still serves paid sessions — it just cannot sell new SCRAI.
+// server still serves paid sessions — it just cannot sell new TOKU.
 let issuer: Issuer | null = null;
 try {
   const gateways: Record<string, PaymentGateway> = { btc: selectGateway() };
@@ -107,7 +107,7 @@ function canonicalBody(req: { model: string; messages: unknown; maxTokens?: numb
 }
 
 /**
- * Worst-case price of a request, in SCRAI — the amount to reserve.
+ * Worst-case price of a request, in TOKU — the amount to reserve.
  *
  * Uses the same retail rates the client was quoted, so both sides arrive at the
  * same number and a client is never refused for a ceiling it could not predict.
@@ -314,7 +314,7 @@ async function handle(raw: string, send: (r: Response) => void): Promise<string>
 
   if (req.kind === "invoice.create") {
     if (!issuer) {
-      send(errorResponse(req.id, "this server cannot sell SCRAI — no payment gateway configured", "payment-required"));
+      send(errorResponse(req.id, "this server cannot sell TOKU — no payment gateway configured", "payment-required"));
       return "invoice.denied";
     }
     const invoiceAccount = accountOwns(req.publicKey, req.nonce, `invoice:${req.usd}`, req.sig);
@@ -544,7 +544,7 @@ async function handle(raw: string, send: (r: Response) => void): Promise<string>
       const current = money.getSession(sessionId)?.counter;
       const msg =
         outcome === "insufficient"
-          ? `not enough SCRAI: this request reserves up to ${ceiling}, balance is ${session.balance}`
+          ? `not enough TOKU: this request reserves up to ${ceiling}, balance is ${session.balance}`
           : outcome === "replay"
             ? `counter ${counter} was already used (server is at ${current}) — resync and retry`
             : "unknown session";
@@ -772,7 +772,7 @@ async function main(): Promise<void> {
     let price = "";
     const kind = await handle(m.message, (res) => {
       if (res.kind === "chat.ok" || res.kind === "chat.end") {
-        price = ` ${res.usage.billing?.priceScrai ?? "?"} SCRAI`;
+        price = ` ${res.usage.billing?.priceScrai ?? "?"} TOKU`;
       }
       sock.reply(tag, JSON.stringify(res));
     });
@@ -800,7 +800,7 @@ async function main(): Promise<void> {
     const stale = issuer.expireStale();
     console.log(
       `issuer: gateway=${issuer.gatewayName} · methods=${issuer.availableMethods().join(",")}` +
-        ` · ${ms.pendingInvoices} invoices pending · ${ms.owedScrai.toLocaleString("en-US")} SCRAI owed` +
+        ` · ${ms.pendingInvoices} invoices pending · ${ms.owedScrai.toLocaleString("en-US")} TOKU owed` +
         (stale ? ` · ${stale} expired` : ""),
     );
     if (issuer.isFake) {

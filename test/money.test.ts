@@ -241,7 +241,7 @@ function withdrawFrom(iss: Issuer, account: { accountId: string }, amount: numbe
 
 // Raising an invoice must not credit anything — only paying does.
 const inv = await issuer.createInvoice(buyer.accountId, 10);
-assert.equal(inv.amountScrai, 1_000_000, "10 USD = 1,000,000 SCRAI");
+assert.equal(inv.amountScrai, 1_000_000, "10 USD = 1,000,000 TOKU");
 assert.equal(issuer.entitlement(buyer.accountId), 0, "an unpaid invoice credits nothing");
 
 // Money arrives.

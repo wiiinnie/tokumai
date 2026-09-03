@@ -20,7 +20,7 @@ use ratatui::{prelude::*, widgets::*};
 use rusqlite::{Connection, OpenFlags};
 use serde::Deserialize;
 
-const SCRAI_PER_USD: u64 = 100_000; // one coconut coin = $1 = 100_000 SCRAI
+const SCRAI_PER_USD: u64 = 100_000; // one coconut coin = $1 = 100_000 TOKU
 
 // ---- blob shapes (subset; serde ignores the fields we don't name) ----------
 #[derive(Deserialize, Default)]

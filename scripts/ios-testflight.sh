@@ -33,7 +33,7 @@ rm -rf "$APPLE/Externals/x86_64" "$APPLE/Externals/arm64/debug"   # one config i
 npm run -s tauri ios build -- --export-method app-store-connect >/dev/null 2>&1 || true
 ARCHIVE="$APPLE/build/scrambleai_iOS.xcarchive"
 [ -d "$ARCHIVE" ] || { echo "no archive at $ARCHIVE — run 'npm run tauri ios build' and read its output" >&2; exit 1; }
-if [ -e "$ARCHIVE/Products/Applications/ScrambleAI.app/libapp.a" ]; then
+if [ -e "$ARCHIVE/Products/Applications/tokumai.app/libapp.a" ]; then
   echo "libapp.a is inside the bundle — App Store Connect rejects that. In gen/apple/project.yml the Externals source needs 'buildPhase: none', then 'xcodegen generate'." >&2
   exit 1
 fi
@@ -43,7 +43,7 @@ fi
 # re-signs the bundle anyway, so stamp a monotonic timestamp build number into the archive
 # first (YYYYMMDDHHMM — one integer, always higher than any earlier build).
 BUILD_NO=$(date -u +%Y%m%d%H%M)
-APP_PLIST="$ARCHIVE/Products/Applications/ScrambleAI.app/Info.plist"
+APP_PLIST="$ARCHIVE/Products/Applications/tokumai.app/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NO" "$APP_PLIST"
 /usr/libexec/PlistBuddy -c "Set :ApplicationProperties:CFBundleVersion $BUILD_NO" "$ARCHIVE/Info.plist" 2>/dev/null || true
 echo "→ build $(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PLIST") ($BUILD_NO)"
@@ -67,7 +67,7 @@ rm -rf "$APPLE/build/asc"
 xcodebuild -exportArchive -archivePath "$ARCHIVE" -exportOptionsPlist "$EXPORT_PLIST" -exportPath "$APPLE/build/asc" \
   -allowProvisioningUpdates -authenticationKeyPath "$KEY" -authenticationKeyID "$ASC_ADMIN_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
   | grep -E "EXPORT (SUCCEEDED|FAILED)|error:" || true
-IPA="$APPLE/build/asc/ScrambleAI.ipa"
+IPA="$APPLE/build/asc/tokumai.ipa"
 [ -f "$IPA" ] || { echo "export produced no ipa — see the xcdistributionlogs bundle in \$TMPDIR" >&2; exit 1; }
 
 echo "→ 3/3 upload $(du -h "$IPA" | cut -f1) to App Store Connect"

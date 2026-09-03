@@ -86,7 +86,7 @@ Heute liegt all das **pro Server lokal** (`store.rs` SQLite, `session.rs Session
 
 | Datum | Key | heute | im Shared Ledger |
 |---|---|---|---|
-| Session-Balance (SCRAI) | `sessionId` (seed-abgeleitet) | lokale SQLite | geteilte Zeile, alle Server |
+| Session-Balance (TOKU) | `sessionId` (seed-abgeleitet) | lokale SQLite | geteilte Zeile, alle Server |
 | Entitlement (bezahlt, nicht abgehoben) | `accountId` (seed-abgeleitet) | lokal | geteilt |
 | Spent-Serials / Quorum | Coin-Serial | lokal | geteilt (Double-Spend über alle Server erkannt/verhindert) |
 | Invoice-/Paywall-State | invoiceId / accountId | lokal | geteilt (kein Doppel-Settle) |

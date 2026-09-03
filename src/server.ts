@@ -404,7 +404,7 @@ const server = createServer(async (req, res) => {
         const outcome = money.reserve(k.sessionId, counter, ceiling);
         if (outcome !== "ok") {
           return void sendJson(res, 402, {
-            error: outcome === "insufficient" ? `not enough SCRAI: need up to ${ceiling}, balance ${session.balance}` : outcome,
+            error: outcome === "insufficient" ? `not enough TOKU: need up to ${ceiling}, balance ${session.balance}` : outcome,
           });
         }
         reserved = ceiling;

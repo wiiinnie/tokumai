@@ -7,7 +7,7 @@ inside a real x86_64 Linux environment. Two ways:
 ```
 scripts/build-linux.sh
 ```
-Requires Docker Desktop. Outputs `dist-linux/ScrambleAI_*.AppImage` and `*.deb`.
+Requires Docker Desktop. Outputs `dist-linux/tokumai_*.AppImage` and `*.deb`.
 On Apple Silicon the x86 build is **emulated** → the first run is slow (nym-sdk).
 
 ## B) GitHub Actions (faster, free) — if the repo is on GitHub
@@ -24,7 +24,7 @@ Linux has no single app store everyone uses, so you ship a file. Formats:
 | Format | Who it's for | How they run it |
 |---|---|---|
 | **`.AppImage`** | **Anyone** — universal | Make it executable (`chmod +x` or right-click → Properties → "Allow executing"), then double-click. No install. One self-contained file, like a portable `.app`/`.exe`. |
-| **`.deb`** | Debian / Ubuntu / Mint | Double-click (opens the software installer) or `sudo apt install ./ScrambleAI_*.deb`. Proper install + menu entry. |
+| **`.deb`** | Debian / Ubuntu / Mint | Double-click (opens the software installer) or `sudo apt install ./tokumai_*.deb`. Proper install + menu entry. |
 | **`.rpm`** | Fedora / openSUSE / RHEL | Same idea, different distro family. |
 | Flatpak / Snap | "App store" style, sandboxed | More work to publish — overkill for sharing to a few people. |
 

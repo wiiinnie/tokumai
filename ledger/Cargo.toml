@@ -2,7 +2,7 @@
 name = "scrai-ledger"
 version.workspace = true
 edition = "2021"
-description = "ScrambleAI shared 'guest book' ledger — the seed-recoverable, cross-server value layer (redeemed session credit). Runs as a portless, mixnet-reachable service over a hardened local SQLite; the chat servers reach it via MixnetLedger. Only the INFREQUENT ops live here (credit/status/balance); per-message billing stays local. See docs/federation-shared-ledger.md."
+description = "tokumai shared 'guest book' ledger — the seed-recoverable, cross-server value layer (redeemed session credit). Runs as a portless, mixnet-reachable service over a hardened local SQLite; the chat servers reach it via MixnetLedger. Only the INFREQUENT ops live here (credit/status/balance); per-message billing stays local. See docs/federation-shared-ledger.md."
 
 [dependencies]
 scrai-core = { path = "../core" }

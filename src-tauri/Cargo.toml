@@ -1,8 +1,8 @@
 [package]
-name = "scrambleai"
+name = "tokumai"
 version.workspace = true
-description = "ScrambleAI desktop"
-authors = ["ScrambleAI"]
+description = "tokumai desktop"
+authors = ["tokumai"]
 license = ""
 edition = "2021"
 rust-version = "1.87.0"
@@ -76,7 +76,7 @@ orp = { version = "1", optional = true }
 # Android: Nym's HTTP client (reqwest 0.13) verifies TLS through rustls-platform-verifier,
 # which on Android must be handed a JNI env + app Context once at start-up — otherwise every
 # TLS handshake to the Nym directory fails and the mixnet client never connects (two testers
-# hit exactly that on 2026-08-30: stuck at "Connecting to ScrambleAI server").
+# hit exactly that on 2026-08-30: stuck at "Connecting to tokumai server").
 [target.'cfg(target_os = "android")'.dependencies]
 rustls-platform-verifier = "0.7"
 jni = { version = "0.22", default-features = false }

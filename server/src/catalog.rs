@@ -87,7 +87,7 @@ async fn fetch_models(pricing: &PricingTable, margin: f64) -> Vec<Value> {
     models
 }
 
-/// Retail rate in SCRAI per 1M tokens (provider USD price × peg × margin).
+/// Retail rate in TOKU per 1M tokens (provider USD price × peg × margin).
 fn retail(usd_per_million: f64, margin: f64) -> u64 {
     ceil_scrai(usd_per_million * SCRAI_PER_USD as f64 * margin).ceil() as u64
 }

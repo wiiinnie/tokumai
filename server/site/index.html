@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="referrer" content="no-referrer">
-<title>ScrambleAI — anonymous AI over the Nym mixnet</title>
+<title>tokumai — anonymous AI over the Nym mixnet</title>
 <style>
   :root{
     --ink:#141210; --surface:#1C1917; --surface-2:#262220; --line:#332E2A;
@@ -131,7 +131,7 @@
   <div class="hero">
     <div>
       <h1>Anonymous AI.<br>Over the <b>Nym mixnet</b>.</h1>
-      <p>Every question you ask a chatbot reveals <b>who</b> is asking and <b>what</b>. ScrambleAI separates the two by engineering: questions travel through five mixnet hops, credit is bought once and spent as blind-signed coins, and your history never leaves the device.</p>
+      <p>Every question you ask a chatbot reveals <b>who</b> is asking and <b>what</b>. tokumai separates the two by engineering: questions travel through five mixnet hops, credit is bought once and spent as blind-signed coins, and your history never leaves the device.</p>
       <div class="cta">
         <a class="btn primary big" href="#download">Download</a>
         <a class="btn big" href="#faucet">Get testnet credit</a>
@@ -139,7 +139,7 @@
       <p style="font-size:12px;margin-top:14px">{{VERSION}} · built on the Nym SDK · no account, no e-mail — a 24-word phrase is all you keep.</p>
     </div>
     <div class="shotwrap">
-      <button class="shot" type="button" id="heroShot" aria-label="Enlarge the screenshot"><img src="/img/mac-chat.jpg" alt="ScrambleAI on macOS 0.3.2: a picture generated over five mixnet hops"></button>
+      <button class="shot" type="button" id="heroShot" aria-label="Enlarge the screenshot"><img src="/img/mac-chat.jpg" alt="tokumai on macOS 0.3.2: a picture generated over five mixnet hops"></button>
       <div class="shotcap"><span>macOS · {{VERSION_SHORT}} · the app, not a mock</span><b>click to enlarge</b></div>
     </div>
   </div>
@@ -158,7 +158,7 @@
         <div class="note">Signed &amp; notarised by Apple. Open, drag to Applications — done. Apple silicon.</div>
         <div class="row">{{DL_MACOS}}</div>
         <div class="sect">Installation notes</div>
-        <div class="nbody">Open the .dmg and drag ScrambleAI to Applications, then double-click to launch. No warning, no workaround — the build is signed and notarised by Apple (Developer ID). Apple silicon (M-series) only.</div>
+        <div class="nbody">Open the .dmg and drag tokumai to Applications, then double-click to launch. No warning, no workaround — the build is signed and notarised by Apple (Developer ID). Apple silicon (M-series) only.</div>
         <div class="sect">Verify checksum</div>
         <div><div class="shafull">sha256 {{SHA_MACOS}}</div><div class="nbody" style="margin-top:8px">Check your download with the copy-paste command under <a href="#verify" style="color:var(--signal);text-decoration:none">Verify a download ↓</a>.</div></div>
       </div>
@@ -170,7 +170,7 @@
         <div class="note">For Debian, Ubuntu, Mint and Kali — installs like any system package.</div>
         <div class="row">{{DL_DEB}}{{DL_APPIMAGE}}</div>
         <div class="sect">Installation notes</div>
-        <div class="nbody"><b>.deb</b> — install from a terminal, then launch ScrambleAI from your app menu:
+        <div class="nbody"><b>.deb</b> — install from a terminal, then launch tokumai from your app menu:
           <div class="cmd">sudo dpkg -i {{FILE_DEB}}</div>
           It uses your system's WebKitGTK, which makes it the most reliable option.
           <div class="sub"><b>AppImage (experimental)</b> for other distros: one file — <span style="font-family:var(--mono)">chmod +x</span>, double-click. On VMs and older graphics stacks the window can stay grey (EGL); try <span style="font-family:var(--mono)">WEBKIT_DISABLE_DMABUF_RENDERER=1</span> before launching, or use the .deb on a Debian-based system.</div>
@@ -219,7 +219,7 @@
             <li>Tap the finished download (notification, or Files → Downloads).</li>
             <li>First time only: Android says it isn't allowed to install unknown apps from this source → <b>Settings → Allow from this source</b> → go back.</li>
             <li>Tap <b>Install</b>. If Play Protect objects ("unrecognised developer"), tap <b>More details → Install anyway</b>.</li>
-            <li>Open ScrambleAI. Updates install over the old version — your account and history stay.</li>
+            <li>Open tokumai. Updates install over the old version — your account and history stay.</li>
           </ol>
         </div>
         <div class="sect">Verify checksum</div>
@@ -259,7 +259,7 @@
   <div class="sec" id="how">
     <div class="eyebrow">03 · How it works</div>
     <h2>Two things that never <b>meet</b></h2>
-    <p class="lead">Your identity and your questions. The app talks to the ScrambleAI server only through the Nym mixnet (Sphinx packets, five hops, cover traffic) — the server has no public address at all. Credit is bought once as an account top-up and then withdrawn as blind-signed coins; a coin spent on a question cannot be linked back to the purchase that funded it.</p>
+    <p class="lead">Your identity and your questions. The app talks to the tokumai server only through the Nym mixnet (Sphinx packets, five hops, cover traffic) — the server has no public address at all. Credit is bought once as an account top-up and then withdrawn as blind-signed coins; a coin spent on a question cannot be linked back to the purchase that funded it.</p>
   </div>
 
   <div class="sec" id="verify">
@@ -360,7 +360,7 @@
   });
 })();
 </script>
-<div class="lb" id="lb" role="dialog" aria-modal="true" aria-label="Screenshot"><img src="/img/mac-chat.jpg" alt="ScrambleAI on macOS 0.3.2, full size"></div>
+<div class="lb" id="lb" role="dialog" aria-modal="true" aria-label="Screenshot"><img src="/img/mac-chat.jpg" alt="tokumai on macOS 0.3.2, full size"></div>
 <script>
 (function(){
   var lb=document.getElementById('lb'), b=document.getElementById('heroShot');

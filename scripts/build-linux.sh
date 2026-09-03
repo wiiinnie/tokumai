@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the ScrambleAI Linux (x86_64) desktop bundles in a container and copy them
+# Build the tokumai Linux (x86_64) desktop bundles in a container and copy them
 # out to ./dist-linux/  →  a .AppImage (send to anyone) and a .deb (Debian/Ubuntu).
 #
 # Requires Docker Desktop. On an Apple-Silicon Mac the x86 build is EMULATED and the

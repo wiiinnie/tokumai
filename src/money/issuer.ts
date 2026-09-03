@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// issuer.ts — turns a payment into spendable SCRAI.
+// issuer.ts — turns a payment into spendable TOKU.
 //
 // Three steps, and the order of the middle two is what protects the user:
 //
@@ -71,7 +71,7 @@ export class Issuer {
   }
 
   /**
-   * Raise an invoice. The SCRAI amount is fixed HERE, not at settlement, so a
+   * Raise an invoice. The TOKU amount is fixed HERE, not at settlement, so a
    * user always receives exactly what they were quoted regardless of what the
    * exchange rate does while they are paying.
    */
@@ -176,7 +176,7 @@ export class Issuer {
 
     const signatures = outputs.map((o) => this.mint.sign(o)); // pure; throws before any debit
     if (!this.store.withdrawEntitlement(accountId, total)) {
-      throw new Error(`not enough entitlement: account holds ${this.store.entitlement(accountId)} SCRAI`);
+      throw new Error(`not enough entitlement: account holds ${this.store.entitlement(accountId)} TOKU`);
     }
     return { keysetId: this.mint.keysetId(), signatures };
   }

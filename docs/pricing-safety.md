@@ -1,6 +1,6 @@
 # Pricing safety — „ein Prompt darf mich nie mehr kosten als dem User berechnet"
 
-Ziel: für **jeden** Prompt gilt `berechnet (SCRAI) ≥ Provider-Kosten × Marge` (Marge ≥ 1,10,
+Ziel: für **jeden** Prompt gilt `berechnet (TOKU) ≥ Provider-Kosten × Marge` (Marge ≥ 1,10,
 im Zweifel aufgerundet). Stand 2026-08-23.
 
 ## Warum es per Konstruktion hält (Code)
@@ -31,7 +31,7 @@ Google Cloud → Billing zeigt die (verzögerte) Gesamtrechnung für den Monats-
 
 ## Dev-Cost-Audit-Panel (Nachweis, live)
 
-**Erreichen: Wordmark „ScrambleAI" oben links ~0,65 s gedrückt halten** → togglet das Panel
+**Erreichen: Wordmark „tokumai" oben links ~0,65 s gedrückt halten** → togglet das Panel
 (bleibt über App-Starts erhalten, in `localStorage`). Unter jeder Antwort erscheint dann:
 
 > ⚙ provider $0.001380 · charged $0.001518 · +10.0 % ✓

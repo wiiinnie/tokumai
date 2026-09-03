@@ -1,6 +1,6 @@
 # Abuse policy (for provider inquiries)
 
-ScrambleAI relays chat requests from anonymous users to AI providers over the Nym mixnet.
+tokumai relays chat requests from anonymous users to AI providers over the Nym mixnet.
 We cannot identify a person: purchases are unlinkable from usage by design (blind-signed
 ecash), and usage is keyed by a per-session pseudonym the user can rotate.
 

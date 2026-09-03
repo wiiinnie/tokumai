@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// ScrambleAI desktop — the Rust core.
+// tokumai desktop — the Rust core.
 //
 // The public/ UI runs in the webview and calls these commands via `invoke`.
 // Account + held coconut credentials are local; everything else talks to the
@@ -89,7 +89,7 @@ const TIMEOUT_MS: u64 = 120_000;
 /// what once delayed the "server unreachable" verdict by minutes.
 const META_TIMEOUT_MS: u64 = 30_000;
 
-/// Coins redeemed per auto-fund when a session runs dry (1 coin = 1000 SCRAI →
+/// Coins redeemed per auto-fund when a session runs dry (1 coin = 1000 TOKU →
 /// 100 coins ≈ $1, per docs/federation-params.md). Uniform across users on
 /// purpose: not everything at once (leaks the balance and builds one big
 /// pseudonym), not tiny bits (many shows + mixnet round-trips).
@@ -222,7 +222,7 @@ fn messages_plaintext(messages: &Value) -> Option<String> {
     Some(s)
 }
 
-/// The client's independent fair upper-bound price (whole SCRAI) for one exchange,
+/// The client's independent fair upper-bound price (whole TOKU) for one exchange,
 /// or None when it can't be estimated (multimodal input, model not in the bundled
 /// table, unparsable table). Uses the exact same billing math as the server.
 fn fair_price_estimate(model: &str, messages: &Value, reply_text: &str) -> Option<u64> {
@@ -656,7 +656,7 @@ fn wallet_account(app: &AppHandle) -> Result<account::Account, String> {
 // an XSS frontend could race against chat's auto-redeem and clobber a purse. Removed. The
 // live buy→coins path is `collect` (withdraws via `withdraw_purse`) and `redeem`.
 
-/// Redeem `coins` from the stored coconut credential into the ACTIVE session's SCRAI
+/// Redeem `coins` from the stored coconut credential into the ACTIVE session's TOKU
 /// balance (the credit `chat` draws down). Durable: the advanced purse is persisted
 /// BEFORE the payment leaves the device, so a crash/retry can't roll the counter back
 /// and re-spend. Returns the session balance the server reports after crediting.
@@ -733,7 +733,7 @@ async fn redeem_coconut(app: &AppHandle, t: &Transport, srv: &str, coins: u64) -
     }
 }
 
-/// SCRAI value of coconut coins NOT yet redeemed (0 if no credential). Local-only —
+/// TOKU value of coconut coins NOT yet redeemed (0 if no credential). Local-only —
 /// added to the funded session balance so the UI shows total spendable credit.
 /// The first held book that still has coins, restored — spends drain the books
 /// in order, and emptied ones are dropped by the spender.
@@ -1555,7 +1555,7 @@ async fn chat_impl(
                     redeem_coconut(&app, &transport, &srv, REDEEM_CHUNK_COINS).await?;
                     counter0 = session_status(&transport, &srv, &sk).await?.1;
                 } else {
-                    return Err("no SCRAI credit — buy credit first".into());
+                    return Err("no TOKU credit — buy credit first".into());
                 }
             }
             let counter = counter0 + 1;
@@ -1593,7 +1593,7 @@ async fn chat_impl(
     };
     // Send — and AUTO-REDEEM on the way. The proactive top-up above only fires when the
     // session is fully empty, so a partial balance that's below THIS request's worst-case
-    // reserve (e.g. a big image) used to just fail with "not enough SCRAI". Instead: if the
+    // reserve (e.g. a big image) used to just fail with "not enough TOKU". Instead: if the
     // server rejects for insufficient balance (a fast rejection at the reserve step, BEFORE
     // any provider work), redeem a held coconut chunk and resend the SAME still-signed
     // request. A failed reserve never advances the counter, and redeem only tops up the
@@ -1618,7 +1618,10 @@ async fn chat_impl(
             .await?;
         let server_error = (reply.get("kind").and_then(|k| k.as_str()) == Some("error"))
             .then(|| reply.get("error").and_then(|e| e.as_str()).unwrap_or("server error").to_string());
-        let insufficient = server_error.as_deref().is_some_and(|s| s.contains("not enough SCRAI"));
+        // Both spellings: old servers say SCRAI, renamed ones TOKU.
+        let insufficient = server_error
+            .as_deref()
+            .is_some_and(|s| s.contains("not enough SCRAI") || s.contains("not enough TOKU"));
         if insufficient && redeems < 64 && !is_flagged(&srv) && !wallet::load(&dir).coconut_purses.is_empty() {
             // Session credit ran short mid-request → auto-redeem a held $1 chunk and resend.
             // A failed reserve never consumed the counter, so the verbatim resend is valid.
@@ -1628,6 +1631,8 @@ async fn chat_impl(
             continue;
         }
         if let Some(e) = server_error {
+            // The unit was renamed in the UI; an older server still says SCRAI.
+            let e = e.replace("SCRAI", "TOKU");
             // The server answered — this request is spent (its counter is used, or it was
             // refused for good), so the next attempt must be a FRESH one, not a replay.
             transport.clear_pending_chat(&sk.session_id).await;
@@ -1661,7 +1666,7 @@ async fn chat_impl(
             if charged > MIN_FLAG_SCRAI && charged > ceiling {
                 flag_server(
                     &srv,
-                    &format!("overcharge: charged {charged} SCRAI vs ~{fair} fair (>{OVERCHARGE_FACTOR}×)"),
+                    &format!("overcharge: charged {charged} TOKU vs ~{fair} fair (>{OVERCHARGE_FACTOR}×)"),
                 );
                 price_warning = json!({
                     "kind": "overcharge",
@@ -1737,7 +1742,7 @@ async fn app_resumed(
 
 /// THE reconnect path (route poll + resume + "rebuild now"): rebuild the route — keys,
 /// client, gateway, cover traffic are reported by ensure_connected — then prove the far end
-/// with a ping ("Connecting to ScrambleAI server"), and only then report `online`. One at
+/// with a ping ("Connecting to tokumai server"), and only then report `online`. One at
 /// a time; a failure reports `failed` with the reason. A server that doesn't answer keeps
 /// the fresh route (probe never drops the client) so the poll doesn't rebuild in a loop.
 fn spawn_rebuild(app: AppHandle, t: Arc<Transport>) {

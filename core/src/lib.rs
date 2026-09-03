@@ -1,4 +1,4 @@
-// ScrambleAI shared core — the byte-identical crypto/protocol used by both the
+// tokumai shared core — the byte-identical crypto/protocol used by both the
 // desktop client (src-tauri) and the server binary (server).
 //
 // - coconut:    threshold ecash — client/authority/verifier/quorum crypto roles

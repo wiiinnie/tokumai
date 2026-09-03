@@ -10,7 +10,7 @@
 //
 //   ACCOUNT   derived from a seed phrase. Stable, recoverable, and KNOWN to the
 //             issuer: it is what a payment is credited against. The issuer sees
-//             "this account bought 10 USD of SCRAI".
+//             "this account bought 10 USD of TOKU".
 //
 //   SPENDING  a separate, random key per session (see session.ts). The server
 //             sees a balance being spent and cannot tie it to an account.

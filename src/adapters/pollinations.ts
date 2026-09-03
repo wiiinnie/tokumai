@@ -18,7 +18,7 @@ import { AdapterError, type ChatRequest, type ChatChunk } from "../types.js";
 // in the client as the "trains on input" badge.
 //
 // Free means free: the adapter reports zero tokens, so a request costs zero
-// SCRAI. It is a test instrument, not a product model.
+// TOKU. It is a test instrument, not a product model.
 // ---------------------------------------------------------------------------
 
 const BASE = "https://image.pollinations.ai/prompt";

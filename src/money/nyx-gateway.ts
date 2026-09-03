@@ -19,7 +19,7 @@
 // Monero. The memo is how nym.com correlates, too. Its one weakness is the user
 // forgetting it — so the UI must show it as prominently as the amount.
 //
-// WHAT SETTLES: like BTCPay, the SCRAI amount is fixed when the invoice is
+// WHAT SETTLES: like BTCPay, the TOKU amount is fixed when the invoice is
 // RAISED (the issuer does that). Here we only fix the NYM amount, at the locked
 // USD/NYM rate, so "pay exactly this many NYM" stays honest for the window.
 //

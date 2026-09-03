@@ -33,16 +33,16 @@ pub use ce::scheme::withdrawal::{RequestInfo, WithdrawalRequest};
 use ce::setup::Parameters;
 
 // ---- economic parameters (docs/federation-params.md) ----------------------
-/// 10 USD = 1_000_000 SCRAI (existing peg).
+/// 10 USD = 1_000_000 TOKU (existing peg).
 pub const SCRAI_PER_USD: u64 = 100_000;
-/// One ecash coin = 1000 SCRAI = $0.01. Coarse on purpose (one serial per coin).
+/// One ecash coin = 1000 TOKU = $0.01. Coarse on purpose (one serial per coin).
 pub const COIN_SCRAI: u64 = 1_000;
 /// Redeem ~$1 (100 coins) into a session at a time, uniform across users.
 pub const REDEEM_CHUNK_COINS: u64 = 100;
 /// Ticket type / denomination class (single class for now).
 pub const DEFAULT_T_TYPE: u8 = 1;
 
-/// Number of coins in a ticketbook bought for `tier_scrai` SCRAI.
+/// Number of coins in a ticketbook bought for `tier_scrai` TOKU.
 pub fn book_coins(tier_scrai: u64) -> u64 {
     tier_scrai / COIN_SCRAI
 }
@@ -292,7 +292,7 @@ mod tests {
 
     #[test]
     fn book_coins_maps_tiers() {
-        // $10 = 1_000_000 SCRAI → 1000 coins of $0.01
+        // $10 = 1_000_000 TOKU → 1000 coins of $0.01
         assert_eq!(book_coins(1_000_000), 1_000);
         assert_eq!(book_coins(500_000), 500); // $5
     }

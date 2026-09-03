@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// session.rs — server-side session balances (SCRAI), the bridge between redeemed
+// session.rs — server-side session balances (TOKU), the bridge between redeemed
 // coconut credit and metered chat usage.
 //
 // A client redeems coconut coins into a session (→ `credit`); each chat charges the
@@ -44,7 +44,7 @@ impl SessionStore {
     pub fn count(&self) -> usize {
         self.sessions.len()
     }
-    /// Total unspent, redeemed SCRAI sitting across all sessions.
+    /// Total unspent, redeemed TOKU sitting across all sessions.
     pub fn total_balance(&self) -> u64 {
         self.sessions.values().map(|s| s.balance).sum()
     }

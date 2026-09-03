@@ -27,7 +27,7 @@ use scrai_core::pricing::PricingTable;
 use scrai_core::quorum::QuorumStore;
 use scrai_core::session::SessionStore;
 
-// One issued ticketbook = 500 coins × 1000 SCRAI = 500,000 SCRAI = the $5
+// One issued ticketbook = 500 coins × 1000 TOKU = 500,000 TOKU = the $5
 // minimum purchase tier, so every tier is a whole number of books ($10 = 2,
 // $50 = 10). Changing this needs a FRESH authority bootstrap (delete
 // data/authority.json) and invalidates previously issued purses — fine while
@@ -409,7 +409,7 @@ async fn main() {
     };
     let book_scrai = ticketbook_coins() * scrai_core::coconut::COIN_SCRAI;
     println!(
-        "scrai-server: gateway {} · ticketbook {} coins ({} SCRAI = ${}){}",
+        "scrai-server: gateway {} · ticketbook {} coins ({} TOKU = ${}){}",
         gateway.name(),
         ticketbook_coins(),
         book_scrai,
@@ -682,11 +682,11 @@ async fn main() {
                     let id = envelope.get("id").cloned().unwrap_or(serde_json::Value::Null);
                     let app = envelope.get("app").and_then(|a| a.as_str()).unwrap_or("<0.3.0 (no version sent)");
                     eprintln!("scrai-server: UPDATE GATE — refused `{kind}` from app {app} (min {min})");
-                    let notice = format!("Update required — ScrambleAI {min} or newer. Download: {url}");
+                    let notice = format!("Update required — tokumai {min} or newer. Download: {url}");
                     let resp = if kind == "models" {
                         serde_json::json!({
                             "id": id,
-                            "models": [{ "model": "update-required", "label": format!("⚠ Update required — get {min} at {url}"), "vendor": "ScrambleAI", "kind": "chat", "rate": { "in": 0, "out": 0 } }],
+                            "models": [{ "model": "update-required", "label": format!("⚠ Update required — get {min} at {url}"), "vendor": "tokumai", "kind": "chat", "rate": { "in": 0, "out": 0 } }],
                             "testnet": scrai_server::pay::is_testnet_server(), "faucetUrl": scrai_server::pay::faucet_url(),
                             "update": { "required": true, "minApp": min, "url": url },
                         })

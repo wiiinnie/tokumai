@@ -9069,50 +9069,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "scrambleai"
-version = "0.4.6"
-dependencies = [
- "aes-gcm 0.10.3",
- "base64 0.22.1",
- "bip39",
- "block2",
- "ed25519-dalek",
- "futures",
- "gline-rs",
- "hex",
- "image",
- "jni 0.22.4",
- "k256",
- "keyring",
- "log",
- "nym-sdk",
- "objc2",
- "objc2-core-foundation",
- "objc2-core-graphics",
- "objc2-foundation",
- "objc2-local-authentication",
- "objc2-store-kit",
- "objc2-ui-kit",
- "objc2-vision",
- "orp",
- "pdf-extract",
- "qrcode",
- "rand 0.8.7",
- "reqwest 0.12.28",
- "rfd",
- "rustls-platform-verifier",
- "scrai-core",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tauri",
- "tauri-build",
- "tauri-plugin-log",
- "tauri-plugin-opener",
- "tokio",
-]
-
-[[package]]
 name = "sct"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10996,6 +10952,50 @@ checksum = "d01145a2c788d6aae4cd653afec1e8332534d7d783d01897cefcafe4428de992"
 dependencies = [
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "tokumai"
+version = "0.4.6"
+dependencies = [
+ "aes-gcm 0.10.3",
+ "base64 0.22.1",
+ "bip39",
+ "block2",
+ "ed25519-dalek",
+ "futures",
+ "gline-rs",
+ "hex",
+ "image",
+ "jni 0.22.4",
+ "k256",
+ "keyring",
+ "log",
+ "nym-sdk",
+ "objc2",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-foundation",
+ "objc2-local-authentication",
+ "objc2-store-kit",
+ "objc2-ui-kit",
+ "objc2-vision",
+ "orp",
+ "pdf-extract",
+ "qrcode",
+ "rand 0.8.7",
+ "reqwest 0.12.28",
+ "rfd",
+ "rustls-platform-verifier",
+ "scrai-core",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-log",
+ "tauri-plugin-opener",
+ "tokio",
 ]
 
 [[package]]

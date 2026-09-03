@@ -188,7 +188,7 @@ async function withdrawPackets(account: Account, entitlementScrai: number): Prom
 }
 
 /**
- * Buy SCRAI and fund the session.
+ * Buy TOKU and fund the session.
  *
  * Two steps on purpose, because that is the shape real money has: an ISSUER
  * blind-signs bearer tokens (after a payment), and the SERVER redeems them into
@@ -225,7 +225,7 @@ async function topUp(usd: number, onStep?: (msg: string) => void): Promise<numbe
   };
 
   console.log("");
-  console.log(`  Pay USD ${inv.amountUsd.toFixed(2)} for ${wallet.fmt(inv.amountScrai)} SCRAI`);
+  console.log(`  Pay USD ${inv.amountUsd.toFixed(2)} for ${wallet.fmt(inv.amountScrai)} TOKU`);
   console.log(`  ${inv.instruction}`);
   console.log(`  expires ${new Date(inv.expiresAt).toLocaleTimeString()}`);
   showPaymentOptions(inv.options ?? []);
@@ -282,9 +282,9 @@ async function topUp(usd: number, onStep?: (msg: string) => void): Promise<numbe
   // Saying "+500,000 for USD 5.00" while moving 1,600,000 would be a lie about
   // money, even though the balance ends up right.
   const carried = Math.max(0, entitlement - inv.amountScrai);
-  console.log(`  payment received — ${wallet.fmt(inv.amountScrai)} SCRAI for USD ${inv.amountUsd.toFixed(2)}`);
+  console.log(`  payment received — ${wallet.fmt(inv.amountScrai)} TOKU for USD ${inv.amountUsd.toFixed(2)}`);
   if (carried > 0) {
-    console.log(`  plus ${wallet.fmt(carried)} SCRAI from earlier purchases never collected`);
+    console.log(`  plus ${wallet.fmt(carried)} TOKU from earlier purchases never collected`);
   }
   console.log("  withdrawing …");
 
@@ -763,7 +763,7 @@ async function cmdModels(): Promise<void> {
     `  ${"MODEL".padEnd(28)} ${"KIND".padEnd(6)} ${"VENDOR".padEnd(12)} ${"PROMPT".padStart(11)} ${"ANSWER".padStart(11)}  PRIVACY`,
   );
   console.log(
-    `  ${"".padEnd(28)} ${"".padEnd(6)} ${"".padEnd(12)} ${"SCRAI per 1,000 tokens".padStart(23)}`,
+    `  ${"".padEnd(28)} ${"".padEnd(6)} ${"".padEnd(12)} ${"TOKU per 1,000 tokens".padStart(23)}`,
   );
   console.log(`  ${"─".repeat(28)} ${"─".repeat(6)} ${"─".repeat(12)} ${"─".repeat(11)} ${"─".repeat(11)}  ${"─".repeat(15)}`);
   for (const m of res.models) {
@@ -824,7 +824,7 @@ function saveImages(
 }
 
 /**
- * What this turn can cost at most, in whole SCRAI.
+ * What this turn can cost at most, in whole TOKU.
  *
  * An exact price is impossible before the fact — nobody knows how long the
  * answer will be — so this is the ceiling: the whole prompt plus a full
@@ -877,9 +877,9 @@ function affordable(ceiling: number | null): string | null {
   const have = wallet.available();
   if (have >= ceiling) return null;
   return (
-    `  Not enough SCRAI: ${wallet.format(have)}\n` +
-    `  This request costs up to ${wallet.fmt(ceiling)} SCRAI (USD ${wallet.usd(ceiling)}).\n` +
-    `  Top up with:  /credit 10        (10 USD = 1,000,000 SCRAI)`
+    `  Not enough TOKU: ${wallet.format(have)}\n` +
+    `  This request costs up to ${wallet.fmt(ceiling)} TOKU (USD ${wallet.usd(ceiling)}).\n` +
+    `  Top up with:  /credit 10        (10 USD = 1,000,000 TOKU)`
   );
 }
 
@@ -894,7 +894,7 @@ function footer(usage: import("../types.js").TokenUsage, indent = "  ", serverBa
   if (!f) return `${indent}—  ·  ${formatTokensCli(usage)}`;
 
   // A server on an older build sends a frame with different field names, and
-  // reading a missing one yields NaN — which formats as "NaN SCRAI" and books
+  // reading a missing one yields NaN — which formats as "NaN TOKU" and books
   // nothing, i.e. a silent free ride. Say what happened instead.
   if (typeof f.priceScrai !== "number" || !Number.isFinite(f.priceScrai)) {
     return (
@@ -908,7 +908,7 @@ function footer(usage: import("../types.js").TokenUsage, indent = "  ", serverBa
   const price =
     f.priceScrai === 0
       ? "free"
-      : `${wallet.fmt(f.priceScrai)} SCRAI · USD ${wallet.usd(f.priceScrai)}`;
+      : `${wallet.fmt(f.priceScrai)} TOKU · USD ${wallet.usd(f.priceScrai)}`;
 
   return (
     `${indent}${price}  ·  ${formatTokensCli(usage)}` +
@@ -934,7 +934,7 @@ async function cmdChat(prompt: string): Promise<void> {
     process.stderr.write(
       max === 0
         ? "  free\n"
-        : `  up to ${wallet.fmt(max)} SCRAI (USD ${wallet.usd(max)})\n`,
+        : `  up to ${wallet.fmt(max)} TOKU (USD ${wallet.usd(max)})\n`,
     );
   }
 
@@ -1009,7 +1009,7 @@ const REPL_HELP = `
   /model <n>          switch to number n from the list you last saw
   /model <name>       switch by name
   /model refresh      re-fetch the list from the server
-  /credit <usd>       buy SCRAI — fixed amounts: ${purchaseTiers().map((t) => `$${t}`).join(" ")}  (1 USD = 100,000 SCRAI)
+  /credit <usd>       buy TOKU — fixed amounts: ${purchaseTiers().map((t) => `$${t}`).join(" ")}  (1 USD = 100,000 TOKU)
   /redeem             redeem held credit into the session now
   /balance            show balance, held credit and spend
   /gateway            show the active entry gateway
@@ -1054,12 +1054,12 @@ function priceCells(rate?: { in: number; out: number }): [string, string] {
   return [wallet.fmt(rate.in), wallet.fmt(rate.out)];
 }
 
-/** " · 33,000 / 275,000 SCRAI per 1M in/out" — or " · free" when both are zero. */
+/** " · 33,000 / 275,000 TOKU per 1M in/out" — or " · free" when both are zero. */
 function rateLine(rate?: { in: number; out: number }): string {
   if (!rate) return "";
   if (!rate.in && !rate.out) return " · free";
   const [pin, pout] = perThousand(rate);
-  return ` · ${pin} SCRAI per 1k prompt, ${pout} per 1k answer`;
+  return ` · ${pin} TOKU per 1k prompt, ${pout} per 1k answer`;
 }
 
 function printModels(list: ModelInfo[], current?: string): void {
@@ -1072,7 +1072,7 @@ function printModels(list: ModelInfo[], current?: string): void {
       `  ${mark} ${n}. ${m.model.padEnd(28)} ${m.kind.padEnd(6)} ${m.vendor.padEnd(12)} ${pin.padStart(9)} ${pout.padStart(9)}`,
     );
   });
-  console.log(`\n     SCRAI per 1,000 tokens: prompt, then answer.  /model <number> to switch\n`);
+  console.log(`\n     TOKU per 1,000 tokens: prompt, then answer.  /model <number> to switch\n`);
 }
 
 async function cmdRepl(): Promise<void> {
@@ -1105,7 +1105,7 @@ async function cmdRepl(): Promise<void> {
   let rateNote = "";
   try {
     const status = await sessionStatus();
-    if (status) rateNote = ` · ${wallet.fmt(status.balance)} SCRAI`;
+    if (status) rateNote = ` · ${wallet.fmt(status.balance)} TOKU`;
     const fresh = await fetchCatalog();
     const chosen = fresh.find((m) => m.model === cfg.load().model);
     if (chosen) cfg.save({ modelKind: chosen.kind, modelRate: chosen.rate });
@@ -1149,7 +1149,7 @@ async function cmdRepl(): Promise<void> {
       return;
     }
     if (max !== null && max > 0) {
-      process.stderr.write(`  up to ${wallet.fmt(max)} SCRAI (USD ${wallet.usd(max)})\n`);
+      process.stderr.write(`  up to ${wallet.fmt(max)} TOKU (USD ${wallet.usd(max)})\n`);
     }
 
     try {
@@ -1331,7 +1331,7 @@ async function cmdRepl(): Promise<void> {
 
         console.log("  searching for funded sessions …");
         const found = await scanSessions(a.mnemonic, 3, (i, bal) =>
-          process.stderr.write(`\r\x1b[2K  session ${i}: ${bal > 0 ? wallet.fmt(bal) + " SCRAI" : "empty"}`),
+          process.stderr.write(`\r\x1b[2K  session ${i}: ${bal > 0 ? wallet.fmt(bal) + " TOKU" : "empty"}`),
         );
         process.stderr.write("\r\x1b[2K");
 
@@ -1385,7 +1385,7 @@ async function cmdRepl(): Promise<void> {
           }
           try {
             const collected = await topUp(usd);
-            console.log(`  +${wallet.fmt(collected)} SCRAI collected — held locally`);
+            console.log(`  +${wallet.fmt(collected)} TOKU collected — held locally`);
             console.log(`  It funds your session on first use; redeeming later widens your anonymity set.`);
             console.log(`  Available: ${wallet.format(wallet.available())}\n`);
           } catch (err) {
@@ -1399,7 +1399,7 @@ async function cmdRepl(): Promise<void> {
         console.log("  nothing to collect — no entitlement is outstanding\n");
         break;
       }
-      console.log(`  collected ${wallet.fmt(collected)} SCRAI — held locally, funds your session on first use`);
+      console.log(`  collected ${wallet.fmt(collected)} TOKU — held locally, funds your session on first use`);
       console.log(`  Available: ${wallet.format(wallet.available())}\n`);
       break;
     }
@@ -1409,7 +1409,7 @@ async function cmdRepl(): Promise<void> {
       if (!held) { console.log("  nothing held to redeem\n"); break; }
       try {
         const bal = await redeemHeld();
-        console.log(`  redeemed ${wallet.fmt(held)} SCRAI into the session. Balance: ${wallet.format(bal)}\n`);
+        console.log(`  redeemed ${wallet.fmt(held)} TOKU into the session. Balance: ${wallet.format(bal)}\n`);
       } catch (err) {
         console.log(`  redeem failed (tokens are still held): ${err instanceof Error ? err.message : String(err)}\n`);
       }
@@ -1475,9 +1475,9 @@ scrai-client — anonymous AI over the Nym mixnet
           restore <words>  rebuild from a phrase and find funded sessions
           show             print the phrase
 
-  credit <usd>             buy SCRAI — fixed amounts only (${purchaseTiers().map((t) => `$${t}`).join(" ")}),
+  credit <usd>             buy TOKU — fixed amounts only (${purchaseTiers().map((t) => `$${t}`).join(" ")}),
                            raises an invoice, waits, collects; held until first use
-  claim                    collect SCRAI paid for but not yet withdrawn
+  claim                    collect TOKU paid for but not yet withdrawn
   redeem                   redeem held credit into the session now
   balance                  show balance, held credit and spend
 
@@ -1660,7 +1660,7 @@ async function main(): Promise<void> {
 
         console.log("  searching for funded sessions …");
         const found = await scanSessions(a.mnemonic, 3, (i, bal) =>
-          process.stderr.write(`\r\x1b[2K  session ${i}: ${bal > 0 ? wallet.fmt(bal) + " SCRAI" : "empty"}`),
+          process.stderr.write(`\r\x1b[2K  session ${i}: ${bal > 0 ? wallet.fmt(bal) + " TOKU" : "empty"}`),
         );
         process.stderr.write("\r\x1b[2K");
 
@@ -1711,7 +1711,7 @@ async function main(): Promise<void> {
         fail(`credit takes a fixed amount: ${purchaseTiers().map((t) => `$${t}`).join(", ")}   e.g. credit 10`);
       }
       const collected = await topUp(usd);
-      console.log(`+${wallet.fmt(collected)} SCRAI collected — held locally.`);
+      console.log(`+${wallet.fmt(collected)} TOKU collected — held locally.`);
       console.log(`It funds your session on first use; redeeming later widens your anonymity set.`);
       console.log(`Available: ${wallet.format(wallet.available())}`);
       return;
@@ -1723,7 +1723,7 @@ async function main(): Promise<void> {
         console.log("nothing to collect — no entitlement is outstanding");
         return;
       }
-      console.log(`collected ${wallet.fmt(collected)} SCRAI — held locally, funds your session on first use`);
+      console.log(`collected ${wallet.fmt(collected)} TOKU — held locally, funds your session on first use`);
       console.log(`Available: ${wallet.format(wallet.available())}`);
       return;
     }
@@ -1732,7 +1732,7 @@ async function main(): Promise<void> {
       const held = wallet.heldEcashTotal();
       if (!held) { console.log("nothing held to redeem"); return; }
       const bal = await redeemHeld();
-      console.log(`redeemed ${wallet.fmt(held)} SCRAI into the session. Balance: ${wallet.format(bal)}`);
+      console.log(`redeemed ${wallet.fmt(held)} TOKU into the session. Balance: ${wallet.format(bal)}`);
       return;
     }
 

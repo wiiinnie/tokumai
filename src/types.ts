@@ -100,16 +100,16 @@ export interface TokenUsage {
 }
 
 /**
- * The money frame. The unit is SCRAI: 1 SCRAI = USD 0.00001.
+ * The money frame. The unit is TOKU: 1 TOKU = USD 0.00001.
  *
  * Both numbers travel to the client on purpose — the UI shows priceScrai and
  * tracks costScrai invisibly. Nothing here is ever written to disk.
  */
 export interface BillingFrame {
   model: string;
-  /** Provider cost in SCRAI, 4 decimals kept against rounding drift. */
+  /** Provider cost in TOKU, 4 decimals kept against rounding drift. */
   costScrai: number;
-  /** What the user pays: whole SCRAI, cost x margin, rounded up. */
+  /** What the user pays: whole TOKU, cost x margin, rounded up. */
   priceScrai: number;
   /** Table id, e.g. "2026-07-30+remote". Useful when a price looks wrong. */
   pricingVersion: string;

@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
-// billing.ts — turns token counts into SCRAI.
+// billing.ts — turns token counts into TOKU.
 //
-// THE UNIT: 1 SCRAI = USD 0.00001, so 10 USD = 1 000 000 SCRAI. SCRAI is the
+// THE UNIT: 1 TOKU = USD 0.00001, so 10 USD = 1 000 000 TOKU. TOKU is the
 // only money unit in this codebase — there is no second one and no conversion.
 //
 // Why this fine: every exchange is priced with ceil(), so the unit size is the
@@ -20,7 +20,7 @@
 import { priceFor, pricingVersion, type ModelPrice } from "./pricing.js";
 import type { BillingFrame, ChatChunk, TokenUsage } from "./types.js";
 
-/** 1 SCRAI = USD 0.00001, so 10 USD buys 1 000 000 SCRAI. */
+/** 1 TOKU = USD 0.00001, so 10 USD buys 1 000 000 TOKU. */
 export const SCRAI_PER_USD = 100_000;
 
 /**
@@ -63,7 +63,7 @@ function margin(): number {
 }
 
 /**
- * Floor per billed request, in whole SCRAI. Default 0: a model that costs us
+ * Floor per billed request, in whole TOKU. Default 0: a model that costs us
  * nothing costs the user nothing. Set it above zero only if you want a request
  * that reached a provider to never be free — which would make every free-tier
  * model paid, so think before you do.
@@ -87,7 +87,7 @@ export function costUsd(usage: TokenUsage, price: ModelPrice): number {
 }
 
 /**
- * Round a SCRAI amount UP, at 4 decimal places, without inventing money out of
+ * Round a TOKU amount UP, at 4 decimal places, without inventing money out of
  * floating-point noise.
  *
  * The naive `Math.ceil(x * 10_000) / 10_000` is wrong here: 57 input tokens at
@@ -106,8 +106,8 @@ export function estimateTokens(chars: number): number {
 }
 
 /**
- * Build the frame. Cost keeps 4 decimals of a SCRAI so long conversations don't
- * accumulate rounding error; price is whole SCRAI, rounded up, with a floor —
+ * Build the frame. Cost keeps 4 decimals of a TOKU so long conversations don't
+ * accumulate rounding error; price is whole TOKU, rounded up, with a floor —
  * a request that actually reached the provider is never free.
  */
 export function computeBilling(
@@ -134,7 +134,7 @@ export function computeBilling(
 }
 
 /**
- * Retail rate for a model, in SCRAI per 1M tokens, margin already applied.
+ * Retail rate for a model, in TOKU per 1M tokens, margin already applied.
  *
  * This is what the client needs to estimate a price before sending. Note the
  * consequence: shipping this makes the margin inferable by anyone comparing it

@@ -24,7 +24,7 @@
 
 import { Backend, isTauri } from "./backend.js";
 
-const DB_NAME = "scrambleai";
+const DB_NAME = "scrambleai";   // IndexedDB name from the ScrambleAI era — kept so existing vaults keep opening
 const DB_VERSION = 1;
 const STORE = "sessions";
 const KEYS = "keys";
@@ -301,7 +301,7 @@ export const PassphraseCrypto = {
 
   async decrypt(envelopeText, passphrase) {
     const env = JSON.parse(envelopeText);
-    if (env.tag !== ENVELOPE_TAG) throw new Error("not a ScrambleAI envelope");
+    if (env.tag !== ENVELOPE_TAG) throw new Error("not a tokumai envelope");
     const key = await deriveFromPassphrase(passphrase, ub64(env.salt));
     const pt = await crypto.subtle.decrypt(
       { name: "AES-GCM", iv: ub64(env.iv) },

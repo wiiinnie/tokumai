@@ -42,7 +42,7 @@ switch (cmd) {
       break;
     }
     console.log("");
-    console.log(`  ${"STATUS".padEnd(9)} ${"USD".padStart(8)} ${"SCRAI".padStart(12)}  ${"ACCOUNT".padEnd(10)} PROVIDER REF`);
+    console.log(`  ${"STATUS".padEnd(9)} ${"USD".padStart(8)} ${"TOKU".padStart(12)}  ${"ACCOUNT".padEnd(10)} PROVIDER REF`);
     console.log(`  ${"─".repeat(9)} ${"─".repeat(8)} ${"─".repeat(12)}  ${"─".repeat(10)} ${"─".repeat(28)}`);
     for (const r of rows) {
       console.log(
@@ -70,7 +70,7 @@ switch (cmd) {
       console.log(`${arg} was already settled — nothing credited (this is correct)`);
       break;
     }
-    console.log(`settled ${arg} — credited ${scrai(res.credited)} SCRAI (USD ${(res.credited / SCRAI_PER_USD).toFixed(2)})`);
+    console.log(`settled ${arg} — credited ${scrai(res.credited)} TOKU (USD ${(res.credited / SCRAI_PER_USD).toFixed(2)})`);
     break;
   }
 
@@ -82,7 +82,7 @@ switch (cmd) {
     }
     console.log("");
     for (const r of rows) {
-      console.log(`  ${r.account_id.slice(0, 8)}…  ${scrai(r.scrai).padStart(12)} SCRAI awaiting withdrawal`);
+      console.log(`  ${r.account_id.slice(0, 8)}…  ${scrai(r.scrai).padStart(12)} TOKU awaiting withdrawal`);
     }
     console.log("");
     break;

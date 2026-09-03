@@ -1,4 +1,4 @@
-# Build the ScrambleAI Linux desktop app (x86_64) → AppImage + .deb.
+# Build the tokumai Linux desktop app (x86_64) → AppImage + .deb.
 #
 # A GTK/WebKit GUI app can't be cross-compiled cleanly from macOS, so we build
 # inside a real x86_64 Ubuntu container. On an Apple-Silicon Mac this runs under
