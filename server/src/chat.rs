@@ -724,7 +724,7 @@ pub fn mock_provider() -> Option<(u64, usize)> {
     static PARSED: std::sync::OnceLock<Option<(u64, usize)>> = std::sync::OnceLock::new();
     *PARSED.get_or_init(|| {
         let raw = std::env::var("SCRAI_MOCK_PROVIDER").ok()?;
-        if std::env::var("SCRAI_FAKE_PAYMENTS").as_deref() != Ok("1") {
+        if !crate::pay::fake_payments_enabled() {
             return None;
         }
         let mut it = raw.split(':');

@@ -156,6 +156,13 @@ async fn mollie_methods() -> Vec<Value> {
 /// flag is reported to clients so the app can offer the toggle; without it a client
 /// asking for a testnet purchase is refused. This is the kill switch: unset it (or
 /// set 0) and restart, and both server and every client fall back to normal tiers.
+/// The ONE place that answers "is the fake payment rail on?" (SCRAI_FAKE_PAYMENTS=1).
+/// Everything that must only exist on a no-real-money server (the load-test mock
+/// provider) asks here, so the real-money interlocks stay in this file.
+pub fn fake_payments_enabled() -> bool {
+    std::env::var("SCRAI_FAKE_PAYMENTS").as_deref() == Ok("1")
+}
+
 pub fn is_testnet_server() -> bool {
     std::env::var("SCRAI_TESTNET")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
