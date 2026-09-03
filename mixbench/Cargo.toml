@@ -3,7 +3,7 @@
 # Loopback: sends to its OWN Nym address and times send→full-receive. Not shipped.
 [package]
 name = "mixbench"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 publish = false
 

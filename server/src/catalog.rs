@@ -37,21 +37,23 @@ pub fn provider_enabled(name: &str) -> bool {
     }
 }
 
-pub async fn handle(request: &[u8], pricing: &PricingTable, margin: f64) -> Vec<u8> {
+/// `identities`: every Nym address this server answers on (its multi-identity front
+/// doors). The app keeps them as fallbacks — same server, same money, other gateway.
+pub async fn handle(request: &[u8], pricing: &PricingTable, margin: f64, identities: &[String]) -> Vec<u8> {
     let v: Value = serde_json::from_slice(request).unwrap_or(Value::Null);
     let id = v.get("id").cloned().unwrap_or(Value::Null);
 
     // Serve a fresh cached list without touching the providers. Never hold the lock
     // across the await below.
     if let Some(models) = cached_fresh() {
-        return serde_json::to_vec(&json!({ "id": id, "models": models, "testnet": crate::pay::is_testnet_server(), "faucetUrl": crate::pay::faucet_url(), "card": crate::pay::card_info().await })).unwrap_or_default();
+        return serde_json::to_vec(&json!({ "id": id, "models": models, "testnet": crate::pay::is_testnet_server(), "faucetUrl": crate::pay::faucet_url(), "card": crate::pay::card_info().await, "serverVersion": crate::VERSION, "identities": identities })).unwrap_or_default();
     }
 
     let models = fetch_models(pricing, margin).await;
     if let Ok(mut guard) = CATALOG_CACHE.lock() {
         *guard = Some((Instant::now(), models.clone()));
     }
-    serde_json::to_vec(&json!({ "id": id, "models": models, "testnet": crate::pay::is_testnet_server(), "faucetUrl": crate::pay::faucet_url(), "card": crate::pay::card_info().await })).unwrap_or_default()
+    serde_json::to_vec(&json!({ "id": id, "models": models, "testnet": crate::pay::is_testnet_server(), "faucetUrl": crate::pay::faucet_url(), "card": crate::pay::card_info().await, "serverVersion": crate::VERSION, "identities": identities })).unwrap_or_default()
 }
 
 /// A clone of the cached model list if it exists and is within its TTL, else `None`.
@@ -64,6 +66,8 @@ fn cached_fresh() -> Option<Vec<Value>> {
 /// Assemble the live catalog from the providers (the uncached path).
 async fn fetch_models(pricing: &PricingTable, margin: f64) -> Vec<Value> {
     // Gemini first — its models lead the picker (same provider order as the TS server).
+    // OpenAI needs no provider round trip: we offer an explicit allowlist ∩ pricing.json.
+    let openai = if provider_enabled("openai") { openai_models(pricing, margin) } else { Ok(Vec::new()) };
     let (gemini, groq) = tokio::join!(
         async {
             if provider_enabled("gemini") { gemini_models(pricing, margin).await } else { Ok(Vec::new()) }
@@ -73,7 +77,7 @@ async fn fetch_models(pricing: &PricingTable, margin: f64) -> Vec<Value> {
         }
     );
     let mut models = Vec::new();
-    for (provider, result) in [("gemini", gemini), ("groq", groq)] {
+    for (provider, result) in [("gemini", gemini), ("groq", groq), ("openai", openai)] {
         match result {
             Ok(mut m) => models.append(&mut m),
             Err(e) => eprintln!("scrai-server: {provider} catalog fetch failed: {e}"),
@@ -180,6 +184,55 @@ fn image_models(pricing: &PricingTable, margin: f64) -> Vec<Value> {
         }
     }
     out
+}
+
+/// OpenAI text/reasoning models we offer. No live listing (`/v1/models` mixes in
+/// embeddings, TTS, fine-tunes): an explicit allowlist, each only when pricing.json prices
+/// it (an unpriced model is never offered). Verified ids/prices: 2026-09-03.
+const OPENAI_MODELS: [&str; 3] = ["gpt-5.4-nano", "gpt-5.4-mini", "gpt-5.4"];
+
+/// The ids actually offered: SCRAI_OPENAI_MODELS (comma list) overrides; otherwise the
+/// full allowlist — except on a TESTNET server, where testers pay with faucet dollars
+/// while OpenAI bills us real ones, so only the cheapest model is offered there.
+fn openai_model_ids() -> Vec<String> {
+    if let Ok(v) = std::env::var("SCRAI_OPENAI_MODELS") {
+        let ids: Vec<String> = v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+        if !ids.is_empty() {
+            return ids;
+        }
+    }
+    if crate::pay::is_testnet_server() {
+        return vec!["gpt-5.4-nano".to_string()];
+    }
+    OPENAI_MODELS.iter().map(|s| s.to_string()).collect()
+}
+
+fn openai_models(pricing: &PricingTable, margin: f64) -> Result<Vec<Value>, String> {
+    let _ = crate::openai::api_key()?; // no key → the provider is simply absent
+    let mut out = Vec::new();
+    for id in openai_model_ids() {
+        let id = id.as_str();
+        let price = crate::chat::effective_price(pricing.price(id));
+        if price.fallback {
+            continue;
+        }
+        out.push(json!({
+            "model": id,
+            "label": pricing.label(id).unwrap_or(id),
+            "vendor": "OpenAI",
+            "kind": "text",
+            "rate": { "in": retail(price.input, margin), "out": retail(price.output, margin) },
+            "tier": price.tier.as_str(),
+            // API inputs are not used for training (business terms) …
+            "trainsOnInput": false,
+            // … but retained for abuse monitoring: 30 days, or 0 with Zero Data Retention.
+            "retentionDays": crate::openai::retention_days(),
+            // Reasoning answers can take a minute or two — the app waits this long.
+            "timeoutMs": crate::openai::TIMEOUT_MS,
+            "acceptsImages": true,
+        }));
+    }
+    Ok(out)
 }
 
 async fn groq_models(pricing: &PricingTable, margin: f64) -> Result<Vec<Value>, String> {

@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use nym_sdk::mixnet::{AnonymousSenderTag, MixnetClientBuilder, MixnetMessageSender, StoragePaths};
+use nym_sdk::mixnet::{AnonymousSenderTag, MixnetClient, MixnetClientBuilder, MixnetClientSender, MixnetMessageSender, ReconstructedMessage, StoragePaths};
 use tokio::sync::Semaphore;
 use scrai_core::federation::{self, Authority};
 use scrai_core::pricing::PricingTable;
@@ -52,14 +52,10 @@ const AUTHORITY_N: usize = 1;
 
 #[tokio::main]
 async fn main() {
-    // Load provider keys etc. from .env. A parse error is NOT silent: dotenvy stops at the
-    // bad line, so everything below it would be missing (an unquoted value with spaces —
-    // a mnemonic — is the classic case).
-    if let Err(e) = dotenvy::dotenv() {
-        if !matches!(e, dotenvy::Error::Io(_)) {
-            eprintln!("scrai-server: .env PARSE ERROR — variables after the bad line are NOT loaded: {e}");
-        }
-    }
+    // Load provider keys etc. from .env (our own lenient parser — see load_env_lenient).
+    load_env_lenient();
+
+    eprintln!("scrai-server: v{}", scrai_server::VERSION);
 
     // Refuse to boot with an ambiguous Gemini key configuration: a testnet key
     // AND a mainnet key both active means nobody knows which account is being
@@ -75,6 +71,19 @@ async fn main() {
         }
     }
 
+    // Load-test mock provider: loud when active, loud when set but refused.
+    if std::env::var("SCRAI_MOCK_PROVIDER").is_ok() {
+        match chat::mock_provider() {
+            Some((d, c)) => eprintln!(
+                "scrai-server: MOCK PROVIDER ACTIVE — every chat answers a canned {c}-char text after {d} ms; \
+                 no model is called (SCRAI_MOCK_PROVIDER, load testing only)"
+            ),
+            None => eprintln!(
+                "scrai-server: SCRAI_MOCK_PROVIDER is set but IGNORED — it only works together with SCRAI_FAKE_PAYMENTS=1"
+            ),
+        }
+    }
+
     // Install OUR log filter before the nym-sdk installs its own logger (first
     // one wins): the mixnet's "duplicate fragment received" warnings are normal
     // retransmission noise on SURB-heavy requests — one line per re-sent Sphinx
@@ -85,7 +94,7 @@ async fn main() {
         .try_init()
         .ok();
     let data_dir = PathBuf::from(std::env::var("SCRAI_DATA").unwrap_or_else(|_| "./data".into()));
-    let authority = load_or_bootstrap(&data_dir.join("authority.json"));
+    let authority = Arc::new(load_or_bootstrap(&data_dir.join("authority.json")));
 
     // Persistent Nym identity so the server keeps ONE address across restarts.
     let storage = StoragePaths::new_from_dir(data_dir.join(".nym-server"))
@@ -93,14 +102,34 @@ async fn main() {
     let mut builder = MixnetClientBuilder::new_with_default_storage(storage)
         .await
         .expect("mixnet client builder");
-    // Pin the gateway via SCRAI_GATEWAY (identity key). Only honoured on the
-    // FIRST registration — an existing .nym-server identity keeps its gateway,
-    // so to re-home the server: stop it, delete data/.nym-server, start again
-    // (this also mints a NEW Nym address for the clients).
-    let pinned = std::env::var("SCRAI_GATEWAY").ok().filter(|g| !g.trim().is_empty());
+    // Entry gateways. SCRAI_GATEWAY_MASTER pins the primary identity (the address the app
+    // ships with); SCRAI_GATEWAY_FALLBACK=gw1,gw2,… pins the extra identities #1, #2, … —
+    // the same server on other gateways, which the app learns from the catalog reply and
+    // falls back to when the master's gateway is down. The number of identities follows
+    // from that list (SCRAI_MIX_CLIENTS only overrides it). SCRAI_GATEWAY is the legacy
+    // name of the master pin.
+    //
+    // A pin is applied on EVERY start: `request_gateway` re-registers an existing identity
+    // at the requested gateway (same keys, so the address only changes its `@gateway`
+    // part). Which is also why an UNPINNED identity that already exists must NOT get a
+    // random pick — it would move to a new gateway (= a new address) on every restart, as
+    // the fallback slots once did (2026-09-03). Unpinned + existing = keep; unpinned + new
+    // = curated random.
+    let fallback_gateways: Vec<String> = std::env::var("SCRAI_GATEWAY_FALLBACK")
+        .unwrap_or_default()
+        .split(',')
+        .map(|g| g.trim().to_string())
+        .filter(|g| !g.is_empty())
+        .collect();
+    let pinned = ["SCRAI_GATEWAY_MASTER", "SCRAI_GATEWAY"]
+        .iter()
+        .find_map(|k| std::env::var(k).ok().map(|g| g.trim().to_string()).filter(|g| !g.is_empty()));
+    let primary_exists = identity_exists(&data_dir.join(".nym-server"));
     if let Some(gw) = pinned {
         println!("scrai-server: requesting entry gateway {gw}");
-        builder = builder.request_gateway(gw.trim().to_string());
+        builder = builder.request_gateway(gw);
+    } else if primary_exists {
+        println!("scrai-server: no gateway pin — the existing identity keeps its gateway");
     } else if let Some((gw, country, host)) = random_described_gateway().await {
         // No pin → curated random instead of the SDK's blind pick: only gateways
         // whose directory entry carries a location AND a reverse-DNS hostname, so
@@ -110,17 +139,23 @@ async fn main() {
     } else {
         println!("scrai-server: directory unavailable — letting the SDK pick a gateway");
     }
-    let mut client = builder
+    // Egress rate. The SDK default (one real packet every 20 ms ≈ 50 packets/s, the
+    // privacy-preserving stream shape) is a CLIENT default: a service provider that
+    // answers hundreds of users through ONE Nym client serialises every reply behind it —
+    // a 109 KB coconut Keys reply alone is ~55 packets ≈ 1.1 s of the whole server's send
+    // budget. SCRAI_MIX_SEND_MS lowers the per-packet delay (Nym's own "high traffic
+    // volume" preset is 4 ms ≈ 250 packets/s); SCRAI_MIX_COVER_MS thins the loop cover
+    // stream that a server does not need for its own anonymity. Unset = SDK defaults.
+    // Measured in docs/load-testing.md.
+    if let Some(cfg) = server_traffic_config() {
+        builder = builder.debug_config(cfg);
+    }
+    let client = builder
         .build()
         .expect("mixnet build")
         .connect_to_mixnet()
         .await
         .expect("mixnet connect");
-
-    // H2: a cloneable sender lets spawned tasks reply concurrently without borrowing the
-    // client. Used for the pure `models` catalog fetch so a slow provider call can't wedge
-    // the single dispatch loop.
-    let reply_sender = client.split_sender();
 
     println!(
         "scrai-server: authority #{} live on the mixnet.\n  address: {}\n  (point a client at this address)",
@@ -128,19 +163,190 @@ async fn main() {
         client.nym_address()
     );
 
+    // SCRAI_MIX_CLIENTS=K: K−1 EXTRA Nym identities (data/.nym-server-1 …), each on a
+    // different entry gateway, all feeding the SAME dispatch loop and state below. Every
+    // packet for one identity funnels through one gateway and one Sphinx client; the load
+    // test showed that path — not CPU — is what saturates first (docs/load-testing.md).
+    // Extra addresses are more front doors to the same server: nothing about money
+    // changes. The primary identity/address above is untouched, so existing clients
+    // keep working; a missing K means 1 (today's behaviour).
+    let n_clients = env_usize("SCRAI_MIX_CLIENTS", 1 + fallback_gateways.len()).max(1);
+    // Identity #k takes fallback entry k−1 (see above); a missing entry falls back to the
+    // curated random pick. Operator-run gateways = monitorable, reproducible.
+    let mut clients = vec![client];
+    let mut used_gateways: Vec<String> = clients.iter().map(|c| c.nym_address().gateway().to_base58_string()).collect();
+    for k in 1..n_clients {
+        let storage = StoragePaths::new_from_dir(data_dir.join(format!(".nym-server-{k}")))
+            .expect("nym storage paths");
+        let mut b = MixnetClientBuilder::new_with_default_storage(storage)
+            .await
+            .expect("mixnet client builder");
+        if let Some(gw) = fallback_gateways.get(k - 1) {
+            println!("scrai-server: client #{k}: requesting entry gateway {gw} (SCRAI_GATEWAY_FALLBACK)");
+            b = b.request_gateway(gw.clone());
+        } else if identity_exists(&data_dir.join(format!(".nym-server-{k}"))) {
+            println!("scrai-server: client #{k}: no gateway pin — the existing identity keeps its gateway");
+        } else {
+            match random_described_gateway_excluding(&used_gateways).await {
+                Some((gw, country, host)) => {
+                    println!("scrai-server: client #{k}: picked described gateway {gw} ({country}, {host})");
+                    b = b.request_gateway(gw);
+                }
+                None => println!("scrai-server: client #{k}: directory unavailable — letting the SDK pick a gateway"),
+            }
+        }
+        if let Some(cfg) = server_traffic_config() {
+            b = b.debug_config(cfg);
+        }
+        let c = b.build().expect("mixnet build").connect_to_mixnet().await.expect("mixnet connect");
+        println!("  address[{k}]: {}", c.nym_address());
+        used_gateways.push(c.nym_address().gateway().to_base58_string());
+        clients.push(c);
+    }
+    // Every address this server answers on, one per line — for the operator (no journal
+    // access needed) and as the raw material of the signed directory later.
+    let all_addresses: Vec<String> = clients.iter().map(|c| c.nym_address().to_string()).collect();
+    if let Err(e) = std::fs::write(data_dir.join("addresses.txt"), all_addresses.join("\n") + "\n") {
+        eprintln!("scrai-server: could not write addresses.txt: {e}");
+    }
+    if n_clients > 1 {
+        let mut g = used_gateways.clone();
+        g.sort();
+        g.dedup();
+        println!("scrai-server: {n_clients} mixnet identities on {} distinct gateways", g.len());
+        if g.len() < n_clients {
+            // Two front doors on one gateway fail together — the whole point of the extra
+            // identity is lost. Happens when an identity registered before the list was
+            // right; the fix is to re-home that slot (delete its data/.nym-server-k).
+            eprintln!(
+                "scrai-server: WARNING: identities share a gateway (wanted {n_clients} distinct) — \
+                 check SCRAI_GATEWAY_MASTER / SCRAI_GATEWAY_FALLBACK and re-home the duplicate \
+                 slot by deleting its data/.nym-server-k before the next start"
+            );
+        }
+    }
+
+    // H2: cloneable senders let spawned tasks reply concurrently without borrowing a
+    // client. A reply MUST leave through the client that received the request (its reply
+    // SURBs live in that client's store), hence `ReplyTo { idx, tag }` everywhere below.
+    // RwLock per identity: a reconnected identity swaps its sender in place (see the
+    // receive task below); replies take a read lock for the duration of one send.
+    let senders: Arc<Vec<tokio::sync::RwLock<MixnetClientSender>>> =
+        Arc::new(clients.iter().map(|c| tokio::sync::RwLock::new(c.split_sender())).collect());
+    let identity_dirs: Vec<PathBuf> = (0..clients.len())
+        .map(|k| if k == 0 { data_dir.join(".nym-server") } else { data_dir.join(format!(".nym-server-{k}")) })
+        .collect();
+
+    // One receive task per client, merged into a single inbound channel for the loop.
+    // The tasks own the clients; on shutdown they disconnect (flushing the SURB stores).
+    struct Inbound {
+        idx: usize,
+        msg: ReconstructedMessage,
+    }
+    let (in_tx, mut in_rx) = tokio::sync::mpsc::channel::<Inbound>(1024);
+    let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+    let mut recv_tasks = Vec::new();
+    for (idx, mut c) in clients.into_iter().enumerate() {
+        let tx = in_tx.clone();
+        let mut stop = stop_rx.clone();
+        let senders = senders.clone();
+        let dir = identity_dirs[idx].clone();
+        let gateway = c.nym_address().gateway().to_base58_string();
+        recv_tasks.push(tokio::spawn(async move {
+            loop {
+                // Receive until shutdown (false) or the SDK ends the stream (true).
+                let ended = loop {
+                    tokio::select! {
+                        _ = stop.changed() => break false,
+                        batch = c.wait_for_messages() => {
+                            let Some(messages) = batch else { break true };
+                            for msg in messages {
+                                if tx.send(Inbound { idx, msg }).await.is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                };
+                if !ended {
+                    c.disconnect().await;
+                    return;
+                }
+                // The SDK shut this client down — seen in the load test as a panic inside its
+                // ack controller under a retransmission storm (nym-client-core 1.21.4), and
+                // possible on any gateway drop. Rebuild the SAME identity (same keys, same
+                // address) and keep serving; the other identities never noticed. Replies owed
+                // to the dead client are lost with its SURBs — the app retries. A reply-SURB
+                // store the crash left inconsistent refuses to open; it only holds ephemeral
+                // SURBs, so the second attempt wipes it.
+                eprintln!("scrai-server: identity #{idx} lost its mixnet stream — reconnecting");
+                drop(c);
+                let mut attempt = 0u32;
+                c = loop {
+                    attempt += 1;
+                    tokio::time::sleep(std::time::Duration::from_secs(if attempt == 1 { 3 } else { 15 })).await;
+                    if *stop.borrow() {
+                        return;
+                    }
+                    if attempt >= 2 {
+                        for f in ["persistent_reply_store.sqlite", "persistent_reply_store.sqlite-wal", "persistent_reply_store.sqlite-shm"] {
+                            let _ = std::fs::remove_file(dir.join(f));
+                        }
+                    }
+                    match connect_identity(&dir, Some(&gateway)).await {
+                        Ok(nc) => {
+                            *senders[idx].write().await = nc.split_sender();
+                            println!("scrai-server: identity #{idx} back on the mixnet (attempt {attempt}): {}", nc.nym_address());
+                            break nc;
+                        }
+                        Err(e) => eprintln!("scrai-server: identity #{idx} reconnect attempt {attempt} failed: {e}"),
+                    }
+                };
+            }
+        }));
+    }
+    drop(in_tx);
+
     // Durable state: session balances + double-spend records survive a restart.
     let mut db = store::Store::open(&data_dir.join("state.db")).expect("open state db");
     // L1: absent snapshot = fresh start (default); present-but-UNPARSEABLE = FATAL, never a
     // silent reset — a reset double-spend set would reopen every spent coin, and reset
     // balances would erase credit. (Normal writes are valid+atomic, so this only fires on
     // external corruption, and then the operator must act, not the server silently.)
-    let mut quorum = match db.load("quorum") {
-        None => QuorumStore::default(),
-        Some(j) => serde_json::from_str(&j).unwrap_or_else(|e| {
-            eprintln!("scrai-server: FATAL: quorum snapshot present but unparseable ({e}) — refusing \
-                to start (a silent reset would reopen every spent coin). Restore a good state.db.");
-            std::process::exit(1);
-        }),
+    let mut quorum = match (db.load("quorum_meta"), db.load("quorum")) {
+        // Current layout: small meta blob + append-only record rows.
+        (Some(meta), _) => {
+            let rows = db.load_quorum_records();
+            QuorumStore::from_parts(&meta, rows.iter().map(String::as_str)).unwrap_or_else(|e| {
+                eprintln!("scrai-server: FATAL: quorum state present but unparseable ({e}) — refusing \
+                    to start (a silent reset would reopen every spent coin). Restore a good state.db.");
+                std::process::exit(1);
+            })
+        }
+        // Legacy whole-store snapshot: load it once, re-persist as meta + rows, retire it.
+        (None, Some(j)) => {
+            let q: QuorumStore = serde_json::from_str(&j).unwrap_or_else(|e| {
+                eprintln!("scrai-server: FATAL: quorum snapshot present but unparseable ({e}) — refusing \
+                    to start (a silent reset would reopen every spent coin). Restore a good state.db.");
+                std::process::exit(1);
+            });
+            let rows: Vec<(usize, usize, String)> = (0..q.records_len())
+                .filter_map(|i| q.record_json(i).map(|(v, coins)| (i, coins, v)))
+                .collect();
+            let meta = q.meta_json();
+            match db.save_batch(&[("quorum_meta", meta.as_str())], &rows) {
+                Ok(()) => {
+                    db.delete("quorum");
+                    println!("scrai-server: migrated the quorum snapshot to {} record rows + meta", rows.len());
+                }
+                Err(e) => {
+                    eprintln!("scrai-server: FATAL: could not migrate the quorum snapshot: {e}");
+                    std::process::exit(1);
+                }
+            }
+            q
+        }
+        (None, None) => QuorumStore::default(),
     };
     let mut sessions = match db.load("sessions") {
         None => SessionStore::default(),
@@ -195,7 +401,12 @@ async fn main() {
     };
     // Revision marks of what is already on disk — persist_changed() re-saves a store
     // only when its revision moved past these.
-    let mut saved = SavedRevs { sessions: sessions.revision(), quorum: quorum.revision(), pay: paywall.revision() };
+    let mut saved = SavedRevs {
+        sessions: sessions.revision(),
+        quorum_records: quorum.records_len(),
+        quorum_meta: quorum.meta_revision(),
+        pay: paywall.revision(),
+    };
     let book_scrai = ticketbook_coins() * scrai_core::coconut::COIN_SCRAI;
     println!(
         "scrai-server: gateway {} · ticketbook {} coins ({} SCRAI = ${}){}",
@@ -237,18 +448,35 @@ async fn main() {
     struct HttpDone {
         pending: chat::PendingChat,
         result: Result<(String, scrai_core::billing::TokenUsage, chat::Images), String>,
-        tag: AnonymousSenderTag,
+        to: ReplyTo,
         /// Keeps the client counted as in flight until the reply below has gone out.
-        _guard: inflight::Guard<AnonymousSenderTag>,
+        _guard: inflight::Guard<ReplyTo>,
     }
     let (http_tx, mut http_rx) = tokio::sync::mpsc::channel::<HttpDone>(256);
     // Same shape for the paywall: begin() on the loop, gateway HTTP spawned, finish() here.
     struct PayDone {
         outcome: pay::PayOutcome,
-        tag: AnonymousSenderTag,
-        _guard: inflight::Guard<AnonymousSenderTag>,
+        to: ReplyTo,
+        _guard: inflight::Guard<ReplyTo>,
     }
     let (pay_tx, mut pay_rx) = tokio::sync::mpsc::channel::<PayDone>(64);
+    // Same shape for the two BLS-heavy money ops: a coconut Withdraw issues 500
+    // signatures, a redeem verifies O(coins) pairings — ~100 ms to seconds of pure CPU
+    // that used to run ON the loop, so 30 buyers in one minute queued behind each other
+    // and every chat/status waited with them (load test 2026-09-02). Now: gate + reserve
+    // on the loop, crypto in spawn_blocking, apply/persist/reply back here.
+    enum CryptoKind {
+        Withdraw { id: serde_json::Value, account_id: String, result: Result<federation::FedResponse, String> },
+        Redeem { id: serde_json::Value, req: scrai_core::gateway::RedeemRequest, verified: Result<(), String> },
+    }
+    struct CryptoDone {
+        kind: CryptoKind,
+        to: ReplyTo,
+        /// (ms waiting for a crypto slot, ms of BLS work) — for the handled line.
+        timing: (u128, u128),
+        _guard: inflight::Guard<ReplyTo>,
+    }
+    let (crypto_tx, mut crypto_rx) = tokio::sync::mpsc::channel::<CryptoDone>(64);
 
     // Concurrency caps for the spawned slow paths. A chat holds its worst-case
     // reservation while it waits for a slot; past QUEUE_WAIT it fails fast (settle()
@@ -256,11 +484,28 @@ async fn main() {
     // smaller pool: an unauthenticated invoice.status must not be able to open hundreds
     // of LCD connections.
     let max_chats = env_usize("SCRAI_MAX_INFLIGHT_CHATS", 64);
+    // OpenAI gets its own pool: its rate limits are per org tier, and a throttled OpenAI
+    // must not hold Gemini's slots.
+    let max_openai = env_usize("SCRAI_MAX_INFLIGHT_OPENAI", 16);
     let max_gateway = env_usize("SCRAI_MAX_INFLIGHT_GATEWAY", 16);
+    // BLS work is CPU-bound: cap it at the core count so a purchase storm can't starve
+    // the runtime (each permit = one blocking thread busy for up to seconds).
+    let max_crypto = env_usize("SCRAI_MAX_INFLIGHT_CRYPTO", std::thread::available_parallelism().map(|n| n.get()).unwrap_or(2).max(1));
     let chat_slots = Arc::new(Semaphore::new(max_chats));
+    let openai_slots = Arc::new(Semaphore::new(max_openai));
     let gateway_slots = Arc::new(Semaphore::new(max_gateway));
+    let crypto_slots = Arc::new(Semaphore::new(max_crypto));
     const QUEUE_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
-    println!("scrai-server: concurrency caps — chats {max_chats}, gateway calls {max_gateway}");
+    println!("scrai-server: concurrency caps — chats {max_chats} (openai {max_openai}), gateway calls {max_gateway}, coconut crypto {max_crypto}");
+    if std::env::var("OPENAI_API_KEY").is_ok_and(|k| !k.trim().is_empty()) {
+        println!(
+            "scrai-server: OpenAI enabled — moderation prefilter {}, {} strikes/day per session, retention badge {} days, web search ${:.3}/call",
+            if chat::openai_prefilter() { "ON" } else { "off" },
+            scrai_server::openai::strikes_per_day(),
+            scrai_server::openai::retention_days(),
+            scrai_server::openai::search_usd_per_call()
+        );
+    }
     if pay::is_testnet_server() {
         match pay::testnet_faucet_address() {
             Some(a) => println!("scrai-server: TESTNET mode — $1 faucet purchases only, settled only from faucet wallet {a} (SCRAI_TESTNET=1)"),
@@ -271,8 +516,16 @@ async fn main() {
     // Distinct clients with a spawned request in flight; the daily peak lands in the
     // `daily` table for scrai-admin ("peak clients"). Written only when today's mark
     // rises, so the hot path costs no extra fsync.
-    let inflight: inflight::Inflight<AnonymousSenderTag> = inflight::Inflight::default();
+    let inflight: inflight::Inflight<ReplyTo> = inflight::Inflight::default();
     let mut peak_written: (String, usize) = (String::new(), 0);
+    // Distinct clients (reply tags) seen in the last 60 s → the day's `peak_1m`. Tags are
+    // never persisted; the map is pruned every few seconds.
+    let mut recent_clients: std::collections::HashMap<AnonymousSenderTag, std::time::Instant> = std::collections::HashMap::new();
+    let mut recent_pruned = std::time::Instant::now();
+    let mut window_written: (String, usize) = (String::new(), 0);
+    // Every address this server answers on — advertised in the catalog reply so the app
+    // can fall back to another front door of the SAME server when one gateway is out.
+    let identities = Arc::new(all_addresses.clone());
     loop {
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {
@@ -313,7 +566,8 @@ async fn main() {
                         db.bump_daily_model(&today, model, 1, spent, cost);
                         // Consume the month's grounding allowance — re-read on the loop, so it's race-free.
                         let q = rv.pointer("/usage/groundingQueries").and_then(|c| c.as_u64()).unwrap_or(0);
-                        if q > 0 {
+                        // Only Gemini queries draw on Google's monthly allowance; OpenAI's are per call.
+                        if q > 0 && !scrai_server::openai::is_openai_model(model) {
                             let g_month_key = format!("grounding:{}", &today[..7]);
                             let g_used: u64 = db.load(&g_month_key).and_then(|s| s.parse().ok()).unwrap_or(0);
                             let _ = db.save_many(&[(g_month_key.as_str(), (g_used + q).to_string().as_str())]);
@@ -322,8 +576,42 @@ async fn main() {
                 }
                 // Durability: persist any changed store before acknowledging (same as below).
                 persist_changed(&mut db, &sessions, &quorum, &paywall, &mut saved);
-                if let Err(e) = reply_sender.send_reply(done.tag, response).await {
+                if let Err(e) = senders[done.to.idx].read().await.send_reply(done.to.tag, response).await {
                     eprintln!("scrai-server: chat reply failed: {e}");
+                }
+            }
+            // A spawned BLS job returned → apply its outcome to the money state here.
+            Some(done) = crypto_rx.recv() => {
+                let (label, response) = match done.kind {
+                    CryptoKind::Withdraw { id, account_id, result } => {
+                        let resp = match result {
+                            Ok(r) => r,
+                            Err(message) => federation::FedResponse::Error { message },
+                        };
+                        // The book's entitlement was reserved before issuance; anything but
+                        // an issued credential gives it back.
+                        if !matches!(resp, federation::FedResponse::Withdraw { .. }) {
+                            paywall.restore_entitlement(&account_id, book_scrai);
+                        }
+                        let reply = serde_json::json!({ "id": id, "fed": serde_json::to_value(&resp).unwrap_or(serde_json::Value::Null) });
+                        ("coconut.Withdraw", serde_json::to_vec(&reply).unwrap_or_default())
+                    }
+                    CryptoKind::Redeem { id, req, verified } => {
+                        let reply = match verified {
+                            Err(e) => scrai_core::gateway::redeem_error(&id, e),
+                            Ok(()) => scrai_core::gateway::redeem_apply(&mut quorum, &mut sessions, req, id).await,
+                        };
+                        ("redeem", serde_json::to_vec(&reply).unwrap_or_default())
+                    }
+                };
+                let (c0, c1) = label_color(label);
+                println!(
+                    "scrai-server: handled {c0}{label}{c1} (→ {} bytes · crypto wait {} ms, work {} ms)",
+                    response.len(), done.timing.0, done.timing.1
+                );
+                persist_changed(&mut db, &sessions, &quorum, &paywall, &mut saved);
+                if let Err(e) = senders[done.to.idx].read().await.send_reply(done.to.tag, response).await {
+                    eprintln!("scrai-server: {label} reply failed: {e}");
                 }
             }
             // A spawned gateway call (invoice / entitlement sweep) returned → apply it here.
@@ -339,20 +627,35 @@ async fn main() {
                     db.bump_daily(&today_utc(), 0, 0, 0, 1, delta);
                 }
                 persist_changed(&mut db, &sessions, &quorum, &paywall, &mut saved);
-                if let Err(e) = reply_sender.send_reply(done.tag, response).await {
+                if let Err(e) = senders[done.to.idx].read().await.send_reply(done.to.tag, response).await {
                     eprintln!("scrai-server: pay reply failed: {e}");
                 }
             }
-            batch = client.wait_for_messages() => {
-                let Some(messages) = batch else {
-                    eprintln!("scrai-server: mixnet stream ended");
+            inbound = in_rx.recv() => {
+                let Some(Inbound { idx, msg: m }) = inbound else {
+                    // Only at shutdown: receive tasks reconnect a dead identity themselves.
+                    eprintln!("scrai-server: every mixnet stream ended");
                     break;
                 };
-                for m in messages {
             let Some(tag) = m.sender_tag else {
                 eprintln!("scrai-server: dropping a message with no reply SURB");
                 continue;
             };
+            let to = ReplyTo { idx, tag };
+            {
+                let now = std::time::Instant::now();
+                recent_clients.insert(tag, now);
+                if recent_pruned.elapsed() >= std::time::Duration::from_secs(5) {
+                    recent_clients.retain(|_, t| now.duration_since(*t) < std::time::Duration::from_secs(60));
+                    recent_pruned = now;
+                }
+                let n = recent_clients.len();
+                let today = today_utc();
+                if window_written.0 != today || n > window_written.1 {
+                    db.bump_window_peak(&today, n);
+                    window_written = (today, n);
+                }
+            }
             // `chat` + `models` need async HTTP to the provider; everything else is
             // handled synchronously by the shared core.
             let envelope = serde_json::from_slice::<serde_json::Value>(&m.message).unwrap_or(serde_json::Value::Null);
@@ -380,7 +683,7 @@ async fn main() {
                     } else {
                         serde_json::json!({ "id": id, "kind": "error", "error": notice, "updateRequired": true, "minApp": min, "updateUrl": url })
                     };
-                    if let Err(e) = reply_sender.send_reply(tag, serde_json::to_vec(&resp).unwrap_or_default()).await {
+                    if let Err(e) = senders[to.idx].read().await.send_reply(to.tag, serde_json::to_vec(&resp).unwrap_or_default()).await {
                         eprintln!("scrai-server: update-gate reply failed: {e}");
                     }
                     continue;
@@ -394,7 +697,7 @@ async fn main() {
                 && m.message.len() > MAX_CONTROL_BYTES
             {
                 let resp = serde_json::to_vec(&serde_json::json!({"kind":"error","error":"request too large"})).unwrap_or_default();
-                if let Err(e) = reply_sender.send_reply(tag, resp).await {
+                if let Err(e) = senders[to.idx].read().await.send_reply(to.tag, resp).await {
                     eprintln!("scrai-server: reply failed: {e}");
                 }
                 continue;
@@ -403,12 +706,12 @@ async fn main() {
             // state — and its provider HTTP (Gemini/Groq model lists) can be slow. Spawn it
             // so it never blocks chat/payment on the single dispatch loop; it replies itself.
             if kind == "models" {
-                let (p, sender, msg) = (pricing.clone(), reply_sender.clone(), m.message.clone());
-                let guard = inflight.enter(tag);
+                let (p, sender, msg, ids) = (pricing.clone(), senders.clone(), m.message.clone(), identities.clone());
+                let guard = inflight.enter(to);
                 note_peak(&db, &inflight, &mut peak_written);
                 tokio::spawn(async move {
-                    let resp = catalog::handle(&msg, &p, margin).await;
-                    if let Err(e) = sender.send_reply(tag, resp).await {
+                    let resp = catalog::handle(&msg, &p, margin, &ids).await;
+                    if let Err(e) = sender[to.idx].read().await.send_reply(to.tag, resp).await {
                         eprintln!("scrai-server: models reply failed: {e}");
                     }
                     drop(guard); // replied → no longer in flight
@@ -422,8 +725,15 @@ async fn main() {
                     .ok()
                     .and_then(|v| v.get("id").cloned())
                     .unwrap_or(serde_json::Value::Null);
-                let resp = serde_json::to_vec(&serde_json::json!({"id": id, "kind": "pong"})).unwrap_or_default();
-                if let Err(e) = reply_sender.send_reply(tag, resp).await {
+                // `load` = how busy this server is right now (clients with a spawned request in
+                // flight vs the chat cap). Coarse, public, and the seed of client-side server
+                // selection (docs/load-testing.md): a client can prefer the emptier server.
+                let resp = serde_json::to_vec(&serde_json::json!({
+                    "id": id, "kind": "pong", "serverVersion": scrai_server::VERSION,
+                    "load": { "inflight": inflight.current(), "maxChats": max_chats },
+                    "identities": &*identities,
+                })).unwrap_or_default();
+                if let Err(e) = senders[to.idx].read().await.send_reply(to.tag, resp).await {
                     eprintln!("scrai-server: ping reply failed: {e}");
                 }
                 continue;
@@ -440,15 +750,15 @@ async fn main() {
                     // Validation error or an idempotent replay hit — no provider call, and
                     // reserve() never mutates the money state on this path.
                     chat::Reserved::Reply(response) => {
-                        if let Err(e) = reply_sender.send_reply(tag, response).await {
+                        if let Err(e) = senders[to.idx].read().await.send_reply(to.tag, response).await {
                             eprintln!("scrai-server: chat reply failed: {e}");
                         }
                     }
                     // Reserved → run the provider off the loop; settle() prices it later.
                     chat::Reserved::Proceed(pending) => {
                         let tx = http_tx.clone();
-                        let slots = chat_slots.clone();
-                        let guard = inflight.enter(tag);
+                        let slots = if pending.provider() == "openai" { openai_slots.clone() } else { chat_slots.clone() };
+                        let guard = inflight.enter(to);
                         note_peak(&db, &inflight, &mut peak_written);
                         tokio::spawn(async move {
                             let result = match tokio::time::timeout(QUEUE_WAIT, slots.acquire_owned()).await {
@@ -456,7 +766,7 @@ async fn main() {
                                 Ok(Ok(_permit)) => chat::run_provider(&pending).await,
                                 _ => Err("the server is busy with too many chats right now — please try again in a moment".to_string()),
                             };
-                            let _ = tx.send(HttpDone { pending: *pending, result, tag, _guard: guard }).await;
+                            let _ = tx.send(HttpDone { pending: *pending, result, to, _guard: guard }).await;
                         });
                     }
                 }
@@ -470,14 +780,14 @@ async fn main() {
                     pay::PayStep::Reply(response) => response,
                     pay::PayStep::Pending(pending) => {
                         let (tx, gw, slots) = (pay_tx.clone(), gateway.clone(), gateway_slots.clone());
-                        let guard = inflight.enter(tag);
+                        let guard = inflight.enter(to);
                         note_peak(&db, &inflight, &mut peak_written);
                         tokio::spawn(async move {
                             let outcome = match tokio::time::timeout(QUEUE_WAIT, slots.acquire_owned()).await {
                                 Ok(Ok(_permit)) => pay::run_gateway(pending, &gw).await,
                                 _ => pay::gateway_busy(pending),
                             };
-                            let _ = tx.send(PayDone { outcome, tag, _guard: guard }).await;
+                            let _ = tx.send(PayDone { outcome, to, _guard: guard }).await;
                         });
                         continue;
                     }
@@ -487,8 +797,44 @@ async fn main() {
                 let (c0, c1) = label_color(&kind);
                 println!("scrai-server: handled {c0}{kind}{c1} ({} → {} bytes)", m.message.len(), response.len());
                 persist_changed(&mut db, &sessions, &quorum, &paywall, &mut saved);
-                if let Err(e) = reply_sender.send_reply(tag, response).await {
+                if let Err(e) = senders[to.idx].read().await.send_reply(to.tag, response).await {
                     eprintln!("scrai-server: reply failed: {e}");
+                }
+                continue;
+            }
+            // redeem: parse on the loop, verify (BLS) in a blocking task, apply back here.
+            if kind == "redeem" {
+                let id = envelope.get("id").cloned().unwrap_or(serde_json::Value::Null);
+                match scrai_core::gateway::redeem_parse(&envelope) {
+                    Err(e) => {
+                        let reply = serde_json::to_vec(&scrai_core::gateway::redeem_error(&id, e)).unwrap_or_default();
+                        if let Err(e) = senders[to.idx].read().await.send_reply(to.tag, reply).await {
+                            eprintln!("scrai-server: redeem reply failed: {e}");
+                        }
+                    }
+                    Ok(req) => {
+                        let (tx, auth, slots) = (crypto_tx.clone(), authority.clone(), crypto_slots.clone());
+                        let guard = inflight.enter(to);
+                        note_peak(&db, &inflight, &mut peak_written);
+                        tokio::spawn(async move {
+                            let t0 = std::time::Instant::now();
+                            let (req, verified, waited) = match tokio::time::timeout(QUEUE_WAIT, slots.acquire_owned()).await {
+                                Ok(Ok(_permit)) => {
+                                    let waited = t0.elapsed().as_millis();
+                                    let (req, v) = tokio::task::spawn_blocking(move || {
+                                        let v = scrai_core::gateway::redeem_verify(&auth, &req);
+                                        (req, v)
+                                    })
+                                    .await
+                                    .unwrap_or_else(|e| panic!("redeem verify task failed: {e}"));
+                                    (req, v, waited)
+                                }
+                                _ => (req, Err("the server is busy verifying payments right now — please try again in a moment".into()), t0.elapsed().as_millis()),
+                            };
+                            let timing = (waited, t0.elapsed().as_millis() - waited);
+                            let _ = tx.send(CryptoDone { kind: CryptoKind::Redeem { id, req, verified }, to, timing, _guard: guard }).await;
+                        });
+                    }
                 }
                 continue;
             }
@@ -496,23 +842,60 @@ async fn main() {
                 "upload.begin" | "upload.chunk" => uploads.handle(&m.message),
                 "image.chunk" => staged.handle(&m.message),
                 // Coconut issuance is gated by the paywall: a Withdraw must be
-                // account-signed and backed by a ticketbook's worth of paid
-                // entitlement, which is consumed only if issuance succeeds.
+                // account-signed and backed by a ticketbook's worth of paid entitlement.
+                // The entitlement is RESERVED here (so two in-flight withdraws of one
+                // account can't both pass), the 500-signature issuance runs in a blocking
+                // task, and a failed issuance restores the entitlement (crypto_rx above).
                 "coconut" => match paywall.gate_withdraw(&m.message, book_scrai) {
                     pay::Gate::Denied(reply) => reply,
                     pay::Gate::NotAWithdraw => {
                         scrai_core::gateway::handle(&authority, &mut quorum, &mut sessions, &m.message).await
                     }
                     pay::Gate::Authorized { account_id } => {
-                        let resp =
-                            scrai_core::gateway::handle(&authority, &mut quorum, &mut sessions, &m.message).await;
-                        let issued = serde_json::from_slice::<serde_json::Value>(&resp)
-                            .ok()
-                            .is_some_and(|r| r.pointer("/fed/Withdraw").is_some());
-                        if issued {
-                            paywall.consume_entitlement(&account_id, book_scrai);
+                        let id = envelope.get("id").cloned().unwrap_or(serde_json::Value::Null);
+                        let fed = serde_json::from_value::<federation::FedRequest>(
+                            envelope.get("fed").cloned().unwrap_or(serde_json::Value::Null),
+                        );
+                        let fed_error = |id: &serde_json::Value, message: String| {
+                            let resp = federation::FedResponse::Error { message };
+                            serde_json::to_vec(&serde_json::json!({ "id": id, "fed": serde_json::to_value(&resp).unwrap_or(serde_json::Value::Null) }))
+                                .unwrap_or_default()
+                        };
+                        match fed {
+                            Ok(federation::FedRequest::Withdraw { user_pk, req }) => {
+                                // M1: a key caught double-spending may not withdraw fresh books.
+                                if quorum.is_blacklisted(&user_pk) {
+                                    fed_error(&id, "blacklisted: this key was caught double-spending and may not withdraw".into())
+                                } else {
+                                    paywall.consume_entitlement(&account_id, book_scrai);
+                                    let (tx, auth, slots) = (crypto_tx.clone(), authority.clone(), crypto_slots.clone());
+                                    let guard = inflight.enter(to);
+                                    note_peak(&db, &inflight, &mut peak_written);
+                                    tokio::spawn(async move {
+                                        let t0 = std::time::Instant::now();
+                                        let (result, waited) = match tokio::time::timeout(QUEUE_WAIT, slots.acquire_owned()).await {
+                                            Ok(Ok(_permit)) => {
+                                                let waited = t0.elapsed().as_millis();
+                                                let r = tokio::task::spawn_blocking(move || {
+                                                    auth.handle(federation::FedRequest::Withdraw { user_pk, req })
+                                                })
+                                                .await
+                                                .unwrap_or_else(|e| Err(format!("issuance task failed: {e}")));
+                                                (r, waited)
+                                            }
+                                            _ => (Err("the server is busy issuing credentials right now — please try again in a moment".into()), t0.elapsed().as_millis()),
+                                        };
+                                        let timing = (waited, t0.elapsed().as_millis() - waited);
+                                        let _ = tx.send(CryptoDone { kind: CryptoKind::Withdraw { id, account_id, result }, to, timing, _guard: guard }).await;
+                                    });
+                                    // The reservation must be on disk before anything else happens.
+                                    persist_changed(&mut db, &sessions, &quorum, &paywall, &mut saved);
+                                    continue;
+                                }
+                            }
+                            Ok(_) => scrai_core::gateway::handle(&authority, &mut quorum, &mut sessions, &m.message).await,
+                            Err(e) => fed_error(&id, format!("bad request: {e}")),
                         }
-                        resp
                     }
                 },
                 _ => scrai_core::gateway::handle(&authority, &mut quorum, &mut sessions, &m.message).await,
@@ -546,24 +929,36 @@ async fn main() {
             // it commit together (never one without the other), and a crash after the
             // reply can't lose a credit the client already advanced its purse for.
             persist_changed(&mut db, &sessions, &quorum, &paywall, &mut saved);
-                    if let Err(e) = reply_sender.send_reply(tag, response).await {
+                    if let Err(e) = senders[to.idx].read().await.send_reply(to.tag, response).await {
                         eprintln!("scrai-server: reply failed: {e}");
                     }
-                } // for m in messages
-            } // batch = wait_for_messages
+            } // inbound = in_rx.recv()
         } // tokio::select!
     } // loop
 
-    // Disconnect flushes the Nym client's persistent stores (notably the
+    // Disconnecting flushes each Nym client's persistent stores (notably the
     // reply-SURB sqlite) so the next start finds them consistent.
-    client.disconnect().await;
+    let _ = stop_tx.send(true);
+    for t in recv_tasks {
+        let _ = t.await;
+    }
     println!("scrai-server: clean shutdown — mixnet state flushed.");
+}
+
+/// Where a reply goes: the Nym client that received the request (its reply SURBs live in
+/// that client's store) and the anonymous sender tag the SDK gave the request.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct ReplyTo {
+    idx: usize,
+    tag: AnonymousSenderTag,
 }
 
 /// Revision marks of the last persisted snapshot per store.
 struct SavedRevs {
     sessions: u64,
-    quorum: u64,
+    /// Quorum: records persisted so far (rows) + revision of the small meta blob.
+    quorum_records: usize,
+    quorum_meta: u64,
     pay: u64,
 }
 
@@ -580,34 +975,52 @@ fn persist_changed(
     saved: &mut SavedRevs,
 ) {
     let sess_snap = (sessions.revision() != saved.sessions).then(|| sessions.snapshot());
-    let quorum_snap = (quorum.revision() != saved.quorum).then(|| quorum.snapshot());
+    let quorum_meta = (quorum.meta_revision() != saved.quorum_meta).then(|| quorum.meta_json());
     let pay_snap = (paywall.revision() != saved.pay).then(|| paywall.snapshot());
+    // New double-spend records since the last persist — rows, never a re-snapshot.
+    let new_records: Vec<(usize, usize, String)> = (saved.quorum_records..quorum.records_len())
+        .filter_map(|i| quorum.record_json(i).map(|(v, coins)| (i, coins, v)))
+        .collect();
     let mut changed: Vec<(&str, &str)> = Vec::new();
     if let Some(s) = &sess_snap {
         changed.push(("sessions", s));
     }
-    if let Some(s) = &quorum_snap {
-        changed.push(("quorum", s));
+    if let Some(s) = &quorum_meta {
+        changed.push(("quorum_meta", s));
     }
     if let Some(s) = &pay_snap {
         changed.push(("pay", s));
     }
-    if changed.is_empty() {
+    if changed.is_empty() && new_records.is_empty() {
         return;
     }
-    match db.save_many(&changed) {
+    let t = std::time::Instant::now();
+    let bytes: usize = changed.iter().map(|(_, s)| s.len()).sum::<usize>()
+        + new_records.iter().map(|(_, _, v)| v.len()).sum::<usize>();
+    match db.save_batch(&changed, &new_records) {
         Ok(()) => {
             saved.sessions = sessions.revision();
-            saved.quorum = quorum.revision();
+            saved.quorum_records = quorum.records_len();
+            saved.quorum_meta = quorum.meta_revision();
             saved.pay = paywall.revision();
         }
         Err(e) => eprintln!("scrai-server: atomic persist failed (will retry): {e}"),
+    }
+    // Whole-snapshot persistence runs ON the loop; make its cost visible once it matters.
+    let ms = t.elapsed().as_millis();
+    if ms >= 20 {
+        eprintln!(
+            "scrai-server: SLOW PERSIST {ms} ms — {}{} ({} KB)",
+            changed.iter().map(|(k, _)| *k).collect::<Vec<_>>().join("+"),
+            if new_records.is_empty() { String::new() } else { format!("+{} record(s)", new_records.len()) },
+            bytes / 1024
+        );
     }
 }
 
 /// Record today's peak of simultaneously served clients — one sqlite write per NEW high
 /// (or per day), nothing on the steady state.
-fn note_peak(db: &store::Store, inflight: &inflight::Inflight<AnonymousSenderTag>, written: &mut (String, usize)) {
+fn note_peak(db: &store::Store, inflight: &inflight::Inflight<ReplyTo>, written: &mut (String, usize)) {
     let now = inflight.current();
     let today = today_utc();
     if written.0 != today || now > written.1 {
@@ -848,6 +1261,12 @@ fn label_color(label: &str) -> (&'static str, &'static str) {
 /// would show up as "??" in their UI. Returns (identity, country, host); None
 /// if the directory is unreachable or the curated pool is empty.
 async fn random_described_gateway() -> Option<(String, String, String)> {
+    random_described_gateway_excluding(&[]).await
+}
+
+/// Same pool, minus gateways already used by another of this server's identities — the
+/// extra identities are only worth anything on DIFFERENT gateways.
+async fn random_described_gateway_excluding(exclude: &[String]) -> Option<(String, String, String)> {
     let body: serde_json::Value = crate::http::client()
         .get("https://validator.nymtech.net/api/v1/nym-nodes/described")
         .timeout(std::time::Duration::from_secs(30))
@@ -875,6 +1294,9 @@ async fn random_described_gateway() -> Option<(String, String, String)> {
             if host.parse::<std::net::IpAddr>().is_ok() {
                 return None;
             }
+            if exclude.iter().any(|e| e == id) {
+                return None;
+            }
             Some((id.to_string(), country.to_string(), host.to_string()))
         })
         .collect();
@@ -884,6 +1306,150 @@ async fn random_described_gateway() -> Option<(String, String, String)> {
 
 /// Load the pricing table: a file override (`SCRAI_PRICING`) if set, else the copy
 /// embedded at build time — so the server always has a valid table.
+/// Load `.env` from the working directory the way an operator writes it: `KEY=value`,
+/// value = the rest of the line, optionally in single or double quotes, `#` comments on
+/// their own line or after whitespace. UNQUOTED VALUES MAY CONTAIN SPACES — dotenvy
+/// stopped parsing at such a line and silently dropped everything below it (a mnemonic
+/// once, `SCRAI_PROVIDERS=gemini, openai` on 2026-09-03), which is how a freshly added
+/// API key "wasn't there". Existing process-environment variables win, like dotenv.
+fn load_env_lenient() {
+    let Ok(text) = std::fs::read_to_string(".env") else { return };
+    let mut loaded = 0usize;
+    for (key, value) in parse_env_lines(&text) {
+        if std::env::var_os(&key).is_some() {
+            continue;
+        }
+        std::env::set_var(&key, &value);
+        loaded += 1;
+    }
+    eprintln!("scrai-server: .env loaded ({loaded} variables)");
+}
+
+/// The lenient `.env` grammar (see `load_env_lenient`), as (key, value) pairs in order.
+fn parse_env_lines(text: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for (n, raw) in text.lines().enumerate() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let line = line.strip_prefix("export ").unwrap_or(line);
+        let Some((key, value)) = line.split_once('=') else {
+            eprintln!("scrai-server: .env line {}: no `=` — ignored: {}", n + 1, line.chars().take(40).collect::<String>());
+            continue;
+        };
+        let key = key.trim();
+        if key.is_empty() || !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            eprintln!("scrai-server: .env line {}: not a variable name — ignored: {}", n + 1, key.chars().take(40).collect::<String>());
+            continue;
+        }
+        let mut value = value.trim().to_string();
+        if value.len() >= 2 && ((value.starts_with('"') && value.ends_with('"')) || (value.starts_with('\'') && value.ends_with('\''))) {
+            value = value[1..value.len() - 1].to_string();
+        } else if let Some(i) = value.find(" #") {
+            value.truncate(i);
+            value = value.trim_end().to_string();
+        }
+        out.push((key.to_string(), value));
+    }
+    out
+}
+
+#[cfg(test)]
+mod env_tests {
+    use super::parse_env_lines;
+
+    #[test]
+    fn lenient_env_keeps_spaces_quotes_and_comments_straight() {
+        let text = "# comment\nA=plain\nSCRAI_PROVIDERS=gemini, openai\nM=\"word word word\"\nS='single quoted'\nK=sk-proj-abc # trailing comment\nURL=https://x.y/#frag\nexport E=1\n\nbad line\n9X=nope\n";
+        let v = parse_env_lines(text);
+        let get = |k: &str| v.iter().find(|(kk, _)| kk == k).map(|(_, val)| val.as_str());
+        assert_eq!(get("A"), Some("plain"));
+        assert_eq!(get("SCRAI_PROVIDERS"), Some("gemini, openai")); // the 2026-09-03 case
+        assert_eq!(get("M"), Some("word word word"));
+        assert_eq!(get("S"), Some("single quoted"));
+        assert_eq!(get("K"), Some("sk-proj-abc"));
+        assert_eq!(get("URL"), Some("https://x.y/#frag")); // `#` without a space before it stays
+        assert_eq!(get("E"), Some("1"));
+        assert_eq!(v.len(), 8, "bad lines are skipped, nothing below them is lost");
+    }
+}
+
+/// Has this identity registered before? (Its keys live in the dir once it has.)
+fn identity_exists(dir: &Path) -> bool {
+    std::fs::read_dir(dir).map(|mut d| d.next().is_some()).unwrap_or(false)
+}
+
+/// Build + connect one identity from its storage dir, at `gateway` (re-homing it there if
+/// it sat elsewhere). Used for reconnects with the gateway the identity already has; the
+/// initial connects above print their gateway story and keep `expect`.
+async fn connect_identity(dir: &Path, gateway: Option<&str>) -> Result<MixnetClient, String> {
+    let storage = StoragePaths::new_from_dir(dir).map_err(|e| format!("storage paths: {e}"))?;
+    let mut b = MixnetClientBuilder::new_with_default_storage(storage)
+        .await
+        .map_err(|e| format!("client builder: {e}"))?;
+    if let Some(g) = gateway {
+        b = b.request_gateway(g.to_string());
+    }
+    if let Some(cfg) = server_traffic_config() {
+        b = b.debug_config(cfg);
+    }
+    b.build()
+        .map_err(|e| format!("build: {e}"))?
+        .connect_to_mixnet()
+        .await
+        .map_err(|e| format!("connect: {e}"))
+}
+
+/// Mixnet traffic knobs for the server's own Nym client (see the call site). `None` when
+/// neither variable is set, so the default stays byte-for-byte the SDK's.
+fn server_traffic_config() -> Option<nym_sdk::DebugConfig> {
+    let burst = std::env::var("SCRAI_MIX_BURST").as_deref() == Ok("1");
+    let send_ms = std::env::var("SCRAI_MIX_SEND_MS").ok().and_then(|v| v.trim().parse::<u64>().ok());
+    let cover_ms = std::env::var("SCRAI_MIX_COVER_MS").ok().and_then(|v| v.trim().parse::<u64>().ok());
+    if !burst && send_ms.is_none() && cover_ms.is_none() {
+        return None;
+    }
+    let mut d = nym_sdk::DebugConfig::default();
+    if burst {
+        // SCRAI_MIX_BURST=1 — THE server setting. The SDK's real-traffic stream is a
+        // constant-rate Poisson stream: every tick sends a real packet if one is queued,
+        // else a loop-cover packet. That shape hides a USER's traffic pattern; a service
+        // provider has no pattern to hide, and pays for the padding with CPU: at
+        // SCRAI_MIX_SEND_MS=4 × 10 identities the padding alone was 2,500 Sphinx packets/s
+        // = all 6 cores of the VPS (2026-09-02). Disabling the Poisson distribution sends
+        // real packets as soon as they are ready and nothing when idle; the separate loop
+        // cover stream goes too. Replies are still SURB replies — the client's anonymity
+        // does not depend on the server's sending shape.
+        d.traffic.disable_main_poisson_packet_distribution = true;
+        d.cover_traffic.disable_loop_cover_traffic_stream = true;
+    }
+    if let Some(ms) = send_ms {
+        d.traffic.message_sending_average_delay = std::time::Duration::from_millis(ms.max(1));
+    }
+    if let Some(ms) = cover_ms {
+        d.cover_traffic.loop_cover_traffic_average_delay = std::time::Duration::from_millis(ms.max(1));
+    }
+    println!(
+        "scrai-server: mixnet traffic override — burst {}, send delay {} ms, cover delay {} ms",
+        if burst { "ON (no Poisson padding, no loop cover)" } else { "off" },
+        send_ms.map(|m| m.to_string()).unwrap_or_else(|| "default (20)".into()),
+        cover_ms.map(|m| m.to_string()).unwrap_or_else(|| "default (200)".into())
+    );
+    if !burst {
+        if let Some(ms) = send_ms {
+            if ms < 20 {
+                eprintln!(
+                    "scrai-server: WARNING: SCRAI_MIX_SEND_MS={ms} without SCRAI_MIX_BURST=1 pads the idle stream \
+                     with cover packets: ~{} Sphinx packets/s per identity, all CPU. Use SCRAI_MIX_BURST=1.",
+                    (1000 / ms.max(1)) as usize
+                );
+            }
+        }
+    }
+    Some(d)
+}
+
 fn load_pricing() -> PricingTable {
     const EMBEDDED: &str = include_str!("../../pricing.json");
     let from_file = std::env::var("SCRAI_PRICING")

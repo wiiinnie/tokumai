@@ -177,6 +177,27 @@
       "out": 0.08,
       "note": "approximate — verify",
       "tier": "free-tier"
+    },
+    "gpt-5.4-nano": {
+      "label": "GPT-5.4 nano",
+      "in": 0.2,
+      "out": 1.25,
+      "cached_in": 0.02,
+      "note": "OpenAI Responses API, reasoning model. Verified 2026-09-03 vs developers.openai.com/api/docs/pricing. Web search $10/1k calls (SCRAI_OPENAI_SEARCH_USD)."
+    },
+    "gpt-5.4-mini": {
+      "label": "GPT-5.4 mini",
+      "in": 0.75,
+      "out": 4.5,
+      "cached_in": 0.075,
+      "note": "OpenAI. Verified 2026-09-03."
+    },
+    "gpt-5.4": {
+      "label": "GPT-5.4",
+      "in": 2.5,
+      "out": 15.0,
+      "cached_in": 0.25,
+      "note": "OpenAI. Verified 2026-09-03."
     }
   }
 }

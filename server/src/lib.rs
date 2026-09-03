@@ -8,10 +8,16 @@ pub mod faucet;
 pub mod http;
 pub mod inflight;
 pub mod nyx;
+pub mod openai;
 pub mod pay;
 pub mod replies;
 pub mod store;
 pub mod uploads;
+
+/// The server's version — the shared workspace version (root Cargo.toml), so it always
+/// matches the app release it was cut with. Printed at boot, sent as `serverVersion` on
+/// the models reply (the app shows it under Settings) and in scrai-admin's header.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Resolve a network-scoped config value: `{base}_MAINNET` or `{base}_TESTNET`
 /// (whichever is set and non-empty), falling back to the legacy plain `{base}`. The

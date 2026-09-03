@@ -1086,8 +1086,8 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
 <div class="scrim" id="topupScrim" data-click="__backdrop__" data-close="closeTopupSheet">
   <div class="modal" style="padding:14px 20px 26px">
     <div class="sheetgrab"></div>
-    <div class="sheett">You’re leaving the app</div>
-    <div class="sheetd">The top-up page opens in Safari with your top-up ID already filled in. Credit appears in the app shortly after payment.</div>
+    <div class="sheett" id="topupTitle">You’re leaving the app</div>
+    <div class="sheetd" id="topupDesc">The top-up page opens in Safari with your top-up ID already filled in. Credit appears in the app shortly after payment.</div>
     <div class="sheetbtns">
       <button class="btn primary" data-click="confirmTopup">Continue</button>
       <button class="btn" data-click="closeTopupSheet">Cancel</button>
@@ -1179,7 +1179,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       <label class="setrow"><input type="checkbox" id="mpCont"><span><b>Constant cover traffic</b><small>Keep sending decoy packets even when idle (recommended), so there’s never a “silent” period an observer could read. Turning it off saves the most battery but <span style="color:var(--rust)">noticeably lowers your privacy</span>. <span style="color:var(--muted)">(disable_loop_cover_traffic_stream)</span></small></span></label>
       <button class="btn" id="mpReset" data-click="resetMixPerf" style="margin:2px 0 9px">↺ Reset to recommended</button>
       <label class="setrow"><input type="checkbox" id="mpPipe"><span><b>Pipelining</b><small>On (default): send all parts of a file <b>at once (in parallel)</b>, with a smoother progress bar; any part that isn’t confirmed re-sends automatically. Off: send parts one after another. Privacy is unchanged either way. <span style="color:var(--muted)">(This is what “faster uploads” means — separate from the Sending-rate dial above.)</span></small></span></label>
-      <label class="setrow live" id="liveRow"><span><span class="rowtop"><b>Live data (web search)</b><span class="cpill">◎ costs extra</span></span><small>Let models answer with up-to-the-minute facts (weather, scores, prices) by searching the web. The model decides on its own whether a question actually needs a search — so everyday questions stay free. When it does search, a query goes to Google Search (your identity stays hidden by the mixnet) and each search is billed on top. Off by default.</small></span><input type="checkbox" id="liveChk"></label>
+      <label class="setrow live" id="liveRow"><span><span class="rowtop"><b>Live data (web search)</b><span class="cpill">◎ costs extra</span></span><small>Let models answer with up-to-the-minute facts (weather, scores, prices) by searching the web. The model decides on its own whether a question actually needs a search — so everyday questions stay free. When it does search, a query goes to Google Search (your identity stays hidden by the mixnet) and each search is billed on top. On by default — switch it off here if you never want a search.</small></span><input type="checkbox" id="liveChk"></label>
 
       </div>
       <div class="mpage" data-page="eff">
@@ -1233,6 +1233,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       </div>
       </div>
       <p class="hint" id="setStatus" style="margin:12px 6px 0"></p>
+      <p class="hint" id="verLine" style="margin:6px 6px 0;opacity:.6"></p>
     </div>
   </div>
 </div>
@@ -1468,6 +1469,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   let migrateData = null;                // {mnemonic, qr} for the "migrate to device" view
   let fakePayments = true;               // dev fake gateway vs real BTCPay
   let serverTestnet = false;             // server runs with SCRAI_TESTNET=1 → offers the $1 faucet purchase
+  let storefront = null;                 // iOS: App Store storefront (ISO alpha-3, "USA"/"DEU"/…) or null → strictest top-up variant
   let faucetUrl = null;                  // where testers redeem the memo (server-provided, https only)
   let testnetBuy = false;                // the toggle in the Buy dialog (only meaningful when serverTestnet)
   const TESTNET_USD = 1;
@@ -1481,6 +1483,9 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // iOS; flip this to hide the card row there in one place while that stays undecided.
   const CARD_ON_IOS = true;
   let server = null;                     // scrai-server Nym address (native app)
+  let serverAlternates = [];             // every address of THAT server (fallbacks; same server)
+  // Two addresses are the same server when both are in its advertised identity set.
+  const sameServer = (a,b) => !!a && !!b && (a===b || (serverAlternates.includes(a) && serverAlternates.includes(b)));
   let busy = false;
   let scanning = false;         // true while an attachment is being guard-scanned → send is locked
   let pendingFile = null;                // { mimeType, size, name, bytes:Uint8Array, isImage, thumb?, url? } | null
@@ -1548,12 +1553,17 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       devBuild = s.devBuild === true;
       if(!devBuild) devCost = false;             // no diagnostics outside a debug build, whatever localStorage says
       if(s.update && s.update.required) showUpdateGate(s.update);
+      // Settings footer: app + server version (server absent on the web dev bridge / old servers).
+      { const av=String(s.appVersion||"").slice(0,32), sv=String(s.serverVersion||"").slice(0,32);
+        $("verLine").textContent = av ? ("ScrambleAI "+av+(sv?" · server "+sv:"")) : ""; }
       serverTestnet = s.testnet === true;          // the server's kill switch: absent/false → no toggle
+      storefront = /^[A-Z]{3}$/.test(String(s.storefront||"")) ? String(s.storefront) : null;
       { const fu=String(s.faucetUrl||""); faucetUrl = serverTestnet && /^https:\/\/[\w.-]+/.test(fu) ? fu : null; }
       if(!serverTestnet) testnetBuy = false;
       // Card rail: coerce both fields — the reply is untrusted server data.
       { const c=s.card||{}; cardInfo={ enabled:c.enabled===true, minUsd:Math.max(1, Math.floor(Number(c.minUsd)||10)), methods:Array.isArray(c.methods)?c.methods.filter(m=>m&&typeof m==="object"):[] }; }
       server = s.server || null;
+      serverAlternates = Array.isArray(s.serverAlternates) ? s.serverAlternates.filter(a=>typeof a==="string") : [];
       if(isTauri() && !server){
         $("env").className="env bad"; $("envText").textContent="app · no server set";
         $("mName").textContent="set a server"; $("mVend").textContent="Account & recovery";
@@ -1691,6 +1701,10 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     groq: { name:"Groq", links:[
       { label:"Groq Terms of Use", url:"https://groq.com/terms-of-use/" },
       { label:"Groq Privacy Policy", url:"https://groq.com/privacy-policy/" } ] },
+    openai: { name:"OpenAI (API Platform)", links:[
+      { label:"OpenAI Usage Policies", url:"https://openai.com/policies/usage-policies/" },
+      { label:"OpenAI Business Terms (API)", url:"https://openai.com/policies/business-terms/" },
+      { label:"OpenAI Privacy Policy", url:"https://openai.com/policies/privacy-policy/" } ] },
     google: { name:"Google — Gemini API (Paid Services)", links:[
       { label:"Gemini API Additional Terms of Service", url:"https://ai.google.dev/gemini-api/terms" },
       { label:"Google APIs Terms of Service", url:"https://developers.google.com/terms" },
@@ -1750,7 +1764,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       <ul class="terms">${links}</ul>
       <p class="hint">${m.trainsOnInput
         ? '⚠ Flagged “trains on input” — this provider may retain or train on what you send. Don’t paste anything you wouldn’t make public.'
-        : 'On the paid API tier this provider does <b>not</b> use your prompts or responses to train or improve its products; it may log them briefly, solely to detect abuse and keep the service secure.'}</p>`;
+        : 'On the paid API tier this provider does <b>not</b> use your prompts or responses to train or improve its products; it may log them briefly, solely to detect abuse and keep the service secure.' + (typeof m.retentionDays==="number" ? ` This provider states it keeps API inputs for <b>${m.retentionDays===0?'0 days (zero data retention)':m.retentionDays+' days'}</b> for abuse monitoring, then deletes them.` : '')}</p>`;
     // Consent is explicit and fresh every time: reset the checkbox and re-disable Accept.
     const cb = $("termsAgree"), btn = $("termsAcceptBtn");
     if(cb) cb.checked = false;
@@ -2613,7 +2627,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         // Different title, and "Use official server" as the escape hatch after a bad
         // custom address (a gateway change wouldn't help, so that button is dropped).
         const srvFail = p.srv===true;
-        const canOfficial = srvFail && KNOWN_SERVERS.length && server!==KNOWN_SERVERS[0].address;
+        const canOfficial = srvFail && KNOWN_SERVERS.length && !sameServer(server, KNOWN_SERVERS[0].address);
         const last = rt.lines[rt.lines.length-1]; if(last) routeFinish(last, false);
         const box=$("routeBox"); if(box){ box.classList.add("bad"); const t=box.querySelector(".t span"); if(t) t.textContent = srvFail ? "Server not answering" : "Mixnet offline"; }
         const why=$("routeWhy"); if(why) why.textContent = routeFail || "Could not reach an entry gateway. Usually the phone has no internet right now, or the chosen gateway is down.";
@@ -3818,10 +3832,10 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // same speed as sequential on a throughput-bound path, but smoother progress; the Rust
   // side re-fires any chunk that isn't acked in time. Off → sequential 4MB chunks.
   function pipelineOn(){ try{ return localStorage.getItem("scrai.pipeline")!=="0"; }catch(_){ return true; } }
-  // Live web-search grounding — OFF by default (it costs extra + sends a derived query
+  // Live web-search grounding — ON by default (opt-out via "0"; it costs extra + sends a derived query
   // to Google Search). When on, Gemini requests carry the google_search tool and the
   // model itself decides whether a given prompt actually needs a search.
-  function liveDataOn(){ try{ return localStorage.getItem("scrai.liveData")==="1"; }catch(_){ return false; } }
+  function liveDataOn(){ try{ return localStorage.getItem("scrai.liveData")!=="0"; }catch(_){ return true; } }
   // Reasoning depth (Gemini thinking budget, in tokens). Slider index → budget; default
   // "Balanced" (2048). Lower = faster + cheaper (thinking bills as output).
   const THINK_STEPS = [0, 512, 2048, 4096];   // Off · Low · Balanced · Deep
@@ -4291,7 +4305,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   const SRV_STYLE="width:100%;background:var(--ink);border:1px solid var(--line);border-radius:8px;color:var(--bone);font-family:var(--mono);font-size:11px;padding:8px;outline:none;margin-top:8px";
   function serverControls(){
     const cur=server||"";
-    const knownIdx=KNOWN_SERVERS.findIndex(s=>s.address===cur);
+    const knownIdx=KNOWN_SERVERS.findIndex(s=>sameServer(s.address, cur));
     const custom = serverCustom || (!!cur && knownIdx<0) || KNOWN_SERVERS.length===0;
     // Nothing set yet → a real placeholder, never "official" pre-selected while unsaved.
     const selVal = custom ? "__custom__" : (knownIdx>=0 ? "k"+knownIdx : "");
@@ -4816,27 +4830,65 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // fingerprint is the top-up ID, payment happens on the payment site in Safari
   // (Mullvad model — the seed never leaves the device). The testnet faucet flow stays
   // available alongside so testers are not blocked.
-  // TODO storefront split via StoreKit (US: this sheet · EU: Apple's DMA sheet through
-  // the entitlement · RoW: ID only, no link). This build shows the US behaviour.
+  // Storefront split (the device's App Store country, read from StoreKit in Rust):
+  //   us  — the US storefront may link out freely since 2025-04-30 (Epic v. Apple order;
+  //         3.1.1 now says US apps "are not prohibited from including buttons, external
+  //         links, or other calls to action"). ID + Safari link with our own leave sheet.
+  //   eu  — under Apple's DMA terms a link-out needs the External Purchase Link
+  //         entitlement (com.apple.developer.storekit.external-purchase-link + the
+  //         SKExternalPurchaseLink Info.plist URLs) and Apple's disclosure wording before
+  //         leaving. Until Apple grants it, EU shows the RoW variant. Flip
+  //         EU_LINK_ENTITLED once the entitlement is in the provisioning profile.
+  //   row — everywhere else 3.1.1 still forbids any call to action: the ID only, no URL,
+  //         no button. Credit loaded from another device shows up by itself.
+  // No storefront (no App Store account signed in) → row: the strictest reading is the
+  // only one that cannot get the build rejected.
+  const EU_LINK_ENTITLED = false;
+  const EU_STOREFRONTS = new Set(["AUT","BEL","BGR","HRV","CYP","CZE","DNK","EST","FIN","FRA","DEU","GRC","HUN","IRL","ITA","LVA","LTU","LUX","MLT","NLD","POL","PRT","ROU","SVK","SVN","ESP","SWE"]);
+  function iosRegion(){
+    let sf = storefront;
+    // Debug builds may force a storefront (Settings → Developer is desktop-only, so a
+    // localStorage key does it): localStorage.setItem("scrai.dev.storefront","DEU").
+    if(devBuild){ try{ const o=localStorage.getItem("scrai.dev.storefront"); if(o && /^[A-Z]{3}$/.test(o)) sf=o; }catch(_){} }
+    if(sf==="USA") return "us";
+    if(sf && EU_STOREFRONTS.has(sf)) return EU_LINK_ENTITLED ? "eu" : "row";
+    return "row";
+  }
   const PAYMENT_SITE = "https://payment.hermes-stakepool.de/";
   const topupId = () => (account && account.fingerprint) || "";
   function renderIosTopup(){
-    $("iosTopup").innerHTML = `
+    const region = iosRegion();
+    const idRow = `
       <div class="grouplbl" style="margin-top:2px">Top-up</div>
       <div class="mprow">
         <div class="mptop"><b>Top-up ID</b></div>
         <div class="mpdesc">Safe to share — it can only receive credit, never spend it.</div>
         <div class="topupid">${esc(topupId())}</div>
         <button class="btn" style="width:100%" id="copyTopupBtn" data-click="copyTopupId">Copy top-up ID</button>
-      </div>
+      </div>`;
+    // row: the ID and nothing else — no site name, no button, no "go to" (3.1.1).
+    const rowNote = `
+      <div class="mprow">
+        <div class="mpdesc">Credit loaded to this ID from another device appears here on its own — usually within a minute, no restart needed.</div>
+      </div>`;
+    const linkRow = `
       <div class="mprow">
         <div class="mptop"><b>Load credits on the web</b></div>
         <div class="mpdesc">Opens in Safari with your top-up ID already filled in. Credit appears in the app shortly after payment.</div>
         <button class="btn primary" style="width:100%" data-click="openTopupSheet">Load credits on payment.hermes-stakepool.de ↗</button>
       </div>`;
+    $("iosTopup").innerHTML = idRow + (region==="row" ? rowNote : linkRow);
   }
   function copyTopupId(){ copyText(topupId(), $("copyTopupBtn")); }
-  function openTopupSheet(){ $("topupScrim").classList.add("open"); }
+  function openTopupSheet(){
+    const eu = iosRegion()==="eu";
+    // EU: Apple's disclosure wording for external purchase links (DMA terms). US: ours.
+    $("topupTitle").textContent = eu ? "You’re about to go to an external website" : "You’re leaving the app";
+    $("topupDesc").textContent = eu
+      ? "You will no longer be transacting with Apple. Any accounts or purchases made outside of this app will be managed by the developer “ScrambleAI”. Your App Store account, stored payment methods, and related features, such as subscription management and refund requests, will not be available. Apple is not responsible for the privacy or security of transactions made with this developer."
+      : "The top-up page opens in Safari with your top-up ID already filled in. Credit appears in the app shortly after payment.";
+    $("topupScrim").classList.add("open");
+  }
   function closeTopupSheet(){ $("topupScrim").classList.remove("open"); }
   function confirmTopup(){ closeTopupSheet(); openLink(PAYMENT_SITE+"?id="+encodeURIComponent(topupId())); }
 

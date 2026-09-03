@@ -28,6 +28,17 @@ impl Store {
             [],
         )
         .map_err(|e| e.to_string())?;
+        // Double-spend records, append-only: one row per accepted payment (its JSON incl.
+        // the payment proof, needed to PROVE a later double-spend). `coins` is for the
+        // admin's "coins redeemed". The small rest of the quorum lives in kv "quorum_meta".
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS quorum_records (\
+               idx INTEGER PRIMARY KEY,\
+               coins INTEGER NOT NULL DEFAULT 0,\
+               v TEXT NOT NULL)",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
         // Per-UTC-day activity counters — the ONLY timestamped data the server keeps.
         // Aggregate-only (no account/session ids, no content): totals for the admin view.
         conn.execute(
@@ -48,6 +59,11 @@ impl Store {
         // Peak number of distinct clients served in parallel that day (a MAX, not a sum) —
         // the capacity signal for the single Nym client / provider slots (inflight.rs).
         let _ = conn.execute("ALTER TABLE daily ADD COLUMN peak_clients INTEGER NOT NULL DEFAULT 0", []);
+        // Most DIFFERENT clients that sent anything within the same 60-second window that
+        // day. `peak_clients` only sees the slow (spawned) paths at one instant — two people
+        // whose chats don't overlap by a few seconds read as 1 there; this is the "how
+        // many were on the server at once" number an operator actually means.
+        let _ = conn.execute("ALTER TABLE daily ADD COLUMN peak_1m INTEGER NOT NULL DEFAULT 0", []);
         // Distinct paying sessions per UTC day ("users"): one row per (day, hashed session
         // id), so COUNT(*) per day is the number of different sessions that chatted. The
         // hash (sha256, 16 hex) keeps raw session ids out of the metrics table; rows older
@@ -125,6 +141,15 @@ impl Store {
         );
     }
 
+    /// Raise the day's 60-second-window client peak (a MAX, like `bump_peak`).
+    pub fn bump_window_peak(&self, day: &str, n: usize) {
+        let _ = self.conn.execute(
+            "INSERT INTO daily (day, peak_1m) VALUES (?1, ?2) \
+             ON CONFLICT(day) DO UPDATE SET peak_1m = MAX(peak_1m, ?2)",
+            params![day, n as i64],
+        );
+    }
+
     /// The stored JSON blob for `key`, if any.
     pub fn load(&self, key: &str) -> Option<String> {
         self.conn
@@ -139,6 +164,11 @@ impl Store {
     /// request — persisting them atomically means a crash can never leave the coin
     /// recorded-as-spent while its credit is lost (or vice versa) (H2).
     pub fn save_many(&mut self, pairs: &[(&str, &str)]) -> Result<(), String> {
+        self.save_batch(pairs, &[])
+    }
+
+    /// `save_many` plus new quorum record rows, all in the same transaction.
+    pub fn save_batch(&mut self, pairs: &[(&str, &str)], records: &[(usize, usize, String)]) -> Result<(), String> {
         let tx = self.conn.transaction().map_err(|e| e.to_string())?;
         for (k, v) in pairs {
             tx.execute(
@@ -148,7 +178,31 @@ impl Store {
             )
             .map_err(|e| e.to_string())?;
         }
+        for (idx, coins, v) in records {
+            tx.execute(
+                "INSERT INTO quorum_records (idx, coins, v) VALUES (?1, ?2, ?3) \
+                 ON CONFLICT(idx) DO UPDATE SET v = excluded.v, coins = excluded.coins",
+                params![*idx as i64, *coins as i64, v],
+            )
+            .map_err(|e| e.to_string())?;
+        }
         tx.commit().map_err(|e| e.to_string())
+    }
+
+    /// All quorum record rows in index order.
+    pub fn load_quorum_records(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        if let Ok(mut st) = self.conn.prepare("SELECT v FROM quorum_records ORDER BY idx") {
+            if let Ok(rows) = st.query_map([], |r| r.get::<_, String>(0)) {
+                out.extend(rows.flatten());
+            }
+        }
+        out
+    }
+
+    /// Remove one blob (used once, to retire the legacy whole-quorum snapshot).
+    pub fn delete(&self, key: &str) {
+        let _ = self.conn.execute("DELETE FROM kv WHERE k = ?1", params![key]);
     }
 }
 

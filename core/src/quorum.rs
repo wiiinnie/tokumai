@@ -86,7 +86,7 @@ impl Record {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Offense {
     pubkey: PublicKeyUser,
     coins: HashSet<String>,   // distinct reused coin serials
@@ -108,6 +108,24 @@ pub struct QuorumStore {
     /// replay or a benign no-op.
     #[serde(default)]
     rev: u64,
+    /// Bumped only when the SMALL part changes (offenses / blacklist) — the server
+    /// persists that part as one blob and the records as append-only rows.
+    #[serde(default)]
+    meta_rev: u64,
+}
+
+/// The store minus its per-payment records: policy, offenses, blacklist, revisions.
+/// Small and rarely changing, so it can be re-written whole; the records (~100 KB per
+/// 100-coin payment, one per redeem, never modified) are persisted as rows instead. A
+/// whole-store snapshot was 17 MB after 160 redeems and took ~90 ms per write ON the
+/// dispatch loop — every state change re-wrote every payment ever seen.
+#[derive(Serialize, Deserialize)]
+pub struct QuorumMeta {
+    policy: Policy,
+    offenses: HashMap<String, Offense>,
+    blacklist: HashSet<String>,
+    rev: u64,
+    meta_rev: u64,
 }
 
 impl Default for QuorumStore {
@@ -125,12 +143,65 @@ impl QuorumStore {
             offenses: HashMap::new(),
             blacklist: HashSet::new(),
             rev: 0,
+            meta_rev: 0,
         }
     }
 
     /// Monotonic revision, bumped whenever durable state changes.
     pub fn revision(&self) -> u64 {
         self.rev
+    }
+
+    /// Revision of the small part (offenses/blacklist) — see `QuorumMeta`.
+    pub fn meta_revision(&self) -> u64 {
+        self.meta_rev
+    }
+
+    /// Number of recorded (fresh) payments; records `saved..records_len()` are new.
+    pub fn records_len(&self) -> usize {
+        self.records.len()
+    }
+
+    /// One record as JSON (for append-only persistence) plus its coin count.
+    pub fn record_json(&self, idx: usize) -> Option<(String, usize)> {
+        let r = self.records.get(idx)?;
+        Some((serde_json::to_string(r).ok()?, r.payment.ss.len()))
+    }
+
+    /// The small part as JSON.
+    pub fn meta_json(&self) -> String {
+        let m = QuorumMeta {
+            policy: self.policy.clone(),
+            offenses: self.offenses.clone(),
+            blacklist: self.blacklist.clone(),
+            rev: self.rev,
+            meta_rev: self.meta_rev,
+        };
+        serde_json::to_string(&m).unwrap_or_else(|_| "{}".into())
+    }
+
+    /// Rebuild from the small part + the record rows (in index order). The serial
+    /// index is derived from the records, so it is never stored twice.
+    pub fn from_parts<'a>(meta: &str, records: impl Iterator<Item = &'a str>) -> Result<Self, String> {
+        let m: QuorumMeta = serde_json::from_str(meta).map_err(|e| format!("quorum meta: {e}"))?;
+        let mut q = QuorumStore {
+            policy: m.policy,
+            serials: HashMap::new(),
+            records: Vec::new(),
+            offenses: m.offenses,
+            blacklist: m.blacklist,
+            rev: m.rev,
+            meta_rev: m.meta_rev,
+        };
+        for (i, r) in records.enumerate() {
+            let rec: Record = serde_json::from_str(r).map_err(|e| format!("quorum record {i}: {e}"))?;
+            let idx = q.records.len();
+            for key in rec.payment.ss.iter().map(serial_key) {
+                q.serials.entry(key).or_insert(idx);
+            }
+            q.records.push(rec);
+        }
+        Ok(q)
     }
 
     /// Restore from a JSON snapshot (server boot); empty/invalid → a fresh store.
@@ -195,6 +266,7 @@ impl QuorumStore {
                 self.blacklist.insert(bkey);
             }
             self.rev += 1; // offense recorded (and maybe a ban) — durable state changed
+            self.meta_rev += 1;
             return Verdict::DoubleSpend {
                 rejected_coins: reused_serials.len() as u32,
                 offender: pk,
@@ -329,5 +401,43 @@ mod tests {
             other => panic!("expected DoubleSpend, got {other:?}"),
         }
         assert!(store.is_blacklisted(&fk.user_pubkey()));
+    }
+
+    /// The append-only layout (meta + record rows) must rebuild the same store as a
+    /// whole snapshot: the serial index is derived from the rows, so a coin recorded
+    /// before the restart is still PROVEN doubled after it, and a replay stays benign.
+    #[test]
+    fn parts_round_trip_preserves_double_spend_detection() {
+        let fk = testkit::funded();
+        let mut w = fk.wallet();
+        let mut w2 = fk.copy(&w);
+        let mut store = QuorumStore::default();
+        let (p1, pi1) = fk.spend_one(&mut w, 6);
+        assert_eq!(store.submit(&p1, pi1, 1), Verdict::Accepted);
+        assert_eq!(store.records_len(), 1);
+        assert_eq!(store.meta_revision(), 0); // no offense yet → meta untouched
+
+        let meta = store.meta_json();
+        let rows: Vec<String> = (0..store.records_len()).map(|i| store.record_json(i).unwrap().0).collect();
+        assert_eq!(store.record_json(0).unwrap().1, 1); // one coin in that payment
+        let mut store = QuorumStore::from_parts(&meta, rows.iter().map(String::as_str)).unwrap();
+        assert_eq!(store.records_len(), 1);
+
+        // same payment again → replay, not a fresh record
+        assert_eq!(store.submit(&p1, pi1, 1), Verdict::Replay);
+        assert_eq!(store.records_len(), 1);
+        // the same coin from the copy → proven double-spend, and the meta revision moves
+        let (p2, pi2) = fk.spend_one(&mut w2, 7);
+        match store.submit(&p2, pi2, 1) {
+            Verdict::DoubleSpend { rejected_coins, offender, .. } => {
+                assert_eq!(rejected_coins, 1);
+                assert!(offender == fk.user_pubkey());
+            }
+            other => panic!("expected DoubleSpend after parts restore, got {other:?}"),
+        }
+        assert_eq!(store.meta_revision(), 1);
+        // and the offense survives another parts round trip
+        let again = QuorumStore::from_parts(&store.meta_json(), rows.iter().map(String::as_str)).unwrap();
+        assert!(again.is_blacklisted(&fk.user_pubkey()) || again.meta_revision() == 1);
     }
 }

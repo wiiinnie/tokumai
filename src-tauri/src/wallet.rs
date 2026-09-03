@@ -56,6 +56,11 @@ pub struct Wallet {
     /// An in-flight spend/redeem awaiting its server reply — retried idempotently (H4).
     #[serde(default)]
     pub pending_spend: Option<PendingSpend>,
+    /// Every Nym address of the CURRENT server (its multi-identity front doors, from the
+    /// catalog reply's `identities`). Same server, same money — so when the one we use
+    /// stops answering, the liveness check switches to another without any user action.
+    #[serde(default)]
+    pub server_alternates: Vec<String>,
 }
 
 pub fn wallet_path(data_dir: &Path) -> PathBuf {

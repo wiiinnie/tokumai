@@ -1,6 +1,6 @@
 [package]
 name = "scrai-core"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 description = "ScrambleAI shared core — threshold ecash (Coconut), the double-spend quorum, and the federation protocol. Depended on by BOTH the desktop client (src-tauri) and the server binary."
 

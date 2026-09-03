@@ -118,6 +118,8 @@ struct DayRow {
     purchased: u64,
     /// most clients served in parallel at one instant that day (chat/catalog/payment in flight)
     peak_clients: u64,
+    /// most DIFFERENT clients that sent anything within one 60-second window that day
+    peak_1m: u64,
     /// DIFFERENT paying sessions that chatted that day (`daily_users`; 0 before it existed).
     /// One person = one session unless they bump the session index; free-tier chats
     /// carry no session and are not counted.
@@ -349,7 +351,17 @@ fn read_metrics(path: &PathBuf) -> Metrics {
         .unwrap_or(0);
     let sess: SessBlob = blob("sessions").and_then(|j| serde_json::from_str(&j).ok()).unwrap_or_default();
     let pay: PayBlob = blob("pay").and_then(|j| serde_json::from_str(&j).ok()).unwrap_or_default();
-    let quo: QuorumBlob = blob("quorum").and_then(|j| serde_json::from_str(&j).ok()).unwrap_or_default();
+    // Current layout: kv "quorum_meta" (offenses/blacklist) + quorum_records rows (coins);
+    // the legacy whole-store "quorum" blob is read when a server has not migrated yet.
+    let quo: QuorumBlob = blob("quorum_meta")
+        .or_else(|| blob("quorum"))
+        .and_then(|j| serde_json::from_str(&j).ok())
+        .unwrap_or_default();
+    let coins_from_rows: Option<u64> = conn
+        .query_row("SELECT COALESCE(SUM(coins), 0) FROM quorum_records", [], |r| r.get::<_, i64>(0))
+        .ok()
+        .map(|n| n as u64)
+        .filter(|n| *n > 0);
 
     // economy
     let mut payers: HashSet<&str> = HashSet::new();
@@ -390,7 +402,7 @@ fn read_metrics(path: &PathBuf) -> Metrics {
     // NOTE: coins_redeemed is the count of burned ecash SERIALS, an integrity
     // number only — a nym ticketbook holds many tiny coins, so a serial is NOT
     // a $1 coin. Do not dollarize it. Real spend comes from the daily counters.
-    m.coins_redeemed = quo.serials.len() as u64;
+    m.coins_redeemed = coins_from_rows.unwrap_or(quo.serials.len() as u64);
 
     // integrity
     m.offenders = quo.offenses.len();
@@ -412,8 +424,10 @@ fn read_metrics(path: &PathBuf) -> Metrics {
     // `daily_users` arrived with 0.3.0 — absent on an older db
     let has_users = conn.prepare("SELECT sid FROM daily_users LIMIT 0").is_ok();
     let users_col = if has_users { "(SELECT COUNT(*) FROM daily_users u WHERE u.day = daily.day)" } else { "0" };
+    let has_peak1m = conn.prepare("SELECT peak_1m FROM daily LIMIT 0").is_ok();
+    let peak1m_col = if has_peak1m { "peak_1m" } else { "0" };
     if let Ok(mut stmt) = conn.prepare(&format!(
-        "SELECT day, prompts, spent, purchases, purchased, cost, {peak_col}, {users_col} FROM daily ORDER BY day DESC LIMIT 12"
+        "SELECT day, prompts, spent, purchases, purchased, cost, {peak_col}, {users_col}, {peak1m_col} FROM daily ORDER BY day DESC LIMIT 12"
     )) {
         m.has_daily = true;
         if let Ok(rows) = stmt.query_map([], |r| {
@@ -426,6 +440,7 @@ fn read_metrics(path: &PathBuf) -> Metrics {
                 cost: r.get::<_, i64>(5)? as u64,
                 peak_clients: r.get::<_, i64>(6)? as u64,
                 users: r.get::<_, i64>(7)? as u64,
+                peak_1m: r.get::<_, i64>(8)? as u64,
                 per_model: Default::default(),
                 faucet: 0,
             })
@@ -574,6 +589,7 @@ fn ui(f: &mut Frame, m: &Metrics, path: &str, clock: &str, network: &str, status
         Span::styled("Scramble", Style::default().fg(BONE).add_modifier(Modifier::BOLD)),
         Span::styled("AI", Style::default().fg(SAGE).add_modifier(Modifier::BOLD)),
         Span::styled("  server admin", Style::default().fg(DIM)),
+        Span::styled(format!("  v{}", scrai_server::VERSION), Style::default().fg(DIM)),
         Span::styled(format!("   {path}"), Style::default().fg(DIM)),
         Span::styled(format!("   {clock} UTC"), Style::default().fg(GOLD)),
         Span::styled(
@@ -724,6 +740,7 @@ fn ui(f: &mut Frame, m: &Metrics, path: &str, clock: &str, network: &str, status
     header.push("buys".into());
     header.push("buys $".into());
     header.push("users".into());
+    header.push("1 min".into());
     header.push("peak".into());
     // two lines: the model labels wrap ("Nano Banana\n2 Lite"), the rest sits on the first
     let header_row = Row::new(header).style(Style::default().fg(DIM)).height(2);
@@ -763,6 +780,7 @@ fn ui(f: &mut Frame, m: &Metrics, path: &str, clock: &str, network: &str, status
                     Cell::from(Span::styled(grp(d.purchases), Style::default().fg(BONE))),
                     Cell::from(Span::styled(usd(d.purchased), Style::default().fg(GOLD))),
                     Cell::from(Span::styled(grp(d.users), Style::default().fg(BONE))),
+                    Cell::from(Span::styled(grp(d.peak_1m), Style::default().fg(SAGE))),
                     Cell::from(Span::styled(grp(d.peak_clients), Style::default().fg(SAGE))),
                 ])
                 .collect::<Vec<Cell>>())

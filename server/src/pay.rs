@@ -39,7 +39,23 @@ const INVOICE_ACCT_WINDOW_MS: u64 = 600_000;
 /// H4: hard cap on the burned-nonce store (oldest evicted past this). Large enough that a
 /// legit client never bumps into it, small enough that a signed-nonce flood can't OOM.
 const MAX_NONCES: usize = 100_000;
-const INVOICE_GLOBAL_PER_MIN: usize = 30;
+/// Server-wide invoice.create rate (per minute). An ABUSE brake, not a capacity limit:
+/// every create is a payment-provider call + a persisted invoice row, and accounts are
+/// free to mint — so a griefer must not be able to raise thousands. The server itself
+/// handles creates in ~2 s under load. Sized for a launch spike (a post going round =
+/// ~50–100 buys in the peak minute) while still capping a flood at 7,200/h. The old
+/// compiled-in 30 turned away 10 of 40 simultaneous buyers in the load test (2026-09-02).
+const INVOICE_GLOBAL_PER_MIN_DEFAULT: usize = 120;
+fn invoice_global_per_min() -> usize {
+    static V: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("SCRAI_INVOICE_PER_MIN")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .filter(|n| *n > 0)
+            .unwrap_or(INVOICE_GLOBAL_PER_MIN_DEFAULT)
+    })
+}
 
 pub fn now_ms() -> u64 {
     SystemTime::now()
@@ -281,10 +297,11 @@ impl Pay {
             }
         }
         self.global_hits.retain(|t| now - t < 60_000);
-        if self.global_hits.len() >= INVOICE_GLOBAL_PER_MIN {
+        let cap = invoice_global_per_min();
+        if self.global_hits.len() >= cap {
             if now - self.global_cap_logged_at > 60_000 {
                 self.global_cap_logged_at = now;
-                eprintln!("scrai-server: INVOICE LIMIT — {INVOICE_GLOBAL_PER_MIN} invoices/min server-wide reached (INVOICE_GLOBAL_PER_MIN in pay.rs, compiled in) — refusing creates for up to 60 s");
+                eprintln!("scrai-server: INVOICE LIMIT — {cap} invoices/min server-wide reached (SCRAI_INVOICE_PER_MIN, default {INVOICE_GLOBAL_PER_MIN_DEFAULT}) — refusing creates for up to 60 s");
             }
             return Err("the server is issuing too many invoices right now — retry in ~60s".into());
         }
@@ -317,10 +334,19 @@ impl Pay {
         *self.entitlements.get(account_id).unwrap_or(&0)
     }
 
-    /// Deduct entitlement after a successful coconut issuance.
+    /// Deduct entitlement for a coconut issuance. Called BEFORE the (off-loop) issuance
+    /// runs, so two withdraws of the same account in flight can't both pass the gate;
+    /// `restore_entitlement` gives it back when issuance fails.
     pub fn consume_entitlement(&mut self, account_id: &str, amount: u64) {
         let e = self.entitlements.entry(account_id.to_string()).or_default();
         *e = e.saturating_sub(amount);
+        self.rev += 1;
+    }
+
+    /// Undo a `consume_entitlement` whose issuance did not produce a credential.
+    pub fn restore_entitlement(&mut self, account_id: &str, amount: u64) {
+        let e = self.entitlements.entry(account_id.to_string()).or_default();
+        *e = e.saturating_add(amount);
         self.rev += 1;
     }
 
@@ -1002,6 +1028,26 @@ impl Rail {
     }
 }
 
+/// `Retry-After` in seconds, if the provider sent one (an HTTP-date form is ignored).
+fn retry_after_secs(res: &reqwest::Response) -> Option<u64> {
+    res.headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|n| *n > 0)
+}
+
+/// What the USER reads when a payment provider throttles or is down: our wording,
+/// with the provider's own retry hint when it gave one. (The raw rail error string is
+/// what invoice.create returns to the app, so this is the whole message.)
+fn provider_busy(provider: &str, retry_after: Option<u64>) -> String {
+    match retry_after {
+        Some(n) if n >= 120 => format!("{provider} is limiting requests right now — please try again in about {} minutes", n.div_ceil(60)),
+        Some(n) => format!("{provider} is limiting requests right now — please try again in about {n} seconds"),
+        None => format!("{provider} is busy right now — please try again in a minute"),
+    }
+}
+
 async fn btcpay(api_key: &str, req: reqwest::RequestBuilder) -> Result<Value, String> {
     let res = req
         // BTCPay's own scheme, not Bearer.
@@ -1011,12 +1057,19 @@ async fn btcpay(api_key: &str, req: reqwest::RequestBuilder) -> Result<Value, St
         .await
         .map_err(|e| format!("BTCPay unreachable: {e}"))?;
     let status = res.status();
+    let retry_after = retry_after_secs(&res);
     let body: Value = res.json().await.unwrap_or(Value::Null);
     if !status.is_success() {
         let msg = body.get("message").and_then(|m| m.as_str()).unwrap_or("");
         return Err(match status.as_u16() {
             401 | 403 => "BTCPay rejected the API key — check BTCPAY_API_KEY and its store permissions".into(),
             404 => "BTCPay does not know this store or invoice — check BTCPAY_STORE_ID".into(),
+            // Throttled (429) or temporarily down (502/503/504): the user gets a plain
+            // "try again in N" instead of BTCPay's own text; the operator log keeps that.
+            429 | 502 | 503 | 504 => {
+                eprintln!("scrai-server: BTCPay {status} (retry-after {retry_after:?}): {}", msg.chars().take(200).collect::<String>());
+                provider_busy("the payment processor", retry_after)
+            }
             s => format!("BTCPay {s}: {}", msg.chars().take(200).collect::<String>()),
         });
     }
@@ -1139,7 +1192,7 @@ impl CardRail {
         }
         let v = match mollie(api_key, crate::http::client().get(format!("{MOLLIE_API}/payments/{provider_ref}"))).await {
             Ok(v) => v,
-            Err(MollieErr::RateLimited) => return Ok("pending".into()),
+            Err(MollieErr::RateLimited(_)) => return Ok("pending".into()),
             Err(MollieErr::Other(e)) => return Err(e),
         };
         Ok(match v.get("status").and_then(|s| s.as_str()).unwrap_or("") {
@@ -1161,14 +1214,15 @@ fn is_mollie_url(u: &str) -> bool {
 
 #[derive(Debug)]
 enum MollieErr {
-    RateLimited,
+    /// 429 with the provider's `Retry-After` (seconds), when it sent one.
+    RateLimited(Option<u64>),
     Other(String),
 }
 
 impl From<MollieErr> for String {
     fn from(e: MollieErr) -> String {
         match e {
-            MollieErr::RateLimited => "Mollie is rate-limiting us — try again in a moment".into(),
+            MollieErr::RateLimited(after) => provider_busy("the card processor", after),
             MollieErr::Other(s) => s,
         }
     }
@@ -1182,6 +1236,7 @@ async fn mollie(api_key: &str, req: reqwest::RequestBuilder) -> Result<Value, Mo
         .await
         .map_err(|e| MollieErr::Other(format!("Mollie unreachable: {e}")))?;
     let status = res.status();
+    let retry_after = retry_after_secs(&res);
     let body: Value = res.json().await.unwrap_or(Value::Null);
     if !status.is_success() {
         // Mollie errors are {status, title, detail}; `detail` names the offending field.
@@ -1189,7 +1244,8 @@ async fn mollie(api_key: &str, req: reqwest::RequestBuilder) -> Result<Value, Mo
         return Err(match status.as_u16() {
             401 | 403 => MollieErr::Other("Mollie rejected the API key — check MOLLIE_API_KEY".into()),
             404 => MollieErr::Other("Mollie does not know this payment".into()),
-            429 => MollieErr::RateLimited,
+            429 => MollieErr::RateLimited(retry_after),
+            502 | 503 | 504 => MollieErr::Other(provider_busy("the card processor", retry_after)),
             s => MollieErr::Other(format!("Mollie {s}: {}", detail.chars().take(200).collect::<String>())),
         });
     }

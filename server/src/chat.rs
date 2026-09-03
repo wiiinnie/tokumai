@@ -170,17 +170,23 @@ pub const GROUNDING_FREE_PER_MONTH: u64 = 5000;
 /// (provider cost in SCRAI, retail SCRAI charged) for `queries` executed grounding
 /// searches. Zero queries → no charge, so a live-enabled prompt the model chose NOT
 /// to search on costs nothing extra.
-fn grounding_charge(queries: u64, margin: f64) -> (f64, u64) {
+/// Per-query search price for a model's provider: Gemini grounding or OpenAI web search.
+fn search_usd_per_query(model: &str) -> f64 {
+    if crate::openai::is_openai_model(model) { crate::openai::search_usd_per_call() } else { GROUNDING_USD_PER_QUERY }
+}
+
+fn grounding_charge_at(queries: u64, usd_per_query: f64, margin: f64) -> (f64, u64) {
     use scrai_core::billing::{ceil_scrai, clamp_margin};
     use scrai_core::coconut::SCRAI_PER_USD;
     if queries == 0 {
         return (0.0, 0);
     }
-    let cost = ceil_scrai(queries as f64 * GROUNDING_USD_PER_QUERY * SCRAI_PER_USD as f64);
+    let cost = ceil_scrai(queries as f64 * usd_per_query * SCRAI_PER_USD as f64);
     let retail = (cost * clamp_margin(margin)).ceil() as u64;
     (cost, retail)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn ceiling_for(
     price: &scrai_core::billing::ModelPrice,
     margin: f64,
@@ -190,6 +196,7 @@ fn ceiling_for(
     grounding_free: u64,
     thinking: u64,
     image_size: &str,
+    model: &str,
 ) -> u64 {
     use scrai_core::billing::{ceil_scrai, clamp_margin};
     use scrai_core::coconut::SCRAI_PER_USD;
@@ -229,7 +236,7 @@ fn ceiling_for(
     // beyond the month's free allowance. Under the allowance grounding is free, so a
     // low-balance user isn't falsely blocked by a reserve for cost they won't incur.
     let grounding = if live {
-        grounding_charge(MAX_GROUNDING_QUERIES.saturating_sub(grounding_free), margin).1
+        grounding_charge_at(MAX_GROUNDING_QUERIES.saturating_sub(grounding_free), search_usd_per_query(model), margin).1
     } else {
         0
     };
@@ -346,6 +353,11 @@ impl PendingChat {
     pub fn session_id(&self) -> Option<&str> {
         self.paid.as_ref().map(|p| p.session_id.as_str())
     }
+
+    /// Provider key for the per-provider concurrency cap (main.rs).
+    pub fn provider(&self) -> &'static str {
+        provider_of(&self.model)
+    }
 }
 
 pub enum Reserved {
@@ -453,7 +465,19 @@ pub fn reserve(
     // Reserve the worst case — this is what keeps two in-flight requests from
     // jointly overspending, and the counter check is the replay protection.
     use scrai_core::session::Reserve;
-    let ceiling = ceiling_for(&price, margin, &messages, max_tokens, live, grounding_free, thinking, image_size);
+    // OpenAI web search has no monthly free allowance — every call is billable.
+    let grounding_free = if crate::openai::is_openai_model(&model) { 0 } else { grounding_free };
+    // Abuse strikes: a session that collected today's quota of declines AT THIS PROVIDER
+    // is refused that provider's models until tomorrow (openai.rs) — before anything is
+    // reserved or sent anywhere. Other providers stay available.
+    let provider = provider_of(&model);
+    if crate::openai::blocked(&session_id, provider, crate::openai::day_number()) {
+        return err(&format!(
+            "{} models are paused for this session for the rest of the day after repeated policy declines — they work again tomorrow (UTC); other models are unaffected",
+            provider_label(provider)
+        ));
+    }
+    let ceiling = ceiling_for(&price, margin, &messages, max_tokens, live, grounding_free, thinking, image_size, &model);
     match sessions.reserve(&session_id, counter, ceiling) {
         Reserve::Ok => {}
         Reserve::Unknown => return err("unknown session — redeem coconut coins into it first"),
@@ -555,7 +579,7 @@ pub fn settle(
             // anything, so only those are billed (per query, on top of tokens). Within
             // the allowance grounding is genuinely free → nothing added.
             let billable_queries = usage.grounding_queries.saturating_sub(p.grounding_free);
-            let (g_cost, g_retail) = grounding_charge(billable_queries, p.margin);
+            let (g_cost, g_retail) = grounding_charge_at(billable_queries, search_usd_per_query(&p.model), p.margin);
             frame.cost_scrai += g_cost;
             provider_cost = Some(frame.cost_scrai);
             // Token cost + per-image cost (image models report zero tokens) + grounding.
@@ -595,6 +619,11 @@ pub fn settle(
         Err(e) => {
             // Provider failed → the user pays nothing.
             sessions.refund(&paid.session_id, paid.ceiling);
+            // A policy decline (any provider, or our moderation prefilter) is a strike
+            // against the session; today's quota reached = paused until tomorrow.
+            if e.starts_with("Declined by") {
+                crate::openai::strike(&paid.session_id, provider_of(&p.model), crate::openai::day_number());
+            }
             json!({ "id": id, "kind": "error", "error": e })
         }
     };
@@ -656,12 +685,25 @@ async fn chat(
     let model = v.get("model").and_then(|m| m.as_str()).ok_or("no model")?;
     let max_tokens = v.get("maxTokens").and_then(|m| m.as_u64()).map(|m| m.min(MAX_OUTPUT_TOKENS));
 
+    // Load testing: a canned answer instead of a provider call (fake-payments servers only).
+    if let Some((delay_ms, chars)) = mock_provider() {
+        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+        let input = serde_json::to_string(&messages).map(|s| s.len() as u64 / 4).unwrap_or(0);
+        let text = mock_answer(chars);
+        let usage = TokenUsage { input, output: (chars as u64 / 4).max(1), estimated: true, ..Default::default() };
+        return Ok((text, usage, None));
+    }
+
     // Route by model → provider; text catalogs are fetched live (catalog.rs),
     // image models are the static free-tier sets. Only Gemini honours `live`
     // grounding; image-gen models never search, so it's forced off for them.
     if model.starts_with("gemini") {
         let live = live && !model.contains("image");
         gemini(model, &messages, max_tokens, live, thinking, image_size).await
+    } else if crate::openai::is_openai_model(model) {
+        let sid = v.get("sessionId").and_then(|s| s.as_str());
+        let (t, u) = crate::openai::chat(model, &messages, max_tokens.unwrap_or_else(default_max_tokens), live, thinking, sid).await?;
+        Ok((t, u, None))
     } else if model.starts_with("pollinations-") {
         pollinations(model, &messages).await
     } else if let Some(path) = cf_model_path(model) {
@@ -669,6 +711,61 @@ async fn chat(
     } else {
         let (t, u) = groq(model, messages, max_tokens).await?;
         Ok((t, u, None))
+    }
+}
+
+/// LOAD-TEST ONLY: `SCRAI_MOCK_PROVIDER=<delay_ms>[:<answer_chars>]` makes every chat return
+/// a canned answer after `delay_ms` instead of calling a provider — so a load test drives
+/// the whole money path (reserve → settle → persist → reply over the mixnet) without a
+/// single model call. Honoured ONLY together with SCRAI_FAKE_PAYMENTS=1: on that server no
+/// real money can arrive (pay.rs refuses fake + real rails), so nobody is charged for a
+/// fake answer. On any other server the variable is ignored (main.rs logs that at boot).
+pub fn mock_provider() -> Option<(u64, usize)> {
+    static PARSED: std::sync::OnceLock<Option<(u64, usize)>> = std::sync::OnceLock::new();
+    *PARSED.get_or_init(|| {
+        let raw = std::env::var("SCRAI_MOCK_PROVIDER").ok()?;
+        if std::env::var("SCRAI_FAKE_PAYMENTS").as_deref() != Ok("1") {
+            return None;
+        }
+        let mut it = raw.split(':');
+        let delay = it.next()?.trim().parse().ok()?;
+        let chars = it.next().and_then(|c| c.trim().parse().ok()).unwrap_or(600);
+        Some((delay, chars))
+    })
+}
+
+fn mock_answer(chars: usize) -> String {
+    const S: &str = "This is a mock answer from a load-test server; no model was called. ";
+    let mut t = String::with_capacity(chars + S.len());
+    while t.len() < chars {
+        t.push_str(S);
+    }
+    t.truncate(chars);
+    t
+}
+
+/// Boot-line helper: is the OpenAI moderation prefilter on?
+pub fn openai_prefilter() -> bool {
+    crate::openai::prefilter_enabled()
+}
+
+/// User-facing name of a provider key.
+fn provider_label(provider: &str) -> &'static str {
+    match provider {
+        "gemini" => "Google",
+        "openai" => "OpenAI",
+        _ => "This provider's",
+    }
+}
+
+/// Which provider serves a model — the key for per-provider concurrency caps.
+pub fn provider_of(model: &str) -> &'static str {
+    if model.starts_with("gemini") {
+        "gemini"
+    } else if crate::openai::is_openai_model(model) {
+        "openai"
+    } else {
+        "other"
     }
 }
 
@@ -1296,14 +1393,14 @@ mod tests {
         };
         let nb2 = ModelPrice { output_text: Some(3.0), ..text };
         let msgs = json!([{ "role": "user", "content": "a cat" }]);
-        let old = ceiling_for(&text, 1.0, &msgs, Some(1024), false, 5000, 2048, "4K");
-        let new = ceiling_for(&nb2, 1.0, &msgs, Some(1024), false, 5000, 2048, "4K");
+        let old = ceiling_for(&text, 1.0, &msgs, Some(1024), false, 5000, 2048, "4K", "gemini-x");
+        let new = ceiling_for(&nb2, 1.0, &msgs, Some(1024), false, 5000, 2048, "4K", "gemini-x");
         // old: 3072 output tokens × $60/1M = $0.184 (≈ 18_432 SCRAI) — all at the image rate
         // new: 3072 × $3/1M + 2520 × $60/1M = $0.0092 + $0.1512 ≈ 16_044 SCRAI
         assert!(new < old, "split reserve {new} should be below the all-image-rate reserve {old}");
         assert!(new >= 2520 * 60 / 10, "reserve must still cover a 4K image: {new}");
         // The reserve follows the requested size: 1K (1120 tokens) reserves less than 4K.
-        let one_k = ceiling_for(&nb2, 1.0, &msgs, Some(1024), false, 5000, 2048, "1K");
+        let one_k = ceiling_for(&nb2, 1.0, &msgs, Some(1024), false, 5000, 2048, "1K", "gemini-x");
         assert!(one_k < new, "1K reserve {one_k} must be below 4K reserve {new}");
         assert!(one_k >= 1120 * 60 / 10);
     }
@@ -1383,9 +1480,9 @@ mod tests {
 
     #[test]
     fn grounding_charge_bills_per_query_and_zero_is_free() {
-        assert_eq!(grounding_charge(0, 1.1), (0.0, 0));
+        assert_eq!(grounding_charge_at(0, GROUNDING_USD_PER_QUERY, 1.1), (0.0, 0));
         // 2 queries × $0.014 = $0.028 → provider SCRAI > 0, retail = ceil(cost×1.1)
-        let (cost, retail) = grounding_charge(2, 1.1);
+        let (cost, retail) = grounding_charge_at(2, GROUNDING_USD_PER_QUERY, 1.1);
         assert!(cost > 0.0);
         assert!(retail as f64 >= cost); // margin never lowers the charge
     }

@@ -27,6 +27,9 @@ static SERVER_TESTNET: std::sync::Mutex<(bool, Option<String>)> = std::sync::Mut
 /// What the server said about cards with the catalog (`{enabled, minUsd}`) — the card
 /// row exists only when a server has a Mollie key, and the minimum tile is its call.
 static SERVER_CARD: std::sync::Mutex<Option<Value>> = std::sync::Mutex::new(None);
+/// The server's own version (`serverVersion` on the catalog reply; older servers send
+/// none) — shown under Settings next to the app version.
+static SERVER_VERSION: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 /// The server's update notice (`update` on the catalogue reply) — set with the model list,
 /// shown by the UI as a blocking "Update available" gate.
 static SERVER_UPDATE: std::sync::Mutex<Option<Value>> = std::sync::Mutex::new(None);
@@ -36,17 +39,47 @@ static APP_VER: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 pub fn app_version() -> &'static str {
     APP_VER.get().map(String::as_str).unwrap_or("0.0.0")
 }
+
+/// The App Store storefront the device is signed into, as an ISO 3166-1 alpha-3 code
+/// ("USA", "DEU", …). Only iOS has one; `None` when no store account is signed in or on
+/// any other platform. The webview turns it into the 3.1.1 top-up variant (see
+/// `iosRegion` in index.html): a missing storefront falls to the strictest one.
+#[cfg(target_os = "ios")]
+#[allow(deprecated)] // SKPaymentQueue.storefront is the only storefront API reachable from Obj-C
+fn ios_storefront() -> Option<String> {
+    use objc2_store_kit::SKPaymentQueue;
+    let queue = unsafe { SKPaymentQueue::defaultQueue() };
+    let storefront = unsafe { queue.storefront() }?;
+    let code = unsafe { storefront.countryCode() }.to_string();
+    let code = code.trim().to_ascii_uppercase();
+    (code.len() == 3 && code.bytes().all(|b| b.is_ascii_uppercase())).then_some(code)
+}
+#[cfg(not(target_os = "ios"))]
+fn ios_storefront() -> Option<String> {
+    None
+}
 const PROTO: u64 = 1;
 
-// Reply-SURB budgets: a small answer needs few, a chat answer more.
-const SURBS_SMALL: u32 = 80;
+// Reply-SURB budgets, sized per REPLY: every SURB rides in the request as one Sphinx
+// packet, so a budget is inbound load on the server — the load test (docs/load-testing.md)
+// measured 60 → 10 SURBs on one-packet replies halving their latency under a storm, and
+// 120 making everything worse. The SDK re-requests SURBs when a reply outgrows its budget
+// (one extra round trip), so a budget is a fast path, never a hard limit.
+/// One-packet replies: status, invoice.*, entitlement, withdraw, redeem, upload acks, ping.
+const SURBS_SMALL: u32 = 8;
+/// The catalogue (a few KB).
+const SURBS_META: u32 = 16;
+/// Coconut `Keys` (~109 KB ≈ 55 packets) — fetched once per epoch and cached (`keys_cache`).
+const SURBS_KEYS: u32 = 64;
+/// One staged picture chunk (96 KB base64 ≈ 50 packets).
+const SURBS_CHUNK: u32 = 64;
 /// `staged_download` key for the unsigned (free-model) chat path, which has no session.
 const FREE_SESSION_KEY: &str = "free";
-/// Reply budget for text chats: ~150 Sphinx packets ≈ 300 KB — ample for any
-/// text answer, and far fewer request fragments than the old flat 500 (each
-/// SURB rides IN the request, so oversizing bloats every send and triggers
-/// retransmission storms on the server's inbound reassembly).
-const SURBS_TEXT: u32 = 150;
+/// Reply budget for text chats: ~30 Sphinx packets ≈ 60 KB — a long markdown answer is
+/// 10–20 KB; anything bigger re-requests. (Was 150, before that a flat 500: each SURB
+/// rides IN the request, so oversizing bloats every send and triggers retransmission
+/// storms on the server's inbound reassembly.)
+const SURBS_TEXT: u32 = 30;
 // (Image chats used to carry a flat 500-SURB budget for a single ~MB reply. Generated
 // pictures now come back as `image.chunk` references fetched with SURBS_SMALL each —
 // see `fetch_staged_images` — so an image chat's own reply is text-sized.)
@@ -404,13 +437,53 @@ async fn fed_call(
     srv: &str,
     req: scrai_core::federation::FedRequest,
 ) -> Result<scrai_core::federation::FedResponse, String> {
+    let surbs = if matches!(req, scrai_core::federation::FedRequest::Keys) { SURBS_KEYS } else { SURBS_SMALL };
     let env = json!({
         "v": PROTO, "kind": "coconut", "id": rand_hex(16),
         "fed": serde_json::to_value(&req).map_err(|e| e.to_string())?,
     });
-    let reply = t.round_trip(srv, &env, SURBS_SMALL, TIMEOUT_MS).await?;
+    let reply = t.round_trip(srv, &env, surbs, TIMEOUT_MS).await?;
     serde_json::from_value(reply.get("fed").cloned().ok_or("no fed in reply")?)
         .map_err(|e| format!("bad fed response: {e}"))
+}
+
+/// The federation's `Keys` reply per server, kept for the epoch. It is ~109 KB and
+/// changes only when the authority rotates (visible as a new `expiration_date`), yet the
+/// app used to fetch it for EVERY ticketbook — in a purchase storm those replies were the
+/// server's biggest outbound burst. Cached in memory (one fetch per app run and epoch);
+/// dropped on any withdrawal failure so a rotated key is refetched on the retry.
+fn keys_cache() -> &'static std::sync::Mutex<std::collections::HashMap<String, (u32, Value)>> {
+    static C: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, (u32, Value)>>> = std::sync::OnceLock::new();
+    C.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Fetch (or reuse) the federation keys for `srv`.
+async fn federation_keys(t: &Transport, srv: &str) -> Result<scrai_core::federation::FedResponse, String> {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) as u32;
+    let cached = keys_cache().lock().ok().and_then(|c| c.get(srv).cloned());
+    // Valid while the spend date the app uses (expiration − 1 day) is still ahead.
+    if let Some((exp, v)) = cached {
+        if now + 2 * 86_400 < exp {
+            if let Ok(r) = serde_json::from_value::<scrai_core::federation::FedResponse>(v) {
+                return Ok(r);
+            }
+        }
+    }
+    let resp = fed_call(t, srv, scrai_core::federation::FedRequest::Keys).await?;
+    if let scrai_core::federation::FedResponse::Keys { expiration_date, .. } = &resp {
+        if let Ok(v) = serde_json::to_value(&resp) {
+            if let Ok(mut c) = keys_cache().lock() {
+                c.insert(srv.to_string(), (*expiration_date, v));
+            }
+        }
+    }
+    Ok(resp)
+}
+
+fn forget_keys(srv: &str) {
+    if let Ok(mut c) = keys_cache().lock() {
+        c.remove(srv);
+    }
 }
 
 /// Full credential withdrawal: fetch keys → blind-withdraw at each authority →
@@ -433,7 +506,7 @@ async fn withdraw_purse(
     }
 
     let (vk, auth_vks, coin_sigs, date_sigs, expiration_date, total_coins) =
-        match fed_call(t, srv, FedRequest::Keys).await? {
+        match federation_keys(t, srv).await? {
             FedResponse::Keys {
                 vk, auth_vks, coin_sigs, date_sigs, expiration_date, total_coins, ..
             } => (vk, auth_vks, coin_sigs, date_sigs, expiration_date, total_coins),
@@ -471,7 +544,10 @@ async fn withdraw_purse(
             .map_err(|e| format!("bad fed response: {e}"))?;
         let blinded = match resp {
             FedResponse::Withdraw { blinded } => blinded,
-            FedResponse::Error { message } => return Err(format!("server: {message}")),
+            FedResponse::Error { message } => {
+                forget_keys(srv); // a rotated key would surface here — refetch on retry
+                return Err(format!("server: {message}"));
+            }
             _ => return Err("unexpected response to Withdraw".into()),
         };
         // verify_share is the cryptographic proof of honest issuance: a well-formed
@@ -479,6 +555,7 @@ async fn withdraw_purse(
         // garbage share (H3). Flag it so no further book is withdrawn into it.
         let share = coconut::verify_share(vk_auth, user.secret_key(), &blinded, &req_info, i as u64 + 1)
             .map_err(|e| {
+                forget_keys(srv);
                 flag_server(srv, &format!("invalid withdrawal share: {e}"));
                 format!("server issued an invalid credential share (server flagged as dishonest): {e}")
             })?;
@@ -487,6 +564,7 @@ async fn withdraw_purse(
     // aggregate — succeeds ONLY if the server issued valid shares
     let wallet = coconut::aggregate(&vk, user.secret_key(), &shares, &req_info)
         .map_err(|e| {
+            forget_keys(srv);
             flag_server(srv, &format!("credential shares don't aggregate: {e}"));
             format!("server credential failed to aggregate (server flagged as dishonest): {e}")
         })?;
@@ -689,7 +767,7 @@ async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<V
             models = cached;
         } else {
             match transport
-                .round_trip(srv, &json!({"v":PROTO,"kind":"models","id":rand_hex(16)}), SURBS_SMALL, META_TIMEOUT_MS)
+                .round_trip(srv, &json!({"v":PROTO,"kind":"models","id":rand_hex(16)}), SURBS_META, META_TIMEOUT_MS)
                 .await
             {
                 Err(_) => server_answered = false,
@@ -697,6 +775,25 @@ async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<V
                     if let Some(m) = resp.get("models") {
                         models = m.clone();
                         transport.set_cached_models(m.clone()).await;
+                    }
+                    // The server's other front doors — remembered as fallbacks, but only
+                    // when the address we use is among them (a custom server's list is its
+                    // own; never let one server hand us another's addresses).
+                    if let Some(ids) = resp.get("identities").and_then(|i| i.as_array()) {
+                        let ids: Vec<String> = ids
+                            .iter()
+                            .filter_map(|a| a.as_str())
+                            .filter(|a| Transport::validate_address(a).is_ok())
+                            .map(str::to_string)
+                            .collect();
+                        if ids.iter().any(|a| a == srv) {
+                            let dir = data_dir(&app)?;
+                            let mut w2 = wallet::load(&dir);
+                            if w2.server_alternates != ids {
+                                w2.server_alternates = ids;
+                                let _ = wallet::save(&dir, &w2);
+                            }
+                        }
                     }
                     {
                         let mut u = SERVER_UPDATE.lock().unwrap_or_else(|e| e.into_inner());
@@ -714,6 +811,10 @@ async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<V
                     {
                         let mut c = SERVER_CARD.lock().unwrap_or_else(|e| e.into_inner());
                         *c = resp.get("card").filter(|c| c.is_object()).cloned();
+                    }
+                    {
+                        let mut v = SERVER_VERSION.lock().unwrap_or_else(|e| e.into_inner());
+                        *v = resp.get("serverVersion").and_then(|s| s.as_str()).map(|s| s.chars().take(32).collect());
                     }
                 }
             }
@@ -739,12 +840,15 @@ async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<V
     let (testnet, faucet_url) = SERVER_TESTNET.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let update = SERVER_UPDATE.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let card = SERVER_CARD.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let server_version = SERVER_VERSION.lock().unwrap_or_else(|e| e.into_inner()).clone();
 
     let out = json!({
         // Developer diagnostics (cost audit, upload readout, dev dials) exist only in a
         // debug build — a shipped binary never shows the Developer section.
         "devBuild": cfg!(debug_assertions),
         "appVersion": app_version(),
+        "serverVersion": server_version,
+        "storefront": ios_storefront(),
         "update": update,
         "account": account,
         "balance": balance,
@@ -757,6 +861,7 @@ async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<V
         "card": card,
         "models": models,
         "server": server,
+        "serverAlternates": w.server_alternates,
     });
     diag(&app, &format!(
         "state: about to respond, {} bytes total (models {} bytes)",
@@ -786,6 +891,7 @@ async fn set_server(app: AppHandle, transport: State<'_, Arc<Transport>>, addres
     transport.clear_cached_models().await;
     *SERVER_TESTNET.lock().unwrap_or_else(|e| e.into_inner()) = (false, None);
     *SERVER_CARD.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    *SERVER_VERSION.lock().unwrap_or_else(|e| e.into_inner()) = None;
     *SERVER_UPDATE.lock().unwrap_or_else(|e| e.into_inner()) = None;
     // Check the NEW address right away: over the live route it's a single ping, and a
     // dead route (e.g. the previous server was unreachable) is rebuilt first instead of
@@ -1275,6 +1381,19 @@ async fn chat_impl(
     // text budget covers it; `bigReply` is kept for older callers and ignored.
     let _ = bigReply;
     let surbs = SURBS_TEXT;
+    // Reasoning models advertise a longer `timeoutMs` in the catalog (OpenAI: 180 s);
+    // never shorter than the default.
+    let chat_timeout_ms: u64 = transport
+        .cached_models()
+        .await
+        .and_then(|ms| {
+            ms.as_array()?
+                .iter()
+                .find(|m| m.get("model").and_then(|x| x.as_str()) == Some(model.as_str()))
+                .and_then(|m| m.get("timeoutMs").and_then(|t| t.as_u64()))
+        })
+        .map(|t| t.max(TIMEOUT_MS))
+        .unwrap_or(TIMEOUT_MS);
 
     let dir = data_dir(&app)?;
     let w = wallet::load(&dir);
@@ -1315,7 +1434,7 @@ async fn chat_impl(
         req["chunkedImages"] = json!(true);
         let sent_app = app.clone();
         let resp = transport
-            .round_trip_notify(&srv, &req, surbs, TIMEOUT_MS, move || {
+            .round_trip_notify(&srv, &req, surbs, chat_timeout_ms, move || {
                 let _ = sent_app.emit("chat-sent", ());
             })
             .await?;
@@ -1421,7 +1540,7 @@ async fn chat_impl(
         // which left the pending request set after e.g. a provider refusal, so the UI's
         // Retry resent the SAME counter and got "counter N was already used".)
         let reply = transport
-            .round_trip_raw_notify(&srv, &req, surbs, TIMEOUT_MS, move || {
+            .round_trip_raw_notify(&srv, &req, surbs, chat_timeout_ms, move || {
                 let _ = sent_app.emit("chat-sent", ());
             })
             .await?;
@@ -1595,12 +1714,43 @@ async fn run_check(app: AppHandle, t: Arc<Transport>) {
         }
         t.ensure_connected().await?;
         let _ = app.emit("mixnet-phase", json!({ "step": "server", "detail": "" }));
-        let w = wallet::load(&data_dir(&app)?);
+        let dir = data_dir(&app)?;
+        let w = wallet::load(&dir);
         let srv = server_addr(&w)?;
         let req = json!({ "v": PROTO, "kind": "ping", "id": rand_hex(8) });
         match t.probe(&srv, &req, SURBS_SMALL, 15_000).await {
             Ok(_) => Ok(()),
             Err(e) if e.starts_with("cancelled") => Err(e), // superseded by a newer check
+            Err(_) if w.server_alternates.iter().any(|a| a != &srv) => {
+                // The address is silent but the SERVER has other front doors (same
+                // identity set from its own catalog reply): try them, and stay on the
+                // first that answers. Same server, same balance — nothing to migrate.
+                let _ = app.emit("mixnet-phase", json!({ "step": "server", "detail": "trying another address of the same server" }));
+                let alternates: Vec<String> = w.server_alternates.iter().filter(|a| *a != &srv).cloned().collect();
+                let mut switched = None;
+                for alt in alternates {
+                    let req = json!({ "v": PROTO, "kind": "ping", "id": rand_hex(8) });
+                    match t.probe(&alt, &req, SURBS_SMALL, 15_000).await {
+                        Ok(_) => { switched = Some(alt); break; }
+                        Err(e) if e.starts_with("cancelled") => return Err(e),
+                        Err(_) => {}
+                    }
+                }
+                match switched {
+                    Some(alt) => {
+                        let mut w2 = wallet::load(&dir);
+                        w2.server = Some(alt.clone());
+                        wallet::save(&dir, &w2)?;
+                        log::warn!("[mixnet] server address silent — switched to another address of the same server");
+                        let _ = app.emit("mixnet-phase", json!({ "step": "server", "detail": "switched to a fallback address of the same server" }));
+                        Ok(())
+                    }
+                    None => {
+                        let short = if srv.len() > 12 { format!("{}…{}", &srv[..4], &srv[srv.len() - 5..]) } else { srv.clone() };
+                        Err(format!("the route is fine — the server at {short} did not answer through the mixnet on any of its addresses; it may be down for maintenance"))
+                    }
+                }
+            }
             Err(_) => {
                 let short = if srv.len() > 12 { format!("{}…{}", &srv[..4], &srv[srv.len() - 5..]) } else { srv.clone() };
                 Err(format!("the route is fine — the server at {short} did not answer through the mixnet; the address may have a typo, or that server is down or restarting"))
@@ -1725,7 +1875,7 @@ async fn finish_staged_download(
             let progress_app = app.clone();
             let received_ref = &received;
             let res = transport
-                .collect_replies(srv, requests, SURBS_SMALL, TIMEOUT_MS, move |v, _| {
+                .collect_replies(srv, requests, SURBS_CHUNK, TIMEOUT_MS, move |v, _| {
                     // Keep each chunk the moment it lands — a window that fails later
                     // still leaves what arrived, for the resume.
                     if let (Some(seq), Some(data)) =

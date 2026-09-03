@@ -5192,7 +5192,7 @@ dependencies = [
 
 [[package]]
 name = "mixbench"
-version = "0.1.0"
+version = "0.4.6"
 dependencies = [
  "nym-sdk",
  "tokio",
@@ -7265,6 +7265,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "objc2-store-kit"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "29a1cef520f802b637e2cca72d7dfd2f17cfff947fb5f802dd2d8c68e6c63072"
+dependencies = [
+ "bitflags 2.13.1",
+ "block2",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-core-foundation",
+ "objc2-foundation",
+]
+
+[[package]]
 name = "objc2-ui-kit"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8982,7 +8996,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "scrai-core"
-version = "0.1.0"
+version = "0.4.6"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -8998,7 +9012,7 @@ dependencies = [
 
 [[package]]
 name = "scrai-ledger"
-version = "0.1.0"
+version = "0.4.6"
 dependencies = [
  "async-trait",
  "ed25519-dalek",
@@ -9012,8 +9026,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "scrai-loadtest"
+version = "0.4.6"
+dependencies = [
+ "base64 0.22.1",
+ "ed25519-dalek",
+ "env_logger",
+ "hex",
+ "log",
+ "nym-sdk",
+ "rand 0.8.7",
+ "scrai-core",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+]
+
+[[package]]
 name = "scrai-server"
-version = "0.1.0"
+version = "0.4.6"
 dependencies = [
  "base64 0.22.1",
  "crossterm",
@@ -9038,7 +9070,7 @@ dependencies = [
 
 [[package]]
 name = "scrambleai"
-version = "0.1.0"
+version = "0.4.6"
 dependencies = [
  "aes-gcm 0.10.3",
  "base64 0.22.1",
@@ -9059,6 +9091,7 @@ dependencies = [
  "objc2-core-graphics",
  "objc2-foundation",
  "objc2-local-authentication",
+ "objc2-store-kit",
  "objc2-ui-kit",
  "objc2-vision",
  "orp",

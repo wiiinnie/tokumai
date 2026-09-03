@@ -63,6 +63,10 @@ fn encode(v: &Value) -> Vec<u8> {
 /// payment offline, record it in the double-spend quorum, and on a fresh accept credit
 /// the session by `coins × COIN_SCRAI`. A benign replay (same pay_info) is idempotent —
 /// it was already credited, so we return the current balance without double-crediting.
+///
+/// Three steps so the server can run the expensive one off its dispatch loop:
+/// `redeem_parse` (cheap) → `redeem_verify` (O(coins) BLS pairings, ~100 ms+) →
+/// `redeem_apply` (quorum + credit, must run where the state lives).
 async fn redeem_reply(
     authority: &Authority,
     quorum: &mut QuorumStore,
@@ -70,32 +74,62 @@ async fn redeem_reply(
     v: &Value,
     id: Value,
 ) -> Value {
-    // Errors carry `kind:"error"` so the client's `round_trip` surfaces them.
-    let err = |e: String| json!({ "id": id, "kind": "error", "accepted": false, "error": e });
-
-    let session_id = v.get("sessionId").and_then(|s| s.as_str()).unwrap_or("");
-    if session_id.is_empty() {
-        return err("no sessionId".into());
-    }
-    let payment: Payment = match serde_json::from_value(v.get("payment").cloned().unwrap_or(Value::Null)) {
-        Ok(p) => p,
-        Err(e) => return err(format!("bad payment: {e}")),
+    let req = match redeem_parse(v) {
+        Ok(r) => r,
+        Err(e) => return redeem_error(&id, e),
     };
+    if let Err(e) = redeem_verify(authority, &req) {
+        return redeem_error(&id, e);
+    }
+    redeem_apply(quorum, sessions, req, id).await
+}
+
+/// A parsed, not yet verified redeem.
+pub struct RedeemRequest {
+    pub session_id: String,
+    pub payment: Payment,
+    pub pay_info: [u8; 72],
+    pub spend_date: u32,
+}
+
+/// Errors carry `kind:"error"` so the client's `round_trip` surfaces them.
+pub fn redeem_error(id: &Value, e: String) -> Value {
+    json!({ "id": id, "kind": "error", "accepted": false, "error": e })
+}
+
+/// Step 1: shape check only — no crypto.
+pub fn redeem_parse(v: &Value) -> Result<RedeemRequest, String> {
+    let session_id = v.get("sessionId").and_then(|s| s.as_str()).unwrap_or("").to_string();
+    if session_id.is_empty() {
+        return Err("no sessionId".into());
+    }
+    let payment: Payment = serde_json::from_value(v.get("payment").cloned().unwrap_or(Value::Null))
+        .map_err(|e| format!("bad payment: {e}"))?;
     let pay_info: Vec<u8> =
         serde_json::from_value(v.get("pay_info").cloned().unwrap_or(Value::Null)).unwrap_or_default();
-    let bytes: [u8; 72] = match pay_info.as_slice().try_into() {
-        Ok(b) => b,
-        Err(_) => return err("bad pay_info length".into()),
-    };
-    let pi = PayInfo { pay_info_bytes: bytes };
+    let pay_info: [u8; 72] = pay_info.as_slice().try_into().map_err(|_| "bad pay_info length".to_string())?;
     let spend_date = v.get("spend_date").and_then(|d| d.as_u64()).unwrap_or(0) as u32;
+    Ok(RedeemRequest { session_id, payment, pay_info, spend_date })
+}
 
-    if let Err(e) = authority.verify_payment(&payment, &pi, spend_date) {
-        return err(format!("invalid payment: {e}"));
-    }
-    let coins = payment.ss.len() as u64;
-    match quorum.submit(&payment, pi, THIS_SERVER) {
-        Verdict::Accepted => match sessions.session_credit(session_id, coins * COIN_SCRAI).await {
+/// Step 2: the offline payment verification — pure, CPU-bound (BLS), no state.
+pub fn redeem_verify(authority: &Authority, r: &RedeemRequest) -> Result<(), String> {
+    let pi = PayInfo { pay_info_bytes: r.pay_info };
+    authority.verify_payment(&r.payment, &pi, r.spend_date).map_err(|e| format!("invalid payment: {e}"))
+}
+
+/// Step 3: record the serials and credit the session — runs on the loop that owns the state.
+pub async fn redeem_apply(
+    quorum: &mut QuorumStore,
+    sessions: &mut dyn Ledger,
+    r: RedeemRequest,
+    id: Value,
+) -> Value {
+    let err = |e: String| redeem_error(&id, e);
+    let pi = PayInfo { pay_info_bytes: r.pay_info };
+    let coins = r.payment.ss.len() as u64;
+    match quorum.submit(&r.payment, pi, THIS_SERVER) {
+        Verdict::Accepted => match sessions.session_credit(&r.session_id, coins * COIN_SCRAI).await {
             Ok(balance) => json!({ "id": id, "accepted": true, "coins": coins, "balance": balance }),
             // Local `SessionStore` never fails here (credit is in-process, same store as the
             // serial record — the H2 atomic-persist covers it). This arm only becomes live
@@ -106,7 +140,7 @@ async fn redeem_reply(
         },
         // Idempotent retry: already credited on the first accept — don't credit twice.
         Verdict::Replay => {
-            let balance = sessions.session_balance(session_id).await.unwrap_or(0);
+            let balance = sessions.session_balance(&r.session_id).await.unwrap_or(0);
             json!({ "id": id, "accepted": true, "coins": 0, "balance": balance })
         }
         Verdict::DoubleSpend { .. } => err("double-spend rejected".into()),

@@ -1,6 +1,6 @@
 [package]
 name = "scrai-server"
-version = "0.1.0"
+version.workspace = true
 # three binaries live here (scrai-server, scrai-admin, scrai-faucet); plain `cargo run` = the server
 default-run = "scrai-server"
 edition = "2021"
@@ -43,6 +43,9 @@ env_logger = "0.11"
 base64 = "0.22"
 # Durable session balances + double-spend records (bundled SQLite, no system dep).
 rusqlite = { version = "0.32", features = ["bundled"] }
+# openai.rs: the per-day safety identifier (sha256 hex).
+sha2 = "0.10"
+hex = "0.4"
 # scrai-admin: terminal dashboard (htop-style). Only used by that binary.
 ratatui = "0.28"
 crossterm = "0.28"
@@ -50,8 +53,6 @@ crossterm = "0.28"
 [dev-dependencies]
 # pay.rs / chat.rs tests sign requests the way the real client does.
 ed25519-dalek = "2"
-sha2 = "0.10"
-hex = "0.4"
 
 [lib]
 name = "scrai_server"

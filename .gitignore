@@ -30,6 +30,10 @@ src-tauri/models/
 images/
 data/
 
+# load-test runs (CSV + summaries) and the throw-away local server they run against
+loadtest/results/
+.loadtest/
+
 # fuzzing (server/fuzz is its own workspace)
 server/fuzz/target/
 server/fuzz/corpus/

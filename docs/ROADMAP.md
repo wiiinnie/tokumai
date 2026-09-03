@@ -64,6 +64,15 @@ Sonar** / **OpenAI GPT web_search** as a "live" tier. Flag these models **"🌐 
 private"**: the search query (derived from the prompt) reaches a search backend at the
 provider (user IP still hidden by the mixnet, but the topic leaks).
 
+### OpenAI — *built (2026-09-03), not yet live*
+Responses-API adapter (`server/src/openai.rs`): GPT-5.4 nano/mini/full, images + PDFs in,
+web search per call, reasoning effort from the app slider, prepaid-only, own concurrency
+pool, `store: false`. Anonymous-user safeguards: per-day safety identifier, moderation
+prefilter (`MODERATION_PREFILTER`), session strikes (`ABUSE_STRIKES_PER_DAY`). Go-live:
+`OPENAI_API_KEY` + `openai` in `SCRAI_PROVIDERS` on the MAINNET server only, account at
+tier ≥ 2, monthly budget set, then the cost reconciliation against the OpenAI dashboard as
+done for Gemini. Details: `docs/providers-openai.md`, `docs/abuse-policy.md`.
+
 ### More providers for breadth — *considering*
 Add one developer-first multi-model provider for model variety + a metadata API:
 **OpenRouter** (huge breadth, pricing/context per model), or EU-hosted **Mistral La
@@ -77,6 +86,15 @@ the catalog, token-billed, real verified prices. Marketing names shown in the pi
 
 ## App
 
+### iOS top-up by storefront — *built (2026-09-01), EU entitlement pending*
+The buy sheet on iOS now follows the device's App Store storefront (StoreKit, read in
+Rust): **US** shows the top-up ID + a Safari link (allowed since the 2025 Epic order),
+**EU** is meant to link out under Apple's DMA terms, **everywhere else** shows the ID only
+(3.1.1). The EU path needs the **External Purchase Link entitlement**
+(`com.apple.developer.storekit.external-purchase-link` + `SKExternalPurchaseLink` URLs in
+Info.plist), requested from Apple per app; until it is in the provisioning profile the EU
+falls back to ID-only (`EU_LINK_ENTITLED` in index.html). No storefront → ID only.
+
 ### Native iOS document picker — *planned*
 Photos/camera now use a native picker (`pick_image`). "Choose File" (PDF/text) still falls
 back to the flaky web `<input type=file>` — replace with a native `UIDocumentPickerViewController`.
@@ -86,6 +104,15 @@ See `[[scrambleai-ios-attach-picker]]`.
 Prepaid credit + auto-recharge (unlocks after spend history). Before pointing real users at
 paid models: Cloud Billing budget alert on low balance + a reload process, so the API never
 runs dry mid-service.
+
+## Capacity / load distribution — *load-test harness built (2026-09-02)*
+`scrai-loadtest` + `scripts/loadtest.sh` measure one server's latency curve vs concurrent
+users (ping / models / full signed chat with fake payments + mock provider). Next: run the
+stages, find the knee, then either **multi-address server** (K Nym identities, one state —
+if ingress saturates first) or a second server behind the **signed directory** (if the
+loop / chat cap saturates first). Server selection must never be a user task: pong now
+carries `load`, the client picks + sticks (session balance and — until the DKG — coconut
+books are server-bound). Details: `docs/load-testing.md`.
 
 ## Ops / metrics — *done (2026-08-25)*
 scrai-admin now shows **chat revenue** (retail users chatted), **provider cost** (raw price
