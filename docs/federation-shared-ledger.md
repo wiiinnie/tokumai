@@ -1,14 +1,24 @@
-# Federation Schritt 1 — das „gemeinsame Gästebuch" (Shared Ledger, eigene Server)
+# Multi-Server — das „gemeinsame Gästebuch" (Shared Ledger, alle Server vom selben Betreiber)
 
-Status: **Design, nicht implementiert** (2026-08-21). Erster Federation-Schritt: mehrere
-Server, die **alle vom selben Betreiber** laufen. Ziel: **jede** Wertform funktioniert über
-alle Server hinweg UND über Geräte­wechsel — ohne dass Guthaben irgendwo strandet.
+Status: **Design, Ledger-Logik gebaut, nicht verdrahtet** (2026-08-21; Betriebsmodell
+festgezurrt 2026-09-03). Das Zielmodell für mehrere Server, die **alle vom selben
+Betreiber** laufen. Ziel: **jede** Wertform funktioniert über alle Server hinweg UND über
+Geräte­wechsel — ohne dass Guthaben irgendwo strandet.
 
 Voraussetzung / Trust-Modell: **Du betreibst jeden Server und die geteilte Datenbank
 selbst.** Dieses Design ist sicher **genau so lange, wie das gilt** (siehe §6 — die Grenze).
-Für 3rd-Party-Operatoren gilt es NICHT; dann greift das trustless Modell (Bearer-Ecash +
-t-of-n-DKG + Zwei-Wege-Tausch / seed-verschlüsselte Backup-Box), siehe
-`federation-params.md` „Security roadmap".
+
+> **Entscheidung 2026-09-03: es gibt KEIN Fremdbetreiber-Modell.** Ein früherer Plan sah
+> eine „trustless Föderation" mit fremden Operatoren vor (Bearer-Ecash + t-of-n-DKG über
+> fremde Authorities + Betreiber-Clearing). Der ist gestrichen — nicht aus technischen,
+> sondern aus regulatorischen Gründen: sobald Kundengeld über die Authority an fremde
+> Betreiber fließt (Settlement/Clearing), ist das ein Zahlungsdienst bzw. E-Geld →
+> BaFin-Erlaubnis → GwG-Verpflichteter → **Identifizierung der Kunden**, was das anonyme
+> Modell beendet. Fremde Node-Betreiber partizipieren stattdessen auf der Nym-Ebene: als
+> **Entry-Gateways der scrai-Server** (`SCRAI_GATEWAY_MASTER`/`SCRAI_GATEWAY_FALLBACK`),
+> vergütet über Nyms Bandbreiten-Ökonomie (heute frei, später bezahlte
+> Bandbreiten-Credentials). Dabei fließt kein Geld von uns an sie und kein Kundengeld über
+> sie. Begründung und Rest der Roadmap: `docs/ROADMAP.md` „Operating model".
 
 > **Implementierungs-Stand (2026-08-21).** Die Naht + die Ledger-Logik sind **gebaut &
 > getestet**:
@@ -56,8 +66,8 @@ Das Gästebuch allein reicht nicht — es braucht drei Teile, die zusammenspiele
    Server gilt, müssen alle Server denselben aggregierten Verification-Key kennen. Bei
    eigenen Servern der einfachste Weg: **eine** Authority-Identität, die alle Server teilen
    (oder t-of-n unter deinen eigenen Servern). Dann ist ein Coin von irgendwo bei jedem
-   deiner Server verifizierbar — offline, ohne Rückfrage. *(Für 3rd-Party unsicher; für
-   eigene Server ok — siehe §6.)*
+   deiner Server verifizierbar — offline, ohne Rückfrage. *(t-of-n über die eigenen
+   Server schützt gegen eine einzelne kompromittierte Box, siehe §6.)*
 2. **Shared Ledger („Gästebuch") — der Fokus dieses Docs.** Ein geteilter, transaktionaler
    Store für **Session-Balances**, **Entitlement** und den **Spent-Serial-Set** (Double-
    Spend). Alle Server lesen/schreiben denselben.
@@ -147,14 +157,19 @@ Der Moment, in dem es bricht — und was dann gilt:
 Deshalb die harte Regel:
 
 > **Onboarde NIE einen 3rd-Party-Operator auf das Gästebuch oder den geteilten Authority-Key.**
-> Fremde Operatoren bekommen das trustless Modell: **t-of-n-DKG** (kein Einzelner mintet),
-> Bearer-Ecash als server-übergreifender Wert (trustless via VK), **Zwei-Wege-Tausch**
-> (Session↔Ecash) + **seed-verschlüsselte Backup-Box** für Geräte­wechsel, signierte
-> Preisliste (C3). Details: `federation-params.md` „Security roadmap".
+> Es gibt dafür auch kein Ersatzmodell mehr (Entscheidung 2026-09-03, siehe oben): ein
+> Fremdbetreiber, der an unserem Umsatz teilhat, macht uns zum Zahlungsdienstleister.
+> Fremde beteiligen sich nur auf der Nym-Ebene (Entry-Gateways), nie an Authority, Ledger
+> oder Guthaben.
 
-Das Gästebuch ist also bewusst der **eigene-Server-Sonderfall** — maximal einfach, weil er
-Vertrauen ausnutzen darf, das bei Fremden nicht existiert. Es ist eine Abkürzung, kein
-Ersatz für die trustless Föderation.
+Was aus dem alten „trustless"-Katalog trotzdem bleibt, hat einen anderen Gegner — die
+**kompromittierte eigene Box** statt des unehrlichen Fremden: **t-of-n-DKG** über die
+eigenen Server (ein gehackter Server mintet nicht allein), die **signierte Preisliste** (ein
+gehackter Server kann nicht überteuern), Client-`verify_share` + `flag_server`. Details:
+`federation-params.md` „Security roadmap".
+
+Das Gästebuch ist damit das **Zielmodell**, kein Zwischenschritt — maximal einfach, weil
+alle Schreiber derselbe Betreiber sind.
 
 ---
 
@@ -238,12 +253,13 @@ den Server). Die realen Punkte:
   neuen Build → **Server-Identität stabil halten** (nym-client-Key auf dem VPS nicht neu erzeugen).
 - **Kurzfristig leicht SICHERER** als Freitext: ein Angreifer kann den Nutzer schwerer auf einen
   bösen Server locken (H5). Aber es **pinnt Trust auf einen Operator**.
-- **Federation-Konflikt:** widerspricht dem signierten Directory-Modell (§4/§2 Baustein 3).
+- **Konflikt mit dem Directory:** widerspricht dem signierten Directory-Modell (§4/§2 Baustein 3).
 
-**TODO (entfernen/ersetzen bei Federation):** `KNOWN_SERVERS` wird zur **signierten, versionierten
-Server-Directory** (Authorities signieren die Liste, Client verifiziert gegen gepinnten
-Governance-Key — Tor-Consensus-Modell). Der hard-codierte Default fliegt dann raus bzw. wird zum
-signierten Directory-Eintrag. Markiert im Code als `TODO(federation)`.
+**TODO (ersetzen, sobald es mehr als einen Server gibt):** `KNOWN_SERVERS` wird zur
+**signierten, versionierten Server-Directory** (wir signieren die Liste, Client verifiziert
+gegen gepinnten Governance-Key — Tor-Consensus-Modell). Der hard-codierte Default fliegt dann
+raus bzw. wird zum signierten Directory-Eintrag. Zwischenstand (0.4.6): der Katalog trägt
+bereits `identities` (die K Adressen eines Servers) als Fallback-Liste im Client.
 
 ## 6d. Zwei Geräte / gleichzeitiger Betrieb — Lease-TTL + Fencing
 
@@ -298,11 +314,11 @@ unter derselben `sessionId`. Held Ecash gilt via geteiltem VK ohnehin überall. 
   Gerät ggf. vorher redeemen (bleibt der einzige Bearer-Sonderfall).
 - **Server wechseln:** kein Stranden mehr — dieselbe DB, dieselben Stände.
 
-Der einzige Rest-Bearer-Fall (Held Ecash über Gerätewechsel) bleibt bestehen, bis die
-seed-verschlüsselte Backup-Box gebaut ist — die ist aber erst fürs 3rd-Party-Modell nötig;
-für eigene Server genügt „am alten Gerät vor dem Wechsel redeemen".
+Der einzige Rest-Bearer-Fall (Held Ecash über Gerätewechsel) bleibt bestehen; für eigene
+Server genügt „am alten Gerät vor dem Wechsel redeemen" (kleine `REDEEM_CHUNK_COINS` halten
+den möglichen Verlust bei $1). Eine seed-verschlüsselte Backup-Box wäre reiner Komfort.
 
 ---
 
-Related: `federation-params.md` (Parameter + trustless Roadmap),
+Related: `federation-params.md` (Parameter + Security-Roadmap für den Multi-Server-Betrieb),
 `security/audit-2026-08-20.md` (H9 DKG, H3 Fair-Exchange, C3 Preisliste).

@@ -1,19 +1,23 @@
-# Federation / Coconut ecash — mechanics & tunable parameters
+# Multi-server Coconut ecash — mechanics & tunable parameters
 
 Status: **design locked, not yet implemented** (2026-08-17). This file is the single
 source of truth for the values below so we can test them and adjust them later.
 Every value here is meant to be a named, overridable constant/env — never a magic
 number buried in code.
 
-See the decision doc "Föderation oder Inseln" for the full rationale.
+See the decision doc "Föderation oder Inseln" for the original rationale. **Operating
+model, decided 2026-09-03: every authority and every serving node is run by us.** There is
+no third-party-operator federation (it would make the authority a payment service — see
+`docs/ROADMAP.md` "Operating model" and `federation-shared-ledger.md`). "Federation" in the
+code (`core/src/federation.rs`) means the Coconut authority set, nothing more.
 
 ---
 
 ## The mechanics (what we build)
 
 - **Scheme:** Coconut threshold ecash via `nym-compact-ecash` (BLS12-381). The
-  scrai-servers are the `t`-of-`n` issuing **authorities**. Credit is valid across
-  ALL servers (one aggregated verification key).
+  scrai-servers (all ours) are the `t`-of-`n` issuing **authorities**. Credit is valid
+  across ALL servers (one aggregated verification key).
 - **Double-spend handling = Nym's model:** a server **accepts a spend OFFLINE**
   (no synchronous global check — `Payment::spend_verify()` needs no spent-set), then
   reports the coin serials to a shared **majority quorum**. The quorum detects a
@@ -94,30 +98,33 @@ catches real attacks while keeping innocent bans near-zero.
 
 - Test (2 servers): trusted-dealer `ttp_keygen(t=2, n=2)` → 2 authority shares +
   aggregated `VerificationKey` (hardcoded/pinned in the client).
-- Before foreign gateways: real DKG (inject shares via `SecretKeyAuth::create_from_raw`).
+- Before real money on more than one server: real DKG across OUR servers (inject shares
+  via `SecretKeyAuth::create_from_raw`). The point is that one compromised box cannot mint
+  alone — not distrust between operators (there is only one).
 
-## Security roadmap — what t-of-n federation must also carry (audit 2026-08-20)
+## Security roadmap — what the t-of-n multi-server build must also carry (audit 2026-08-20)
 
-Context: today there is ONE operator (currently the project owner themselves), so the
-"dishonest operator" findings are low current priority — but they only fully resolve
-with real multi-operator t-of-n. Track these so they land WITH the federation build,
-not after. Full details: `docs/security/audit-2026-08-20.md`.
+Context: there is ONE operator by decision (2026-09-03), so the audit's "dishonest
+operator" findings change their adversary: not a foreign operator who cheats, but **one of
+our own boxes that got compromised** (or a rogue insider). The mitigations are the same
+cryptographic ones; only the motivation differs. Track these so they land WITH the
+multi-server build, not after. Full details: `docs/security/audit-2026-08-20.md`.
 
-- **H3 — withdraw fair-exchange (real-money entitlement).** A single untrusted operator
-  can consume a paid ticketbook and issue garbage; atomic entitlement↔credential
-  exchange is *impossible* with one untrusted party. Interim shipped: client detects the
-  cheat via `verify_share` and quarantines the server (`flag_server`), capping loss to
-  one book. **Full fix = t-of-n:** no single authority can forge (needs t shares) or
-  consume entitlement alone → requires a **shared/replicated entitlement ledger** every
-  authority checks before issuing its share (so entitlement-consume is a quorum decision,
-  and a garbage share from one authority is routed around by using the other t valid ones).
-- **C3 — pricing tamper-proofing across foreign operators.** Client-side fair-price
-  recompute is shipped for the pinned single server; before foreign gateways serve their
-  own price list, add the SIGNED, versioned retail list with a pinned pubkey (see
-  `[[scrambleai-signed-pricing-todo]]`). Margin folded into the signed list.
+- **H3 — withdraw fair-exchange (real-money entitlement).** A single compromised server
+  can consume a paid ticketbook and issue garbage; atomic entitlement↔credential exchange
+  is *impossible* with one party. Interim shipped: client detects the cheat via
+  `verify_share` and quarantines the server (`flag_server`), capping loss to one book.
+  **Full fix = t-of-n across our servers:** no single box can forge (needs t shares) or
+  consume entitlement alone → requires the **shared entitlement ledger** (the Gästebuch)
+  every authority checks before issuing its share, so entitlement-consume is a quorum
+  decision and a garbage share from one box is routed around by using the other t valid ones.
+- **C3 — pricing tamper-proofing.** Client-side fair-price recompute is shipped for the
+  pinned single server; with several servers add the SIGNED, versioned retail list with a
+  pinned pubkey (see `[[scrambleai-signed-pricing-todo]]`) so a compromised or stale server
+  cannot overcharge or serve a diverging list. Margin folded into the signed list.
 - **H9 — replace the 1-of-1 trusted-dealer with real DKG (t≥2)** before real money on
-  multiple operators; the server currently boot-gates 1-of-1 real-money issuance behind
-  `SCRAI_ALLOW_SINGLE_AUTHORITY=1`.
+  more than one server; the server currently boot-gates 1-of-1 real-money issuance behind
+  `SCRAI_ALLOW_SINGLE_AUTHORITY=1`. With a single VPS this stays a conscious override.
 - **Redeem-timing mixing (client privacy, crowd-gated — decided 2026-08-20).** Redeems
   are the Session-side events; decouple them in time from the account-side Withdraw
   (which happens at purchase). Design:

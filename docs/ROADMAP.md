@@ -26,13 +26,48 @@ Flip the payment layer from **testnet** NYM/BTC to **mainnet** for real inbound 
 Independent of the Gemini-key mainnet switch (already done). See
 `[[scrambleai-payment-architecture]]`.
 
+## Operating model — *decided 2026-09-03*
+
+### One operator, many servers — no third-party federation
+Every scrai-server, every Coconut authority and the shared ledger are run by **us**. The
+earlier plan of a "trustless federation" with foreign operators (shared t-of-n key across
+operators, bearer ecash valid at anyone's server, clearing between operators) is
+**dropped for regulatory, not technical, reasons**: the moment customer money collected by
+the authority is passed on to other operators (settlement) — or operators clear balances
+through us — that is a payment service / e-money business (PSD2/EMD2, ZAG in Germany).
+That needs a BaFin licence, and a licensee is an obliged entity under the AML rules
+(GwG/AMLR), i.e. it must **identify its customers**. Anonymous prepaid is then only
+allowed up to €150 / €50 remote, which ends the product. Today's model — a merchant
+selling its own prepaid service credit, accepting crypto or card — needs **no KYC** and
+no licence; see `docs/federation-shared-ledger.md` (header) for the full reasoning.
+
+Consequences:
+- **Keep:** the signed server directory + load-based selection in the client, K Nym
+  identities per server, the Gästebuch (shared ledger) across our servers, t-of-n DKG
+  across our servers (see below). These are what scale the service.
+- **Drop:** operator clearing, per-operator price lists, foreign-authority verification,
+  the "franchise"/settlement designs. A lot of code that never needs to exist.
+- **How other node operators still participate:** on the Nym layer, not the money layer.
+  They run the **entry gateways the scrai-servers hang off** (`SCRAI_GATEWAY_MASTER` /
+  `SCRAI_GATEWAY_FALLBACK`, today de01/at01/ch01) and are compensated through Nym's own
+  bandwidth economy — free in the current mode, later via paid bandwidth credentials
+  (zk-nym). No money flows from us to them and no customer money flows through them, so
+  nobody becomes a payment intermediary and nobody sees more than a Nym client's
+  gateway sees.
+- **What we give up:** trust minimisation towards the operator. Users still have to trust
+  that our servers do not log; the mixnet hides who they are, not what they ask. That is
+  exactly what the TEE endpoint (below) is for, and it gets easier with a fleet we own,
+  because attestation only has to cover our own machines.
+
 ## Security / decentralisation (mainnet blockers)
 
-### t-of-n authority DKG — *required before real-money mainnet*
+### t-of-n authority DKG across our own servers — *required before real-money mainnet*
 Today `AUTHORITY_N = 1` and the server runs with `SCRAI_ALLOW_SINGLE_AUTHORITY=1`
 (testnet override). A single 1-of-1 authority can **forge unlimited ecash** and weakens
-unlinkability. Stand up a real **threshold (t-of-n) DKG with ≥2 independent authorities**
-and drop the override before issuing real-money credentials.
+unlinkability. Stand up a real **threshold (t-of-n) DKG with ≥2 of our own servers**
+and drop the override before issuing real-money credentials. The adversary is a single
+compromised box or insider, not a distrusted operator (there is only one); one box must
+never be able to mint or consume entitlement alone.
 
 ## Models / providers
 
@@ -112,7 +147,8 @@ stages, find the knee, then either **multi-address server** (K Nym identities, o
 if ingress saturates first) or a second server behind the **signed directory** (if the
 loop / chat cap saturates first). Server selection must never be a user task: pong now
 carries `load`, the client picks + sticks (session balance and — until the DKG — coconut
-books are server-bound). Details: `docs/load-testing.md`.
+books are server-bound). All of these servers are ours (see "Operating model").
+Details: `docs/load-testing.md`.
 
 ## Ops / metrics — *done (2026-08-25)*
 scrai-admin now shows **chat revenue** (retail users chatted), **provider cost** (raw price
