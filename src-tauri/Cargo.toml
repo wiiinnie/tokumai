@@ -1,5 +1,5 @@
 [package]
-name = "tokumai"
+name = "scrambleai"   # crate name is wired into gen/apple + gen/android (tauri checks it) — stays, like the scrai-* crates
 version.workspace = true
 description = "tokumai desktop"
 authors = ["tokumai"]

@@ -10,7 +10,7 @@ configs:
 settingGroups:
   app:
     base:
-      PRODUCT_NAME: ScrambleAI
+      PRODUCT_NAME: tokumai
       PRODUCT_BUNDLE_IDENTIFIER: com.scrambleai.app
 targetTemplates:
   app:

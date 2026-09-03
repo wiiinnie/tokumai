@@ -43,7 +43,7 @@ die laufende Tauri-App. Bestätigt die volle Kette Server→Webview→nativ.
 
 ## Szenario B — Absturz löscht Bearer-Coins permanent (C2, H6)  · RUST-REGRESSIONSTEST · ✅ GEFIXT
 
-**Jetzt verankert** als `cargo test -p tokumai wallet::tests` (3 grüne Tests):
+**Jetzt verankert** als `cargo test -p scrambleai wallet::tests` (3 grüne Tests):
 `round_trips_and_keeps_bearer_coins`, `corrupt_wallet_is_backed_up_never_silently_discarded`,
 `saved_wallet_is_owner_only`. Der Fix: atomarer Write (tmp+fsync+rename) → ein
 Absturz lässt das ALTE Wallet intakt statt einer abgeschnittenen Datei; Korruption
@@ -90,7 +90,7 @@ mod hardening_tests {
     }
 }
 ```
-Ausführen: `cargo test -p tokumai hardening_tests -- --nocapture`
+Ausführen: `cargo test -p scrambleai hardening_tests -- --nocapture`
 (Der Test ist heute **rot** = die unsichere Eigenschaft ist noch da; nach dem
 Fix wird er grün. Das ist die Ausnahme von der „grün=Lücke"-Konvention — hier
 behaupten wir bewusst die Ziel-Eigenschaft.)
@@ -129,7 +129,7 @@ frische Coins verbraucht → beweist den Verlust.
 (`fair_price_estimate` in `lib.rs`, gleiche `scrai-core`-Mathematik, aus dem EIGENEN
 Token-Estimate + der mitgelieferten Preisliste), flaggt Ladungen > fair × 4 als
 `priceWarning` und verweigert weiteres Auto-Redeem in einen geflaggten Server.
-Regressionstests: `cargo test -p tokumai c3_tests` (3 grün). Fängt sowohl
+Regressionstests: `cargo test -p scrambleai c3_tests` (3 grün). Fängt sowohl
 `MARGIN`-Inflation als auch Token-Inflation, weil der Client den Server-Token-Count
 nicht glaubt. **Verbleibend (Föderations-Milestone):** signierte, versionierte Liste
 mit gepinntem Pubkey, damit auch ein FREMDER Operator die Liste nicht fälschen kann.

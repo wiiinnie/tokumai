@@ -28,7 +28,6 @@
 		02061A2BC03B668F453CA308 /* assets */ = {isa = PBXFileReference; lastKnownFileType = folder; path = assets; sourceTree = SOURCE_ROOT; };
 		0752AB40B0C8EA0C3E930E70 /* wallet.rs */ = {isa = PBXFileReference; path = wallet.rs; sourceTree = "<group>"; };
 		07D04C3BCF5264CEA85A585C /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
-		0DDFC3BB91EEBDA18C8B0C85 /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
 		12F7E3508AA983CDD727E2C0 /* SystemConfiguration.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SystemConfiguration.framework; path = System/Library/Frameworks/SystemConfiguration.framework; sourceTree = SDKROOT; };
 		164B7A2FCA3B823C1ED1A8CB /* nym.rs */ = {isa = PBXFileReference; path = nym.rs; sourceTree = "<group>"; };
 		1A548BBB01921C2759821268 /* detect.rs */ = {isa = PBXFileReference; path = detect.rs; sourceTree = "<group>"; };
@@ -52,6 +51,7 @@
 		E564EBA9A0C427D1E60434C5 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
 		E5BBCCB254FD9C364E06E74F /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
 		E79CCDA485FA5C6855ADAED3 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
+		F074058C9913A4C578ACCC93 /* vault.rs */ = {isa = PBXFileReference; path = vault.rs; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -76,14 +76,6 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		00F61579C05981E10D1EF634 /* release */ = {
-			isa = PBXGroup;
-			children = (
-				0DDFC3BB91EEBDA18C8B0C85 /* libapp.a */,
-			);
-			path = release;
-			sourceTree = "<group>";
-		};
 		0EFEDD48A87DF353E4925E6A /* Products */ = {
 			isa = PBXGroup;
 			children = (
@@ -110,7 +102,6 @@
 		24CF13A38ED092DBD3D5E668 /* Externals */ = {
 			isa = PBXGroup;
 			children = (
-				A4F38ABB21E3A0C204DDE94F /* arm64 */,
 			);
 			path = Externals;
 			sourceTree = "<group>";
@@ -140,18 +131,11 @@
 				E53C1FD07A30618C2744264A /* main.rs */,
 				164B7A2FCA3B823C1ED1A8CB /* nym.rs */,
 				52FB72763CD6DA360367080D /* ocr.rs */,
+				F074058C9913A4C578ACCC93 /* vault.rs */,
 				0752AB40B0C8EA0C3E930E70 /* wallet.rs */,
 			);
 			name = src;
 			path = ../../src;
-			sourceTree = "<group>";
-		};
-		A4F38ABB21E3A0C204DDE94F /* arm64 */ = {
-			isa = PBXGroup;
-			children = (
-				00F61579C05981E10D1EF634 /* release */,
-			);
-			path = arm64;
 			sourceTree = "<group>";
 		};
 		A67B63DAF4DEA883CA9DEEFE /* scrambleai */ = {
@@ -188,13 +172,6 @@
 				92E4E0071D12154E0E7687A7 /* scrambleai_iOS.entitlements */,
 			);
 			path = scrambleai_iOS;
-			sourceTree = "<group>";
-		};
-		"TEMP_F84A5889-9914-42BC-B30E-7BC07E34A621" /* x86_64 */ = {
-			isa = PBXGroup;
-			children = (
-			);
-			path = x86_64;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -378,7 +355,7 @@
 				CODE_SIGN_ENTITLEMENTS = scrambleai_iOS/scrambleai_iOS.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = "T23Z4LDMGV";
+				DEVELOPMENT_TEAM = T23Z4LDMGV;
 				ENABLE_BITCODE = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
@@ -394,7 +371,7 @@
 				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				PRODUCT_BUNDLE_IDENTIFIER = com.scrambleai.app;
-				PRODUCT_NAME = "ScrambleAI";
+				PRODUCT_NAME = tokumai;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALID_ARCHS = "arm64  x86_64";
@@ -469,7 +446,7 @@
 				CODE_SIGN_ENTITLEMENTS = scrambleai_iOS/scrambleai_iOS.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = "T23Z4LDMGV";
+				DEVELOPMENT_TEAM = T23Z4LDMGV;
 				ENABLE_BITCODE = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
@@ -485,7 +462,7 @@
 				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				PRODUCT_BUNDLE_IDENTIFIER = com.scrambleai.app;
-				PRODUCT_NAME = "ScrambleAI";
+				PRODUCT_NAME = tokumai;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALID_ARCHS = "arm64  x86_64";
