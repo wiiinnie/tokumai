@@ -971,7 +971,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         <div id="attachRow" class="attachrow" style="display:none"></div>
         <div id="liveNudge" class="nudge" style="display:none">
           <span class="ni">◎</span>
-          <span class="nt"><b>This looks like it needs live data.</b><small>answer with a web search? · costs a bit more, queries Google Search</small></span>
+          <span class="nt"><b>This looks like it needs live data.</b><small>answer with a web search? · costs a bit more, the model's provider runs the search</small></span>
           <span class="na">
             <button class="nbtn go" data-click="liveNudgeUse">Use live data</button>
             <button class="nbtn" data-click="liveNudgeSkip">Answer as-is</button>
@@ -1179,7 +1179,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       <label class="setrow"><input type="checkbox" id="mpCont"><span><b>Constant cover traffic</b><small>Keep sending decoy packets even when idle (recommended), so there’s never a “silent” period an observer could read. Turning it off saves the most battery but <span style="color:var(--rust)">noticeably lowers your privacy</span>. <span style="color:var(--muted)">(disable_loop_cover_traffic_stream)</span></small></span></label>
       <button class="btn" id="mpReset" data-click="resetMixPerf" style="margin:2px 0 9px">↺ Reset to recommended</button>
       <label class="setrow"><input type="checkbox" id="mpPipe"><span><b>Pipelining</b><small>On (default): send all parts of a file <b>at once (in parallel)</b>, with a smoother progress bar; any part that isn’t confirmed re-sends automatically. Off: send parts one after another. Privacy is unchanged either way. <span style="color:var(--muted)">(This is what “faster uploads” means — separate from the Sending-rate dial above.)</span></small></span></label>
-      <label class="setrow live" id="liveRow"><span><span class="rowtop"><b>Live data (web search)</b><span class="cpill">◎ costs extra</span></span><small>Let models answer with up-to-the-minute facts (weather, scores, prices) by searching the web. The model decides on its own whether a question actually needs a search — so everyday questions stay free. When it does search, a query goes to Google Search (your identity stays hidden by the mixnet) and each search is billed on top. On by default — switch it off here if you never want a search.</small></span><input type="checkbox" id="liveChk"></label>
+      <label class="setrow live" id="liveRow"><span><span class="rowtop"><b>Live data (web search)</b><span class="cpill">◎ costs extra</span></span><small>Let models answer with up-to-the-minute facts (weather, scores, prices) by searching the web. The model decides on its own whether a question actually needs a search — so everyday questions stay free. When it does search, the query goes to the model's provider (Google Search for Gemini, OpenAI's web search for GPT — your identity stays hidden by the mixnet) and each search is billed on top. On by default — switch it off here if you never want a search.</small></span><input type="checkbox" id="liveChk"></label>
 
       </div>
       <div class="mpage" data-page="eff">
@@ -3285,6 +3285,15 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   let liveNudgeBypass = false, liveForThisSend = false;
   function looksTimeSensitive(t){ return LIVE_HINTS.some(re=>re.test(t)); }
   function isGeminiTextModel(){ return /google|gemini/i.test(modelVendor||"") && modelKind!=="image"; }
+  // Can the selected model answer with a web search? The catalog says so per model
+  // (`live: true` — Gemini text and OpenAI); an older server without the flag falls back
+  // to the historical rule (Gemini text only). Image models never search.
+  function modelSupportsLive(){
+    if(modelKind==="image") return false;
+    const m = models.find(x=>x.model===currentModel);
+    if(m && typeof m.live==="boolean") return m.live;
+    return isGeminiTextModel();
+  }
   function showLiveNudge(){ const n=$("liveNudge"); if(n) n.style.display="flex"; }
   function hideLiveNudge(){ const n=$("liveNudge"); if(n) n.style.display="none"; }
   function liveNudgeUse(){ hideLiveNudge(); liveNudgeBypass=true; liveForThisSend=true; sendMsg(); }
@@ -3300,7 +3309,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     if(scanning){ setStatus("scanning attachment on-device — one moment…"); return; }   // don't send until the guard scan finishes
     if(!text && !pendingFile) return;
     // Live-data nudge: feature off + a time-sensitive-looking prompt on a Gemini text model.
-    if(!isRetry && !liveNudgeBypass && !liveDataOn() && text && isGeminiTextModel() && looksTimeSensitive(text)){
+    if(!isRetry && !liveNudgeBypass && !liveDataOn() && text && modelSupportsLive() && looksTimeSensitive(text)){
       showLiveNudge(); return;
     }
     // Provider terms not accepted yet → the sheet opens; remember this send so Accept
@@ -3404,9 +3413,9 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     // models bill (reduced) and go through the normal signed path.
     const isFree = modelTier === "free";
     // Live web-search grounding for this turn: global toggle OR the per-message "use
-    // live data" nudge choice. Only meaningful for Gemini text models; ignored elsewhere
-    // server-side. Consume the one-shot nudge flags now that the turn is committed.
-    const useLive = (liveDataOn() || liveForThisSend) && isGeminiTextModel();
+    // live data" nudge choice. Only for models the catalog marks `live` (Gemini text,
+    // OpenAI); ignored elsewhere server-side. Consume the one-shot nudge flags now.
+    const useLive = (liveDataOn() || liveForThisSend) && modelSupportsLive();
     liveNudgeBypass = false; liveForThisSend = false;
     // Image models answer with a ~MB reply → the transport packs the big SURB
     // budget; text chats ride with the small one (fewer request fragments).

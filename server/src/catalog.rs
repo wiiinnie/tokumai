@@ -230,6 +230,8 @@ fn openai_models(pricing: &PricingTable, margin: f64) -> Result<Vec<Value>, Stri
             // Reasoning answers can take a minute or two — the app waits this long.
             "timeoutMs": crate::openai::TIMEOUT_MS,
             "acceptsImages": true,
+            // The Responses `web_search` tool, attached when the app sends `live`.
+            "live": true,
         }));
     }
     Ok(out)
@@ -355,6 +357,8 @@ async fn gemini_models(pricing: &PricingTable, margin: f64) -> Result<Vec<Value>
             "trainsOnInput": crate::chat::gemini_trains_on_input(),
             // Gemini reads images, PDFs and text via inlineData attachments.
             "acceptsImages": true,
+            // Text models can ground answers with a web search when the app sends `live`.
+            "live": true,
         }));
     }
     Ok(out)
