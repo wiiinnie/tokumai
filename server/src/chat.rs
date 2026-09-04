@@ -395,6 +395,11 @@ pub fn reserve(
 
     let session_id = v.get("sessionId").and_then(|s| s.as_str()).unwrap_or("").to_string();
     let model = v.get("model").and_then(|m| m.as_str()).unwrap_or("").to_string();
+    // OpenAI web search has no monthly free allowance — every call is billable. Decided
+    // HERE, before the `pending` closure below captures it: until 2026-09-04 the override
+    // sat after that closure, so settle() still subtracted Gemini's ~5,000 free queries
+    // from OpenAI's search calls and billed none of them ($0.10 of $0.13 on one day).
+    let grounding_free = if crate::openai::is_openai_model(&model) { 0 } else { grounding_free };
     let messages = v.get("messages").cloned().unwrap_or_else(|| json!([]));
     let max_tokens = v.get("maxTokens").and_then(|m| m.as_u64()).map(|m| m.min(MAX_OUTPUT_TOKENS));
     // Live web-search grounding for this turn (unsigned flag — see the client). Only
@@ -465,8 +470,6 @@ pub fn reserve(
     // Reserve the worst case — this is what keeps two in-flight requests from
     // jointly overspending, and the counter check is the replay protection.
     use scrai_core::session::Reserve;
-    // OpenAI web search has no monthly free allowance — every call is billable.
-    let grounding_free = if crate::openai::is_openai_model(&model) { 0 } else { grounding_free };
     // Abuse strikes: a session that collected today's quota of declines AT THIS PROVIDER
     // is refused that provider's models until tomorrow (openai.rs) — before anything is
     // reserved or sent anywhere. Other providers stay available.
@@ -584,6 +587,21 @@ pub fn settle(
             let (g_cost, g_retail) = grounding_charge_at(billable_queries, search_usd_per_query(&p.model), p.margin);
             frame.cost_scrai += g_cost;
             provider_cost = Some(frame.cost_scrai);
+            // One line per answer, the numbers the provider's console shows — so a spend
+            // mismatch is a journal grep, not a reconstruction. No content, no identifiers.
+            eprintln!(
+                "scrai-server: usage {} in={} cached={} out={} img={} searches={} (billable {}) cost={:.0} charged={}{}",
+                p.model,
+                usage.input,
+                usage.cached_input,
+                usage.output,
+                usage.output_image,
+                usage.grounding_queries,
+                billable_queries,
+                frame.cost_scrai,
+                frame.price_scrai + g_retail,
+                if usage.estimated { " ESTIMATED" } else { "" }
+            );
             // Token cost + per-image cost (image models report zero tokens) + grounding.
             let n_images = images.as_ref().and_then(|i| i.as_array()).map(|a| a.len()).unwrap_or(0) as u64;
             let cost = frame.price_scrai + n_images * per_image_scrai(&p.price, p.margin) + g_retail;
@@ -1569,6 +1587,35 @@ mod tests {
         )
         .unwrap();
         assert!(r["error"].as_str().unwrap().contains("already used"));
+    }
+
+    // Regression (2026-09-04): OpenAI web-search calls were billed as if Gemini's monthly
+    // free allowance applied — the OpenAI override was decided after the closure that
+    // carries grounding_free into settle() had already captured the Gemini value.
+    #[tokio::test]
+    async fn openai_search_calls_are_billed_despite_gemini_free_allowance() {
+        let (sk, pem, sid) = session_keypair();
+        let mut sessions = scrai_core::session::SessionStore::default();
+        let mut uploads = crate::uploads::UploadStore::default();
+        let mut replies: std::collections::HashMap<String, (u64, Vec<u8>)> = std::collections::HashMap::new();
+        let pricing = PricingTable::parse(
+            r#"{"version":"t","default":{"in":1.0,"out":4.0,"fallback":true},"models":{"gpt-5.4-nano":{"in":0.2,"out":1.25}}}"#,
+        )
+        .unwrap();
+        sessions.credit(&sid, 1_000_000);
+        // 4,990 Gemini queries still free this month — must not leak into OpenAI billing
+        let Reserved::Proceed(p) = reserve(&signed_chat(&sk, &pem, &sid, 1, "gpt-5.4-nano"), &mut sessions, &mut uploads, &pricing, 1.4, &mut replies, 4_990)
+        else {
+            panic!("should reserve");
+        };
+        assert_eq!(p.grounding_free, 0, "OpenAI has no free search allowance");
+        let usage = TokenUsage { input: 32_000, output: 4_000, grounding_queries: 3, ..Default::default() };
+        let settled = settle(*p, Ok(("hi".to_string(), usage, None)), &mut sessions, &mut replies);
+        let cost = settled.provider_cost.unwrap();
+        // tokens: 32k × $0.20/M + 4k × $1.25/M = $0.0114 = 1,140 TOKU; searches: 3 × $0.01 = 3,000 TOKU
+        assert!(cost >= 4_100.0 && cost < 4_200.0, "provider cost must include the three search calls, got {cost}");
+        let r: Value = serde_json::from_slice(&settled.reply).unwrap();
+        assert!(r["cost"].as_u64().unwrap() > 3_000, "the user is charged for the searches too");
     }
 
     // ---- H2 concurrency: reserve() and settle() are split so the provider call can run
