@@ -97,15 +97,21 @@ Three roles, one operator:
 - **tokumai-core** — the ONE box that holds state and secrets: the authority, the
   entitlement ledger, session balances, the double-spend list, payment wallets and chain
   watchers, provider API keys, pricing. Today's `scrai-server` **is** the core.
-- **tokumai-server** — stateless fronts, added when one core's CPU is saturated by the
+- **tokumai-front** — stateless fronts, added when one core's CPU is saturated by the
   cover traffic of its Nym identities. A front runs Nym identities, unwraps the Sphinx
   layer, forwards the request to the core and answers over the SURBs. No ledger, no key,
-  no decision; a captured front can neither mint nor rebook anything. Fronts reach the
-  core over a **private link between our own machines** (WireGuard: silent to strangers,
-  so the core keeps having no public port) — the first deliberate exception to "our
-  servers talk only over the mixnet". Optional: an inner encryption layer to the core's key
-  so fronts see ciphertext only. The client finds fronts through the signed directory and
-  fails over between them.
+  no decision; a captured front can neither mint nor rebook anything. The client finds
+  fronts through the signed directory and fails over between them.
+- **Front ↔ core link: WireGuard, decided 2026-09-04.** A private tunnel between our own
+  machines: the core opens one UDP port that answers only packets signed with a front's
+  key and drops everything else silently, so a port scan still finds no service and no
+  user traffic ever touches the clearnet. Routing this hop through the mixnet was
+  rejected: it would add a full mixnet traversal per direction (a question goes from 1–3 s
+  to 2–6 s), double the mixnet load, and hide nothing more about the user — anonymity is
+  made on the client ↔ front leg, the front already knows only a SURB. NymVPN cannot make
+  the core reachable either (it is an outbound tunnel). What remains hidden behind
+  WireGuard is only the core's location, known to us and the fronts. Optional later: an
+  inner encryption layer to the core's key so fronts see ciphertext only.
 
 Not before launch: a single server already carries K Nym identities (one identity ≈ 40
 concurrent users in the load test). Fronts become worthwhile only once that box is CPU-bound;
@@ -187,7 +193,7 @@ runs dry mid-service.
 `scrai-loadtest` + `scripts/loadtest.sh` measure one server's latency curve vs concurrent
 users (ping / models / full signed chat with fake payments + mock provider). Next: run the
 stages, find the knee, then either **multi-address server** (K Nym identities, one state —
-if ingress saturates first) or **tokumai-server fronts** in front of the one core behind the
+if ingress saturates first) or **tokumai-front** relays in front of the one core behind the
 **signed directory** (if CPU saturates first; see "Target topology"). Server selection must
 never be a user task: pong now carries `load`, the client picks + sticks (session balance
 and coconut books belong to the one core, so fronts are interchangeable). All of these
