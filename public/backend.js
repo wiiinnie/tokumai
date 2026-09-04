@@ -107,6 +107,8 @@ const httpBackend = {
   mixnetPing: () => Promise.reject(new Error("mixnet ping is native-only")),
   cancelChat: () => Promise.resolve(),
   appResumed: () => Promise.resolve({ action: "alive", ms: 0 }),
+  appHidden: () => Promise.resolve(),
+  resumeStats: () => Promise.resolve({ count: 0, alive: 0, dead: 0, rebuilt: 0, longest_alive_ms: 0, shortest_dead_ms: null, log: "", path: "" }),
   onMixnetPhase: async () => () => {},
   listEntryGateways: () => Promise.resolve([]),
   setEntryGateway: () => Promise.resolve({ entry_gateway: null }),
@@ -173,6 +175,10 @@ const tauriBackend = (invoke) => ({
   cancelChat: () => invoke("cancel_chat"),
   // App back in the foreground after hiddenMs; force=true rebuilds the route unconditionally.
   appResumed: (hiddenMs, force) => invoke("app_resumed", { hiddenMs: Math.max(0, Math.round(hiddenMs||0)), force: !!force }),
+  // Android: hidden long enough → drop the client so cover traffic stops burning battery.
+  appHidden: () => invoke("app_hidden"),
+  // Local resume log (hidden duration → route alive?), summary + tail. Never leaves the device.
+  resumeStats: () => invoke("resume_stats"),
   // Rust emits mixnet-phase {step, detail} during every (re)connect — keys · client · gateway · cover · ready · failed · check.
   onMixnetPhase: async (cb) => { const ev = window.__TAURI__ && window.__TAURI__.event; if (ev && ev.listen) return ev.listen("mixnet-phase", (e) => { try { cb(e.payload); } catch (_) {} }); return () => {}; },
   listEntryGateways: () => invoke("list_entry_gateways"),
@@ -269,6 +275,8 @@ export const Backend = {
   mixnetPing: () => pick("mixnetPing"),
   cancelChat: () => pick("cancelChat"),
   appResumed: (...a) => pick("appResumed", ...a),
+  appHidden: () => pick("appHidden"),
+  resumeStats: () => pick("resumeStats"),
   onMixnetPhase: (...a) => pick("onMixnetPhase", ...a),
   listEntryGateways: () => pick("listEntryGateways"),
   setEntryGateway: (id) => pick("setEntryGateway", id),

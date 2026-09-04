@@ -2528,7 +2528,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   function pauseWhy(ms){
     const m = Math.round(ms/60000), sec = Math.round(ms/1000);
     const dur = m>=1 ? `${m} min` : `${sec} s`;
-    return `The app was paused in the background for ${dur}, so the anonymous route was dropped — on purpose: a paused route would be a fixed, traceable address. A fresh one takes about 10 s.`;
+    return `The app was in the background for ${dur}. After that long the old route is not trusted any more, so a fresh one is built — about 10 s, new session identity.`;
   }
   function setMixState(st, why){
     if(why!==undefined) routeWhy = why;   // before routeOpen below — it renders routeWhy
@@ -2648,13 +2648,37 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   function routeDismiss(){ routeQuiet=true; routeClose(); }
   // Returning to the foreground: tell Rust how long we were away — it decides between a
   // quick ping (chip only) and a full rebuild (overlay).
+  // Mirrors LONG_PAUSE_MS in lib.rs: below it the old route gets a 5 s ping first, above it
+  // the route is rebuilt straight away. Android additionally drops the client after
+  // ANDROID_HIDDEN_DROP_MS in the background — its webview keeps running (and sending cover
+  // traffic) where iOS would have frozen the process.
+  const RESUME_LONG_PAUSE_MS = 90000, ANDROID_HIDDEN_DROP_MS = 120000;
+  let hiddenDropTimer = null;
+  const isAndroid = () => /Android/i.test(navigator.userAgent||"");
   async function appResumed(hiddenMs, force, auto){
     if(!isTauri() || !mixOn || !everConnected) return;
     routeTitle = "";                       // normal reconnects own the default title
-    if(force || hiddenMs >= 20000){ setMixState("reconnecting", auto ? "Retrying the route automatically — new session identity, about 10 s." : force ? "Rebuilding the route on request — new session identity, about 10 s." : pauseWhy(hiddenMs)); }
+    if(force || hiddenMs >= RESUME_LONG_PAUSE_MS){ setMixState("reconnecting", auto ? "Retrying the route automatically — new session identity, about 10 s." : force ? "Rebuilding the route on request — new session identity, about 10 s." : pauseWhy(hiddenMs)); }
     else setMixState("checking");
     try{ const r = await Backend.appResumed(hiddenMs, !!force); if(r && r.action==="alive"){ lastRtt = r.ms||lastRtt; connectedAt = connectedAt||Date.now(); autoRetryN=0; clearAutoRetry(); setMixState("ok"); } }
     catch(e){ routeFail = (e&&e.message)||String(e); setMixState("offline"); scheduleAutoRetry(); }
+  }
+  // Connection sheet: fill the "Resume checks" row from the local resume log.
+  async function fillResumeKv(){
+    const el=$("resumeKv"); if(!el || !isTauri()) return;
+    try{
+      const r=await Backend.resumeStats();
+      if(!r || !r.count){ el.textContent="none yet"; return; }
+      const la = r.longest_alive_ms ? Math.round(r.longest_alive_ms/1000)+" s" : "—";
+      const sd = r.shortest_dead_ms!=null ? Math.round(r.shortest_dead_ms/1000)+" s" : "—";
+      el.textContent = `${r.alive} alive · ${r.dead} dead · ${r.rebuilt} rebuilt · longest alive ${la} · shortest dead ${sd}`;
+    }catch(_){ el.textContent="—"; }
+  }
+  async function copyResumeLog(){
+    if(!isTauri()) return;
+    try{ const r=await Backend.resumeStats(); const txt=(r&&r.log)||""; if(!txt){ setStatus("resume log is empty"); return; }
+      await navigator.clipboard.writeText(txt); setStatus(`resume log copied · ${txt.split("\n").length} lines`); }
+    catch(e){ setStatus("could not copy: "+((e&&e.message)||e)); }
   }
   // Manual retry: resets the backoff and brings the overlay back.
   function rebuildRoute(){ clearAutoRetry(); autoRetryN=0; routeQuiet=false; routeClose(); mixState="ok"; appResumed(0, true); }
@@ -2676,13 +2700,16 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         <div class="kv"><span class="k">Cover traffic</span><span class="v ${mp.continuous?"ok":"sig"}">${mp.continuous?"on":"idle-only"} · ${msToMbps(mp.coverMs).toFixed(2)} Mbps</span></div>
         <div class="kv"><span class="k">Mixing delay</span><span class="v">${mp.mixMs} ms per hop</span></div>
         <div class="kv"><span class="k">Last round-trip</span><span class="v sig">${lastRtt?(lastRtt/1000).toFixed(1)+" s":"—"}</span></div>
+        <div class="kv"><span class="k">Resume checks</span><span class="v" id="resumeKv">…</span></div>
       </div>
+      <p class="tl" style="margin:8px 4px 0">Local log of every return from the background: how long the app was away and whether the old route still answered. Nothing identifying, nothing sent. <a class="alink" data-click="copyResumeLog">Copy log</a> to paste into a bug report.</p>
       ${mixState==="offline"?`<p class="hint" style="color:var(--rust)">${esc(routeFail||"Could not reach an entry gateway.")}</p>`:""}
       <div class="grouplbl">What happens when the app sleeps</div>
-      <div class="mprow"><div class="tl"><b>Background / lock screen.</b> iOS pauses the app after about 30 s. Cover traffic stops and the route goes quiet — a paused route would be a fixed, traceable address, so it is not kept alive.<br><br>
+      <div class="mprow"><div class="tl"><b>Background / lock screen.</b> iOS pauses the app after about 30 s. Cover traffic stops and the route goes quiet. On return the old route gets one 5 s ping; after more than 90 s away, or when the ping fails, a fresh route is built. Android keeps running in the background, so after 2 min hidden the route is dropped to save battery.<br><br>
       <b>Coming back.</b> Away under 20 s: one ping decides. Longer: a fresh route with a <b>new session identity</b> — about 10 s, shown step by step. A waiting question goes out automatically.<br><br>
       <b>Why that is good.</b> Every return is a new, unlinkable session. Nothing is sent or billed while the route is down.</div></div>
       <div class="btnrow"><button class="btn${mixState==="offline"?" primary":""}" data-click="rebuildRouteFromSheet">${mixState==="offline"?"Try again":"Rebuild the route now"}</button><button class="btn" data-click="openEntryPicker">Choose entry gateway</button></div>`;
+    fillResumeKv();
     openScrim("connScrim");
   }
   function closeConnSheet(){ $("connScrim").classList.remove("open"); }
@@ -5174,7 +5201,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // expose for inline handlers
   Object.assign(window,{ pickModel, copyPhrase, newChat, openSession, deleteSession, exportSession, toggleMenu, selectModelIdx,
     autogrow, onKey, sendMsg, retryMsg, showHandover, downloadHandover, closeHandover, pickImport, importHandover,
-    cancelMsg, resendMsg, showDismissed, retrieveMsg, openConnSheet, closeConnSheet, rebuildRoute, rebuildRouteFromSheet, routeDismiss, useOfficialServer, iterateImg,
+    cancelMsg, resendMsg, showDismissed, retrieveMsg, openConnSheet, closeConnSheet, rebuildRoute, rebuildRouteFromSheet, copyResumeLog, routeDismiss, useOfficialServer, iterateImg,
     openBuy, closeBuy, buyTier, buyOrInvoice, copyUri, copyTopupId, openTopupSheet, closeTopupSheet, confirmTopup, openAccount, closeAccount, doAccountNew, doAccountReveal, doAccountRestore, doAccountDelete, doMigrate, doRedeem, redeemSliderChanged, startQrScan, stopQrScan,
     showRestore, askNew, cancelAcctView, saveServer, srvSelected, qNav, scrollToBottom, reopenGuard, checkCredit,
     openEntryPicker, showExitInfo, chooseGateway, closeGw, filterGw, toggleGwOpt,
@@ -5355,7 +5382,16 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     // Re-check the route the instant we're visible again — that kicks a reconnect
     // when the client is down, so the connection is back before the user sends.
     document.addEventListener("visibilitychange",()=>{
-      if(document.visibilityState==="hidden"){ hiddenAt=Date.now(); return; }
+      if(document.visibilityState==="hidden"){
+        hiddenAt=Date.now();
+        // Android keeps the webview (and the cover-traffic loop) running in the background.
+        // Not while a reply is in flight — dropping the client would kill that transfer.
+        if(isTauri() && isAndroid() && mixOn && !hiddenDropTimer){
+          hiddenDropTimer=setTimeout(()=>{ hiddenDropTimer=null; if(document.visibilityState==="hidden" && !busy) Backend.appHidden().catch(()=>{}); }, ANDROID_HIDDEN_DROP_MS);
+        }
+        return;
+      }
+      if(hiddenDropTimer){ clearTimeout(hiddenDropTimer); hiddenDropTimer=null; }
       if(document.visibilityState==="visible" && isTauri() && mixOn){
         const away = hiddenAt ? Date.now()-hiddenAt : 0; hiddenAt=0;
         const after = ()=>{ if(activeInvoice && pollNow) setTimeout(pollNow, 400); }; // an open invoice? check it now

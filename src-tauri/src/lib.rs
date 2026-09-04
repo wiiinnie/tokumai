@@ -1701,10 +1701,77 @@ fn paid_chat_reply(app: &AppHandle, resp: &Value, price_warning: Value) -> Value
     })
 }
 
+/// Resume telemetry, LOCAL ONLY: one JSON line per return to the foreground — how long the
+/// app was hidden and whether the old route was still alive. No identifiers, no addresses.
+/// Read back by `resume_stats` (connection sheet, Developer page) so LONG_PAUSE_MS can be
+/// set from real numbers instead of a guess. Capped at ~64 KB (oldest half dropped).
+fn record_resume(app: &AppHandle, hidden_ms: u64, action: &str, alive: Option<bool>, rtt_ms: Option<u64>, reason: &str) {
+    let Ok(dir) = data_dir(app) else { return };
+    let path = dir.join("resume-stats.jsonl");
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let line = json!({
+        "ts": ts, "os": std::env::consts::OS, "hidden_ms": hidden_ms,
+        "action": action, "alive": alive, "rtt_ms": rtt_ms, "reason": reason,
+    })
+    .to_string();
+    let _ = std::fs::create_dir_all(&dir);
+    if std::fs::metadata(&path).map(|m| m.len() > 64 * 1024).unwrap_or(false) {
+        if let Ok(all) = std::fs::read_to_string(&path) {
+            let lines: Vec<&str> = all.lines().collect();
+            let _ = std::fs::write(&path, lines[lines.len() / 2..].join("\n") + "\n");
+        }
+    }
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = writeln!(f, "{line}");
+    }
+    log::info!("[resume] hidden {hidden_ms} ms → {action} ({reason}) alive={alive:?} rtt={rtt_ms:?}");
+}
+
+/// Summary + tail of the resume log for the connection sheet / Developer page.
+#[tauri::command]
+async fn resume_stats(app: AppHandle) -> Result<Value, String> {
+    let path = data_dir(&app)?.join("resume-stats.jsonl");
+    let all = std::fs::read_to_string(&path).unwrap_or_default();
+    let (mut n, mut alive, mut dead, mut rebuilt, mut longest_alive) = (0u64, 0u64, 0u64, 0u64, 0u64);
+    let mut shortest_dead: Option<u64> = None;
+    for l in all.lines() {
+        let Ok(v) = serde_json::from_str::<Value>(l) else { continue };
+        n += 1;
+        let h = v["hidden_ms"].as_u64().unwrap_or(0);
+        match v["alive"].as_bool() {
+            Some(true) => { alive += 1; longest_alive = longest_alive.max(h); }
+            Some(false) => { dead += 1; shortest_dead = Some(shortest_dead.map_or(h, |d| d.min(h))); }
+            None => rebuilt += 1,
+        }
+    }
+    let tail: Vec<&str> = all.lines().rev().take(200).collect::<Vec<_>>().into_iter().rev().collect();
+    Ok(json!({
+        "count": n, "alive": alive, "dead": dead, "rebuilt": rebuilt,
+        "longest_alive_ms": longest_alive, "shortest_dead_ms": shortest_dead,
+        "log": tail.join("\n"), "path": path.display().to_string(),
+    }))
+}
+
+/// Android only: the webview keeps running in the background, and with it the cover
+/// traffic — radio + CPU for nothing. After a while hidden the JS side calls this to drop
+/// the client; the next resume rebuilds the route (it is past LONG_PAUSE_MS by then).
+/// iOS never gets here: the process is frozen, so there is nothing to stop.
+#[tauri::command]
+async fn app_hidden(transport: State<'_, Arc<Transport>>) -> Result<(), String> {
+    transport.inner().drop_client().await;
+    log::info!("[resume] hidden long enough on Android — client dropped to stop cover traffic");
+    Ok(())
+}
+
 /// The app came back to the foreground after `hidden_ms` in the background (iOS freezes
-/// the process ~30 s after that, and the gateway socket dies with it). Long pause, or
-/// `force`: drop the client and rebuild the route — with progress events. Short pause: one
-/// ping through the mixnet (10 s budget) decides; a failed ping drops the client too.
+/// the process ~30 s after that; the gateway socket usually survives a while longer — how
+/// long is what `resume-stats.jsonl` measures). Long pause, or `force`: drop the client and
+/// rebuild the route — with progress events. Otherwise one ping through the mixnet (5 s
+/// budget; normal round trips take 1-3 s) decides; a failed ping drops the client too.
 /// Returns `{ action: "reconnect" | "alive", ms }`.
 #[tauri::command]
 async fn app_resumed(
@@ -1713,12 +1780,19 @@ async fn app_resumed(
     #[allow(non_snake_case)] hiddenMs: u64,
     force: Option<bool>,
 ) -> Result<Value, String> {
-    const LONG_PAUSE_MS: u64 = 20_000;
+    // Was 20 s (a guess). A rebuild costs more battery than a ping (key generation, a
+    // clearnet topology fetch, gateway handshake, SURB warm-up), so the ping-first window
+    // is wide; the log tells us where the real cliff is.
+    const LONG_PAUSE_MS: u64 = 90_000;
+    const PING_BUDGET_MS: u64 = 5_000;
     let t: Arc<Transport> = transport.inner().clone();
-    if force.unwrap_or(false) || hiddenMs >= LONG_PAUSE_MS || !t.is_connected() {
+    let forced = force.unwrap_or(false);
+    if forced || hiddenMs >= LONG_PAUSE_MS || !t.is_connected() {
+        let reason = if forced { "requested" } else if hiddenMs >= LONG_PAUSE_MS { "long-pause" } else { "dead" };
+        record_resume(&app, hiddenMs, "reconnect", if reason == "dead" { Some(false) } else { None }, None, reason);
         t.drop_client().await;
         spawn_rebuild(app.clone(), t.clone());
-        return Ok(json!({ "action": "reconnect", "reason": if force.unwrap_or(false) { "requested" } else if hiddenMs >= LONG_PAUSE_MS { "long-pause" } else { "dead" } }));
+        return Ok(json!({ "action": "reconnect", "reason": reason }));
     }
     let _ = app.emit("mixnet-phase", json!({ "step": "check", "detail": "" }));
     let w = wallet::load(&data_dir(&app)?);
@@ -1727,12 +1801,15 @@ async fn app_resumed(
     let t0 = std::time::Instant::now();
     // round_trip drops the client + marks it dead on a timeout, so the reconnect below is
     // the genuine full rebuild, not a retry on a corpse.
-    match t.round_trip(&srv, &req, SURBS_SMALL, 10_000).await {
+    match t.round_trip(&srv, &req, SURBS_SMALL, PING_BUDGET_MS).await {
         Ok(_) => {
+            let ms = t0.elapsed().as_millis() as u64;
+            record_resume(&app, hiddenMs, "alive", Some(true), Some(ms), "ping-ok");
             let _ = app.emit("mixnet-phase", json!({ "step": "ready", "detail": "alive" }));
-            Ok(json!({ "action": "alive", "ms": t0.elapsed().as_millis() as u64 }))
+            Ok(json!({ "action": "alive", "ms": ms }))
         }
         Err(_) => {
+            record_resume(&app, hiddenMs, "reconnect", Some(false), None, "ping-failed");
             t.drop_client().await;
             spawn_rebuild(app.clone(), t.clone());
             Ok(json!({ "action": "reconnect", "reason": "ping-failed" }))
@@ -2676,7 +2753,7 @@ pub fn run() {
             state, local_state, set_server, account_new, account_reveal, account_restore, account_delete, account_migrate_qr,
             invoice, invoice_status, invoice_cancel, ocr_scan, pdf_text, pdf_ocr, pdf_pages, collect, redeem, chat,
             smart_available, smart_detect, coconut_redeem,
-            mixnet_route, mixnet_ping, cancel_chat, app_resumed, list_entry_gateways, set_entry_gateway, set_mixnet_perf, open_external, save_image,
+            mixnet_route, mixnet_ping, cancel_chat, app_resumed, app_hidden, resume_stats, list_entry_gateways, set_entry_gateway, set_mixnet_perf, open_external, save_image,
             share_text, upload_begin, upload_chunk, upload_pipeline, pick_image, open_account_security,
             vault_list, vault_load, vault_save, vault_remove, vault_purge_webdata, pending_load, pending_save
         ])
