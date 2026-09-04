@@ -387,7 +387,7 @@
   .qnavnum{font-family:var(--mono);font-size:11px;color:var(--bone);font-variant-numeric:tabular-nums;padding:1px 0;min-width:26px;text-align:center}
   /* the question you're currently parked on (↑/↓ nav) — subtle accent, no layout shift */
   .msg.you.qcurrent{box-shadow:inset 3px 0 0 0 var(--signal);background:color-mix(in srgb,var(--signal) 7%,transparent);border-radius:6px}
-  /* dev cost-audit line under an answer (long-press the wordmark to toggle) */
+  /* dev cost-audit line under an answer (Settings → Developer → Developer diagnostics, debug builds only) */
   .costaudit{font-family:var(--mono);font-size:10px;color:var(--signal);opacity:.9;margin-top:8px;letter-spacing:.02em}
   .costaudit.bad{color:var(--rust);opacity:1;font-weight:700}
   .sizenote{font-family:var(--mono);font-size:11px;color:var(--bone);opacity:.7;margin-top:8px;letter-spacing:.02em}
@@ -719,13 +719,13 @@
   body.tauri .dot{display:none}
   body.tauri .titlebar{padding-left:82px}
   /* Make the whole title bar a window-drag handle (macOS convention): clicks on its
-     decorative children pass through to the data-tauri-drag-region element. The two
-     interactive children keep their events — the status chip opens the connection
-     sheet, the wordmark carries the long-press dev toggle. (Until 2026-09-04 the chip
-     was unreachable in every native build; only the hamburger had been re-enabled.) */
+     decorative children pass through to the data-tauri-drag-region element. The one
+     interactive child keeps its events — the status chip opens the connection sheet.
+     (Until 2026-09-04 the chip was unreachable in every native build; only the phone
+     hamburger had been re-enabled.) */
   .titlebar[data-tauri-drag-region]{cursor:default}
   .titlebar[data-tauri-drag-region] > *{pointer-events:none}
-  .titlebar[data-tauri-drag-region] > .env,.titlebar[data-tauri-drag-region] > .wordmark{pointer-events:auto}
+  .titlebar[data-tauri-drag-region] > .env{pointer-events:auto}
 
   /* ---------- boot splash (phones only — see the script below the styles) ----------
      Pure splash until the wordmark has settled (+2s): the chrome is invisible
