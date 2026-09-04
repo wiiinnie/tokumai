@@ -124,10 +124,43 @@ struct DayRow {
     /// One person = one session unless they bump the session index; free-tier chats
     /// carry no session and are not counted.
     users: u64,
-    /// prompts per model id that day (from `daily_model`; empty for days before it existed)
-    per_model: std::collections::HashMap<String, u64>,
+    /// per model id that day (from `daily_model`; empty for days before it existed)
+    per_model: std::collections::HashMap<String, ModelDay>,
     /// faucet payments that day (from faucet.db next to state.db; UTC days)
     faucet: u64,
+}
+
+/// One model's share of a day: prompts, what users paid, what the provider charged us.
+#[derive(Default, Clone, Copy)]
+struct ModelDay {
+    prompts: u64,
+    spent: u64,
+    cost: u64,
+}
+
+/// Which invoice a model lands on. Google is reconciled in € (AI Studio, Pacific-day
+/// buckets), OpenAI in $ (usage dashboard, UTC days) — hence the separate blocks.
+fn provider_of(model: &str) -> &'static str {
+    if model.starts_with("gemini") || model.starts_with("imagen") || model.starts_with("veo") {
+        "GOOGLE"
+    } else if model.starts_with("gpt") || model.starts_with("o1") || model.starts_with("o3") || model.starts_with("o4") {
+        "OPENAI"
+    } else {
+        "OTHER"
+    }
+}
+
+/// Single-line catalog label for the drill-down rows ("Nano Banana 2 Lite"), raw id as fallback.
+fn model_label(id: &str) -> String {
+    model_header(id).replace('\n', " ")
+}
+
+/// What the operator is looking at: the selected day row and whether the drawer with the
+/// testnet faucet + integrity details is open.
+#[derive(Default)]
+struct View {
+    sel: usize,
+    drawer: bool,
 }
 
 #[derive(Default)]
@@ -457,12 +490,17 @@ fn read_metrics(path: &PathBuf) -> Metrics {
             .query_row("SELECT v FROM kv WHERE k = 'metrics_tz'", [], |r| r.get::<_, String>(0))
             .unwrap_or_else(|_| "UTC".into());
         // per-model prompts for the same days (table may not exist on an older server)
-        if let Ok(mut st) = conn.prepare("SELECT day, model, prompts FROM daily_model") {
-            if let Ok(rows) = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)? as u64))) {
+        if let Ok(mut st) = conn.prepare("SELECT day, model, prompts, spent, cost FROM daily_model") {
+            if let Ok(rows) = st.query_map([], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)? as u64, r.get::<_, i64>(3)? as u64, r.get::<_, i64>(4)? as u64))
+            }) {
                 let mut totals: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
-                for (day, model, n) in rows.filter_map(|r| r.ok()) {
+                for (day, model, n, spent, cost) in rows.filter_map(|r| r.ok()) {
                     if let Some(d) = m.daily.iter_mut().find(|d| d.day == day) {
-                        *d.per_model.entry(model.clone()).or_insert(0) += n;
+                        let e = d.per_model.entry(model.clone()).or_default();
+                        e.prompts += n;
+                        e.spent += spent;
+                        e.cost += cost;
                         *totals.entry(model).or_insert(0) += n;
                     }
                 }
@@ -573,14 +611,15 @@ fn block(title: &str) -> Block<'_> {
         ))
 }
 
-fn ui(f: &mut Frame, m: &Metrics, path: &str, clock: &str, network: &str, status: &str) {
+fn ui(f: &mut Frame, m: &Metrics, view: &View, path: &str, clock: &str, network: &str, status: &str) {
     let root = Layout::vertical([
         Constraint::Length(1),
         // 11 → inner 9 → 8 content lines + gauge, so USAGE's grounding line fits (the
         // bottom row has ample empty space to give up).
         Constraint::Length(11),
         Constraint::Min(6),
-        Constraint::Length(1),
+        Constraint::Length(1), // strip: faucet + integrity one-liners, drawer key
+        Constraint::Length(1), // footer note / status
     ])
     .split(f.area());
 
@@ -596,7 +635,7 @@ fn ui(f: &mut Frame, m: &Metrics, path: &str, clock: &str, network: &str, status
             format!("   net:{network}"),
             Style::default().fg(if network == "mainnet" { RUST } else { SAGE }).add_modifier(Modifier::BOLD),
         ),
-        Span::styled("   n toggle · q quit", Style::default().fg(DIM)),
+        Span::styled("   ↑↓ day · i details · n toggle · c code · q quit", Style::default().fg(DIM)),
         Span::styled(
             if status.is_empty() { String::new() } else { format!("   {status}") },
             Style::default().fg(GOLD),
@@ -722,28 +761,24 @@ fn ui(f: &mut Frame, m: &Metrics, path: &str, clock: &str, network: &str, status
         ur[1],
     );
 
-    // bottom row: DAILY | FAUCET (testnet servers only) | INTEGRITY
-    let bot = if m.has_faucet {
-        Layout::horizontal([Constraint::Min(40), Constraint::Length(36), Constraint::Length(30)]).split(root[2])
-    } else {
-        Layout::horizontal([Constraint::Min(40), Constraint::Length(30)]).split(root[2])
+    // bottom row: DAILY totals (↑↓ picks a day) | that day by provider and model
+    let bot = Layout::horizontal([Constraint::Min(72), Constraint::Length(66)]).split(root[2]);
+    let fx = eur_per_usd();
+    let margin_txt = |spent: u64, cost: u64| -> (String, Color) {
+        if cost > 0 {
+            let pct = (spent as f64 / cost as f64 - 1.0) * 100.0;
+            (format!("{pct:+.1}%"), if pct > 100.0 || pct < 0.0 { RUST } else { SAGE })
+        } else {
+            ("—".into(), DIM)
+        }
     };
 
-    // day · prompts · spent · cost · margin · <one column per model> · buys · buys $
-    let fx = eur_per_usd();
-    let mut header: Vec<String> = ["day", "prompts", "spent", "cost", "margin"].iter().map(|s| s.to_string()).collect();
+    let mut header: Vec<&str> = vec!["day", "prompts", "spent", "cost"];
     if fx.is_some() {
-        header.insert(4, "cost €".into()); // next to the $ figure — the number to match with AI Studio
+        header.push("cost €"); // next to the $ figure — the number to match with AI Studio
     }
-    header.extend(m.models.iter().map(|id| model_header(id)));
-    header.push("faucet".into());
-    header.push("buys".into());
-    header.push("buys $".into());
-    header.push("users".into());
-    header.push("1 min".into());
-    header.push("peak".into());
-    // two lines: the model labels wrap ("Nano Banana\n2 Lite"), the rest sits on the first
-    let header_row = Row::new(header).style(Style::default().fg(DIM)).height(2);
+    header.extend(["margin", "buys", "buys $", "users", "1 min", "peak"]);
+    let header_row = Row::new(header).style(Style::default().fg(DIM));
     let rows: Vec<Row> = if m.daily.is_empty() {
         vec![Row::new(vec![Cell::from(Span::styled(
             if m.has_daily { "no activity yet today" } else { "server not yet redeployed with metrics" },
@@ -753,37 +788,26 @@ fn ui(f: &mut Frame, m: &Metrics, path: &str, clock: &str, network: &str, status
         m.daily
             .iter()
             .map(|d| {
-                Row::new(vec![
-                    Cell::from(Span::styled(d.day.clone(), Style::default().fg(BONE))),
-                    Cell::from(Span::styled(grp(d.prompts), Style::default().fg(SAGE))),
-                    Cell::from(Span::styled(usd(d.spent), Style::default().fg(GOLD))),
-                    Cell::from(Span::styled(usd(d.cost), Style::default().fg(BONE))),
-                ]
-                .into_iter()
-                // "cost €" only when a rate is configured (the header column is added on the same condition)
-                .chain(fx.map(|r| Cell::from(Span::styled(eur(d.cost, r), Style::default().fg(GOLD)))))
-                .chain([Cell::from(Span::styled(
-                    if d.cost > 0 { format!("+{:.1}%", (d.spent as f64 / d.cost as f64 - 1.0) * 100.0) } else { "—".into() },
-                    Style::default().fg(SAGE),
-                ))])
-                .chain(m.models.iter().map(|id| {
-                    // "—" for days before the per-model table existed, 0 for "not used that day"
-                    let txt = if d.per_model.is_empty() { "—".to_string() } else { grp(*d.per_model.get(id).unwrap_or(&0)) };
-                    let color = if txt == "—" || txt == "0" { DIM } else { SAGE };
-                    Cell::from(Span::styled(txt, Style::default().fg(color)))
-                }))
-                .chain([
-                    Cell::from(Span::styled(
-                        if d.faucet == 0 { "—".to_string() } else { grp(d.faucet) },
-                        Style::default().fg(if d.faucet == 0 { DIM } else { GOLD }),
-                    )),
-                    Cell::from(Span::styled(grp(d.purchases), Style::default().fg(BONE))),
-                    Cell::from(Span::styled(usd(d.purchased), Style::default().fg(GOLD))),
-                    Cell::from(Span::styled(grp(d.users), Style::default().fg(BONE))),
-                    Cell::from(Span::styled(grp(d.peak_1m), Style::default().fg(SAGE))),
-                    Cell::from(Span::styled(grp(d.peak_clients), Style::default().fg(SAGE))),
-                ])
-                .collect::<Vec<Cell>>())
+                let (mt, mc) = margin_txt(d.spent, d.cost);
+                Row::new(
+                    vec![
+                        Cell::from(Span::styled(d.day.clone(), Style::default().fg(BONE))),
+                        Cell::from(Span::styled(grp(d.prompts), Style::default().fg(SAGE))),
+                        Cell::from(Span::styled(usd(d.spent), Style::default().fg(GOLD))),
+                        Cell::from(Span::styled(usd(d.cost), Style::default().fg(BONE))),
+                    ]
+                    .into_iter()
+                    .chain(fx.map(|r| Cell::from(Span::styled(eur(d.cost, r), Style::default().fg(GOLD)))))
+                    .chain([
+                        Cell::from(Span::styled(mt, Style::default().fg(mc))),
+                        Cell::from(Span::styled(grp(d.purchases), Style::default().fg(BONE))),
+                        Cell::from(Span::styled(usd(d.purchased), Style::default().fg(GOLD))),
+                        Cell::from(Span::styled(grp(d.users), Style::default().fg(BONE))),
+                        Cell::from(Span::styled(grp(d.peak_1m), Style::default().fg(SAGE))),
+                        Cell::from(Span::styled(grp(d.peak_clients), Style::default().fg(SAGE))),
+                    ])
+                    .collect::<Vec<Cell>>(),
+                )
             })
             .collect()
     };
@@ -796,56 +820,181 @@ fn ui(f: &mut Frame, m: &Metrics, path: &str, clock: &str, network: &str, status
     if fx.is_some() {
         widths.push(Constraint::Length(8)); // cost €
     }
-    widths.push(Constraint::Length(8)); // margin
-    widths.extend(m.models.iter().map(|_| Constraint::Length(13)));
-    widths.push(Constraint::Length(6));
-    widths.push(Constraint::Length(5));
-    widths.push(Constraint::Length(8));
-    widths.push(Constraint::Length(5)); // users
-    widths.push(Constraint::Length(5)); // peak
-    f.render_widget(
-        Table::new(rows, widths).header(header_row).block(block(&format!("DAILY · per {} day", m.metrics_tz))),
+    widths.extend([
+        Constraint::Length(8), // margin
+        Constraint::Length(5), // buys
+        Constraint::Length(8), // buys $
+        Constraint::Length(6), // users
+        Constraint::Length(6), // 1 min
+        Constraint::Length(5), // peak
+    ]);
+    let mut ts = TableState::default();
+    if !m.daily.is_empty() {
+        ts.select(Some(view.sel.min(m.daily.len() - 1)));
+    }
+    f.render_stateful_widget(
+        Table::new(rows, widths)
+            .header(header_row)
+            .highlight_style(Style::default().bg(Color::Rgb(38, 34, 32)).add_modifier(Modifier::BOLD))
+            .highlight_symbol("▶ ")
+            .block(block(&format!("DAILY · totals · per {} day", m.metrics_tz))),
         bot[0],
+        &mut ts,
     );
 
-    let integ = vec![
-        kv("burned coin serials", grp(m.coins_redeemed), BONE),
-        kv("offenders", grp(m.offenders as u64), if m.offenders > 0 { RUST } else { SAGE }),
-        kv("blacklisted", grp(m.blacklisted as u64), if m.blacklisted > 0 { RUST } else { SAGE }),
-        Line::from(""),
-        kv("lifetime prompts", grp(m.total_prompts), SAGE),
-        kv("lifetime spend", usd(m.total_spent), GOLD),
-        kv("lifetime buys", format!("{} · {}", grp(m.total_purchases), usd(m.total_purchased)), GOLD),
-    ];
-    f.render_widget(Paragraph::new(integ).block(block("INTEGRITY · double-spend")), bot[bot.len() - 1]);
+    // the selected day, one block per provider, models underneath, month-to-date at the foot
+    let sel_day = m.daily.get(view.sel.min(m.daily.len().saturating_sub(1)));
+    let mut drill: Vec<Line> = Vec::new();
+    let col = |a: &str, b: &str, c: &str, d: &str, e: &str| format!("{a:<24}{b:>7} {c:>8} {d:>8} {e:>8}");
+    drill.push(Line::from(Span::styled(
+        col("", "prompts", "spent", "cost", if fx.is_some() { "cost €" } else { "" }) + "   margin",
+        Style::default().fg(DIM),
+    )));
+    match sel_day {
+        None => drill.push(Line::from(Span::styled("no day selected", Style::default().fg(DIM)))),
+        Some(d) if d.per_model.is_empty() => {
+            drill.push(Line::from(Span::styled("no per-model figures for this day (older server)", Style::default().fg(DIM))))
+        }
+        Some(d) => {
+            let mut providers: Vec<&str> = d.per_model.keys().map(|k| provider_of(k)).collect();
+            providers.sort();
+            providers.dedup();
+            for prov in providers {
+                let mut models: Vec<(&String, &ModelDay)> = d.per_model.iter().filter(|(k, _)| provider_of(k) == prov).collect();
+                models.sort_by(|a, b| b.1.spent.cmp(&a.1.spent).then(a.0.cmp(b.0)));
+                let (p, sp, co) = models.iter().fold((0, 0, 0), |acc, (_, v)| (acc.0 + v.prompts, acc.1 + v.spent, acc.2 + v.cost));
+                let ce = match (prov, fx) {
+                    ("GOOGLE", Some(r)) => eur(co, r),
+                    _ => "—".into(),
+                };
+                let (mt, mc) = margin_txt(sp, co);
+                drill.push(Line::from(vec![
+                    Span::styled(col(prov, &grp(p), &usd(sp), &usd(co), &ce), Style::default().fg(GOLD).add_modifier(Modifier::BOLD)),
+                    Span::styled(format!("   {mt}"), Style::default().fg(mc)),
+                ]));
+                for (id, v) in models {
+                    let ce = match (prov, fx) {
+                        ("GOOGLE", Some(r)) => eur(v.cost, r),
+                        _ => "—".into(),
+                    };
+                    let (mt, mc) = margin_txt(v.spent, v.cost);
+                    let label: String = model_label(id).chars().take(21).collect();
+                    let dim = v.prompts == 0;
+                    drill.push(Line::from(vec![
+                        Span::styled(
+                            col(&format!("  {label}"), &grp(v.prompts), &usd(v.spent), &usd(v.cost), &ce),
+                            Style::default().fg(if dim { DIM } else { BONE }),
+                        ),
+                        Span::styled(format!("   {mt}"), Style::default().fg(if dim { DIM } else { mc })),
+                    ]));
+                }
+            }
+            // month to date per provider — the figures to reconcile with the invoices
+            let month = &d.day[..d.day.len().min(7)];
+            let mut mtd: Vec<(&str, u64, u64)> = Vec::new();
+            for row in m.daily.iter().filter(|r| r.day.starts_with(month)) {
+                for (id, v) in &row.per_model {
+                    let prov = provider_of(id);
+                    match mtd.iter_mut().find(|e| e.0 == prov) {
+                        Some(e) => {
+                            e.1 += v.spent;
+                            e.2 += v.cost;
+                        }
+                        None => mtd.push((prov, v.spent, v.cost)),
+                    }
+                }
+            }
+            mtd.sort();
+            drill.push(Line::from(""));
+            drill.push(Line::from(Span::styled(format!("{month} to date · spent / cost"), Style::default().fg(DIM))));
+            for (prov, sp, co) in mtd {
+                let extra = match (prov, fx) {
+                    ("GOOGLE", Some(r)) => format!(" ≈ {}  ← AI Studio (Pacific days)", eur(co, r)),
+                    ("OPENAI", _) => "  ← OpenAI usage (UTC days)".to_string(),
+                    _ => String::new(),
+                };
+                drill.push(Line::from(vec![
+                    Span::styled(format!("{prov:<8}"), Style::default().fg(GOLD)),
+                    Span::styled(format!("{} / {}", usd(sp), usd(co)), Style::default().fg(BONE)),
+                    Span::styled(extra, Style::default().fg(DIM)),
+                ]));
+            }
+        }
+    }
+    let drill_title = sel_day.map(|d| format!("{} · by provider and model", d.day)).unwrap_or_else(|| "by provider and model".into());
+    f.render_widget(Paragraph::new(drill).block(block(&drill_title)), bot[1]);
 
-    // FAUCET: invite codes with uses left; `c` mints one (the only write besides .env)
+    // strip: the one-line summaries of what used to be two side panels
+    let mut strip: Vec<Span> = vec![Span::styled(" INTEGRITY ", Style::default().fg(GOLD).add_modifier(Modifier::BOLD))];
+    strip.push(Span::styled(
+        format!(
+            "burned {} · offenders {} · blacklisted {}",
+            grp(m.coins_redeemed),
+            m.offenders,
+            m.blacklisted
+        ),
+        Style::default().fg(if m.offenders > 0 || m.blacklisted > 0 { RUST } else { DIM }),
+    ));
     if m.has_faucet {
-        let mut lines: Vec<Line> = vec![
-            kv("funded", format!("{} · {:.1} NYM", m.faucet_claims, m.faucet_unym as f64 / 1e6), GOLD),
-            // today vs the cap (SCRAI_FAUCET_DAILY_MAX in .env) — red at the limit, the moment to raise it
-            kv(
-                "today",
-                format!("{} / {}{}", m.faucet_today, m.faucet_daily_max, if m.faucet_today >= m.faucet_daily_max { "  LIMIT — raise SCRAI_FAUCET_DAILY_MAX" } else { "" }),
-                if m.faucet_today >= m.faucet_daily_max { RUST } else if m.faucet_today > 0 { GOLD } else { DIM },
-            ),
-            kv("open invoices", grp(m.testnet_pending as u64), if m.testnet_pending > 0 { GOLD } else { DIM }),
-            Line::from(Span::styled("codes · uses left · note", Style::default().fg(DIM))),
+        strip.push(Span::styled("   FAUCET ", Style::default().fg(GOLD).add_modifier(Modifier::BOLD)));
+        strip.push(Span::styled(
+            format!("{} funded · today {}/{} · {} open", m.faucet_claims, m.faucet_today, m.faucet_daily_max, m.testnet_pending),
+            Style::default().fg(if m.faucet_today >= m.faucet_daily_max { RUST } else { DIM }),
+        ));
+    }
+    strip.push(Span::styled("   i details", Style::default().fg(BONE)));
+    f.render_widget(Paragraph::new(Line::from(strip)), root[3]);
+
+    // drawer (i): the full INTEGRITY + FAUCET panels as a popup over the bottom row
+    if view.drawer {
+        let area = root[2];
+        let w = area.width.min(96);
+        let h = area.height.min(22);
+        let pop = Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h);
+        f.render_widget(Clear, pop);
+        let cols = if m.has_faucet {
+            Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)]).split(pop)
+        } else {
+            Layout::horizontal([Constraint::Percentage(100)]).split(pop)
+        };
+        let integ = vec![
+            kv("burned coin serials", grp(m.coins_redeemed), BONE),
+            kv("offenders", grp(m.offenders as u64), if m.offenders > 0 { RUST } else { SAGE }),
+            kv("blacklisted", grp(m.blacklisted as u64), if m.blacklisted > 0 { RUST } else { SAGE }),
+            Line::from(""),
+            kv("lifetime prompts", grp(m.total_prompts), SAGE),
+            kv("lifetime spend", usd(m.total_spent), GOLD),
+            kv("lifetime buys", format!("{} · {}", grp(m.total_purchases), usd(m.total_purchased)), GOLD),
+            Line::from(""),
+            Line::from(Span::styled("i or Esc closes", Style::default().fg(DIM))),
         ];
-        let avail = bot[1].height.saturating_sub(2 + lines.len() as u16 + 1) as usize;
-        for c in m.faucet_codes.iter().take(avail.max(1)) {
-            let left = c.left();
-            lines.push(Line::from(vec![
-                Span::styled(format!("{:<16}", c.code), Style::default().fg(if left > 0 { BONE } else { DIM })),
-                Span::styled(format!("{:>2}  ", left), Style::default().fg(if left > 0 { SAGE } else { DIM })),
-                Span::styled(c.note.chars().take(12).collect::<String>(), Style::default().fg(DIM)),
-            ]));
+        f.render_widget(Paragraph::new(integ).block(block("INTEGRITY · double-spend")), cols[0]);
+        if m.has_faucet {
+            let mut lines: Vec<Line> = vec![
+                kv("funded", format!("{} · {:.1} NYM", m.faucet_claims, m.faucet_unym as f64 / 1e6), GOLD),
+                kv(
+                    "today",
+                    format!("{} / {}{}", m.faucet_today, m.faucet_daily_max, if m.faucet_today >= m.faucet_daily_max { "  LIMIT — raise SCRAI_FAUCET_DAILY_MAX" } else { "" }),
+                    if m.faucet_today >= m.faucet_daily_max { RUST } else if m.faucet_today > 0 { GOLD } else { DIM },
+                ),
+                kv("open invoices", grp(m.testnet_pending as u64), if m.testnet_pending > 0 { GOLD } else { DIM }),
+                Line::from(Span::styled("codes · uses left · note", Style::default().fg(DIM))),
+            ];
+            let avail = cols[1].height.saturating_sub(2 + lines.len() as u16 + 1) as usize;
+            for c in m.faucet_codes.iter().take(avail.max(1)) {
+                let left = c.left();
+                lines.push(Line::from(vec![
+                    Span::styled(format!("{:<16}", c.code), Style::default().fg(if left > 0 { BONE } else { DIM })),
+                    Span::styled(format!("{:>2}  ", left), Style::default().fg(if left > 0 { SAGE } else { DIM })),
+                    Span::styled(c.note.chars().take(12).collect::<String>(), Style::default().fg(DIM)),
+                ]));
+            }
+            if m.faucet_codes.len() > avail.max(1) {
+                lines.push(Line::from(Span::styled(format!("… {} more (scrai-faucet code list)", m.faucet_codes.len() - avail.max(1)), Style::default().fg(DIM))));
+            }
+            lines.push(Line::from(Span::styled("c = new code (1 claim)", Style::default().fg(GOLD))));
+            f.render_widget(Paragraph::new(lines).block(block("FAUCET · testnet")), cols[1]);
         }
-        if m.faucet_codes.len() > avail.max(1) {
-            lines.push(Line::from(Span::styled(format!("… {} more (scrai-faucet code list)", m.faucet_codes.len() - avail.max(1)), Style::default().fg(DIM))));
-        }
-        lines.push(Line::from(Span::styled("c = new code (1 claim)", Style::default().fg(GOLD))));
-        f.render_widget(Paragraph::new(lines).block(block("FAUCET · testnet")), bot[1]);
     }
 
     // footer
@@ -853,7 +1002,7 @@ fn ui(f: &mut Frame, m: &Metrics, path: &str, clock: &str, network: &str, status
         "accounts = distinct paying pubkeys (anonymous) · sessions are unlinkable to accounts · spend & prompts are real daily counters, started at metrics deploy · peak = most clients with a chat/purchase/catalog request in flight at one instant · burned-serial count is integrity only, not a $ value",
         Style::default().fg(DIM),
     ));
-    f.render_widget(Paragraph::new(note), root[3]);
+    f.render_widget(Paragraph::new(note), root[4]);
 }
 
 fn ratio(part: u64, whole: u64) -> f64 {
@@ -906,15 +1055,24 @@ fn mint_invite_code(state_db: &Path) -> String {
 
 fn run<B: Backend>(term: &mut Terminal<B>, path: &PathBuf, path_str: &str) -> io::Result<()> {
     let mut status = String::new();
+    let mut view = View::default();
     loop {
         let m = read_metrics(path);
         let clock = clock_utc();
         let network = current_network();
-        term.draw(|f| ui(f, &m, path_str, &clock, &network, &status))?;
+        term.draw(|f| ui(f, &m, &view, path_str, &clock, &network, &status))?;
         if event::poll(Duration::from_millis(1500))? {
             if let Event::Key(k) = event::read()? {
+                let last = m.daily.len().saturating_sub(1);
                 match k.code {
-                    KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
+                    KeyCode::Char('q') => return Ok(()),
+                    KeyCode::Esc if view.drawer => view.drawer = false,
+                    KeyCode::Esc => return Ok(()),
+                    KeyCode::Char('i') => view.drawer = !view.drawer,
+                    KeyCode::Down | KeyCode::Char('j') => view.sel = (view.sel + 1).min(last),
+                    KeyCode::Up | KeyCode::Char('k') => view.sel = view.sel.saturating_sub(1),
+                    KeyCode::Home => view.sel = 0,
+                    KeyCode::End => view.sel = last,
                     KeyCode::Char('n') => status = toggle_network(),
                     KeyCode::Char('c') => status = mint_invite_code(path),
                     _ => {}
@@ -978,5 +1136,14 @@ mod header_tests {
         assert_eq!(model_header("gemini-3.5-flash-lite"), "Gemini 3.5\nFlash-Lite");
         assert_eq!(two_lines("Nano Banana 2", 12), "Nano Banana\n2");
         assert_eq!(model_header("gemini-9-imaginary"), "9 imaginary");
+        assert_eq!(model_label("gemini-3.1-flash-lite-image"), "Nano Banana 2 Lite");
+    }
+
+    #[test]
+    fn providers_by_model_prefix() {
+        assert_eq!(provider_of("gemini-3.6-flash"), "GOOGLE");
+        assert_eq!(provider_of("imagen-4"), "GOOGLE");
+        assert_eq!(provider_of("gpt-5.4-mini"), "OPENAI");
+        assert_eq!(provider_of("mistral-large"), "OTHER");
     }
 }
