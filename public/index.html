@@ -718,11 +718,14 @@
      hide our decorative dots and clear space for the real traffic lights. */
   body.tauri .dot{display:none}
   body.tauri .titlebar{padding-left:82px}
-  /* Make the whole title bar a window-drag handle (macOS convention). Its
-     children carry no click handlers, so passing their clicks through lets a
-     mousedown anywhere on the bar hit the data-tauri-drag-region element. */
+  /* Make the whole title bar a window-drag handle (macOS convention): clicks on its
+     decorative children pass through to the data-tauri-drag-region element. The two
+     interactive children keep their events — the status chip opens the connection
+     sheet, the wordmark carries the long-press dev toggle. (Until 2026-09-04 the chip
+     was unreachable in every native build; only the hamburger had been re-enabled.) */
   .titlebar[data-tauri-drag-region]{cursor:default}
   .titlebar[data-tauri-drag-region] > *{pointer-events:none}
+  .titlebar[data-tauri-drag-region] > .env,.titlebar[data-tauri-drag-region] > .wordmark{pointer-events:auto}
 
   /* ---------- boot splash (phones only — see the script below the styles) ----------
      Pure splash until the wordmark has settled (+2s): the chrome is invisible
