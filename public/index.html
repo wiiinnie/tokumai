@@ -2032,11 +2032,28 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // passes through esc()/escAttr(), only http(s) URLs become anchors (openLink → OS
   // browser), and raw HTML/images in the answer stay inert text — the answer is
   // server-controlled input and must never be able to inject markup (C1).
+  const TEX_SYM = { rightarrow:"→", to:"→", leftarrow:"←", leftrightarrow:"↔", Rightarrow:"⇒", Leftarrow:"⇐", Leftrightarrow:"⇔", mapsto:"↦",
+    times:"×", cdot:"·", div:"÷", approx:"≈", neq:"≠", ne:"≠", le:"≤", leq:"≤", ge:"≥", geq:"≥", pm:"±", mp:"∓", infty:"∞", deg:"°", degree:"°", circ:"°",
+    ldots:"…", dots:"…", cdots:"⋯", sqrt:"√", sum:"Σ", prod:"∏", int:"∫", partial:"∂", nabla:"∇", in:"∈", notin:"∉", subset:"⊂", cup:"∪", cap:"∩", forall:"∀", exists:"∃",
+    alpha:"α", beta:"β", gamma:"γ", delta:"δ", epsilon:"ε", varepsilon:"ε", zeta:"ζ", eta:"η", theta:"θ", lambda:"λ", mu:"μ", nu:"ν", xi:"ξ", pi:"π", rho:"ρ", sigma:"σ", tau:"τ", phi:"φ", varphi:"φ", chi:"χ", psi:"ψ", omega:"ω",
+    Gamma:"Γ", Delta:"Δ", Theta:"Θ", Lambda:"Λ", Pi:"Π", Sigma:"Σ", Phi:"Φ", Psi:"Ψ", Omega:"Ω", euro:"€", pounds:"£", percent:"%", textrightarrow:"→", textbullet:"•", quad:" ", qquad:"  ", ",":" ", ";":" " };
+  // "$\\rightarrow$" → "→"; "$x^2$" and friends (unknown macros, braces we can't set) → null = leave as typed
+  function texInline(t){
+    if(!/\\/.test(String(t))) return null;             // no TeX command inside → plain dollars ("$5 and $10"), untouched
+    let s = String(t).replace(/\^\\circ/g,"°").replace(/\\([A-Za-z]+|[,;%$&_{}])/g,(m,k)=>{ if(k==="%"||k==="$"||k==="&"||k==="_"||k==="{"||k==="}") return k; return TEX_SYM[k]!==undefined?TEX_SYM[k]:m; });
+    if(/\\/.test(s)) return null;                     // something we don't know — hands off
+    s = s.replace(/\\?\{|\\?\}/g,"").replace(/\s+/g," ").trim();
+    return s.length ? s : null;
+  }
   function mdInline(raw){
     const codes=[], links=[];
     let x = esc(String(raw||""));
     // inline code first — its content is opaque to every other rule
     x = x.replace(/`([^`\n]+)`/g,(_,c)=>{ codes.push('<code class="mdi">'+c+'</code>'); return "\u0000"+(codes.length-1)+"\u0000"; });
+    // Inline TeX the models like to emit ("$\\rightarrow$", "\\(\\times\\)"): there is no
+    // math engine here, so the common symbols become their Unicode glyphs and the $-fences
+    // go. A span with anything we don't know stays exactly as typed.
+    x = x.replace(/\$([^$\n]{1,80})\$|\\\(([^\n]{1,80}?)\\\)/g,(m0,a,b)=>{ const t=texInline(a!=null?a:b); return t===null?m0:t; });
     const mkLink=(u,label)=>{
       const safe=safeHttpUrl(u.replace(/&amp;/g,"&"));
       if(safe==="#") return null;
