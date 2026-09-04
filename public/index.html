@@ -1563,12 +1563,13 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         if(/^\d+\.\d+\.\d+/.test(av)){ APP_VERSION = versionLabel(av); const v=$("appVer"); if(v) v.textContent="v"+APP_VERSION; } }
       serverTestnet = s.testnet === true;          // the server's kill switch: absent/false → no toggle
       storefront = /^[A-Z]{3}$/.test(String(s.storefront||"")) ? String(s.storefront) : null;
-      { const fu=String(s.faucetUrl||"");
-        const okUrl = /^https:\/\/[\w.-]+(\/[^\s]*)?$/.test(fu);
-        faucetUrl = serverTestnet && okUrl ? fu : null;
-        // Same URL, ungated: it is also where a top-up started here is finished in
-        // the browser (webPayUrl). Not testnet-specific.
-        siteUrl = okUrl ? fu : null; }
+      { const ok = u => /^https:\/\/[\w.-]+(\/[^\s]*)?$/.test(u);
+        const fu = String(s.faucetUrl||"");
+        faucetUrl = serverTestnet && ok(fu) ? fu : null;
+        // The payment page is NOT testnet-gated — it matters most on mainnet — so it has
+        // its own field. Older servers send only faucetUrl; fall back to it.
+        const su = String(s.siteUrl||"") || fu;
+        siteUrl = ok(su) ? su : null; }
       if(!serverTestnet) testnetBuy = false;
       // Card rail: coerce both fields — the reply is untrusted server data.
       { const c=s.card||{}; cardInfo={ enabled:c.enabled===true, minUsd:Math.max(1, Math.floor(Number(c.minUsd)||10)), methods:Array.isArray(c.methods)?c.methods.filter(m=>m&&typeof m==="object"):[] }; }
@@ -4824,6 +4825,10 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // (Apple's IAP gate: the purchase is raised and signed in here, money moves out there).
   // Everything rides in the URL FRAGMENT — fragments are not sent with the request, so the
   // address, amount and memo never reach our web server and cannot land in its logs.
+  // ONE payment page: /pay on the site the server names (SCRAI_FAUCET_URL → siteUrl).
+  // The old hardcoded payment.hermes-stakepool.de was a placeholder whose own source says
+  // "no rail is wired yet"; two pages for one job drift apart, so this is the only one.
+  const payPageUrl = () => siteUrl ? siteUrl.replace(/\/+$/,"") + "/pay" : "";
   function b64url(str){
     const bytes = new TextEncoder().encode(str);
     let bin = ""; for (const b of bytes) bin += String.fromCharCode(b);
@@ -4839,9 +4844,18 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     if(card ? checkout==="#" : !opts.length) return "";
     const payload = { v:1, id:String(inv.invoiceId||""), usd:Number(inv.amountUsd||0), toku:Number(inv.amountScrai||0),
                       exp:Number(inv.expiresAt||0), rail: card?"card":"coin", checkout: card?checkout:"", opts: card?[]:opts };
-    return siteUrl.replace(/\/+$/,"") + "/pay#" + b64url(JSON.stringify(payload));
+    const base = payPageUrl();
+    return base ? base + "#" + b64url(JSON.stringify(payload)) : "";
   }
-  function payOnWeb(){ const u = webPayUrl(activeInvoice); if(u) openLink(u); }
+  function payOnWeb(){
+    const u = webPayUrl(activeInvoice);
+    if(!u) return;
+    // iOS: money must not change hands inside the app (App Store 3.1.1), and leaving for
+    // an external purchase has to be disclosed first. Everywhere else the browser opens
+    // straight away — same as the card checkout already does.
+    if(isIOSNative()){ pendingWebPay = u; openTopupSheet(); return; }
+    openLink(u);
+  }
   // The card row exists only when the server sells by card; on iOS additionally behind CARD_ON_IOS.
   // In testnet mode it stays visible but greyed, like the Bitcoin tile (the faucet pays NYM only).
   function cardAvailable(){ return cardInfo.enabled && (CARD_ON_IOS || !isIOSNative()); }
@@ -4946,7 +4960,6 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     if(sf && EU_STOREFRONTS.has(sf)) return EU_LINK_ENTITLED ? "eu" : "row";
     return "row";
   }
-  const PAYMENT_SITE = "https://payment.hermes-stakepool.de/";
   const topupId = () => (account && account.fingerprint) || "";
   function renderIosTopup(){
     const region = iosRegion();
@@ -4978,11 +4991,16 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     $("topupTitle").textContent = eu ? "You’re about to go to an external website" : "You’re leaving the app";
     $("topupDesc").textContent = eu
       ? "You will no longer be transacting with Apple. Any accounts or purchases made outside of this app will be managed by the developer “tokumai”. Your App Store account, stored payment methods, and related features, such as subscription management and refund requests, will not be available. Apple is not responsible for the privacy or security of transactions made with this developer."
-      : "The top-up page opens in Safari with your top-up ID already filled in. Credit appears in the app shortly after payment.";
+      : "The payment page opens in your browser with this invoice already filled in. The credit appears in the app on its own once the payment goes through.";
     $("topupScrim").classList.add("open");
   }
   function closeTopupSheet(){ $("topupScrim").classList.remove("open"); }
-  function confirmTopup(){ closeTopupSheet(); openLink(PAYMENT_SITE+"?id="+encodeURIComponent(topupId())); }
+  // Confirmed the disclosure → hand the RAISED invoice over to the payment page. The
+  // invoice rides in the URL fragment (never sent to the server); there is no account id
+  // in the link at all. `pendingWebPay` is the url payOnWeb() parked before showing the
+  // sheet, so the same sheet serves every rail.
+  let pendingWebPay = "";
+  function confirmTopup(){ closeTopupSheet(); const u = pendingWebPay; pendingWebPay = ""; if(u) openLink(u); }
 
   function openBuy(){
     if(!account){ openAccount(); return; }

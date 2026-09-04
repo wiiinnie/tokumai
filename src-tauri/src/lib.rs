@@ -24,6 +24,9 @@ use tauri::{AppHandle, Emitter, Manager, State};
 const TIERS: [u32; 4] = [5, 10, 20, 50];
 /// (server reports testnet mode, faucet URL) — learned with the model list.
 static SERVER_TESTNET: std::sync::Mutex<(bool, Option<String>)> = std::sync::Mutex::new((false, None));
+/// Our website, from the catalog reply (`siteUrl`). The app builds the `/pay` hand-over
+/// link from it; unlike `faucetUrl` it is NOT tied to testnet mode.
+static SERVER_SITE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 /// What the server said about cards with the catalog (`{enabled, minUsd}`) — the card
 /// row exists only when a server has a Mollie key, and the minimum tile is its call.
 static SERVER_CARD: std::sync::Mutex<Option<Value>> = std::sync::Mutex::new(None);
@@ -866,6 +869,14 @@ async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<V
                         );
                     }
                     {
+                        let mut u = SERVER_SITE.lock().unwrap_or_else(|e| e.into_inner());
+                        // Older servers send no siteUrl — fall back to faucetUrl so a
+                        // testnet box keeps working before it is redeployed.
+                        *u = resp.get("siteUrl").and_then(|u| u.as_str())
+                            .or_else(|| resp.get("faucetUrl").and_then(|u| u.as_str()))
+                            .map(str::to_string);
+                    }
+                    {
                         let mut c = SERVER_CARD.lock().unwrap_or_else(|e| e.into_inner());
                         *c = resp.get("card").filter(|c| c.is_object()).cloned();
                     }
@@ -915,6 +926,7 @@ async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<V
         "gateway": "btcpay",
         "testnet": testnet,
         "faucetUrl": faucet_url,
+        "siteUrl": SERVER_SITE.lock().unwrap_or_else(|e| e.into_inner()).clone(),
         "card": card,
         "models": models,
         "server": server,
@@ -947,6 +959,7 @@ async fn set_server(app: AppHandle, transport: State<'_, Arc<Transport>>, addres
     // "TESTER" mode until a restart.
     transport.clear_cached_models().await;
     *SERVER_TESTNET.lock().unwrap_or_else(|e| e.into_inner()) = (false, None);
+    *SERVER_SITE.lock().unwrap_or_else(|e| e.into_inner()) = None;
     *SERVER_CARD.lock().unwrap_or_else(|e| e.into_inner()) = None;
     *SERVER_VERSION.lock().unwrap_or_else(|e| e.into_inner()) = None;
     *SERVER_UPDATE.lock().unwrap_or_else(|e| e.into_inner()) = None;

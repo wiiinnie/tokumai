@@ -189,6 +189,22 @@ pub fn faucet_url() -> Option<String> {
     std::env::var("SCRAI_FAUCET_URL").ok().filter(|u| u.starts_with("https://"))
 }
 
+/// Where our own website lives — the app builds the `/pay` hand-over link from it, so a
+/// purchase started in the app can be paid in the browser (Apple's IAP gate).
+///
+/// Deliberately NOT the same call as `faucet_url()`: that one is gated on testnet mode,
+/// because the faucet note is a tester thing. The payment page is the opposite — it
+/// matters most on MAINNET. Reusing the faucet URL for it would have made the hand-over
+/// button silently disappear the moment testnet is switched off (caught 2026-09-04).
+/// `SCRAI_SITE_URL` wins; `SCRAI_FAUCET_URL` is the fallback so an existing .env keeps working.
+pub fn site_url() -> Option<String> {
+    std::env::var("SCRAI_SITE_URL")
+        .ok()
+        .or_else(|| std::env::var("SCRAI_FAUCET_URL").ok())
+        .map(|u| u.trim().trim_end_matches('/').to_string())
+        .filter(|u| u.starts_with("https://"))
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Inv {
     id: String,
