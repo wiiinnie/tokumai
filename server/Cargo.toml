@@ -32,9 +32,9 @@ serde = { version = "1.0", features = ["derive"] }
 # preserve_order: chat signatures cover the client's canonical JSON body, so
 # message key order must survive parse → re-serialize (core enables it too).
 serde_json = { version = "1.0", features = ["preserve_order"] }
-# Proxy chat requests to LLM providers (Groq/Gemini) over HTTPS.
+# Proxy chat requests to LLM providers (Gemini/OpenAI) over HTTPS.
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-# Load provider API keys from .env (GROQ_API_KEY, GEMINI_API_KEY).
+# Load provider API keys from .env (GEMINI_API_KEY, OPENAI_API_KEY).
 dotenvy = "0.15"
 # Chunked vision-image upload staging: random upload ids + base64 chunk decode.
 rand = "0.8"

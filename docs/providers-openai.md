@@ -41,6 +41,17 @@ safeguards, (c) respond to abuse reports. What we do:
 - **On an abuse report** we can answer: identifier X on day Y → session paused, strike
   count N, balance stranded; no person identifiable by design (docs/abuse-policy.md).
 
+## The privacy page names the providers — keep it in sync
+
+`server/site/privacy.html` (§3 and §5) names every model provider that receives request
+content. That is a GDPR duty (Art. 13 (1) (e)), not documentation: it has to be right
+**before** a provider serves its first request, and the page is also one of the ones
+Mollie reviews. It names Google and OpenAI today.
+
+**Adding or removing any provider means editing that page in the same change** — in both
+worktrees, since main and tokumai each ship a site — plus `VENDOR_TERMS` in
+`public/index.html`. The file carries a checklist comment above §3.
+
 ## Not yet
 
 Image generation (`gpt-image-*`, per-token image billing like Nano Banana — needs the

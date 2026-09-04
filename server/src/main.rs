@@ -713,7 +713,7 @@ async fn main() {
                 continue;
             }
             // H2: the catalog fetch is pure — immutable pricing, no session/paywall/quorum
-            // state — and its provider HTTP (Gemini/Groq model lists) can be slow. Spawn it
+            // state — and its provider HTTP (the Gemini model list) can be slow. Spawn it
             // so it never blocks chat/payment on the single dispatch loop; it replies itself.
             if kind == "models" {
                 let (p, sender, msg, ids) = (pricing.clone(), senders.clone(), m.message.clone(), identities.clone());

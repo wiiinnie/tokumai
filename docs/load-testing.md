@@ -18,7 +18,7 @@ number we need before launch, and the number that tells us *where* the server sa
                         ┌───────────┴───────────┐
                         ▼                       ▼
             [ chat: semaphore 64 ] → provider  [ pay: semaphore 16 ] → gateway/LCD
-                        │  (Gemini/Groq latency + their rate limits)
+                        │  (Gemini/OpenAI latency + their rate limits)
                         ▼
                      settle on the loop → reply via SURBs (large replies = many packets)
 ```

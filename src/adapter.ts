@@ -23,13 +23,12 @@ export interface ModelAdapter {
   readonly vendor: string;
   readonly kind: ModelKind;
   /**
-   * Env var holding this provider's credential, e.g. "GROQ_API_KEY". The server
+   * Env var holding this provider's credential, e.g. "GEMINI_API_KEY". The server
    * looks it up and injects the value — the adapter never reads the environment
    * for it, so a provider's secret can never leak into an adapter's own code.
    *
-   * Omit for providers that need no credential at all (Pollinations). Those
-   * register unconditionally; keyed ones are skipped when their var is unset,
-   * so an operator only ever offers what they can actually serve.
+   * Omit for a provider that needs no credential. Keyed ones are skipped when
+   * their var is unset, so an operator only ever offers what they can serve.
    */
   readonly apiKeyEnv?: string;
   /**

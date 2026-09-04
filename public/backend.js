@@ -221,7 +221,7 @@ const tauriBackend = (invoke) => ({
         // The route is down: this request waits for the rebuild before it leaves.
         unlisten.push(await ev.listen("chat-route", () => onPhase("route")));
       }
-      const r = await invoke("chat", { model: body.model, messages: body.messages, maxTokens: body.maxTokens, free: !!body.free, live: !!body.live, thinkingBudget: (typeof body.thinkingBudget==="number"?body.thinkingBudget:null), bigReply: !!body.bigReply, retry: !!body.retry, imageSize: (typeof body.imageSize==="string"?body.imageSize:null) });
+      const r = await invoke("chat", { model: body.model, messages: body.messages, maxTokens: body.maxTokens, live: !!body.live, thinkingBudget: (typeof body.thinkingBudget==="number"?body.thinkingBudget:null), bigReply: !!body.bigReply, retry: !!body.retry, imageSize: (typeof body.imageSize==="string"?body.imageSize:null) });
       if (onPhase) onPhase("receiving");
       if (r && r.text) {
         // The whole answer arrived in one mixnet reply — feed it out in slices so

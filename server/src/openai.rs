@@ -34,7 +34,8 @@ const MODERATIONS_URL: &str = "https://api.openai.com/v1/moderations";
 /// Reasoning answers can take a minute or two; the default 120 s client would cut them.
 pub const TIMEOUT_MS: u64 = 180_000;
 
-/// Is this model id served by OpenAI? (`gpt-oss-*` are open weights hosted at Groq.)
+/// Is this model id served by OpenAI? `gpt-oss-*` are OpenAI's OPEN-WEIGHT models,
+/// which we do not host — they are served by other providers, so they are not ours.
 pub fn is_openai_model(model: &str) -> bool {
     if model.starts_with("gpt-oss") || model.contains('/') {
         return false;

@@ -6,9 +6,15 @@
 // plus its `sessionId`. Flow: enforce the session holds credit → call the provider →
 // price the usage via the pricing table + margin → charge → reply with the balance.
 //
-// Providers: Groq (OpenAI-compatible) and Gemini (Google's native API — the request
-// and usage translation mirror src/adapters/gemini.ts + gemini-usage.ts, so the Rust
-// server bills a Gemini exchange exactly like the TS server did).
+// Providers: Gemini (Google's native API — the request and usage translation mirror
+// src/adapters/gemini.ts + gemini-usage.ts, so the Rust server bills a Gemini exchange
+// exactly like the TS server did) and OpenAI (Responses API, see openai.rs).
+//
+// The keyless/free test providers (Groq, Cloudflare Workers AI, Pollinations) were
+// removed before mainnet on 2026-09-04: they existed to develop against without a
+// billed key, none of them ever carried a paying user, and each was one more third
+// party seeing prompt content for no revenue. A model this server does not route is
+// now an explicit error, never a silent fallback to "some other provider".
 
 use scrai_core::billing::{compute_billing, TokenUsage};
 use scrai_core::pricing::PricingTable;
@@ -229,9 +235,6 @@ fn ceiling_for(
         + image_tokens as f64 * retail(price.output))
         / 1_000_000.0)
         .ceil() as u64;
-    // Flat-priced image models (Cloudflare flux) bill per generated image (their
-    // providers report zero tokens); one request produces at most one image, so
-    // reserve exactly one.
     // Live grounding: reserve headroom only for the BILLABLE worst case — queries
     // beyond the month's free allowance. Under the allowance grounding is free, so a
     // low-balance user isn't falsely blocked by a reserve for cost they won't incur.
@@ -419,6 +422,14 @@ pub fn reserve(
     if price.fallback {
         return err(&format!("model \"{model}\" has no price entry on this server"));
     }
+    // …and a priced model still has to be one this server OFFERS. The catalog's rules
+    // (SCRAI_PROVIDERS, the OpenAI id allowlist, "nano only" on a testnet server) shape
+    // the picker; asking them again here is what makes them real. Before this check a
+    // hand-crafted request reached any priced model, including ones the operator had
+    // switched off — see `catalog::model_offered`.
+    if !crate::catalog::model_offered(&model) {
+        return err(&format!("model \"{model}\" is not offered by this server"));
+    }
     let pending = |paid, messages| {
         Reserved::Proceed(Box::new(PendingChat {
             id: id.clone(),
@@ -436,18 +447,6 @@ pub fn reserve(
             paid,
         }))
     };
-
-    // Tier "free" = genuinely free forever (no provider quota behind it): no
-    // signature, no session, no reserve. The request still costs the sender
-    // their mixnet bandwidth credentials — that's the only price. Free-TIER
-    // models do NOT come through here: they bill (reduced) like any paid model.
-    if price.tier == scrai_core::billing::Tier::Free {
-        let mut resolved = messages;
-        if let Err(e) = uploads.resolve(&mut resolved) {
-            return err(&format!("file upload failed: {e}"));
-        }
-        return pending(None, resolved);
-    }
 
     // ---- payment: everything here happens BEFORE the provider is called, so a
     // request that cannot pay costs the operator nothing.
@@ -668,30 +667,9 @@ fn encode(v: &Value) -> Vec<u8> {
     serde_json::to_vec(v).unwrap_or_default()
 }
 
-fn tok(usage: &Value, key: &str) -> u64 {
-    usage.get(key).and_then(|t| t.as_u64()).unwrap_or(0)
-}
-
 /// The generated images of an image-model reply, as the client renders them:
 /// `[{ "mimeType": …, "data": <base64> }]`. None for text models.
 pub type Images = Option<Value>;
-
-/// Cloudflare Workers AI image models: friendly id → Cloudflare's model path.
-/// ONLY non-partner models belong here: partner models (flux-2-klein,
-/// lucid-origin, phoenix-1.0, …) are billed per image in real USD, NOT covered
-/// by the free daily allowance — a "free" label on those would bill the
-/// operator for every request. (The adapter below also handles the SD-family
-/// raw-PNG response shape, should more non-partner models be added.)
-const CF_MODELS: [(&str, &str); 1] = [("flux-schnell", "@cf/black-forest-labs/flux-1-schnell")];
-
-pub fn cf_model_path(model: &str) -> Option<&'static str> {
-    CF_MODELS.iter().find(|(id, _)| *id == model).map(|(_, p)| *p)
-}
-
-/// All Cloudflare model ids, for the catalog.
-pub fn cf_model_path_all() -> impl Iterator<Item = (&'static str, &'static str)> {
-    CF_MODELS.iter().copied()
-}
 
 /// Call the provider for `v` (with upload refs already resolved into `messages`)
 /// → (answer text, normalized token usage, generated images).
@@ -724,13 +702,10 @@ async fn chat(
         let sid = v.get("sessionId").and_then(|s| s.as_str());
         let (t, u) = crate::openai::chat(model, &messages, max_tokens.unwrap_or_else(default_max_tokens), live, thinking, sid).await?;
         Ok((t, u, None))
-    } else if model.starts_with("pollinations-") {
-        pollinations(model, &messages).await
-    } else if let Some(path) = cf_model_path(model) {
-        cloudflare(path, &messages).await
     } else {
-        let (t, u) = groq(model, messages, max_tokens).await?;
-        Ok((t, u, None))
+        // Unroutable. `catalog::model_offered` refuses these long before here, so this
+        // is the belt to that braces — never a fallback to an unnamed provider.
+        Err(format!("model \"{model}\" is not served by this server"))
     }
 }
 
@@ -787,183 +762,6 @@ pub fn provider_of(model: &str) -> &'static str {
     } else {
         "other"
     }
-}
-
-/// The drawing prompt of an image request: all user-message text, joined.
-fn prompt_of(messages: &Value) -> Result<String, String> {
-    let empty = Vec::new();
-    let p = messages
-        .as_array()
-        .unwrap_or(&empty)
-        .iter()
-        .filter(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
-        .filter_map(|m| m.get("content").and_then(|c| c.as_str()))
-        .collect::<Vec<_>>()
-        .join(" ")
-        .trim()
-        .to_string();
-    if p.is_empty() {
-        return Err("no prompt to draw".into());
-    }
-    Ok(p)
-}
-
-/// Pollinations — free, keyless image generation (see src/adapters/pollinations.ts
-/// for the full privacy rationale: no key, no contract, prompt visible to a third
-/// party — the mixnet still hides WHO asks). Model suffix = square size in px.
-async fn pollinations(model: &str, messages: &Value) -> Result<(String, TokenUsage, Images), String> {
-    use base64::Engine;
-    let size: u64 = model.strip_prefix("pollinations-").and_then(|s| s.parse().ok()).unwrap_or(1024);
-    let prompt = prompt_of(messages)?;
-    let url = format!(
-        "https://image.pollinations.ai/prompt/{}?width={size}&height={size}&nologo=true&safe=true",
-        urlencoding::encode(&prompt)
-    );
-    // Generation is genuinely slow at larger sizes (~45s at 1536px) — and that is
-    // before the mixnet gets involved, so the timeout is generous.
-    let res = crate::http::client()
-        .get(url)
-        .timeout(std::time::Duration::from_secs(60))
-        .send()
-        .await
-        .map_err(|e| format!("pollinations request failed: {e}"))?;
-    if !res.status().is_success() {
-        return Err(format!("pollinations returned {}", res.status()));
-    }
-    let mime = res
-        .headers()
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .map(|v| v.split(';').next().unwrap_or("image/jpeg").to_string())
-        .unwrap_or_else(|| "image/jpeg".to_string());
-    let bytes = res.bytes().await.map_err(|e| format!("pollinations body read failed: {e}"))?;
-    if bytes.len() < 100 {
-        return Err("pollinations returned an empty image".into());
-    }
-    let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
-    Ok((String::new(), TokenUsage::default(), Some(json!([{ "mimeType": mime, "data": data }]))))
-}
-
-/// Cloudflare Workers AI — Flux image generation on a real free allowance
-/// (10,000 Neurons/day covers the image models). Mirrors src/adapters/cloudflare.ts.
-/// NOTE the envelope: Cloudflare answers 200 with success:false for model-level
-/// failures, so checking the HTTP status alone would yield a silent empty image.
-async fn cloudflare(path: &str, messages: &Value) -> Result<(String, TokenUsage, Images), String> {
-    let token = std::env::var("CLOUDFLARE_API_TOKEN")
-        .map_err(|_| "CLOUDFLARE_API_TOKEN not set".to_string())?;
-    let account = std::env::var("CLOUDFLARE_ACCOUNT_ID").map_err(|_| {
-        "CLOUDFLARE_ACCOUNT_ID not set — the token alone is not enough, the account id is part of the URL"
-            .to_string()
-    })?;
-    use base64::Engine;
-    let mut prompt = prompt_of(messages)?;
-    prompt.truncate(2048);
-    // flux takes {prompt, steps}; the SD family validates its input strictly, so
-    // it gets ONLY the required {prompt} and keeps its server-side defaults.
-    let body = if path.contains("flux") {
-        json!({ "prompt": prompt, "steps": 4 })
-    } else {
-        json!({ "prompt": prompt })
-    };
-    let res = crate::http::client()
-        .post(format!("https://api.cloudflare.com/client/v4/accounts/{account}/ai/run/{path}"))
-        .bearer_auth(token)
-        .json(&body)
-        .timeout(std::time::Duration::from_secs(60))
-        .send()
-        .await
-        .map_err(|e| format!("cloudflare request failed: {e}"))?;
-    let status = res.status();
-    let ctype = res
-        .headers()
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .map(|v| v.split(';').next().unwrap_or("").trim().to_string())
-        .unwrap_or_default();
-
-    // SD-family models answer with the raw PNG itself, not a JSON envelope.
-    if status.is_success() && ctype.starts_with("image/") {
-        let bytes = res.bytes().await.map_err(|e| format!("cloudflare body read failed: {e}"))?;
-        if bytes.len() < 100 {
-            return Err("cloudflare returned an empty image".into());
-        }
-        let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
-        return Ok((String::new(), TokenUsage::default(), Some(json!([{ "mimeType": ctype, "data": data }]))));
-    }
-
-    let j: Value = res.json().await.unwrap_or(Value::Null);
-    let failed = !status.is_success() || j.get("success").and_then(|s| s.as_bool()) == Some(false);
-    if failed {
-        let msg = j
-            .pointer("/errors/0/message")
-            .and_then(|m| m.as_str())
-            .map(String::from)
-            .unwrap_or_else(|| format!("HTTP {status}"));
-        return Err(format!("cloudflare: {msg}"));
-    }
-    let image = j
-        .pointer("/result/image")
-        .and_then(|i| i.as_str())
-        .ok_or("cloudflare returned no image")?;
-    Ok((
-        String::new(),
-        TokenUsage::default(),
-        Some(json!([{ "mimeType": "image/jpeg", "data": image }])),
-    ))
-}
-
-// ---- Groq (OpenAI-compatible) ---------------------------------------------
-
-async fn groq(model: &str, mut messages: Value, max_tokens: Option<u64>) -> Result<(String, TokenUsage), String> {
-    let key = std::env::var("GROQ_API_KEY").map_err(|_| "GROQ_API_KEY not set".to_string())?;
-    // Strip our attachments field — the OpenAI-compatible API doesn't know it
-    // (Groq catalog models don't accept images anyway).
-    if let Some(arr) = messages.as_array_mut() {
-        for m in arr {
-            if let Some(o) = m.as_object_mut() {
-                o.remove("attachments");
-            }
-        }
-    }
-    let mut body = json!({ "model": model, "messages": messages });
-    if let Some(mt) = max_tokens {
-        body["max_tokens"] = json!(mt);
-    }
-
-    let res = crate::http::client()
-        .post("https://api.groq.com/openai/v1/chat/completions")
-        .bearer_auth(key)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("groq request failed: {e}"))?;
-    let status = res.status();
-    let j: Value = res
-        .json()
-        .await
-        .map_err(|e| format!("groq returned non-JSON: {e}"))?;
-    if !status.is_success() {
-        let msg = j
-            .pointer("/error/message")
-            .and_then(|m| m.as_str())
-            .unwrap_or("unknown error");
-        return Err(format!("groq {status}: {msg}"));
-    }
-
-    let text = j
-        .pointer("/choices/0/message/content")
-        .and_then(|t| t.as_str())
-        .unwrap_or("")
-        .to_string();
-    let u = j.get("usage").cloned().unwrap_or(Value::Null);
-    let usage = TokenUsage {
-        input: tok(&u, "prompt_tokens"),
-        output: tok(&u, "completion_tokens"),
-        cached_input: 0,
-        audio_input: 0,
-        ..Default::default()
-    };
-    Ok((text, usage))
 }
 
 // ---- Gemini (Google AI Studio, native API) --------------------------------
@@ -1096,8 +894,8 @@ async fn gemini(
         })
         .unwrap_or_default();
     // Image-generation models (Nano Banana / gemini-*-image) return the picture as an
-    // inlineData part on the SAME generateContent endpoint — same shape the client already
-    // renders for pollinations/cloudflare. Billing stays token-based: usageMetadata reports
+    // inlineData part on the SAME generateContent endpoint — the shape the client
+    // renders. Billing stays token-based: usageMetadata reports
     // the image's output tokens under modality IMAGE (billed at `out`), and the model's
     // text + thinking under TEXT / thoughtsTokenCount (billed at `out_text`) — see
     // gemini_usage(). No per-image charge is added.
@@ -1584,13 +1382,15 @@ mod tests {
         let mut replies: std::collections::HashMap<String, (u64, Vec<u8>)> = std::collections::HashMap::new();
         let pricing = PricingTable::parse(
             r#"{"version":"t","default":{"in":1.0,"out":4.0,"fallback":true},
-                "models":{"m":{"in":1.0,"out":4.0},"m2":{"in":1.0,"out":4.0}}}"#,
+                "models":{"gemini-m":{"in":1.0,"out":4.0},"gemini-m2":{"in":1.0,"out":4.0}}}"#,
         )
         .unwrap();
         sessions.credit(&sid, 100_000);
 
-        // Unsigned → refused before anything happens.
-        let bare = json!({"kind":"chat","id":"x","model":"m","messages":[]}).to_string();
+        // Unsigned → refused before anything happens. (The ids are `gemini-*` so the
+        // request is one this server actually routes — `catalog::model_offered` refuses
+        // an unroutable id before the paywall is reached at all.)
+        let bare = json!({"kind":"chat","id":"x","model":"gemini-m","messages":[]}).to_string();
         let r: Value = serde_json::from_slice(
             &handle(bare.as_bytes(), &mut sessions, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH).await,
         )
@@ -1600,8 +1400,8 @@ mod tests {
         // Tampered model (signature covers the body) → refused, balance untouched.
         // (Tampers to another PRICED model — an unpriced one is rejected by the
         // price check before the signature is even looked at.)
-        let mut env: Value = serde_json::from_slice(&signed_chat(&sk, &pem, &sid, 1, "m")).unwrap();
-        env["model"] = json!("m2");
+        let mut env: Value = serde_json::from_slice(&signed_chat(&sk, &pem, &sid, 1, "gemini-m")).unwrap();
+        env["model"] = json!("gemini-m2");
         let r: Value = serde_json::from_slice(
             &handle(env.to_string().as_bytes(), &mut sessions, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH).await,
         )
@@ -1609,10 +1409,10 @@ mod tests {
         assert!(r["error"].as_str().unwrap().contains("signature"));
         assert_eq!(sessions.balance(&sid), 100_000);
 
-        // Valid signature: reserve happens, provider fails (no GROQ_API_KEY for
-        // model "m" in the test env) → FULL refund, but the counter is consumed.
+        // Valid signature: reserve happens, provider fails (no Gemini key in the test
+        // env) → FULL refund, but the counter is consumed.
         let r: Value = serde_json::from_slice(
-            &handle(&signed_chat(&sk, &pem, &sid, 1, "m"), &mut sessions, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH).await,
+            &handle(&signed_chat(&sk, &pem, &sid, 1, "gemini-m"), &mut sessions, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH).await,
         )
         .unwrap();
         assert!(r.get("error").is_some());
@@ -1621,7 +1421,7 @@ mod tests {
 
         // Replaying the same counter is now refused.
         let r: Value = serde_json::from_slice(
-            &handle(&signed_chat(&sk, &pem, &sid, 1, "m"), &mut sessions, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH).await,
+            &handle(&signed_chat(&sk, &pem, &sid, 1, "gemini-m"), &mut sessions, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH).await,
         )
         .unwrap();
         assert!(r["error"].as_str().unwrap().contains("already used"));
@@ -1666,7 +1466,7 @@ mod tests {
         let mut uploads = crate::uploads::UploadStore::default();
         let mut replies: std::collections::HashMap<String, (u64, Vec<u8>)> = std::collections::HashMap::new();
         let pricing = PricingTable::parse(
-            r#"{"version":"t","default":{"in":1.0,"out":4.0,"fallback":true},"models":{"m":{"in":1.0,"out":4.0}}}"#,
+            r#"{"version":"t","default":{"in":1.0,"out":4.0,"fallback":true},"models":{"gemini-m":{"in":1.0,"out":4.0}}}"#,
         )
         .unwrap();
         sessions.credit(&sid, 1_000_000);
@@ -1674,11 +1474,11 @@ mod tests {
 
         // Two chats reserved back-to-back (counter 1 then 2) — the H2 window where BOTH
         // worst-case reservations are held at once, before either provider call returns.
-        let Reserved::Proceed(a) = reserve(&signed_chat(&sk, &pem, &sid, 1, "m"), &mut sessions, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH)
+        let Reserved::Proceed(a) = reserve(&signed_chat(&sk, &pem, &sid, 1, "gemini-m"), &mut sessions, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH)
         else {
             panic!("A should reserve");
         };
-        let Reserved::Proceed(b) = reserve(&signed_chat(&sk, &pem, &sid, 2, "m"), &mut sessions, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH)
+        let Reserved::Proceed(b) = reserve(&signed_chat(&sk, &pem, &sid, 2, "gemini-m"), &mut sessions, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH)
         else {
             panic!("B should reserve");
         };
@@ -1711,13 +1511,13 @@ mod tests {
         let mut uploads = crate::uploads::UploadStore::default();
         let mut replies: std::collections::HashMap<String, (u64, Vec<u8>)> = std::collections::HashMap::new();
         let pricing = PricingTable::parse(
-            r#"{"version":"t","default":{"in":1.0,"out":4.0,"fallback":true},"models":{"m":{"in":1.0,"out":4.0}}}"#,
+            r#"{"version":"t","default":{"in":1.0,"out":4.0,"fallback":true},"models":{"gemini-m":{"in":1.0,"out":4.0}}}"#,
         )
         .unwrap();
         sessions.credit(&sid, 1_000_000);
 
         // A first, successful turn (counter 1): reserve → settle.
-        let Reserved::Proceed(p) = reserve(&signed_chat(&sk, &pem, &sid, 1, "m"), &mut sessions, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH)
+        let Reserved::Proceed(p) = reserve(&signed_chat(&sk, &pem, &sid, 1, "gemini-m"), &mut sessions, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH)
         else {
             panic!("should reserve");
         };
@@ -1726,7 +1526,7 @@ mod tests {
         let bal_after = sessions.balance(&sid);
 
         // A lost-reply retry resends the SAME counter → the cached reply, and NO second charge.
-        match reserve(&signed_chat(&sk, &pem, &sid, 1, "m"), &mut sessions, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH) {
+        match reserve(&signed_chat(&sk, &pem, &sid, 1, "gemini-m"), &mut sessions, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH) {
             Reserved::Reply(bytes) => assert_eq!(bytes, first, "replay returns the exact cached reply"),
             Reserved::Proceed(_) => panic!("replay must NOT re-run the provider"),
         }
@@ -1756,13 +1556,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unpriced_models_are_rejected_and_free_models_skip_the_paywall() {
+    async fn unpriced_models_are_rejected_and_every_priced_model_needs_a_session() {
         let mut sessions = scrai_core::session::SessionStore::default();
         let mut uploads = crate::uploads::UploadStore::default();
         let mut replies: std::collections::HashMap<String, (u64, Vec<u8>)> = std::collections::HashMap::new();
         let pricing = PricingTable::parse(
             r#"{"version":"t","default":{"in":1.0,"out":4.0,"fallback":true},
-                "models":{"pollinations-512":{"in":0.0,"out":0.0,"tier":"free"}}}"#,
+                "models":{"gemini-3.5-flash":{"in":0.3,"out":2.5},"free-thing":{"in":0.0,"out":0.0,"tier":"free"}}}"#,
         )
         .unwrap();
 
@@ -1774,15 +1574,25 @@ mod tests {
         .unwrap();
         assert!(r["error"].as_str().unwrap().contains("no price entry"));
 
-        // Explicit 0/0 model → passes the paywall with NO signature or session at
-        // all. It reaches the provider adapter, which fails on the empty prompt —
-        // proving the request got past every payment gate.
-        let req = json!({"kind":"chat","id":"x","model":"pollinations-512","messages":[]}).to_string();
+        // A priced model with no signature: refused. There is no longer ANY request
+        // shape that reaches a provider unauthenticated — the keyless test providers
+        // and their `Tier::Free` shortcut were removed before mainnet (2026-09-04).
+        let req = json!({"kind":"chat","id":"x","model":"gemini-3.5-flash","messages":[]}).to_string();
         let r: Value = serde_json::from_slice(
             &handle(req.as_bytes(), &mut sessions, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH).await,
         )
         .unwrap();
-        assert!(r["error"].as_str().unwrap().contains("no prompt to draw"));
+        assert!(r["error"].as_str().unwrap().contains("funded, signed session"));
+
+        // …and a leftover `"tier":"free"` in a pricing file no longer opens that door:
+        // the string now parses as Paid, so this model needs a session like any other.
+        let req = json!({"kind":"chat","id":"x","model":"free-thing","messages":[]}).to_string();
+        let r: Value = serde_json::from_slice(
+            &handle(req.as_bytes(), &mut sessions, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH).await,
+        )
+        .unwrap();
+        let e = r["error"].as_str().unwrap();
+        assert!(e.contains("funded, signed session") || e.contains("not offered"), "got: {e}");
     }
 }
 

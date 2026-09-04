@@ -3,7 +3,7 @@
 //
 // This is the ONLY shape the server and client speak. Every provider lives
 // behind an adapter that translates this <-> its own wire format. Adding a new
-// model (Claude, Groq, GPT, ...) means writing one adapter, never touching the
+// model (Claude, GPT, ...) means writing one adapter, never touching the
 // server, the client, or these types.
 // ---------------------------------------------------------------------------
 

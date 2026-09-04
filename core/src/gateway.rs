@@ -170,7 +170,7 @@ fn models_reply(id: Value) -> Value {
         "id": id,
         "models": [
             model("gemini-3.5-flash-lite", "Google", "text", 0.10, 0.40),
-            model("llama-3.3-70b-versatile", "Groq", "text", 0.59, 0.79),
+            model("gemini-3.5-flash", "Google", "text", 0.30, 2.50),
         ],
     })
 }

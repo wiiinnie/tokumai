@@ -74,7 +74,6 @@ const SURBS_KEYS: u32 = 64;
 /// One staged picture chunk (96 KB base64 ≈ 50 packets).
 const SURBS_CHUNK: u32 = 64;
 /// `staged_download` key for the unsigned (free-model) chat path, which has no session.
-const FREE_SESSION_KEY: &str = "free";
 /// Reply budget for text chats: ~30 Sphinx packets ≈ 60 KB — a long markdown answer is
 /// 10–20 KB; anything bigger re-requests. (Was 150, before that a flat 500: each SURB
 /// rides IN the request, so oversizing bloats every send and triggers retransmission
@@ -1387,7 +1386,6 @@ async fn chat(
     model: String,
     messages: Value,
     #[allow(non_snake_case)] maxTokens: Option<u64>,
-    free: Option<bool>,
     // Live web-search grounding for this turn. UNSIGNED on purpose: it stays out of the
     // canonicalBody {model, messages, maxTokens} so existing session signatures are
     // unaffected. The server reads it to decide whether to attach the google_search tool.
@@ -1414,7 +1412,6 @@ async fn chat(
         model,
         messages,
         maxTokens,
-        free,
         live,
         bigReply,
         thinkingBudget,
@@ -1431,7 +1428,6 @@ async fn chat_impl(
     model: String,
     messages: Value,
     maxTokens: Option<u64>,
-    free: Option<bool>,
     live: Option<bool>,
     bigReply: Option<bool>,
     thinkingBudget: Option<u64>,
@@ -1470,55 +1466,6 @@ async fn chat_impl(
     let dir = data_dir(&app)?;
     let w = wallet::load(&dir);
     let srv = server_addr(&w)?;
-
-    // A model the picker showed at rate 0/0 needs no account, session or
-    // signature — the server re-checks against its own price table, so a wrong
-    // flag just comes back as "requires a funded, signed session".
-    if free.unwrap_or(false) {
-        // Retry after an interrupted picture download → resume it, no new generation.
-        if retry.unwrap_or(false) {
-            if let Some(dl) = transport.take_staged_download(FREE_SESSION_KEY).await {
-                let resp = finish_staged_download(&app, &transport, &srv, dl).await?;
-                return Ok(json!({
-                    "text": resp.get("text"),
-                    "usage": resp.get("usage"),
-                    "images": resp.get("images"),
-                }));
-            }
-        }
-        let mut req = json!({
-            "v":PROTO,"kind":"chat","id":rand_hex(16),"model":model,"messages":messages,"stream":false
-        });
-        if let Some(mt) = maxTokens {
-            req["maxTokens"] = json!(mt);
-        }
-        if live.unwrap_or(false) {
-            req["live"] = json!(true);
-        }
-        if let Some(tb) = thinkingBudget {
-            req["thinkingBudget"] = json!(tb);
-        }
-        if let Some(s) = &imageSize {
-            req["imageSize"] = json!(s);
-        }
-        // This client can fetch chunked pictures (fetch_staged_images); an older client
-        // that can't leaves this out and the server keeps images inline.
-        req["chunkedImages"] = json!(true);
-        let sent_app = app.clone();
-        let resp = transport
-            .round_trip_notify(&srv, &req, surbs, chat_timeout_ms, move || {
-                let _ = sent_app.emit("chat-sent", ());
-            })
-            .await?;
-        // Free image models (pollinations) stage big pictures too — resolve the refs.
-        let resp = fetch_staged_images(&app, &transport, &srv, FREE_SESSION_KEY, resp).await?;
-        // No balance in the reply: nothing was spent, so the UI keeps its number.
-        return Ok(json!({
-            "text": resp.get("text"),
-            "usage": resp.get("usage"),
-            "images": resp.get("images"),
-        }));
-    }
 
     let m = w.mnemonic.clone().ok_or("no account — create one and buy credit")?;
 
@@ -2640,30 +2587,47 @@ fn open_account_security() -> Result<(), String> {
     Err("the native account-security screen is iOS-only".into())
 }
 
+/// Is this a URL we are willing to hand to the OS browser? http(s) only, a non-empty
+/// host, and not one character of whitespace or control code anywhere in it.
+///
+/// The scheme test is the policy; the whitespace/control test is defence in depth. A URL
+/// that reaches here is frequently NOT ours — since 0.4.4 the markdown renderer turns
+/// every http(s) run in a MODEL ANSWER into a clickable link, and `faucetUrl` / the
+/// update notice come from whatever server the app is pointed at. So this string must be
+/// treated as hostile text, and never as something a launcher may re-parse (H1).
+pub(crate) fn is_openable_url(url: &str) -> bool {
+    let rest = match url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")) {
+        Some(r) => r,
+        None => return false,
+    };
+    // A host has to exist and has to end somewhere sane — "https:///x" or "https://?x"
+    // are not links a browser should be handed.
+    let host = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if host.is_empty() {
+        return false;
+    }
+    // Whitespace and control characters have no business in a URL; they are also what
+    // splits arguments and lines in every launcher and log we might ever pass through.
+    !url.chars().any(|c| c.is_whitespace() || c.is_control())
+}
+
 /// Open an http(s) URL in the OS default browser. The webview itself won't
 /// follow target=_blank links, so provider T&C / checkout links route here.
+///
+/// EVERY platform goes through the opener plugin — deliberately, and not just because
+/// mobile cannot spawn processes. Until 2026-09-04 the desktop arms shelled out, and the
+/// Windows one was `cmd /C start "" <url>`: Rust only quotes an argument containing a
+/// space, so a URL without one reached `cmd.exe` bare and `cmd` then read `&` in it as a
+/// command separator — `https://x/a?b=1&calc.exe` ran calc. The plugin hands the URL to
+/// `ShellExecuteExW` (Windows), `open` (macOS) and `xdg-open` (Linux) as DATA; nothing
+/// re-parses it as shell code. Never replace this with a `Command` again.
 #[tauri::command]
 fn open_external(app: AppHandle, url: String) -> Result<(), String> {
-    if !(url.starts_with("https://") || url.starts_with("http://")) {
-        return Err("only http(s) urls are allowed".into());
+    if !is_openable_url(&url) {
+        return Err("only plain http(s) urls are allowed".into());
     }
-    #[cfg(target_os = "macos")]
-    let spawned = std::process::Command::new("open").arg(&url).spawn();
-    #[cfg(target_os = "linux")]
-    let spawned = std::process::Command::new("xdg-open").arg(&url).spawn();
-    #[cfg(target_os = "windows")]
-    let spawned = std::process::Command::new("cmd").args(["/C", "start", "", &url]).spawn();
-    // Mobile cannot spawn processes: the opener plugin hands the URL to the system
-    // browser (UIApplication.openURL / Android Intent). Called from Rust, so the
-    // plugin's JS scope never applies — the http(s) check above is the whole policy.
-    #[cfg(mobile)]
-    let spawned: std::io::Result<()> = {
-        use tauri_plugin_opener::OpenerExt;
-        app.opener().open_url(&url, None::<&str>).map_err(std::io::Error::other)
-    };
-    #[cfg(desktop)]
-    let _ = &app;
-    spawned.map(|_| ()).map_err(|e| e.to_string())
+    use tauri_plugin_opener::OpenerExt;
+    app.opener().open_url(&url, None::<&str>).map_err(|e| e.to_string())
 }
 
 /// Android: hand rustls-platform-verifier the JVM + app Context so TLS verification can use
@@ -2798,5 +2762,29 @@ mod c3_tests {
         assert!(inflated > MIN_FLAG_SCRAI && inflated > ceiling, "gross overcharge must be flaggable");
         // an honest charge at the client's own estimate stays under the ceiling → not flagged
         assert!(!(fair > MIN_FLAG_SCRAI && fair > ceiling), "a fair charge must never be flagged");
+    }
+
+    // H1 (2026-09-04): a link in a MODEL ANSWER reaches open_external, so its URL is
+    // hostile text. The command injection is closed by not shelling out at all; this
+    // pins the input filter that sits in front of it.
+    #[test]
+    fn only_plain_http_urls_may_be_opened() {
+        assert!(is_openable_url("https://example.com/a?x=1"));
+        assert!(is_openable_url("http://example.com"));
+        // legitimate URL punctuation must keep working — no metacharacter blocklist
+        assert!(is_openable_url("https://maps.google.com/?q=a!b(c)&d=e'f"));
+        assert!(is_openable_url("https://mollie.com/checkout/select-method/abc#top"));
+        // the shell/launcher escape hatches
+        assert!(!is_openable_url("https://example.com/a b"), "a space splits arguments");
+        assert!(!is_openable_url("https://example.com/a\nb"), "a newline splits lines");
+        assert!(!is_openable_url("https://example.com/a\tb"));
+        assert!(!is_openable_url("https://example.com/a\u{0}b"));
+        // wrong scheme / no host
+        assert!(!is_openable_url("javascript:alert(1)"));
+        assert!(!is_openable_url("file:///etc/passwd"));
+        assert!(!is_openable_url("data:text/html,<script>"));
+        assert!(!is_openable_url("https:///nohost"));
+        assert!(!is_openable_url("https://?q=1"));
+        assert!(!is_openable_url(""));
     }
 }

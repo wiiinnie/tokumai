@@ -148,21 +148,23 @@ Sonar** / **OpenAI GPT web_search** as a "live" tier. Flag these models **"🌐 
 private"**: the search query (derived from the prompt) reaches a search backend at the
 provider (user IP still hidden by the mixnet, but the topic leaks).
 
-### OpenAI — *built (2026-09-03), not yet live*
+### OpenAI — *live*
 Responses-API adapter (`server/src/openai.rs`): GPT-5.4 nano/mini/full, images + PDFs in,
 web search per call, reasoning effort from the app slider, prepaid-only, own concurrency
 pool, `store: false`. Anonymous-user safeguards: per-day safety identifier, moderation
-prefilter (`MODERATION_PREFILTER`), session strikes (`ABUSE_STRIKES_PER_DAY`). Go-live:
-`OPENAI_API_KEY` + `openai` in `SCRAI_PROVIDERS` on the MAINNET server only, account at
-tier ≥ 2, monthly budget set, then the cost reconciliation against the OpenAI dashboard as
-done for Gemini. Details: `docs/providers-openai.md`, `docs/abuse-policy.md`.
+prefilter (`MODERATION_PREFILTER`), session strikes (`ABUSE_STRIKES_PER_DAY`). Offered
+alongside Gemini and named as a recipient in the privacy page. Still open from the
+bring-up list: account at tier ≥ 2, a monthly budget cap, and the cost reconciliation
+against the OpenAI dashboard as done for Gemini.
+Details: `docs/providers-openai.md`, `docs/abuse-policy.md`.
 
 ### More providers for breadth — *considering*
 Add one developer-first multi-model provider for model variety + a metadata API:
 **OpenRouter** (huge breadth, pricing/context per model), or EU-hosted **Mistral La
 Plateforme / Scaleway / OVHcloud** for data residency. **Not Cloudflare Workers AI** — its
 self-serve *and* enterprise terms forbid reselling to third parties, and its open models
-have no built-in web grounding.
+have no built-in web grounding; its dev-only integration was removed on 2026-09-04
+together with Groq and Pollinations.
 
 ### Text-to-image — *done (2026-08-25)*
 Google Nano Banana (`gemini-2.5-flash-image`, `gemini-3.1-flash-image[-lite]`) wired into

@@ -17,7 +17,7 @@ use crate::billing::{ModelPrice, Tier};
 
 /// One row of pricing.json (`in`/`out`/`cached_in`/`audio_in` = USD per 1M tokens,
 /// `out_text` = text/thinking output rate for image models whose `out` is the
-/// image-token rate, `per_image` = USD per generated image, `tier` = "free" |
+/// image-token rate, `per_image` = USD per generated image, `tier` =
 /// "free-tier" | absent for paid). Unknown fields (label, note, floating, …) are ignored.
 #[derive(Deserialize)]
 struct RawPrice {
@@ -48,8 +48,9 @@ impl RawPrice {
     fn to_model_price(&self, force_fallback: bool) -> ModelPrice {
         // Unknown tier strings deliberately land on Paid — mistyping a tier must
         // never accidentally give a model away for free.
+        // "free" was the keyless test providers' tier; they are gone, and the string
+        // now falls through to Paid like any other unknown value.
         let tier = match self.tier.as_deref() {
-            Some("free") => Tier::Free,
             Some("free-tier") => Tier::FreeTier,
             _ => Tier::Paid,
         };

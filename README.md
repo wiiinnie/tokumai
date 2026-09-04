@@ -22,7 +22,7 @@ app; the transport lives behind one seam (`src/nym/`) so replacing the shelled-o
 | Transport | native `nym-client`, addressed by Nym address |
 | Streaming | yes — chunk frames, reordered client-side |
 | Billing | per-turn, priced server-side, margin never leaves the server |
-| Images | Nano Banana (needs billing) + Pollinations (free, keyless) |
+| Images | Nano Banana (Gemini, needs billing) |
 | Progress | live indicator driven by real events, not a timer |
 | Client | persistent by default via `daemon` — cover traffic while connected |
 | Credentials | not yet — see the build plan |
@@ -62,12 +62,13 @@ one at a time.
 | Provider | Env | Free tier |
 |---|---|---|
 | Google Gemini | `GEMINI_API_KEY` | text yes; **images `limit: 0`**, needs billing |
-| Groq | `GROQ_API_KEY` | llama-3.3-70b 1k/day, llama-3.1-8b 14.4k/day |
-| Cloudflare Workers AI | `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` | 10k Neurons/day, covers FLUX |
-| Pollinations | — none — | free, keyless, weak, third party |
+| OpenAI | `OPENAI_API_KEY` | none — prepaid, and off unless `SCRAI_PROVIDERS` names it |
 
-**Replicate is not usable here:** it has no free tier at all — every prediction
-is billed per second of compute.
+Groq, Cloudflare Workers AI and Pollinations were removed on 2026-09-04. They
+existed to develop against without a billed key; none of them ever served a
+paying user, and each was one more third party seeing prompt content for no
+revenue. Pollinations in particular was the last model tier the server answered
+without a signature or a session at all.
 
 **3. Node 22+** and `npm install`.
 
@@ -186,13 +187,10 @@ npm run client -- chat "a single red circle on white"
 > Enable billing on the Google Cloud project behind the key and it works
 > unchanged. The adapter says so explicitly rather than making you decode a 429.
 
-For testing the image path today there are three **free, keyless** models via
-[Pollinations](https://pollinations.ai):
+To exercise the image path:
 
 ```bash
-npm run client -- model pollinations-512     # ~20-50 KB
-npm run client -- model pollinations-1024    # ~85-110 KB
-npm run client -- model pollinations-1536    # ~90-120 KB
+npm run client -- model gemini-3.1-flash-image
 npm run client -- chat "a single red circle on white"
 ```
 
@@ -523,7 +521,7 @@ The `/model` listing shows retail TOKU per 1M tokens, in/out, margin included:
   MODEL                        KIND   VENDOR            PROMPT      ANSWER  PRIVACY
                                                   TOKU per 1,000 tokens
   gemini-3.5-flash-lite        text   google                33         275  trains on input
-  llama-3.3-70b-versatile      text   groq                free        free  zero-retention
+  gemini-3.1-flash-image      image   google                33       3,300  trains on input
 ```
 
 Read the two number columns as **two independent prices**, not a ratio: sending

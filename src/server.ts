@@ -27,9 +27,6 @@ import { dirname } from "node:path";
 import { registerIfAvailable, keyFor, resolve, catalog } from "./adapter.js";
 import { geminiAdapter } from "./adapters/gemini.js";
 import { geminiImageAdapter } from "./adapters/gemini-image.js";
-import { pollinationsAdapter } from "./adapters/pollinations.js";
-import { groqAdapter } from "./adapters/groq.js";
-import { cloudflareAdapter } from "./adapters/cloudflare.js";
 import { createMeter, retailRate, purchaseTiers } from "./billing.js";
 import { warmPricing, pricingVersion } from "./pricing.js";
 import { MoneyStore } from "./money/store.js";
@@ -74,7 +71,7 @@ const DEFAULT_MAX_TOKENS = Number(process.env.SCRAI_DEFAULT_MAX_TOKENS ?? 4096);
 const THINKING_BUDGET = Number(process.env.SCRAI_THINKING_BUDGET ?? 2048);
 
 // ---- providers ------------------------------------------------------------
-const PROVIDERS = [geminiAdapter, geminiImageAdapter, pollinationsAdapter, groqAdapter, cloudflareAdapter];
+const PROVIDERS = [geminiAdapter, geminiImageAdapter];
 for (const a of PROVIDERS) registerIfAvailable(a);
 if (catalog().length === 0) {
   console.error("no provider configured — set at least one credential in .env (e.g. GEMINI_API_KEY)");

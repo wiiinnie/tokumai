@@ -1,6 +1,6 @@
 {
   "schema": "scrambler/pricing@1",
-  "version": "2026-08-27",
+  "version": "2026-09-04",
   "source": "https://ai.google.dev/gemini-api/docs/pricing",
   "tier": "paid-standard",
   "currency": "USD",
@@ -84,99 +84,6 @@
       "out": 30,
       "cached_in": 0.03,
       "note": "Standard tier: input $0.30/1M, output $30/1M = ~$0.039/image (1290 tokens); Google lists no separate text-output rate for this model, so all output bills at 30. Verified 2026-08-27 vs ai.google.dev/gemini-api/docs/pricing."
-    },
-    "pollinations-512": {
-      "label": "Pollinations 512px (free)",
-      "in": 0,
-      "out": 0,
-      "note": "Keyless public service — costs nothing, so it bills nothing. Test instrument for the image transfer path.",
-      "tier": "free"
-    },
-    "pollinations-1024": {
-      "label": "Pollinations 1024px (free)",
-      "in": 0,
-      "out": 0,
-      "note": "Keyless public service — costs nothing, so it bills nothing. Test instrument for the image transfer path.",
-      "tier": "free"
-    },
-    "pollinations-1536": {
-      "label": "Pollinations 1536px (free)",
-      "in": 0,
-      "out": 0,
-      "note": "Keyless public service — costs nothing, so it bills nothing. Test instrument for the image transfer path.",
-      "tier": "free"
-    },
-    "llama-3.3-70b-versatile": {
-      "label": "Llama 3.3 70B (groq)",
-      "in": 0.59,
-      "out": 0.79,
-      "tier": "free-tier"
-    },
-    "llama-3.1-8b-instant": {
-      "label": "Llama 3.1 8B (groq)",
-      "in": 0.05,
-      "out": 0.08,
-      "tier": "free-tier"
-    },
-    "flux-schnell": {
-      "label": "FLUX.1 schnell (cloudflare, free tier)",
-      "in": 0,
-      "out": 0,
-      "note": "Cloudflare free daily allowance serves it today; per_image is the honest list price so users pay a (reduced) rate.",
-      "tier": "free-tier",
-      "per_image": 0.001
-    },
-    "openai/gpt-oss-20b": {
-      "label": "GPT-OSS 20B (groq)",
-      "in": 0.1,
-      "out": 0.5,
-      "tier": "free-tier"
-    },
-    "openai/gpt-oss-120b": {
-      "label": "GPT-OSS 120B (groq)",
-      "in": 0.15,
-      "out": 0.75,
-      "tier": "free-tier"
-    },
-    "moonshotai/kimi-k2-instruct": {
-      "label": "Kimi K2 (groq)",
-      "in": 1.0,
-      "out": 3.0,
-      "tier": "free-tier"
-    },
-    "qwen/qwen3-32b": {
-      "label": "Qwen3 32B (groq)",
-      "in": 0.29,
-      "out": 0.59,
-      "tier": "free-tier"
-    },
-    "qwen/qwen3.6-27b": {
-      "label": "Qwen3.6 27B (groq, approx)",
-      "in": 0.29,
-      "out": 0.59,
-      "note": "approximate — verify",
-      "tier": "free-tier"
-    },
-    "groq/compound": {
-      "label": "Compound (groq agentic, approx)",
-      "in": 0.15,
-      "out": 0.75,
-      "note": "agentic system — approximate; verify",
-      "tier": "free-tier"
-    },
-    "groq/compound-mini": {
-      "label": "Compound-mini (groq agentic, approx)",
-      "in": 0.1,
-      "out": 0.5,
-      "note": "agentic system — approximate; verify",
-      "tier": "free-tier"
-    },
-    "allam-2-7b": {
-      "label": "Allam 2 7B (groq, approx)",
-      "in": 0.05,
-      "out": 0.08,
-      "note": "approximate — verify",
-      "tier": "free-tier"
     },
     "gpt-5.4-nano": {
       "label": "GPT-5.4 nano",

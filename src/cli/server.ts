@@ -19,9 +19,6 @@
 import { registerIfAvailable, keyFor, resolve, catalog, refreshCatalog, pruneUnpriced, deregister } from "../adapter.js";
 import { geminiAdapter } from "../adapters/gemini.js";
 import { geminiImageAdapter } from "../adapters/gemini-image.js";
-import { pollinationsAdapter } from "../adapters/pollinations.js";
-import { groqAdapter } from "../adapters/groq.js";
-import { cloudflareAdapter } from "../adapters/cloudflare.js";
 import { createMeter, retailRate } from "../billing.js";
 import { warmPricing, pricingVersion, pricingAgeDays, hasPrice } from "../pricing.js";
 import { PROTOCOL_VERSION, parseRequest, errorResponse, type Response } from "../protocol.js";
@@ -39,7 +36,7 @@ import * as nym from "../nym/process.js";
 
 // Each provider is offered only if its credential is actually present, so the
 // catalog never advertises something this box cannot serve.
-const PROVIDERS = [geminiAdapter, geminiImageAdapter, pollinationsAdapter, groqAdapter, cloudflareAdapter];
+const PROVIDERS = [geminiAdapter, geminiImageAdapter];
 const dormant: string[] = [];
 for (const a of PROVIDERS) {
   if (!registerIfAvailable(a)) dormant.push(`${a.vendor} (set ${a.apiKeyEnv})`);
@@ -696,8 +693,7 @@ async function main(): Promise<void> {
     fail(
       "no provider is configured — set at least one credential in .env:\n" +
         "  GEMINI_API_KEY        aistudio.google.com/apikey      (text; images need billing)\n" +
-        "  GROQ_API_KEY          console.groq.com/keys           (text, generous free tier)\n" +
-        "  CLOUDFLARE_API_TOKEN  + CLOUDFLARE_ACCOUNT_ID          (images, 10k neurons/day free)",
+        "  OPENAI_API_KEY        platform.openai.com/api-keys    (text, prepaid)",
     );
   }
 

@@ -1464,7 +1464,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // --- app state (mirrors what the backend reports; the backend is the truth) ---
   let models = [];                       // [{model,vendor,kind,trainsOnInput,rate}]
   let tiers = [];                        // fixed purchase amounts, USD
-  let currentModel = null, modelVendor = "", modelTrains = false, modelRate = null, modelAcceptsImages = false, modelTier = "paid", modelKind = "text";
+  let currentModel = null, modelVendor = "", modelTrains = false, modelRate = null, modelAcceptsImages = false, modelKind = "text";
   let account = null;                    // { fingerprint, sessionIndex } | null
   let balance = 0, held = 0;             // TOKU: funded session, and held ecash
   let redeeming = false;                 // re-entrancy guard for the manual redeem button
@@ -1691,7 +1691,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     return models.find(m=>text(m)&&/flash-lite/i.test(m.model||"")) || models.find(text) || models[0];
   }
   function selectModel(m){
-    currentModel=m.model; modelVendor=m.vendor; modelTrains=m.trainsOnInput; modelRate=m.rate||null; modelAcceptsImages=!!m.acceptsImages; modelTier=m.tier||"paid"; modelKind=m.kind||"text";
+    currentModel=m.model; modelVendor=m.vendor; modelTrains=m.trainsOnInput; modelRate=m.rate||null; modelAcceptsImages=!!m.acceptsImages; modelKind=m.kind||"text";
     $("mName").textContent=m.label||m.model; $("mVend").textContent=m.vendor+(m.rate?(' · '+rateHint(m.rate)):'');
     if(typeof pendingFile!=="undefined" && pendingFile) renderAttach();  // refresh the file hint
     syncComposerHint();
@@ -1708,9 +1708,6 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // by a third-party provider under THEIR terms. Acceptance is required per model
   // before it can be used (and re-surfaced when switching to one not yet accepted).
   const VENDOR_TERMS = {
-    groq: { name:"Groq", links:[
-      { label:"Groq Terms of Use", url:"https://groq.com/terms-of-use/" },
-      { label:"Groq Privacy Policy", url:"https://groq.com/privacy-policy/" } ] },
     openai: { name:"OpenAI (API Platform)", links:[
       { label:"OpenAI Usage Policies", url:"https://openai.com/policies/usage-policies/" },
       { label:"OpenAI Business Terms (API)", url:"https://openai.com/policies/business-terms/" },
@@ -1721,11 +1718,6 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       { label:"Google Cloud Terms of Service", url:"https://cloud.google.com/terms" },
       { label:"Generative AI Prohibited Use Policy", url:"https://policies.google.com/terms/generative-ai/use-policy" },
       { label:"Google Privacy Policy", url:"https://policies.google.com/privacy" } ] },
-    cloudflare: { name:"Cloudflare (Workers AI)", links:[
-      { label:"Cloudflare Website Terms", url:"https://www.cloudflare.com/website-terms/" },
-      { label:"Developer Platform / Workers AI Terms", url:"https://www.cloudflare.com/service-specific-terms-developer-platform/" } ] },
-    pollinations: { name:"Pollinations", links:[
-      { label:"Pollinations.ai (public, keyless service)", url:"https://pollinations.ai/" } ] },
   };
   // Open external links in the OS browser (the webview won't follow target=_blank).
   // nosemgrep: scrai-js-window-open -- the app path is open_external (http/https only, OS browser); window.open is the dev-bridge fallback
@@ -1759,7 +1751,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   function closeTerms(){ pendingTermsModel=null; $("termsScrim").classList.remove("open"); }
   function showTerms(m){
     pendingTermsModel = m;
-    // vendor casing in the catalog ("Google"/"Groq") differs from the map keys —
+    // vendor casing in the catalog ("Google"/"OpenAI") differs from the map keys —
     // normalise so the correct terms links are always found.
     const t = VENDOR_TERMS[(m.vendor||"").toLowerCase()] || { name:m.vendor, links:[] };
     const links = t.links.length
@@ -3481,10 +3473,6 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
 
     // The backend redeems any held credit into the session first, then prices and
     // debits the turn. We only display the finished number it sends back.
-    // tier "free" = genuinely free → the request skips account, session and
-    // signature entirely (the server re-checks its own price table). Free-TIER
-    // models bill (reduced) and go through the normal signed path.
-    const isFree = modelTier === "free";
     // Live web-search grounding for this turn: global toggle OR the per-message "use
     // live data" nudge choice. Only for models the catalog marks `live` (Gemini text,
     // OpenAI); ignored elsewhere server-side. Consume the one-shot nudge flags now.
@@ -3500,7 +3488,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     // downgrade (2K on Lite → 1K) is told to the user, not silently swallowed.
     const reqSize = imageSize(), reqLabel = $("mName").textContent || currentModel;
     dlProg=null;
-    Backend.chat({ model: currentModel, messages: sendMessages, maxTokens: 4096, free: isFree, live: useLive, thinkingBudget: thinkingBudget(), bigReply: modelKind === "image", retry: replay, imageSize: reqSize }, {
+    Backend.chat({ model: currentModel, messages: sendMessages, maxTokens: 4096, live: useLive, thinkingBudget: thinkingBudget(), bigReply: modelKind === "image", retry: replay, imageSize: reqSize }, {
       // Real lifecycle signals drive the status line: request fully sent →
       // "Thinking…", which holds until the answer itself takes over.
       onPhase:(p,info)=>{

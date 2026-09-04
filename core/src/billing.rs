@@ -53,15 +53,18 @@ pub struct ModelPrice {
 }
 
 /// How a model is offered to users:
-/// - `Free`: genuinely free forever — no provider quota behind it (pollinations).
-///   Served without a funded session.
 /// - `FreeTier`: a paid model the operator's API key uses on a daily free
 ///   allowance; billed to users at a REDUCED rate, and past the allowance the
 ///   provider's error is passed through (until API-side billing is enabled).
 /// - `Paid`: always billed at full retail.
+///
+/// There is deliberately no "genuinely free" tier any more. It existed for the
+/// keyless test providers (pollinations), and it was the one request shape the
+/// server answered with NO signature, NO session and NO reserve. Those providers
+/// were removed before mainnet (2026-09-04) and the tier went with them — every
+/// request now costs something and is therefore authenticated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Tier {
-    Free,
     FreeTier,
     #[default]
     Paid,
@@ -70,7 +73,6 @@ pub enum Tier {
 impl Tier {
     pub fn as_str(&self) -> &'static str {
         match self {
-            Tier::Free => "free",
             Tier::FreeTier => "free-tier",
             Tier::Paid => "paid",
         }
@@ -192,8 +194,8 @@ mod tests {
     }
 
     #[test]
-    fn free_model_stays_free() {
-        let free = ModelPrice { input: 0.0, output: 0.0, tier: Tier::Free, ..P };
+    fn zero_priced_model_costs_nothing() {
+        let free = ModelPrice { input: 0.0, output: 0.0, ..P };
         let u = TokenUsage { input: 1000, output: 1000, ..Default::default() };
         let f = compute_billing(&free, &u, 1.1, 0, false);
         assert_eq!(f.cost_scrai, 0.0);

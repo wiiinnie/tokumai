@@ -1,12 +1,12 @@
 // catalog.rs — the model catalog, fetched LIVE from the providers so it never goes
-// stale (Groq deprecates model ids regularly; Google rotates Gemini previews).
+// stale (Google rotates Gemini previews constantly).
 // Providers fail independently: a missing key or an unreachable API just drops that
 // provider's models from the reply instead of emptying the whole catalog.
 //
 // Each model's retail rate comes from the pricing table (USD/1M × peg × margin), so
-// the price shown in the picker is exactly what chat.rs will charge. Unlisted Groq
-// models get the conservative fallback price; unpriced Gemini models are dropped
-// (the live list is a zoo of previews we'd otherwise show at a surprise price).
+// the price shown in the picker is exactly what chat.rs will charge. Unpriced Gemini
+// models are dropped (the live list is a zoo of previews we'd otherwise show at a
+// surprise price); OpenAI is an explicit allowlist with no live listing at all.
 
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -26,15 +26,73 @@ static CATALOG_CACHE: Mutex<Option<(Instant, Vec<Value>)>> = Mutex::new(None);
 
 /// Provider allowlist: SCRAI_PROVIDERS="gemini" (comma list) limits the
 /// catalog to those providers; unset/empty/"all" offers everything available.
-/// Trims the PICKER only — pricing still guards direct requests in chat.rs.
+/// Enforced for the picker here AND for every chat via `model_offered` below.
 pub fn provider_enabled(name: &str) -> bool {
     match std::env::var("SCRAI_PROVIDERS") {
         Err(_) => true,
-        Ok(v) => {
-            let v = v.trim().to_lowercase();
-            v.is_empty() || v == "all" || v.split(',').any(|p| p.trim() == name)
-        }
+        Ok(v) => provider_in_list(name, &v),
     }
+}
+
+/// The pure half of `provider_enabled`, so the admission rules can be tested without
+/// writing to process-global env (which every other test in this crate would see).
+fn provider_in_list(name: &str, list: &str) -> bool {
+    let v = list.trim().to_lowercase();
+    v.is_empty() || v == "all" || v.split(',').any(|p| p.trim() == name)
+}
+
+/// Which provider serves `model`. Deliberately the SAME routing `chat::chat` uses to
+/// pick an adapter, in the same order, so the admission decision below and the call
+/// that actually happens can never disagree about who gets the request.
+pub fn provider_of_model(model: &str) -> &'static str {
+    if model.starts_with("gemini") {
+        "gemini"
+    } else if crate::openai::is_openai_model(model) {
+        "openai"
+    } else {
+        // Not routable by chat.rs either — `model_offered` therefore says no, and an
+        // unknown id can never fall through to some unnamed provider.
+        "unknown"
+    }
+}
+
+/// Does this server OFFER `model` right now?
+///
+/// The picker is built from this decision (`fetch_models`) and `chat::reserve` enforces
+/// the SAME one before anything is reserved or sent. That symmetry is the point: until
+/// 2026-09-04 the only server-side guard on a chat was "does pricing.json price this
+/// model", so every rule that lived in the catalog was a client-side suggestion. A
+/// hand-written request naming `gpt-5.4` was served on a TESTNET server — where the
+/// catalog offers nano only, precisely because testers pay in faucet dollars while
+/// OpenAI bills us real ones — and likewise reached any provider the operator had
+/// switched off with SCRAI_PROVIDERS while its key was still in the env.
+///
+/// Rule of thumb for anything added here later: a restriction that only shapes the
+/// catalog is a UI hint. If it protects money, an API key or a policy, it has to be
+/// asked again on the path that does the work.
+pub fn model_offered(model: &str) -> bool {
+    offered_with(model, &std::env::var("SCRAI_PROVIDERS").unwrap_or_default(), &openai_model_ids())
+}
+
+/// The decision itself, with the two config values passed in — pure, so the test below
+/// does not have to mutate env that the rest of this crate's tests read.
+fn offered_with(model: &str, providers: &str, openai_ids: &[String]) -> bool {
+    let provider = provider_of_model(model);
+    // Fail closed on anything chat.rs cannot route. An empty SCRAI_PROVIDERS means "every
+    // provider we HAVE", never "any name a caller invents" — the removed test providers
+    // land here, and so would a typo'd id that pricing.json happens to price.
+    if provider == "unknown" {
+        return false;
+    }
+    if !provider_in_list(provider, providers) {
+        return false;
+    }
+    // OpenAI has no live listing — an explicit allowlist (`SCRAI_OPENAI_MODELS`, or the
+    // built-in set, narrowed to the cheapest model on a testnet server).
+    if provider == "openai" && !openai_ids.iter().any(|id| id == model) {
+        return false;
+    }
+    true
 }
 
 /// `identities`: every Nym address this server answers on (its multi-identity front
@@ -65,19 +123,12 @@ fn cached_fresh() -> Option<Vec<Value>> {
 
 /// Assemble the live catalog from the providers (the uncached path).
 async fn fetch_models(pricing: &PricingTable, margin: f64) -> Vec<Value> {
-    // Gemini first — its models lead the picker (same provider order as the TS server).
-    // OpenAI needs no provider round trip: we offer an explicit allowlist ∩ pricing.json.
+    // Gemini leads the picker. OpenAI needs no provider round trip: we offer an
+    // explicit allowlist ∩ pricing.json.
     let openai = if provider_enabled("openai") { openai_models(pricing, margin) } else { Ok(Vec::new()) };
-    let (gemini, groq) = tokio::join!(
-        async {
-            if provider_enabled("gemini") { gemini_models(pricing, margin).await } else { Ok(Vec::new()) }
-        },
-        async {
-            if provider_enabled("groq") { groq_models(pricing, margin).await } else { Ok(Vec::new()) }
-        }
-    );
+    let gemini = if provider_enabled("gemini") { gemini_models(pricing, margin).await } else { Ok(Vec::new()) };
     let mut models = Vec::new();
-    for (provider, result) in [("gemini", gemini), ("groq", groq), ("openai", openai)] {
+    for (provider, result) in [("gemini", gemini), ("openai", openai)] {
         match result {
             Ok(mut m) => models.append(&mut m),
             Err(e) => eprintln!("scrai-server: {provider} catalog fetch failed: {e}"),
@@ -92,47 +143,9 @@ fn retail(usd_per_million: f64, margin: f64) -> u64 {
     ceil_scrai(usd_per_million * SCRAI_PER_USD as f64 * margin).ceil() as u64
 }
 
-/// The static free-tier image models: pollinations is keyless (always offered),
-/// Cloudflare needs its token + account id. All are explicitly priced 0/0, so
-/// chat.rs serves them without a funded session.
+/// The image models, all Google's — billed by tokens like any other Gemini call.
 fn image_models(pricing: &PricingTable, margin: f64) -> Vec<Value> {
     let mut out = Vec::new();
-    let mut push = |id: &str, vendor: &str, trains: bool| {
-        let price = crate::chat::effective_price(pricing.price(id));
-        if price.fallback {
-            return; // an unpriced image model would be rejected by chat.rs anyway
-        }
-        let mut rate = json!({ "in": retail(price.input, margin), "out": retail(price.output, margin) });
-        // Image models price per generated image, not per token.
-        let img = crate::chat::per_image_scrai(&price, margin);
-        if img > 0 {
-            rate["image"] = json!(img);
-        }
-        out.push(json!({
-            "model": id,
-            "label": pricing.label(id).unwrap_or(id),
-            "vendor": vendor,
-            "kind": "image",
-            "rate": rate,
-            "tier": price.tier.as_str(),
-            "trainsOnInput": trains,
-            "acceptsImages": false,
-        }));
-    };
-    let cf_ready = std::env::var("CLOUDFLARE_API_TOKEN").is_ok_and(|v| !v.trim().is_empty())
-        && std::env::var("CLOUDFLARE_ACCOUNT_ID").is_ok_and(|v| !v.trim().is_empty());
-    if cf_ready && provider_enabled("cloudflare") {
-        for (id, _) in crate::chat::cf_model_path_all() {
-            push(id, "Cloudflare", false);
-        }
-    }
-    // Public, keyless, no contract — the prompt is visible to the operator, so
-    // it carries the "trains on input" badge (assume the worst).
-    if provider_enabled("pollinations") {
-        for id in ["pollinations-512", "pollinations-1024", "pollinations-1536"] {
-            push(id, "Pollinations", true);
-        }
-    }
     // Google (Gemini) native image generation — Nano Banana. Bills by TOKENS: the image
     // itself is a fixed count of IMAGE output tokens at the `out` rate (1K: 1290 on Nano
     // Banana, 1120 on Nano Banana 2 / 2 Lite), the model's text + thinking bill at
@@ -237,54 +250,6 @@ fn openai_models(pricing: &PricingTable, margin: f64) -> Result<Vec<Value>, Stri
     Ok(out)
 }
 
-async fn groq_models(pricing: &PricingTable, margin: f64) -> Result<Vec<Value>, String> {
-    let key = std::env::var("GROQ_API_KEY").map_err(|_| "GROQ_API_KEY not set".to_string())?;
-    let res = crate::http::client()
-        .get("https://api.groq.com/openai/v1/models")
-        .bearer_auth(key)
-        .send()
-        .await
-        .map_err(|e| format!("groq models request failed: {e}"))?;
-    let status = res.status();
-    let body = res
-        .text()
-        .await
-        .map_err(|e| format!("groq models body read failed: {e}"))?;
-    let j: Value = serde_json::from_str(&body)
-        .map_err(|e| format!("groq models non-JSON ({status}): {e}"))?;
-    let data = j.get("data").and_then(|d| d.as_array()).ok_or_else(|| {
-        let detail = j
-            .get("error")
-            .map(|e| e.to_string())
-            .unwrap_or_else(|| body.chars().take(300).collect());
-        format!("groq models ({status}): {detail}")
-    })?;
-
-    let mut out = Vec::new();
-    for m in data {
-        let Some(id) = m.get("id").and_then(|i| i.as_str()) else {
-            continue;
-        };
-        // Skip non-chat models (audio / safety / embeddings).
-        let low = id.to_lowercase();
-        if ["whisper", "tts", "guard", "embed"].iter().any(|k| low.contains(k)) {
-            continue;
-        }
-        let price = crate::chat::effective_price(pricing.price(id));
-        out.push(json!({
-            "model": id,
-            "label": pricing.label(id).unwrap_or(id),
-            "vendor": "Groq",
-            "kind": "text",
-            "rate": { "in": retail(price.input, margin), "out": retail(price.output, margin) },
-            "tier": price.tier.as_str(),
-            "trainsOnInput": false,
-            "acceptsImages": false,
-        }));
-    }
-    Ok(out)
-}
-
 async fn gemini_models(pricing: &PricingTable, margin: f64) -> Result<Vec<Value>, String> {
     let (key, _) = crate::chat::gemini_api_key()?;
     let res = crate::http::client()
@@ -373,7 +338,7 @@ mod tests {
     /// Run explicitly: cargo test -p scrai-server live_catalog -- --ignored --nocapture
     #[tokio::test]
     #[ignore]
-    async fn live_catalog_lists_both_providers() {
+    async fn live_catalog_lists_the_providers() {
         dotenvy::dotenv().ok();
         let pricing = PricingTable::parse(include_str!("../../pricing.json")).unwrap();
         match gemini_models(&pricing, 1.4).await {
@@ -381,9 +346,50 @@ mod tests {
                 m.iter().filter_map(|x| x.get("model").and_then(|v| v.as_str())).collect::<Vec<_>>()),
             Err(e) => println!("gemini FAILED: {e}"),
         }
-        match groq_models(&pricing, 1.4).await {
-            Ok(m) => println!("groq: {} models", m.len()),
-            Err(e) => println!("groq FAILED: {e}"),
+        match openai_models(&pricing, 1.4) {
+            Ok(m) => println!("openai: {} models", m.len()),
+            Err(e) => println!("openai FAILED: {e}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::*;
+
+    fn ids(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// The catalog's rules must hold on the CHAT path too — `model_offered` is what
+    /// `chat::reserve` asks. Driven through the pure `offered_with`, so this test never
+    /// touches process-global env (which the chat/pay tests in this crate read).
+    #[test]
+    fn offered_follows_the_provider_allowlist_and_the_openai_id_list() {
+        let all = ids(&["gpt-5.4-nano", "gpt-5.4-mini", "gpt-5.4"]);
+        // routing matches chat::chat's dispatch order
+        assert_eq!(provider_of_model("gemini-3.5-flash"), "gemini");
+        assert_eq!(provider_of_model("gpt-5.4"), "openai");
+        assert_eq!(provider_of_model("llama-3.3-70b-versatile"), "unknown");
+        assert_eq!(provider_of_model("pollinations-512"), "unknown");
+
+        // no allowlist → everything priced is offered
+        assert!(offered_with("gemini-3.5-flash", "", &all));
+        assert!(offered_with("gpt-5.4", "", &all));
+        // a provider we no longer route is never offered, allowlist or not
+        assert!(!offered_with("pollinations-512", "", &all));
+        assert!(!offered_with("llama-3.3-70b-versatile", "", &all));
+        assert!(offered_with("gpt-5.4", "all", &all));
+
+        // a provider the operator switched off is refused even when named directly …
+        assert!(offered_with("gemini-3.5-flash", "gemini", &all));
+        assert!(!offered_with("gpt-5.4-nano", "gemini", &all), "openai is off");
+
+        // the OpenAI id list is an allowlist, not a hint — this is the testnet rule
+        // (nano only, because testers pay in faucet dollars and OpenAI bills us real ones)
+        let nano = ids(&["gpt-5.4-nano"]);
+        assert!(offered_with("gpt-5.4-nano", "", &nano));
+        assert!(!offered_with("gpt-5.4", "", &nano), "an id outside the list must not be served");
+        assert!(!offered_with("gpt-5.4-mini", "", &nano));
     }
 }

@@ -140,14 +140,10 @@ assert.ok(salvage.priceScrai >= 1);
 assert.equal(salvage.estimated, true);
 
 
-/* 10) MIN_CHARGE_SCRAI=0: a free model stays free. A paid model still never
-      rounds down to zero, because the price is formed with ceil().
-      (pollinations is the only truly 0/0 entry — the groq llamas carry their list
-      price even while a free tier serves them.) */
+/* 10) MIN_CHARGE_SCRAI=0: a paid model still never rounds down to zero, because
+      the price is formed with ceil(). (There is no 0/0 model left in the table —
+      the keyless test providers were removed before mainnet.) */
 process.env.MIN_CHARGE_SCRAI = "0";
-const freeUse: TokenUsage = { ...EMPTY_USAGE, inputTokens: 57, outputTokens: 105 };
-assert.equal(computeBilling("pollinations-1024", freeUse).priceScrai, 0);
-assert.equal(computeBilling("pollinations-1024", freeUse).costScrai, 0);
 
 const paidTiny = computeBilling("gemini-3.5-flash-lite", { ...EMPTY_USAGE, inputTokens: 1 });
 assert.ok(paidTiny.costScrai > 0);
@@ -165,8 +161,5 @@ process.env.MARGIN = "1.1";
 const rate = retailRate("gemini-3.5-flash");
 assert.equal(rate.in, 165000);   // 1.5 USD/1M × 100000 TOKU/USD × 1.1
 assert.equal(rate.out, 990000);  // 9.0 USD/1M × 100000 TOKU/USD × 1.1
-const freeRate = retailRate("pollinations-1024");
-assert.equal(freeRate.in, 0);
-assert.equal(freeRate.out, 0);
 
 console.log("all billing checks passed (incl. min-charge, rounding, rates)");
