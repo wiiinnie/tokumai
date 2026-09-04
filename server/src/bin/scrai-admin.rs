@@ -575,6 +575,11 @@ fn grp(n: u64) -> String {
 fn usd(scrai: u64) -> String {
     format!("${:.2}", scrai as f64 / SCRAI_PER_USD as f64)
 }
+/// Four decimals — the drill-down's per-model figures: a nano-model prompt costs a few
+/// thousandths of a cent, and "$0.04 / $0.04" at two decimals hides the margin.
+fn usd4(scrai: u64) -> String {
+    format!("${:.4}", scrai as f64 / SCRAI_PER_USD as f64)
+}
 
 /// € per $ for the cost columns — Google's AI Studio dashboard and invoice are in EUR at
 /// Google's own monthly rate, so the operator sets the rate they see (`SCRAI_FX_EUR_PER_USD`
@@ -762,7 +767,7 @@ fn ui(f: &mut Frame, m: &Metrics, view: &View, path: &str, clock: &str, network:
     );
 
     // bottom row: DAILY totals (↑↓ picks a day) | that day by provider and model
-    let bot = Layout::horizontal([Constraint::Min(72), Constraint::Length(66)]).split(root[2]);
+    let bot = Layout::horizontal([Constraint::Min(60), Constraint::Length(74)]).split(root[2]);
     let fx = eur_per_usd();
     let margin_txt = |spent: u64, cost: u64| -> (String, Color) {
         if cost > 0 {
@@ -845,11 +850,14 @@ fn ui(f: &mut Frame, m: &Metrics, view: &View, path: &str, clock: &str, network:
     // the selected day, one block per provider, models underneath, month-to-date at the foot
     let sel_day = m.daily.get(view.sel.min(m.daily.len().saturating_sub(1)));
     let mut drill: Vec<Line> = Vec::new();
-    let col = |a: &str, b: &str, c: &str, d: &str, e: &str| format!("{a:<24}{b:>7} {c:>8} {d:>8} {e:>8}");
-    drill.push(Line::from(Span::styled(
-        col("", "prompts", "spent", "cost", if fx.is_some() { "cost €" } else { "" }) + "   margin",
-        Style::default().fg(DIM),
-    )));
+    let col = |a: &str, b: &str, c: &str, d: &str, e: &str| {
+        if fx.is_some() {
+            format!("{a:<22}{b:>7} {c:>10} {d:>10} {e:>9}")
+        } else {
+            format!("{a:<22}{b:>7} {c:>10} {d:>10}")
+        }
+    };
+    drill.push(Line::from(Span::styled(col("", "prompts", "spent", "cost", "cost €") + "   margin", Style::default().fg(DIM))));
     match sel_day {
         None => drill.push(Line::from(Span::styled("no day selected", Style::default().fg(DIM)))),
         Some(d) if d.per_model.is_empty() => {
@@ -869,7 +877,7 @@ fn ui(f: &mut Frame, m: &Metrics, view: &View, path: &str, clock: &str, network:
                 };
                 let (mt, mc) = margin_txt(sp, co);
                 drill.push(Line::from(vec![
-                    Span::styled(col(prov, &grp(p), &usd(sp), &usd(co), &ce), Style::default().fg(GOLD).add_modifier(Modifier::BOLD)),
+                    Span::styled(col(prov, &grp(p), &usd4(sp), &usd4(co), &ce), Style::default().fg(GOLD).add_modifier(Modifier::BOLD)),
                     Span::styled(format!("   {mt}"), Style::default().fg(mc)),
                 ]));
                 for (id, v) in models {
@@ -878,11 +886,11 @@ fn ui(f: &mut Frame, m: &Metrics, view: &View, path: &str, clock: &str, network:
                         _ => "—".into(),
                     };
                     let (mt, mc) = margin_txt(v.spent, v.cost);
-                    let label: String = model_label(id).chars().take(21).collect();
+                    let label: String = model_label(id).chars().take(19).collect();
                     let dim = v.prompts == 0;
                     drill.push(Line::from(vec![
                         Span::styled(
-                            col(&format!("  {label}"), &grp(v.prompts), &usd(v.spent), &usd(v.cost), &ce),
+                            col(&format!("  {label}"), &grp(v.prompts), &usd4(v.spent), &usd4(v.cost), &ce),
                             Style::default().fg(if dim { DIM } else { BONE }),
                         ),
                         Span::styled(format!("   {mt}"), Style::default().fg(if dim { DIM } else { mc })),
@@ -906,7 +914,7 @@ fn ui(f: &mut Frame, m: &Metrics, view: &View, path: &str, clock: &str, network:
             }
             mtd.sort();
             drill.push(Line::from(""));
-            drill.push(Line::from(Span::styled(format!("{month} to date · spent / cost"), Style::default().fg(DIM))));
+            drill.push(Line::from(Span::styled(format!("{month} to date · spent / cost   (4 decimals; totals on the left round to cents)"), Style::default().fg(DIM))));
             for (prov, sp, co) in mtd {
                 let extra = match (prov, fx) {
                     ("GOOGLE", Some(r)) => format!(" ≈ {}  ← AI Studio (Pacific days)", eur(co, r)),
@@ -915,7 +923,7 @@ fn ui(f: &mut Frame, m: &Metrics, view: &View, path: &str, clock: &str, network:
                 };
                 drill.push(Line::from(vec![
                     Span::styled(format!("{prov:<8}"), Style::default().fg(GOLD)),
-                    Span::styled(format!("{} / {}", usd(sp), usd(co)), Style::default().fg(BONE)),
+                    Span::styled(format!("{} / {}", usd4(sp), usd4(co)), Style::default().fg(BONE)),
                     Span::styled(extra, Style::default().fg(DIM)),
                 ]));
             }
