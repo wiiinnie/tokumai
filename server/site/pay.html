@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>tokumai — finish your top-up</title>
+<meta name="description" content="Finish a tokumai top-up that was started in the app.">
+<style>
+  :root{
+    --ink:#141210; --surface:#1C1917; --surface-2:#262220; --line:#332E2A; --bone:#ECE6DC; --muted:#9C938A;
+    --acc:#7A5FFF; --acc2:#B9A3FF; --ok:#3FC98A; --warn:#E4642A;
+    --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+    --body:'Hanken Grotesk',system-ui,-apple-system,sans-serif; --display:Fraunces,Georgia,serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--ink);color:var(--bone);font-family:var(--body);
+       display:flex;justify-content:center;padding:28px 18px 60px}
+  .wrap{width:100%;max-width:560px}
+  .logo{display:flex;align-items:center;gap:10px;font-family:var(--display);font-weight:600;font-size:20px;margin-bottom:26px}
+  .logo b{color:var(--acc);font-weight:600}
+  h1{font-family:var(--display);font-weight:600;font-size:27px;line-height:1.15;margin:0 0 8px}
+  .lead{color:var(--muted);font-size:14.5px;line-height:1.55;margin:0 0 22px}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:20px;margin-bottom:14px}
+  .amt{font-family:var(--display);font-weight:700;font-size:30px}
+  .amt span{font-family:var(--mono);font-size:12px;color:var(--muted);font-weight:400;margin-left:8px}
+  .lbl{font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:16px 0 5px}
+  .lbl.acc{color:var(--acc)}
+  .val{font-family:var(--mono);font-size:13px;word-break:break-all;background:var(--surface-2);
+       border:1px solid var(--line);border-radius:9px;padding:10px 11px;display:flex;gap:10px;align-items:center}
+  .val.memo{border-color:var(--acc);color:var(--acc2);font-size:15px;letter-spacing:.05em}
+  .val code{flex:1;font:inherit;color:inherit;background:none}
+  .cp{flex:none;border:1px solid var(--line);background:var(--surface);color:var(--muted);font-family:var(--mono);
+      font-size:10.5px;padding:5px 9px;border-radius:7px;cursor:pointer}
+  .cp:hover{border-color:var(--acc);color:var(--bone)}
+  .btn{display:block;width:100%;text-align:center;text-decoration:none;font-family:var(--body);font-size:15px;
+       font-weight:600;padding:14px 18px;border-radius:11px;border:1px solid var(--acc);
+       background:var(--acc);color:#141210;cursor:pointer}
+  .btn:hover{filter:brightness(1.08)}
+  .note{font-size:12.5px;line-height:1.55;color:var(--muted);margin-top:14px}
+  .bad{border-color:var(--warn)} .bad h1{color:var(--warn)}
+  .foot{margin-top:26px;font-family:var(--mono);font-size:10.5px;color:var(--muted);text-align:center}
+  .foot a{color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="logo"><span>tokum<b>ai</b></span></div>
+  <div id="out"></div>
+  <div class="foot">Started in the app · nothing on this page identifies you ·
+    <a href="/">tokumai.com</a></div>
+</div>
+<script>
+(function(){
+  "use strict";
+  // The invoice arrives in the URL FRAGMENT, never the query string: a fragment is not
+  // sent to the server, so the address, amount and memo stay off our logs entirely.
+  //
+  // It is also completely attacker-controlled — anyone can craft a link to this page.
+  // Nothing here is trusted: every value is escaped into the DOM, lengths are capped,
+  // and the only clickable link (the card checkout) must be an https URL on mollie.com,
+  // exactly the check the app and the server already make. Without that this page would
+  // be a redirector on our own domain, which is a phishing primitive.
+  var out = document.getElementById("out");
+  var esc = function(s){ var d = document.createElement("div"); d.textContent = String(s == null ? "" : s); return d.innerHTML; };
+  var MAX = 200;
+  var clean = function(s){ return typeof s === "string" ? s.slice(0, MAX) : ""; };
+  var isMollie = function(u){
+    if (typeof u !== "string" || u.length > 500) return false;
+    var rest = u.indexOf("https://") === 0 ? u.slice(8) : null;
+    if (rest === null) return false;
+    if (/[\s<>"'\\]/.test(u)) return false;
+    var host = rest.split("/")[0];
+    return host === "mollie.com" || /\.mollie\.com$/.test(host);
+  };
+
+  function fail(title, body){
+    out.innerHTML = '<div class="card bad"><h1>' + esc(title) + '</h1><p class="lead" style="margin:0">' + esc(body) + '</p></div>';
+  }
+
+  function decode(frag){
+    // base64url -> UTF-8 JSON
+    var b = frag.replace(/-/g, "+").replace(/_/g, "/");
+    while (b.length % 4) b += "=";
+    var bin = atob(b);
+    var bytes = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return JSON.parse(new TextDecoder().decode(bytes));
+  }
+
+  function row(label, value, cls){
+    return '<div class="lbl' + (cls === "memo" ? " acc" : "") + '">' + esc(label) + '</div>' +
+           '<div class="val' + (cls === "memo" ? " memo" : "") + '"><code>' + esc(value) + '</code>' +
+           '<button class="cp" type="button" data-copy="' + esc(value) + '">copy</button></div>';
+  }
+
+  var frag = (location.hash || "").replace(/^#/, "");
+  if (!frag) {
+    fail("Nothing to pay here", "Open this page from the app: Buy credit \u2192 pick an amount \u2192 Pay in the browser.");
+    return;
+  }
+  var inv;
+  try { inv = decode(frag); } catch (e) { inv = null; }
+  if (!inv || typeof inv !== "object" || inv.v !== 1) {
+    fail("That link is not readable", "It may have been cut short. Go back to the app and open it again.");
+    return;
+  }
+
+  var usd = Number(inv.usd) || 0;
+  var toku = Number(inv.toku) || 0;
+  var exp = Number(inv.exp) || 0;
+  if (exp && exp < Date.now()) {
+    fail("This invoice has expired", "Raise a fresh one in the app \u2014 nothing was charged.");
+    return;
+  }
+
+  var head = '<div class="card"><div class="amt">$' + esc(usd.toFixed(2)) +
+             '<span>' + esc(toku.toLocaleString("en-US")) + ' TOKU</span></div>';
+
+  if (inv.rail === "card") {
+    if (!isMollie(inv.checkout)) {
+      fail("That checkout link is not valid", "Only Mollie's own checkout is accepted here. Raise the payment again in the app.");
+      return;
+    }
+    out.innerHTML = head +
+      '<p class="lead" style="margin:14px 0 18px">You will finish the payment on Mollie\u2019s own checkout page. ' +
+      'Mollie sees your name, card and IP for the payment itself \u2014 never your tokumai account and never what you ask.</p>' +
+      '<a class="btn" id="go" href="' + esc(inv.checkout) + '" rel="noopener">Continue to Mollie</a>' +
+      '<p class="note">The credit appears in the app on its own, usually within seconds of paying. ' +
+      'You can close this page once the payment went through.</p></div>';
+    return;
+  }
+
+  var o = (Array.isArray(inv.opts) ? inv.opts : [])[0];
+  if (!o || typeof o !== "object") {
+    fail("That link is incomplete", "Go back to the app and open it again.");
+    return;
+  }
+  var amount = clean(o.amount), cur = clean(o.currency), dest = clean(o.destination), memo = clean(o.memo);
+  if (!dest) {
+    fail("That link is incomplete", "No payment address was handed over. Raise the payment again in the app.");
+    return;
+  }
+  var html = head +
+    '<p class="lead" style="margin:14px 0 4px">Send exactly this amount from your wallet.' +
+    (memo ? ' <b>The memo is required</b> \u2014 without it the payment cannot be credited.' : '') + '</p>';
+  if (amount) html += row("Amount", amount + (cur ? " " + cur : ""), "");
+  html += row("Address", dest, "");
+  if (memo) html += row("Memo \u2014 required", memo, "memo");
+  html += '<p class="note">The credit lands in the app by itself, usually under a minute after the ' +
+          'transfer is seen on chain. It shows up as \u201cheld\u201d and is spent as blind-signed coins.</p></div>';
+  out.innerHTML = html;
+
+  out.addEventListener("click", function(e){
+    var b = e.target.closest("[data-copy]");
+    if (!b) return;
+    var v = b.getAttribute("data-copy");
+    var done = function(){ var t = b.textContent; b.textContent = "copied"; setTimeout(function(){ b.textContent = t; }, 1200); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(v).then(done, function(){});
+    else { var ta = document.createElement("textarea"); ta.value = v; document.body.appendChild(ta); ta.select();
+           try { document.execCommand("copy"); done(); } catch (err) {} document.body.removeChild(ta); }
+  });
+})();
+</script>
+</body>
+</html>

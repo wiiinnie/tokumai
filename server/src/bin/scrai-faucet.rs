@@ -53,6 +53,11 @@ const SITE: &str = include_str!("../../site/index.html");
 const PAGE_IMPRINT: &str = include_str!("../../site/imprint.html");
 const PAGE_TERMS: &str = include_str!("../../site/terms.html");
 const PAGE_PRIVACY: &str = include_str!("../../site/privacy.html");
+/// Hand-over page for a top-up started in the app (Apple's IAP gate: the purchase is
+/// raised and signed in the app, the payment itself happens here in the browser). The
+/// invoice rides in the URL FRAGMENT, so it never reaches this server — nothing to log,
+/// nothing to store, and this route serves one static file to everyone.
+const PAGE_PAY: &str = include_str!("../../site/pay.html");
 /// The site's screenshots, baked into the binary so a deploy ships them (Caddy only knows
 /// /dl/; nothing else to upload or configure). Served as GET /img/<name>.
 /// Where Mollie's hosted checkout sends the browser afterwards (`MOLLIE_REDIRECT_URL`
@@ -111,6 +116,11 @@ const IMAGES: &[(&str, &[u8])] = &[
     ("how-mac-chat-light.jpg", include_bytes!("../../site/img/how-mac-chat-light.jpg")),
     ("how-mac-image-dark.jpg", include_bytes!("../../site/img/how-mac-image-dark.jpg")),
     ("how-mac-image-light.jpg", include_bytes!("../../site/img/how-mac-image-light.jpg")),
+    // PLACEHOLDERS until the real captures land — see the comment in site/index.html.
+    ("how-phone-buy-dark.jpg", include_bytes!("../../site/img/how-phone-buy-dark.jpg")),
+    ("how-phone-buy-light.jpg", include_bytes!("../../site/img/how-phone-buy-light.jpg")),
+    ("how-phone-menu-dark.jpg", include_bytes!("../../site/img/how-phone-menu-dark.jpg")),
+    ("how-phone-menu-light.jpg", include_bytes!("../../site/img/how-phone-menu-light.jpg")),
     ("how-phone-chat-dark.jpg", include_bytes!("../../site/img/how-phone-chat-dark.jpg")),
     ("how-phone-chat-light.jpg", include_bytes!("../../site/img/how-phone-chat-light.jpg")),
     ("how-phone-image-dark.jpg", include_bytes!("../../site/img/how-phone-image-dark.jpg")),
@@ -696,6 +706,7 @@ async fn handle(f: Arc<Faucet>, mut sock: tokio::net::TcpStream, peer: SocketAdd
         ("GET", "/imprint") | ("GET", "/impressum") => respond(&mut sock, 200, "text/html; charset=utf-8", PAGE_IMPRINT.as_bytes()).await,
         ("GET", "/terms") | ("GET", "/agb") => respond(&mut sock, 200, "text/html; charset=utf-8", PAGE_TERMS.as_bytes()).await,
         ("GET", "/privacy") | ("GET", "/datenschutz") => respond(&mut sock, 200, "text/html; charset=utf-8", PAGE_PRIVACY.as_bytes()).await,
+        ("GET", "/pay") => respond(&mut sock, 200, "text/html; charset=utf-8", PAGE_PAY.as_bytes()).await,
         // Mollie's redirect target after a card checkout (see PAID_HTML). Any query string
         // is ignored — nothing on this page depends on it.
         ("GET", "/paid") => respond(&mut sock, 200, "text/html; charset=utf-8", PAID_HTML.as_bytes()).await,

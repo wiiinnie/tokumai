@@ -1029,6 +1029,20 @@ pub fn decline_message(finish: Option<&str>, block: Option<&str>, image_model: b
     Some(format!("{head}: {why}. {billed}"))
 }
 
+/// Did an image model answer with a PLACEHOLDER instead of a picture? Nano Banana
+/// sometimes writes a literal `{image}` (or `[image]`) into its text and returns no image
+/// part at all — it narrates the picture rather than drawing it. The user must not be
+/// shown that: to them it reads as a broken answer, and they were charged for tokens.
+///
+/// Only counts when NO image came back. An answer that has both a picture and the word
+/// in its prose is fine.
+pub fn image_placeholder_only(text: &str) -> bool {
+    let t = text.to_ascii_lowercase();
+    ["{image}", "[image]", "{{image}}", "{image_1}", "{image1}"]
+        .iter()
+        .any(|m| t.contains(m))
+}
+
 async fn gemini(
     model: &str,
     messages: &Value,
@@ -1111,6 +1125,16 @@ async fn gemini(
             eprintln!("scrai-server: gemini {model} returned no content (finish={finish:?} block={block:?})");
             text = msg;
         }
+    }
+    // An image model that returned prose with a "{image}" marker and no picture has
+    // narrated instead of drawn (see `image_placeholder_only`). Say so plainly rather
+    // than passing the placeholder through to the chat.
+    if model.contains("image") && imgs.is_empty() && image_placeholder_only(&text) {
+        eprintln!("scrai-server: gemini {model} wrote an image placeholder instead of drawing one");
+        text = "No picture from Google: the model described the picture instead of drawing it, \
+                and wrote a placeholder where the image should have been. Send the prompt again \
+                — a fresh request usually draws it. Only the tokens it used were billed."
+            .to_string();
     }
     let images: Images = (!imgs.is_empty()).then(|| json!(imgs));
     let mut usage = gemini_usage(j.get("usageMetadata").unwrap_or(&Value::Null), !imgs.is_empty());
@@ -1286,6 +1310,20 @@ fn modality_tokens(details: Option<&Value>, modality: &str) -> u64 {
 // ---------------------------------------------------------------------------
 #[cfg(test)]
 mod tests {
+    // Regression (tester, 0.4.6, 2026-09-04): the model wrote "{image}" markers into its
+    // text and returned no picture. That must never reach the chat as-is.
+    #[test]
+    fn image_placeholders_are_recognised() {
+        use super::image_placeholder_only;
+        assert!(image_placeholder_only("Hier sind die Bilder:\n{image}\n{image}"));
+        assert!(image_placeholder_only("[IMAGE]"));
+        assert!(image_placeholder_only("see {Image_1} above"));
+        // ordinary prose about images must NOT trip it
+        assert!(!image_placeholder_only("Here is the image you asked for."));
+        assert!(!image_placeholder_only("I drew an image of a cat."));
+        assert!(!image_placeholder_only(""));
+    }
+
     #[test]
     fn empty_gemini_answers_explain_themselves() {
         use super::decline_message;

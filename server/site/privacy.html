@@ -45,9 +45,27 @@
   <h2>2. This website</h2>
   <p>The site is served by us. <b>No access logs are kept</b> (request logging is switched off on both the reverse proxy and the application), <b>no cookies</b> are set, and no third-party scripts or analytics are loaded. Two honest limits: the proxy's error log can briefly record the IP address of a connection that failed (for example a broken TLS handshake), and the faucet counts claim attempts per IP address for one hour to stop brute force — hashed with a random key that changes at every restart, held in memory only, never written to disk. The testnet faucet form sends the invite code and the invoice memo you type to our server, where they are stored together with the transaction id of the test payment (purpose: pay one test invoice per code; legal basis Art. 6 (1) (b) GDPR; kept for the duration of the test programme).</p>
 
+<!-- ============================================================================
+     PROVIDER LIST — KEEP IN SYNC WITH WHAT THE SERVER ACTUALLY OFFERS.
+
+     Two places below name the model providers that receive request content:
+       §3 "The app"              — the plain-language list
+       §5 "Recipients and transfers" — the legal entities + transfer mechanism
+
+     Naming a recipient is a GDPR duty (Art. 13 (1) (e)), so this page has to be
+     updated BEFORE a new provider serves its first request — never after. It is
+     also one of the pages Mollie reviews for card acceptance.
+
+     Checklist when adding or removing a provider:
+       1. this file, §3 and §5 (legal entity + country + transfer mechanism)
+       2. the same file in the other worktree (main / tokumai) — both ship a site
+       3. VENDOR_TERMS in public/index.html (the in-app terms sheet)
+       4. docs/providers-<name>.md
+     Removing one: drop it here too, so we never name a recipient that gets nothing.
+============================================================================ -->
   <h2>3. The app</h2>
   <ul>
-    <li><b>Requests to AI models</b> reach our server through the Nym mixnet and are forwarded to the model provider (Google Gemini, Groq — see their terms in the app). We do not store the content of requests or answers. The provider processes the content to generate the answer; providers used under API terms state that API input is not used to train their models.</li>
+    <li><b>Requests to AI models</b> reach our server through the Nym mixnet and are forwarded to the provider of the model you chose — currently Google (Gemini) or OpenAI (ChatGPT models); the app names the provider and its terms before you use a model. We do not store the content of requests or answers. The provider processes the content to generate the answer; providers used under API terms state that API input is not used to train their models.</li>
     <li><b>Session and credit data:</b> the server holds anonymous session keys, balances and burned token serials — needed to bill requests and prevent double spending (Art. 6 (1) (b) GDPR). None of it contains a name, address or IP.</li>
     <li><b>Aggregate metrics:</b> per-day totals (number of requests, cost, distinct sessions) without identifiers.</li>
     <li><b>Data on your device:</b> recovery phrase, history and settings are stored locally by the app; the privacy guard's checks run on the device only.</li>
@@ -57,7 +75,7 @@
   <p><b>Coins (NYM, Bitcoin):</b> we see the transaction on the public chain and the invoice memo; no personal data is collected. <b>Cards:</b> processed by <b>Mollie B.V.</b>, Keizersgracht 126, 1015 CW Amsterdam. Mollie collects the data needed for the payment (card details, name, e-mail if asked, IP address, browser data) as an independent controller under its own privacy policy: <a href="https://www.mollie.com/privacy" rel="noopener">mollie.com/privacy</a>. We receive from Mollie only the payment status, amount and our own random order id — never card data. Legal basis: Art. 6 (1) (b) GDPR; Mollie's retention follows its legal obligations (payment records, typically 7 years).</p>
 
   <h2>5. Recipients and transfers</h2>
-  <p>Model providers (Google LLC, Groq Inc. — USA, under the EU–US Data Privacy Framework and/or standard contractual clauses) receive request content only; Mollie B.V. (Netherlands) receives card payment data; our hosting provider OVHcloud (EU data centre) operates the server. No data is sold or used for advertising.</p>
+  <p>Model providers (Google LLC and OpenAI, L.L.C. — USA, under the EU–US Data Privacy Framework and/or standard contractual clauses) receive request content only; Mollie B.V. (Netherlands) receives card payment data; our hosting provider OVHcloud (EU data centre) operates the server. No data is sold or used for advertising.</p>
 
   <h2>6. Your rights</h2>
   <p>You have the rights of access, rectification, erasure, restriction, portability and objection (Art. 15–21 GDPR) and the right to complain to a supervisory authority (for us: Bayerisches Landesamt für Datenschutzaufsicht (BayLDA), Ansbach). Note that most data we hold is anonymous by design and cannot be attributed to you; for card payments, please quote the order id from the Mollie receipt.</p>

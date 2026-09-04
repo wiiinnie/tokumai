@@ -1474,6 +1474,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   let serverTestnet = false;             // server runs with SCRAI_TESTNET=1 → offers the $1 faucet purchase
   let storefront = null;                 // iOS: App Store storefront (ISO alpha-3, "USA"/"DEU"/…) or null → strictest top-up variant
   let faucetUrl = null;                  // where testers redeem the memo (server-provided, https only)
+  let siteUrl = null;                    // tokumai.com — the /pay hand-over page lives there
   let testnetBuy = false;                // the toggle in the Buy dialog (only meaningful when serverTestnet)
   const TESTNET_USD = 1;
   let cardInfo = { enabled:false, minUsd:10, methods:[] };   // server's card rail: {enabled, minUsd, methods:[{id,label}]} — absent → no card row
@@ -1562,7 +1563,12 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         if(/^\d+\.\d+\.\d+/.test(av)){ APP_VERSION = versionLabel(av); const v=$("appVer"); if(v) v.textContent="v"+APP_VERSION; } }
       serverTestnet = s.testnet === true;          // the server's kill switch: absent/false → no toggle
       storefront = /^[A-Z]{3}$/.test(String(s.storefront||"")) ? String(s.storefront) : null;
-      { const fu=String(s.faucetUrl||""); faucetUrl = serverTestnet && /^https:\/\/[\w.-]+/.test(fu) ? fu : null; }
+      { const fu=String(s.faucetUrl||"");
+        const okUrl = /^https:\/\/[\w.-]+(\/[^\s]*)?$/.test(fu);
+        faucetUrl = serverTestnet && okUrl ? fu : null;
+        // Same URL, ungated: it is also where a top-up started here is finished in
+        // the browser (webPayUrl). Not testnet-specific.
+        siteUrl = okUrl ? fu : null; }
       if(!serverTestnet) testnetBuy = false;
       // Card rail: coerce both fields — the reply is untrusted server data.
       { const c=s.card||{}; cardInfo={ enabled:c.enabled===true, minUsd:Math.max(1, Math.floor(Number(c.minUsd)||10)), methods:Array.isArray(c.methods)?c.methods.filter(m=>m&&typeof m==="object"):[] }; }
@@ -3395,8 +3401,21 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     const displayAtt = file ? { mimeType:file.mimeType, name:file.name, size:file.size, thumb:file.thumb } : undefined;
     // History is sent text-only; a prior attachment is not re-uploaded in v1.
     // Empty turns stay out: a failed send leaves an answerless assistant shell.
-    const apiMessages = messages.filter(m=>(m.role==="you"||m.role==="ai") && (m.text||"").trim())
-      .map(m=>({ role:m.role==="you"?"user":"assistant", content:m.text }));
+    //
+    // IMAGE MODELS GET NO TRANSCRIPT AT ALL — only this turn.
+    // Because history is text-only, a picture the model drew can never go back to it, and
+    // an image-only answer (no text) is dropped by the filter below entirely. After a few
+    // picture turns the model therefore reads its own past as "asked for a picture, replied
+    // with a description, never produced one" — and starts imitating exactly that: prose
+    // plus its own literal "{image}" markers instead of an image part, narrating however
+    // many pictures the older TEXT mentions. A tester hit this on 0.4.6 (2026-09-04):
+    // two described pictures, two "{image}", one real image.
+    // Nothing is lost by dropping it: an ordinary follow-up prompt never carried the
+    // previous picture anyway, and "edit this picture" attaches the chosen one to THIS
+    // turn as an attachment (refPic → apiAtts), not through the transcript.
+    const apiMessages = modelKind === "image" ? [] :
+      messages.filter(m=>(m.role==="you"||m.role==="ai") && (m.text||"").trim())
+        .map(m=>({ role:m.role==="you"?"user":"assistant", content:m.text }));
 
     const youMsg={role:"you",text,att:displayAtt}; if(file) youMsg.uploading={pct:0,kbps:0,name:file.name};
     if(refPic) youMsg.editRef=true;
@@ -4813,6 +4832,28 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   function coinOf(inv){ if(isCardInv(inv)) return "Card"; const o=(inv.options||[])[0]; return o&&/nym/i.test(o.method||"")?"NYM":"Bitcoin"; }
   function isCardInv(inv){ const o=(inv&&inv.options||[])[0]; return !!(o && o.method==="card"); }
   function cardCheckoutOf(inv){ const o=(inv&&inv.options||[])[0]; return safeMollieUrl(inv.checkout || (o&&o.checkout) || ""); }
+  // Hand a RAISED invoice to the browser so the payment itself happens on the web
+  // (Apple's IAP gate: the purchase is raised and signed in here, money moves out there).
+  // Everything rides in the URL FRAGMENT — fragments are not sent with the request, so the
+  // address, amount and memo never reach our web server and cannot land in its logs.
+  function b64url(str){
+    const bytes = new TextEncoder().encode(str);
+    let bin = ""; for (const b of bytes) bin += String.fromCharCode(b);
+    return btoa(bin).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+  }
+  function webPayUrl(inv){
+    if(!siteUrl || !inv) return "";
+    const card = isCardInv(inv);
+    const checkout = card ? cardCheckoutOf(inv) : "";
+    const opts = (inv.options||[])
+      .filter(o=>!/ln|lightning/i.test(o.method||""))
+      .map(o=>({ method:o.method||"", destination:o.destination||"", amount:o.amount||"", currency:o.currency||"", memo:o.memo||"" }));
+    if(card ? checkout==="#" : !opts.length) return "";
+    const payload = { v:1, id:String(inv.invoiceId||""), usd:Number(inv.amountUsd||0), toku:Number(inv.amountScrai||0),
+                      exp:Number(inv.expiresAt||0), rail: card?"card":"coin", checkout: card?checkout:"", opts: card?[]:opts };
+    return siteUrl.replace(/\/+$/,"") + "/pay#" + b64url(JSON.stringify(payload));
+  }
+  function payOnWeb(){ const u = webPayUrl(activeInvoice); if(u) openLink(u); }
   // The card row exists only when the server sells by card; on iOS additionally behind CARD_ON_IOS.
   // In testnet mode it stays visible but greyed, like the Bitcoin tile (the faucet pays NYM only).
   function cardAvailable(){ return cardInfo.enabled && (CARD_ON_IOS || !isIOSNative()); }
@@ -5153,11 +5194,14 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       const btn = url!=="#"
         ? `<a class="btn primary" style="display:block;text-align:center" href="${escAttr(url)}" data-click="openLink" data-click-pass="href" data-prevent="1">Reopen checkout ↗</a>`
         : `<div class="hint">The checkout link is missing — cancel this payment and try again.</div>`;
+      // Finish on the web instead: same invoice, handed over in the URL fragment.
+      const webBtn = webPayUrl(inv)
+        ? `<button class="btn" style="display:block;width:100%;margin-top:8px" data-click="payOnWeb">Pay on tokumai.com ↗</button>` : ``;
       // nosemgrep: scrai-taint-untrusted-to-html -- reviewed 2026-08-29: url is safeMollieUrl()-gated and escAttr()-wrapped; amountUsd/amountScrai are numbers (toFixed/formatScrai); nothing else from the server lands here
       $("payPanel").innerHTML = `<div class="paypanel">
         <div class="paylead">Pay $${Number(inv.amountUsd||0).toFixed(2)} · ${formatScrai(inv.amountScrai||0)} TOKU by card · expires <span id="payExpiry">…</span></div>
         <div class="cardwait"><b>Checkout opened in your browser.</b> Finish the payment there — your credit is picked up here automatically, you don’t need to come back to any page.</div>
-        ${btn}
+        ${btn}${webBtn}
         <div class="cardpriv">Mollie (EU) sees your name, card and IP address — never your tokumai account or what you use it for. Once collected, the credit is unlinkable, exactly like a coin purchase. No refunds after checkout.</div>
       </div>`;
       return;
@@ -5203,6 +5247,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       <div class="paylead">Pay $${inv.amountUsd.toFixed(2)} · ${formatScrai(inv.amountScrai)} TOKU · expires <span id="payExpiry">…</span></div>
       ${blocks}
       ${isNymInv?`<div id="watchState" class="watchrow"><span class="wd"></span> connecting to the Nyx chain…</div>`:""}
+      ${webPayUrl(inv)?`<button class="btn" style="display:block;width:100%;margin-top:10px" data-click="payOnWeb">Open these details on tokumai.com ↗</button>`:""}
       ${inv.checkout?`<a class="btn" style="display:inline-block;margin:2px 0 4px" href="${escAttr(safeHttpUrl(inv.checkout))}" data-click="openLink" data-click-pass="href" data-prevent="1">Open BTCPay checkout (dev shortcut)</a>`:""}
     </div>`;
   }
@@ -5229,7 +5274,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     pickImage, attachTap, pickNative, pickFile, closeAttachMenu, onImagePicked, clearImage, setMenuKind, toggleLatest, toggleVendorIdx, imgSettled,
     closeImport, decryptImport, selectMethod, copyMemo, openSettings, closeSettings,
     navPage, navBack, acctNav, acctBack, backFromRestore,
-    resumePayment, backToChooser, selectTier, startPurchase, cancelPending,
+    resumePayment, backToChooser, selectTier, startPurchase, cancelPending, payOnWeb,
     confirmGuard, closeGuardModal, guardImgKeep, guardImgRemove, closeGuardImg,
     giZoom, giZoomReset, giToggleFull, giProcess, giBack, giApprove,
     tutShow, tutNext, tutBack, tutSkip, cancelUpload });
