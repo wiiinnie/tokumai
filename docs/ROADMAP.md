@@ -43,8 +43,9 @@ no licence; see `docs/federation-shared-ledger.md` (header) for the full reasoni
 
 Consequences:
 - **Keep:** the signed server directory + load-based selection in the client, K Nym
-  identities per server, the Gästebuch (shared ledger) across our servers, t-of-n DKG
-  across our servers (see below). These are what scale the service.
+  identities per server, and — later — stateless fronts in front of one core (see
+  "Target topology" below). The shared ledger across cores and a t-of-n DKG are deferred:
+  there is one core for now.
 - **Drop:** operator clearing, per-operator price lists, foreign-authority verification,
   the "franchise"/settlement designs. A lot of code that never needs to exist.
 - **How other node operators still participate:** on the Nym layer, not the money layer.
@@ -59,15 +60,57 @@ Consequences:
   exactly what the TEE endpoint (below) is for, and it gets easier with a fleet we own,
   because attestation only has to cover our own machines.
 
-## Security / decentralisation (mainnet blockers)
+## Security / decentralisation
 
-### t-of-n authority DKG across our own servers — *required before real-money mainnet*
-Today `AUTHORITY_N = 1` and the server runs with `SCRAI_ALLOW_SINGLE_AUTHORITY=1`
-(testnet override). A single 1-of-1 authority can **forge unlimited ecash** and weakens
-unlinkability. Stand up a real **threshold (t-of-n) DKG with ≥2 of our own servers**
-and drop the override before issuing real-money credentials. The adversary is a single
-compromised box or insider, not a distrusted operator (there is only one); one box must
-never be able to mint or consume entitlement alone.
+### One authority for launch — *decided 2026-09-04*
+`AUTHORITY_N = 1` stays. A single issuing authority harms nobody but us as long as the box is
+honest: forged coins would only be redeemed against our own provider bills, and blind
+signatures are as unlinkable with n = 1 as with n = 3. The one real hole is **key tagging**:
+the client fetches the authority's verification key from the same server that issues the
+book (per 5-dollar ticketbook, cached until two days before the key expires), so a
+malicious server could sign each user's book under a different key and link the spends.
+That is fixed by publishing the key, not by adding shares. Before real money:
+
+1. **Publish + pin the authority key** — on tokumai.com and inside the signed
+   directory/price list; the client verifies the served key against it (see "signed
+   pricing" in `docs/pricing-safety.md`).
+2. **Budget caps + alarm** — hard daily spend limits at every model provider, and an
+   admin alarm when minted coins and booked payments drift apart. Bounds a compromise to
+   one day.
+3. **Rehearse a key rotation** — clients already discard books minted under a foreign key
+   and re-draw from entitlement; run it once on testnet, write down the steps.
+4. Rename the `SCRAI_ALLOW_SINGLE_AUTHORITY` override into a plain launch setting, so the
+   code says "decided", not "testnet leftover".
+
+**t-of-n (e.g. 2-of-3) is deferred** to the moment a second core exists anyway. What it
+would take: the crypto core already does threshold signing (tested 2-of-2); the server
+would need a real DKG (today's keygen is a single dealer) and share-aware issuance; the
+client would need to collect partial signatures from t servers. Three layers, the server
+the largest.
+
+### Target topology — *decided 2026-09-04*
+Three roles, one operator:
+
+- **tokumai-client** — the app (desktop + mobile). Talks only through the mixnet, picks a
+  server from the signed directory, holds the recovery phrase, the vault and the coconut
+  books.
+- **tokumai-core** — the ONE box that holds state and secrets: the authority, the
+  entitlement ledger, session balances, the double-spend list, payment wallets and chain
+  watchers, provider API keys, pricing. Today's `scrai-server` **is** the core.
+- **tokumai-server** — stateless fronts, added when one core's CPU is saturated by the
+  cover traffic of its Nym identities. A front runs Nym identities, unwraps the Sphinx
+  layer, forwards the request to the core and answers over the SURBs. No ledger, no key,
+  no decision; a captured front can neither mint nor rebook anything. Fronts reach the
+  core over a **private link between our own machines** (WireGuard: silent to strangers,
+  so the core keeps having no public port) — the first deliberate exception to "our
+  servers talk only over the mixnet". Optional: an inner encryption layer to the core's key
+  so fronts see ciphertext only. The client finds fronts through the signed directory and
+  fails over between them.
+
+Not before launch: a single server already carries K Nym identities (one identity ≈ 40
+concurrent users in the load test). Fronts become worthwhile only once that box is CPU-bound;
+re-run `scripts/loadtest.sh` first. The core stays the single point for ledger and
+authority — by choice.
 
 ## Models / providers
 
@@ -144,10 +187,11 @@ runs dry mid-service.
 `scrai-loadtest` + `scripts/loadtest.sh` measure one server's latency curve vs concurrent
 users (ping / models / full signed chat with fake payments + mock provider). Next: run the
 stages, find the knee, then either **multi-address server** (K Nym identities, one state —
-if ingress saturates first) or a second server behind the **signed directory** (if the
-loop / chat cap saturates first). Server selection must never be a user task: pong now
-carries `load`, the client picks + sticks (session balance and — until the DKG — coconut
-books are server-bound). All of these servers are ours (see "Operating model").
+if ingress saturates first) or **tokumai-server fronts** in front of the one core behind the
+**signed directory** (if CPU saturates first; see "Target topology"). Server selection must
+never be a user task: pong now carries `load`, the client picks + sticks (session balance
+and coconut books belong to the one core, so fronts are interchangeable). All of these
+servers are ours (see "Operating model").
 Details: `docs/load-testing.md`.
 
 ## Ops / metrics — *done (2026-08-25)*
