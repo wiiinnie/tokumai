@@ -615,7 +615,11 @@ fn site_html(dl_dir: &Path) -> String {
     // hero caption: just the number ("0.3.2"), or the build label when no manifest is published
     let short = mver.clone().unwrap_or_else(|| "testnet build".into());
     s = s.replace("{{VERSION_SHORT}}", &html_escape(&short));
-    let version = mver.map(|v| format!("Testnet build {v}")).unwrap_or_else(|| env_or("SITE_VERSION", "testnet build"));
+    // "Testnet build 0.4.6" was right while the whole server was a test server. On mainnet
+    // the same label reads as a warning to anyone about to pay real money, so it goes.
+    let version = mver
+        .map(|v| if testnet_on() { format!("Testnet build {v}") } else { format!("Build {v}") })
+        .unwrap_or_else(|| env_or("SITE_VERSION", if testnet_on() { "testnet build" } else { "build" }));
     s = s.replace("{{VERSION}}", &html_escape(&version));
     s = s.replace("{{TESTNET}}", if testnet_on() { "on" } else { "off" });
     s
