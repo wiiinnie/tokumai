@@ -57,11 +57,92 @@ pub fn app_outdated(req: &serde_json::Value) -> Option<(String, String)> {
     }
 }
 
+/// Money rails whose configuration is network-scoped (`{base}_MAINNET` / `{base}_TESTNET`).
+/// Getting one of these wrong does not fail loudly — it settles invoices against the wrong
+/// world — so they are checked at boot (`testnet_rails_on_mainnet`).
+pub const MONEY_RAILS: [&str; 6] = [
+    "NYX_LCD_URL",
+    "NYX_RECEIVE_ADDRESS",
+    "BTCPAY_URL",
+    "BTCPAY_STORE_ID",
+    "BTCPAY_API_KEY",
+    "MOLLIE_API_KEY",
+];
+
+/// Rails that would silently run on TEST infrastructure on a real-money server.
+///
+/// `net_var` resolves `_MAINNET` → `_TESTNET` → bare, and that fallback ignores whether the
+/// server is actually in testnet mode. With only `_TESTNET` values in .env — the normal
+/// state of a testnet box — flipping SCRAI_TESTNET to 0 keeps every rail pointed at the
+/// test world while the server starts accepting real money. The worst of them is Mollie:
+/// its test checkout lets the payer pick "paid" for free, so anyone could mint credit and
+/// spend it on provider calls we pay for. Refuse to boot instead.
+pub fn testnet_rails_on_mainnet() -> Vec<&'static str> {
+    rails_on_test_infra(|n| std::env::var(n).ok())
+}
+
+/// The decision itself, with the lookup passed in — pure, so its test does not have to
+/// write the very env names that the pay.rs tests read (that shared-state trap has bitten
+/// this crate twice now).
+fn rails_on_test_infra(get: impl Fn(&str) -> Option<String>) -> Vec<&'static str> {
+    let set = |n: String| get(&n).is_some_and(|v| !v.trim().is_empty());
+    MONEY_RAILS
+        .iter()
+        .copied()
+        .filter(|b| !set(format!("{b}_MAINNET")) && set(format!("{b}_TESTNET")))
+        .collect()
+}
+
 pub fn net_var(base: &str) -> Option<String> {
     let get = |name: String| std::env::var(name).ok().filter(|v| !v.trim().is_empty());
     get(format!("{base}_MAINNET"))
         .or_else(|| get(format!("{base}_TESTNET")))
         .or_else(|| get(base.to_string()))
+}
+
+#[cfg(test)]
+mod rail_guard_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
+        let m: HashMap<String, String> =
+            pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        move |k: &str| m.get(k).cloned()
+    }
+
+    /// The scenario this exists for: a testnet box whose .env only has _TESTNET rails, and
+    /// someone flips SCRAI_TESTNET to 0. Mollie would then run on its `test_` key, whose
+    /// checkout lets the payer choose "paid" for free — real credit, no money moved.
+    #[test]
+    fn a_mainnet_server_refuses_rails_that_only_have_a_testnet_value() {
+        assert!(rails_on_test_infra(env(&[])).is_empty(), "nothing configured → nothing to flag");
+
+        // exactly the shape of the live .env on 2026-09-05
+        let live = env(&[
+            ("MOLLIE_API_KEY_TESTNET", "test_abc"),
+            ("NYX_LCD_URL_TESTNET", "https://validator-sandbox-1.nymtech.net/api"),
+            ("BTCPAY_URL_TESTNET", "https://testnet.demo.btcpayserver.org"),
+        ]);
+        let stale = rails_on_test_infra(live);
+        assert!(stale.contains(&"MOLLIE_API_KEY"), "the free-credit one must be caught: {stale:?}");
+        assert!(stale.contains(&"NYX_LCD_URL") && stale.contains(&"BTCPAY_URL"));
+
+        // a half-migrated .env still trips on what is left
+        let half = env(&[
+            ("MOLLIE_API_KEY_TESTNET", "test_abc"),
+            ("MOLLIE_API_KEY_MAINNET", "live_abc"),
+            ("NYX_LCD_URL_TESTNET", "https://validator-sandbox-1.nymtech.net/api"),
+        ]);
+        assert_eq!(rails_on_test_infra(half), vec!["NYX_LCD_URL"]);
+
+        // an empty value is not a value
+        let blank = env(&[("MOLLIE_API_KEY_TESTNET", "test_abc"), ("MOLLIE_API_KEY_MAINNET", "   ")]);
+        assert_eq!(rails_on_test_infra(blank), vec!["MOLLIE_API_KEY"]);
+
+        // a rail configured only for mainnet, or not at all, is fine
+        assert!(rails_on_test_infra(env(&[("MOLLIE_API_KEY_MAINNET", "live_abc")])).is_empty());
+    }
 }
 
 #[cfg(test)]

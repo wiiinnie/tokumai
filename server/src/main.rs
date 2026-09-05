@@ -57,6 +57,23 @@ async fn main() {
 
     eprintln!("scrai-server: v{}", scrai_server::VERSION);
 
+    // A real-money server must not run on test payment infrastructure. See
+    // `testnet_rails_on_mainnet` for why this cannot be left to the operator's memory.
+    if !pay::is_testnet_server() {
+        let stale = scrai_server::testnet_rails_on_mainnet();
+        if !stale.is_empty() {
+            eprintln!(
+                "scrai-server: FATAL: SCRAI_TESTNET is off, but these rails only have a \
+                 _TESTNET value and would run against TEST infrastructure while real money \
+                 is accepted: {}. Set the _MAINNET variant of each (or delete the _TESTNET \
+                 one if the rail is unused). Mollie in particular would credit real balance \
+                 for a free test-checkout payment.",
+                stale.join(", ")
+            );
+            std::process::exit(1);
+        }
+    }
+
     // Refuse to boot with an ambiguous Gemini key configuration: a testnet key
     // AND a mainnet key both active means nobody knows which account is being
     // billed. Exactly one must be uncommented in .env.
