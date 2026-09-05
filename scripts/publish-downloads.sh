@@ -4,17 +4,17 @@
 # Uploads every release artefact found locally (macOS .dmg from `npm run tauri:build`,
 # Windows .exe and Linux .AppImage/.deb from the CI workflows, dropped into dist/downloads/) to the VPS and installs them into
 # /opt/scrai/site/dl, which Caddy serves as https://<site>/dl/<file>. Prints the sha256
-# of each file and the SCRAI_DL_* lines to paste into /opt/scrai/.env (the site shows a
+# of each file and the DL_* lines to paste into /opt/scrai/.env (the site shows a
 # download button only for links present there; `systemctl restart scrai-faucet` after).
 #
 # Usage:  scripts/publish-downloads.sh <admin_user>@<vps-host> [https://site-host] [--force]
-#         (target falls back to SCRAI_DEPLOY_TARGET; site host defaults to
+#         (target falls back to DEPLOY_TARGET; site host defaults to
 #          https://scrai-faucet.hermes-stakepool.de)
 #
 # One sudo prompt on the VPS (the target dir belongs to scrai, not the admin user).
 set -euo pipefail
 
-TARGET="${1:-${SCRAI_DEPLOY_TARGET:-}}"
+TARGET="${1:-${DEPLOY_TARGET:-}}"
 SITE="${2:-https://scrai-faucet.hermes-stakepool.de}"
 if [ -z "$TARGET" ]; then
   echo "usage: scripts/publish-downloads.sh <admin_user>@<vps-host> [https://site-host]" >&2
@@ -39,11 +39,11 @@ if [ ${#files[@]} -eq 0 ]; then
   exit 1
 fi
 
-# Manifest version: SCRAI_PUBLISH_VERSION wins (publishing an older public build while the
+# Manifest version: PUBLISH_VERSION wins (publishing an older public build while the
 # tree already carries the next version), else tauri.conf.json.
-ver="${SCRAI_PUBLISH_VERSION:-$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$SRC/src-tauri/tauri.conf.json" | head -1)}"
+ver="${PUBLISH_VERSION:-$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$SRC/src-tauri/tauri.conf.json" | head -1)}"
 for f in "${files[@]}"; do
-  case "$(basename "$f")" in tokumai_${ver}_*) ;; *) echo "   ! $(basename "$f") is not version $ver — set SCRAI_PUBLISH_VERSION or remove the file" >&2;; esac
+  case "$(basename "$f")" in tokumai_${ver}_*) ;; *) echo "   ! $(basename "$f") is not version $ver — set PUBLISH_VERSION or remove the file" >&2;; esac
 done
 echo "→ version $ver · local files:"
 for f in "${files[@]}"; do printf '   %s  (%s)\n' "$(basename "$f")" "$(du -h "$f" | cut -f1)"; done

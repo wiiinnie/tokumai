@@ -11,7 +11,7 @@
 //   - web search is a tool billed per call (no monthly free allowance like Gemini);
 //   - `store: false` so nothing is kept in OpenAI's response store; inputs are still
 //     retained ~30 days for abuse monitoring unless the org has Zero Data Retention
-//     (SCRAI_OPENAI_RETENTION_DAYS tells the app what to show);
+//     (OPENAI_RETENTION_DAYS tells the app what to show);
 //   - `safety_identifier`: a per-session, per-day hash so OpenAI can act on ONE user's
 //     abuse instead of throttling the whole org key. It never identifies a person and
 //     never links days.
@@ -58,13 +58,13 @@ pub fn api_key() -> Result<String, String> {
 /// Days of retention to show in the app's privacy badge: 30 by default (OpenAI's abuse
 /// monitoring window); 0 once the org has Zero Data Retention.
 pub fn retention_days() -> u64 {
-    std::env::var("SCRAI_OPENAI_RETENTION_DAYS").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(30)
+    crate::cfg("OPENAI_RETENTION_DAYS").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(30)
 }
 
 /// What one web-search tool call costs us (USD). OpenAI lists $10 / 1k calls for the
 /// reasoning models we offer (a $25 preview rate exists for non-reasoning models).
 pub fn search_usd_per_call() -> f64 {
-    std::env::var("SCRAI_OPENAI_SEARCH_USD").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(0.01)
+    crate::cfg("OPENAI_SEARCH_USD").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(0.01)
 }
 
 /// MODERATION_PREFILTER=1 (default): run the free moderation endpoint on the user's
@@ -98,7 +98,7 @@ pub fn day_number() -> u64 {
 fn salt() -> &'static str {
     static S: OnceLock<String> = OnceLock::new();
     S.get_or_init(|| {
-        std::env::var("SCRAI_ABUSE_SALT").ok().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| {
+        crate::cfg("ABUSE_SALT").ok().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| {
             // No salt configured → a fresh random one per boot (identifiers then also
             // rotate on restart, which is fine).
             use rand::RngCore;

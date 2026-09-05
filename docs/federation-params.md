@@ -124,7 +124,7 @@ multi-server build, not after. Full details: `docs/security/audit-2026-08-20.md`
   cannot overcharge or serve a diverging list. Margin folded into the signed list.
 - **H9 — replace the 1-of-1 trusted-dealer with real DKG (t≥2)** before real money on
   more than one server; the server currently boot-gates 1-of-1 real-money issuance behind
-  `SCRAI_ALLOW_SINGLE_AUTHORITY=1`. With a single VPS this stays a conscious override.
+  `ALLOW_SINGLE_AUTHORITY=1`. With a single VPS this stays a conscious override.
 - **Redeem-timing mixing (client privacy, crowd-gated — decided 2026-08-20).** Redeems
   are the Session-side events; decouple them in time from the account-side Withdraw
   (which happens at purchase). Design:

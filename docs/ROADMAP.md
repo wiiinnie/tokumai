@@ -49,8 +49,8 @@ Consequences:
 - **Drop:** operator clearing, per-operator price lists, foreign-authority verification,
   the "franchise"/settlement designs. A lot of code that never needs to exist.
 - **How other node operators still participate:** on the Nym layer, not the money layer.
-  They run the **entry gateways the scrai-servers hang off** (`SCRAI_GATEWAY_MASTER` /
-  `SCRAI_GATEWAY_FALLBACK`, today de01/at01/ch01) and are compensated through Nym's own
+  They run the **entry gateways the scrai-servers hang off** (`GATEWAY_MASTER` /
+  `GATEWAY_FALLBACK`, today de01/at01/ch01) and are compensated through Nym's own
   bandwidth economy — free in the current mode, later via paid bandwidth credentials
   (zk-nym). No money flows from us to them and no customer money flows through them, so
   nobody becomes a payment intermediary and nobody sees more than a Nym client's
@@ -79,7 +79,7 @@ That is fixed by publishing the key, not by adding shares. Before real money:
    one day.
 3. **Rehearse a key rotation** — clients already discard books minted under a foreign key
    and re-draw from entitlement; run it once on testnet, write down the steps.
-4. Rename the `SCRAI_ALLOW_SINGLE_AUTHORITY` override into a plain launch setting, so the
+4. Rename the `ALLOW_SINGLE_AUTHORITY` override into a plain launch setting, so the
    code says "decided", not "testnet leftover".
 
 **t-of-n (e.g. 2-of-3) is deferred** to the moment a second core exists anyway. What it

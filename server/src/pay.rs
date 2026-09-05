@@ -14,7 +14,7 @@
 //                tied to this account — the link dies at this step.
 //
 // Gateways: BTCPay (real; BTCPAY_URL/STORE_ID/API_KEY) or the fake (dev;
-// SCRAI_FAKE_PAYMENTS=1 — settles on first poll and says so loudly), native NYM
+// FAKE_PAYMENTS=1 — settles on first poll and says so loudly), native NYM
 // (nyx.rs), and cards via Mollie (MOLLIE_API_KEY — hosted checkout, polled, see
 // docs/card-payments.md).
 // ---------------------------------------------------------------------------
@@ -49,7 +49,7 @@ const INVOICE_GLOBAL_PER_MIN_DEFAULT: usize = 120;
 fn invoice_global_per_min() -> usize {
     static V: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     *V.get_or_init(|| {
-        std::env::var("SCRAI_INVOICE_PER_MIN")
+        crate::cfg("INVOICE_PER_MIN")
             .ok()
             .and_then(|v| v.trim().parse::<usize>().ok())
             .filter(|n| *n > 0)
@@ -65,20 +65,20 @@ pub fn now_ms() -> u64 {
 }
 
 fn purchase_tiers() -> Vec<u32> {
-    std::env::var("SCRAI_PURCHASE_TIERS")
+    crate::cfg("PURCHASE_TIERS")
         .ok()
         .map(|s| s.split(',').filter_map(|t| t.trim().parse().ok()).collect())
         .filter(|v: &Vec<u32>| !v.is_empty())
         .unwrap_or_else(|| vec![5, 10, 20, 50])
 }
 
-/// Smallest tile a card may buy (`SCRAI_CARD_MIN_USD`, default $10). Card fees carry a
+/// Smallest tile a card may buy (`CARD_MIN_USD`, default $10). Card fees carry a
 /// fixed €0.25 part that eats a third of a $1 tile, and a card payment can be charged
 /// back for weeks after the credit has been withdrawn as unlinkable ecash — so the card
 /// rail only sells tiles where the fee is a rounding error and the exposure is bounded.
 /// Reported to clients with the catalog so the app greys the smaller tiles itself.
 pub fn card_min_usd() -> u32 {
-    std::env::var("SCRAI_CARD_MIN_USD").ok().and_then(|v| v.trim().parse().ok()).filter(|v| *v > 0).unwrap_or(10)
+    crate::cfg("CARD_MIN_USD").ok().and_then(|v| v.trim().parse().ok()).filter(|v| *v > 0).unwrap_or(10)
 }
 
 /// True when a Mollie key is configured — the client shows the card row only then.
@@ -151,20 +151,20 @@ async fn mollie_methods() -> Vec<Value> {
     fetched
 }
 
-/// Testnet mode (`SCRAI_TESTNET=1`): the ONE extra thing it enables is a $1 invoice
+/// Testnet mode (`TESTNET=1`): the ONE extra thing it enables is a $1 invoice
 /// flagged `testnet:true`, which the faucet on the same host pays for a tester. The
 /// flag is reported to clients so the app can offer the toggle; without it a client
 /// asking for a testnet purchase is refused. This is the kill switch: unset it (or
 /// set 0) and restart, and both server and every client fall back to normal tiers.
-/// The ONE place that answers "is the fake payment rail on?" (SCRAI_FAKE_PAYMENTS=1).
+/// The ONE place that answers "is the fake payment rail on?" (FAKE_PAYMENTS=1).
 /// Everything that must only exist on a no-real-money server (the load-test mock
 /// provider) asks here, so the real-money interlocks stay in this file.
 pub fn fake_payments_enabled() -> bool {
-    std::env::var("SCRAI_FAKE_PAYMENTS").as_deref() == Ok("1")
+    crate::cfg("FAKE_PAYMENTS").as_deref() == Ok("1")
 }
 
 pub fn is_testnet_server() -> bool {
-    std::env::var("SCRAI_TESTNET")
+    crate::cfg("TESTNET")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false)
 }
@@ -177,16 +177,16 @@ pub const TESTNET_USD: u32 = 1;
 /// invoices and pay them without an invite code; every such credit is real model spend.
 /// Unset on a testnet server → testnet purchases are refused (fail closed).
 pub fn testnet_faucet_address() -> Option<String> {
-    std::env::var("SCRAI_TESTNET_FAUCET_ADDRESS").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+    crate::cfg("TESTNET_FAUCET_ADDRESS").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
 }
 
-/// Where testers redeem a testnet invoice (`SCRAI_FAUCET_URL`); shown in the app next to
+/// Where testers redeem a testnet invoice (`FAUCET_URL`); shown in the app next to
 /// the memo. Only reported while testnet mode is on.
 pub fn faucet_url() -> Option<String> {
     if !is_testnet_server() {
         return None;
     }
-    std::env::var("SCRAI_FAUCET_URL").ok().filter(|u| u.starts_with("https://"))
+    crate::cfg("FAUCET_URL").ok().filter(|u| u.starts_with("https://"))
 }
 
 /// Where our own website lives — the app builds the `/pay` hand-over link from it, so a
@@ -196,11 +196,11 @@ pub fn faucet_url() -> Option<String> {
 /// because the faucet note is a tester thing. The payment page is the opposite — it
 /// matters most on MAINNET. Reusing the faucet URL for it would have made the hand-over
 /// button silently disappear the moment testnet is switched off (caught 2026-09-04).
-/// `SCRAI_SITE_URL` wins; `SCRAI_FAUCET_URL` is the fallback so an existing .env keeps working.
+/// `SITE_URL` wins; `FAUCET_URL` is the fallback so an existing .env keeps working.
 pub fn site_url() -> Option<String> {
-    std::env::var("SCRAI_SITE_URL")
+    crate::cfg("SITE_URL")
         .ok()
-        .or_else(|| std::env::var("SCRAI_FAUCET_URL").ok())
+        .or_else(|| crate::cfg("FAUCET_URL").ok())
         .map(|u| u.trim().trim_end_matches('/').to_string())
         .filter(|u| u.starts_with("https://"))
 }
@@ -357,7 +357,7 @@ impl Pay {
         if self.global_hits.len() >= cap {
             if now - self.global_cap_logged_at > 60_000 {
                 self.global_cap_logged_at = now;
-                eprintln!("scrai-server: INVOICE LIMIT — {cap} invoices/min server-wide reached (SCRAI_INVOICE_PER_MIN, default {INVOICE_GLOBAL_PER_MIN_DEFAULT}) — refusing creates for up to 60 s");
+                eprintln!("scrai-server: INVOICE LIMIT — {cap} invoices/min server-wide reached (INVOICE_PER_MIN, default {INVOICE_GLOBAL_PER_MIN_DEFAULT}) — refusing creates for up to 60 s");
             }
             return Err("the server is issuing too many invoices right now — retry in ~60s".into());
         }
@@ -962,7 +962,7 @@ impl Gateway {
             // Testnet invoice: only the faucet wallet's transfer counts. No pin → never paid
             // (fail closed; `begin_create` refuses such invoices up front anyway).
             let pin = if inv.testnet {
-                Some(testnet_faucet_address().ok_or("testnet invoice but SCRAI_TESTNET_FAUCET_ADDRESS is unset — refusing to settle")?)
+                Some(testnet_faucet_address().ok_or("testnet invoice but TESTNET_FAUCET_ADDRESS is unset — refusing to settle")?)
             } else {
                 None
             };
@@ -994,7 +994,7 @@ pub enum Rail {
 
 impl Rail {
     pub fn from_env() -> Rail {
-        if std::env::var("SCRAI_FAKE_PAYMENTS").as_deref() == Ok("1") {
+        if crate::cfg("FAKE_PAYMENTS").as_deref() == Ok("1") {
             // The fake rail must never coexist with a real one: with NYX_* or BTCPAY_* also
             // set, `is_fake()` would read false (real-money interlock passes) while every
             // non-nyx invoice still settled for free. Refuse to boot in that mixed state.
@@ -1005,10 +1005,10 @@ impl Rail {
             .iter()
             .any(|k| std::env::var(k).map(|v| !v.trim().is_empty()).unwrap_or(false));
             if real {
-                eprintln!("scrai-server: FATAL: SCRAI_FAKE_PAYMENTS=1 together with a real payment rail (NYX_*/BTCPAY_*/MOLLIE_*) — remove one. Refusing to start.");
+                eprintln!("scrai-server: FATAL: FAKE_PAYMENTS=1 together with a real payment rail (NYX_*/BTCPAY_*/MOLLIE_*) — remove one. Refusing to start.");
                 std::process::exit(1);
             }
-            eprintln!("scrai-server: SCRAI_FAKE_PAYMENTS=1 — invoices settle on first poll. DEV ONLY.");
+            eprintln!("scrai-server: FAKE_PAYMENTS=1 — invoices settle on first poll. DEV ONLY.");
             return Rail::Fake;
         }
         // Network-scoped (BTCPAY_URL_MAINNET / _TESTNET, legacy BTCPAY_URL fallback).
@@ -1216,7 +1216,7 @@ impl CardRail {
                 let redirect_url = crate::net_var("MOLLIE_REDIRECT_URL")
                     .filter(|u| u.starts_with("https://"))
                     .or_else(|| {
-                        std::env::var("SCRAI_FAUCET_URL")
+                        crate::cfg("FAUCET_URL")
                             .ok()
                             .filter(|u| u.starts_with("https://"))
                             .map(|u| format!("{}/paid", u.trim_end_matches('/')))
@@ -1404,7 +1404,7 @@ mod tests {
     use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
     use ed25519_dalek::{Signer, SigningKey};
 
-    /// SCRAI_TESTNET is process-global and decides whether a plain $5 create is accepted,
+    /// TESTNET is process-global and decides whether a plain $5 create is accepted,
     /// so the one test that flips it takes the write side; invoice-creating tests read.
     static ENV_LOCK: std::sync::RwLock<()> = std::sync::RwLock::new(());
 
@@ -1443,7 +1443,7 @@ mod tests {
         }
     }
 
-    // Faucet: on a testnet server (SCRAI_TESTNET=1) the ONLY purchase is a $1 `testnet:true`
+    // Faucet: on a testnet server (TESTNET=1) the ONLY purchase is a $1 `testnet:true`
     // invoice in native NYM, and only with the faucet wallet pinned; a "real" purchase there
     // is refused (test chain = free coins). Without the env the flag itself is refused. The
     // flag survives into the invoice so admin/faucet can see it.
@@ -1462,14 +1462,14 @@ mod tests {
             assert!(r["error"].as_str().unwrap_or("").contains(needle), "{r}");
         };
 
-        std::env::remove_var("SCRAI_TESTNET");
-        std::env::remove_var("SCRAI_TESTNET_FAUCET_ADDRESS");
+        std::env::remove_var("TESTNET");
+        std::env::remove_var("TESTNET_FAUCET_ADDRESS");
         let mut pay = Pay::default();
         refused(&mut pay, req(1, true, "nyx", "n1"), "testnet");
         // $1 is not a normal tier either
         refused(&mut pay, req(1, false, "nyx", "n2"), "one of");
 
-        std::env::set_var("SCRAI_TESTNET", "1");
+        std::env::set_var("TESTNET", "1");
         // a normal purchase on a testnet server is refused outright
         refused(&mut pay, req(5, false, "nyx", "n3"), "testnet server");
         refused(&mut pay, req(5, true, "nyx", "n4"), "$1");
@@ -1478,11 +1478,11 @@ mod tests {
         // fail closed: no faucet wallet pinned → no testnet purchase at all
         refused(&mut pay, req(1, true, "nyx", "n6"), "faucet wallet");
 
-        std::env::set_var("SCRAI_TESTNET_FAUCET_ADDRESS", "n1faucet");
+        std::env::set_var("TESTNET_FAUCET_ADDRESS", "n1faucet");
         let PayStep::Pending(p) = pay.begin(req(1, true, "nyx", "n7").to_string().as_bytes(), &gw) else { panic!("create needs the gateway") };
         let r: Value = serde_json::from_slice(&pay.finish(run_gateway(p, &gw).await, &gw)).unwrap();
-        std::env::remove_var("SCRAI_TESTNET");
-        std::env::remove_var("SCRAI_TESTNET_FAUCET_ADDRESS");
+        std::env::remove_var("TESTNET");
+        std::env::remove_var("TESTNET_FAUCET_ADDRESS");
         // the gate passed; this test gateway has no NYM rail, and a testnet invoice must
         // never fall back to the processor rail — so it is refused there, not raised on BTC
         assert!(r["error"].as_str().unwrap_or("").contains("NYM rail"), "{r}");
@@ -1566,13 +1566,13 @@ mod tests {
     }
 
     /// Card rules live in begin_create: no Mollie key → no card sales at all; with a key,
-    /// tiles below SCRAI_CARD_MIN_USD are refused BEFORE any gateway call. Env-mutating →
+    /// tiles below CARD_MIN_USD are refused BEFORE any gateway call. Env-mutating →
     /// write lock.
     #[tokio::test]
     async fn card_purchases_need_a_key_and_the_minimum_tile() {
         let _env = ENV_LOCK.write().unwrap_or_else(|e| e.into_inner());
-        std::env::remove_var("SCRAI_TESTNET");
-        std::env::remove_var("SCRAI_CARD_MIN_USD");
+        std::env::remove_var("TESTNET");
+        std::env::remove_var("CARD_MIN_USD");
         for k in ["MOLLIE_API_KEY", "MOLLIE_API_KEY_TESTNET", "MOLLIE_API_KEY_MAINNET"] {
             std::env::remove_var(k);
         }
@@ -1754,7 +1754,7 @@ mod card_tests {
 
     #[test]
     fn card_min_defaults_to_ten() {
-        std::env::remove_var("SCRAI_CARD_MIN_USD");
+        std::env::remove_var("CARD_MIN_USD");
         assert_eq!(card_min_usd(), 10);
     }
 }

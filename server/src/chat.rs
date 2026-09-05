@@ -52,20 +52,20 @@ const MAX_REQUEST_BYTES: usize = 48 * 1024 * 1024;
 const MAX_MESSAGES: usize = 2_000;
 
 /// Assumed visible-answer budget when a client sends no maxTokens of its own
-/// (mirrors the TS server's SCRAI_DEFAULT_MAX_TOKENS).
+/// (mirrors the TS server's DEFAULT_MAX_TOKENS).
 fn default_max_tokens() -> u64 {
-    std::env::var("SCRAI_DEFAULT_MAX_TOKENS")
+    crate::cfg("DEFAULT_MAX_TOKENS")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(4096)
 }
 
-/// Cap on thinking tokens (mirrors the TS server's SCRAI_THINKING_BUDGET). On Gemini
+/// Cap on thinking tokens (mirrors the TS server's THINKING_BUDGET). On Gemini
 /// these bill AS OUTPUT but are NOT bounded by maxOutputTokens, so without a cap a
 /// thinking model can generate far more billed output than the answer limit.
 /// 0 disables thinking; raise it to trade cost for more reasoning depth.
 fn thinking_budget() -> u64 {
-    std::env::var("SCRAI_THINKING_BUDGET")
+    crate::cfg("THINKING_BUDGET")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(2048)
@@ -423,7 +423,7 @@ pub fn reserve(
         return err(&format!("model \"{model}\" has no price entry on this server"));
     }
     // …and a priced model still has to be one this server OFFERS. The catalog's rules
-    // (SCRAI_PROVIDERS, the OpenAI id allowlist, "nano only" on a testnet server) shape
+    // (PROVIDERS, the OpenAI id allowlist, "nano only" on a testnet server) shape
     // the picker; asking them again here is what makes them real. Before this check a
     // hand-crafted request reached any priced model, including ones the operator had
     // switched off — see `catalog::model_offered`.
@@ -501,7 +501,7 @@ pub fn reserve(
         Reserve::Insufficient { balance } => {
             return err(&format!(
                 // Wire string. 0.4.x clients match `contains("not enough SCRAI")` to trigger the
-                // auto-redeem; keep that phrase until they are gated out (SCRAI_MIN_APP).
+                // auto-redeem; keep that phrase until they are gated out (MIN_APP).
                 "not enough SCRAI: this request reserves up to {ceiling}, balance is {balance}"
             ))
         }
@@ -709,16 +709,16 @@ async fn chat(
     }
 }
 
-/// LOAD-TEST ONLY: `SCRAI_MOCK_PROVIDER=<delay_ms>[:<answer_chars>]` makes every chat return
+/// LOAD-TEST ONLY: `MOCK_PROVIDER=<delay_ms>[:<answer_chars>]` makes every chat return
 /// a canned answer after `delay_ms` instead of calling a provider — so a load test drives
 /// the whole money path (reserve → settle → persist → reply over the mixnet) without a
-/// single model call. Honoured ONLY together with SCRAI_FAKE_PAYMENTS=1: on that server no
+/// single model call. Honoured ONLY together with FAKE_PAYMENTS=1: on that server no
 /// real money can arrive (pay.rs refuses fake + real rails), so nobody is charged for a
 /// fake answer. On any other server the variable is ignored (main.rs logs that at boot).
 pub fn mock_provider() -> Option<(u64, usize)> {
     static PARSED: std::sync::OnceLock<Option<(u64, usize)>> = std::sync::OnceLock::new();
     *PARSED.get_or_init(|| {
-        let raw = std::env::var("SCRAI_MOCK_PROVIDER").ok()?;
+        let raw = crate::cfg("MOCK_PROVIDER").ok()?;
         if !crate::pay::fake_payments_enabled() {
             return None;
         }
@@ -1492,7 +1492,7 @@ mod tests {
         let ra: Value = serde_json::from_slice(&sa.reply).unwrap();
         // the provider cost travels beside the reply, never inside it (release servers)
         assert!(sa.provider_cost.unwrap() > 0.0);
-        assert!(ra["usage"]["billing"]["costScrai"].is_null() || std::env::var("SCRAI_DEV_AUDIT").as_deref() == Ok("1"));
+        assert!(ra["usage"]["billing"]["costScrai"].is_null() || crate::cfg("DEV_AUDIT").as_deref() == Ok("1"));
         let rb: Value = serde_json::from_slice(&settle(*b, Ok(("hi".to_string(), usage, None)), &mut sessions, &mut replies).reply).unwrap();
 
         let cost_a = ra["cost"].as_u64().unwrap();
@@ -1597,10 +1597,10 @@ mod tests {
 }
 
 /// What the provider billed us for one answer. That number is the margin in plain sight,
-/// so it leaves the server ONLY when `SCRAI_DEV_AUDIT=1` (a developer's own server);
+/// so it leaves the server ONLY when `DEV_AUDIT=1` (a developer's own server);
 /// release servers send null and the app's cost-audit overlay has nothing to show.
 fn dev_audit_cost(cost_scrai: f64) -> serde_json::Value {
-    if std::env::var("SCRAI_DEV_AUDIT").as_deref() == Ok("1") {
+    if crate::cfg("DEV_AUDIT").as_deref() == Ok("1") {
         serde_json::json!(cost_scrai)
     } else {
         serde_json::Value::Null

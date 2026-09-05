@@ -21,7 +21,7 @@
 #   scripts/loadtest-remote.sh server-start <user@host>       fake-payments + mock-provider server on the box
 #                                                              (wipes the SDK's reply-SURB sqlite first — it goes
 #                                                              inconsistent after a hard stop and then refuses to boot)
-#                                                              (env: SCRAI_GATEWAY_MASTER, SCRAI_GATEWAY_FALLBACK, MOCK)
+#                                                              (env: GATEWAY_MASTER, GATEWAY_FALLBACK, MOCK)
 #   scripts/loadtest-remote.sh server-addr  <user@host>       its addresses (comma-joined, for `run`)
 #   scripts/loadtest-remote.sh server-stop  <user@host>
 #   scripts/loadtest-remote.sh clean   <user@host>            rm -rf the root dir (everything)
@@ -119,22 +119,22 @@ fetch)
 server-start)
   MOCK="${MOCK:-1500:800}"
   rssh "mkdir -p $R/server/data && cat > $R/server/.env <<ENV
-SCRAI_FAKE_PAYMENTS=1
-SCRAI_MOCK_PROVIDER=$MOCK
-SCRAI_DATA=$R/server/data
-SCRAI_PRICING=$R/src/pricing.json
-SCRAI_MIX_BURST=1
-SCRAI_MAX_INFLIGHT_CHATS=${SCRAI_MAX_INFLIGHT_CHATS:-64}
-${SCRAI_GATEWAY_MASTER:+SCRAI_GATEWAY_MASTER=$SCRAI_GATEWAY_MASTER}
-${SCRAI_GATEWAY_FALLBACK:+SCRAI_GATEWAY_FALLBACK=$SCRAI_GATEWAY_FALLBACK}
-${SCRAI_MIX_CLIENTS:+SCRAI_MIX_CLIENTS=$SCRAI_MIX_CLIENTS}
+FAKE_PAYMENTS=1
+MOCK_PROVIDER=$MOCK
+DATA=$R/server/data
+PRICING=$R/src/pricing.json
+MIX_BURST=1
+MAX_INFLIGHT_CHATS=${MAX_INFLIGHT_CHATS:-64}
+${GATEWAY_MASTER:+GATEWAY_MASTER=$GATEWAY_MASTER}
+${GATEWAY_FALLBACK:+GATEWAY_FALLBACK=$GATEWAY_FALLBACK}
+${MIX_CLIENTS:+MIX_CLIENTS=$MIX_CLIENTS}
 ENV
 cd $R/server && rm -f data/addresses.txt data/.nym-server/persistent_reply_store.sqlite* && setsid nohup $R/src/target/release/scrai-server > $R/logs/server.log 2>&1 < /dev/null &
 disown; echo started"
   echo "→ waiting for the server's mixnet address(es) …"
   for _ in $(seq 1 120); do
     N=$(rssh "cat $R/server/data/addresses.txt 2>/dev/null | wc -l" | tr -d ' ')
-    [ "${N:-0}" -ge "${SCRAI_MIX_CLIENTS:-1}" ] && break
+    [ "${N:-0}" -ge "${MIX_CLIENTS:-1}" ] && break
     sleep 3
   done
   rssh "cat $R/server/data/addresses.txt; grep -E 'MOCK|FAKE|identities|FATAL' $R/logs/server.log | head -5"

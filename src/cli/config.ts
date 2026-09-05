@@ -97,7 +97,7 @@ export interface Config {
   }>;
 }
 
-const FILE = process.env.SCRAI_CONFIG ?? join(homedir(), ".scrai", "cli.json");
+const FILE = (process.env.CONFIG ?? process.env.SCRAI_CONFIG) ?? join(homedir(), ".scrai", "cli.json");
 
 const DEFAULTS: Config = {
   clientId: "scrai-client",

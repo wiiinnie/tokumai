@@ -217,7 +217,7 @@ console.log("all account checks passed (recovery, typos, purpose binding, layer 
 import { Issuer } from "../src/money/issuer.js";
 import { FakeGateway } from "../src/money/gateway.js";
 
-process.env.SCRAI_FAKE_PAYMENTS = "1";
+process.env.FAKE_PAYMENTS = "1";
 const shop = new MoneyStore(":memory:");
 const gw = new FakeGateway();
 const issuer = new Issuer(shop, gw, mint);
@@ -292,9 +292,9 @@ assert.equal(issuer.settle("fake-nonexistent"), null);
 
 // The fake gateway refuses to exist without its explicit opt-in — it accepts
 // money that does not exist, so it must never come up by accident.
-delete process.env.SCRAI_FAKE_PAYMENTS;
+delete process.env.FAKE_PAYMENTS; delete process.env.SCRAI_FAKE_PAYMENTS;
 assert.throws(() => new FakeGateway(), /SCRAI_FAKE_PAYMENTS=1/);
-process.env.SCRAI_FAKE_PAYMENTS = "1";
+process.env.FAKE_PAYMENTS = "1";
 
 shop.close();
 console.log("all purchase checks passed (idempotent settlement, entitlement, limits)");

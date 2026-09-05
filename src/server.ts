@@ -41,8 +41,8 @@ import type { ChatMessage, GeneratedImage, TokenUsage } from "./types.js";
 // Payment gateway: real BTCPay when BTCPAY_URL is set in .env (buy is a real
 // invoice paid over Bitcoin/Lightning testnet); otherwise fall back to the fake
 // gateway so the UI still runs with no payment backend at all.
-if (!process.env.BTCPAY_URL && process.env.SCRAI_FAKE_PAYMENTS !== "1") {
-  process.env.SCRAI_FAKE_PAYMENTS = "1";
+if (!process.env.BTCPAY_URL && (process.env.FAKE_PAYMENTS ?? process.env.SCRAI_FAKE_PAYMENTS) !== "1") {
+  process.env.FAKE_PAYMENTS = "1";
 }
 
 // Gemini key slots (same rule as the Rust server): keep both keys in .env,
@@ -64,11 +64,11 @@ if (!process.env.BTCPAY_URL && process.env.SCRAI_FAKE_PAYMENTS !== "1") {
 }
 
 const PORT = Number(process.env.PORT ?? 8787);
-const HOST = process.env.SCRAI_DEV_HOST ?? "127.0.0.1";
+const HOST = (process.env.DEV_HOST ?? process.env.SCRAI_DEV_HOST) ?? "127.0.0.1";
 const isLoopback = (h: string) => h === "127.0.0.1" || h === "::1" || h === "localhost";
 
-const DEFAULT_MAX_TOKENS = Number(process.env.SCRAI_DEFAULT_MAX_TOKENS ?? 4096);
-const THINKING_BUDGET = Number(process.env.SCRAI_THINKING_BUDGET ?? 2048);
+const DEFAULT_MAX_TOKENS = Number((process.env.DEFAULT_MAX_TOKENS ?? process.env.SCRAI_DEFAULT_MAX_TOKENS) ?? 4096);
+const THINKING_BUDGET = Number((process.env.THINKING_BUDGET ?? process.env.SCRAI_THINKING_BUDGET) ?? 2048);
 
 // ---- providers ------------------------------------------------------------
 const PROVIDERS = [geminiAdapter, geminiImageAdapter];
@@ -79,9 +79,10 @@ if (catalog().length === 0) {
 }
 
 // ---- money layer (in-process) ---------------------------------------------
-const money = new MoneyStore(process.env.SCRAI_DEV_MONEY_DB ?? "./data/dev-money.db");
+const money = new MoneyStore((process.env.DEV_MONEY_DB ?? process.env.SCRAI_DEV_MONEY_DB) ?? "./data/dev-money.db");
+const issuerSecret = process.env.ISSUER_SECRET ?? process.env.SCRAI_ISSUER_SECRET;
 const mint = new Mint(
-  process.env.SCRAI_ISSUER_SECRET ? Buffer.from(process.env.SCRAI_ISSUER_SECRET, "utf8") : money.getOrCreateMintSeed(),
+  issuerSecret ? Buffer.from(issuerSecret, "utf8") : money.getOrCreateMintSeed(),
 );
 const gateway = selectGateway();
 const devGateways: Record<string, PaymentGateway> = { btc: gateway };
@@ -98,7 +99,7 @@ interface DevWallet {
   sessionIndex: number;
   ecash: Array<Array<{ amount: number; secret: string; C: string }>>; // held packets
 }
-const WALLET_FILE = process.env.SCRAI_DEV_WALLET ?? "./data/dev-ui.json";
+const WALLET_FILE = (process.env.DEV_WALLET ?? process.env.SCRAI_DEV_WALLET) ?? "./data/dev-ui.json";
 function loadWallet(): DevWallet {
   try {
     return { sessionIndex: 0, ecash: [], ...JSON.parse(readFileSync(WALLET_FILE, "utf8")) };
@@ -211,7 +212,7 @@ function statePayload() {
     devBuild: true,
     appVersion: APP_VERSION,
     fakePayments,
-    testnet: process.env.SCRAI_TESTNET === "1",
+    testnet: (process.env.TESTNET ?? process.env.SCRAI_TESTNET) === "1",
     gateway: issuer.gatewayName,
     models: catalog().map((m) => ({ ...m, rate: retailRate(m.model) })),
     pricingVersion: pricingVersion(),
@@ -298,7 +299,7 @@ const server = createServer(async (req, res) => {
       if (!w.mnemonic) return void sendJson(res, 400, { error: "no account — create one first" });
       const { usd, method, testnet } = await readJson<{ usd?: number; method?: string; testnet?: boolean }>(req);
       // Mirrors the Rust server: a $1 testnet purchase only when the bridge runs with SCRAI_TESTNET=1.
-      const testnetOk = testnet === true && process.env.SCRAI_TESTNET === "1" && Number(usd) === 1;
+      const testnetOk = testnet === true && (process.env.TESTNET ?? process.env.SCRAI_TESTNET) === "1" && Number(usd) === 1;
       if (!testnetOk && !purchaseTiers().includes(Number(usd))) {
         return void sendJson(res, 400, { error: `fixed amounts only: ${purchaseTiers().map((t) => `$${t}`).join(", ")}` });
       }

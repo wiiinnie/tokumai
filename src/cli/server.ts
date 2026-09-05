@@ -42,36 +42,35 @@ for (const a of PROVIDERS) {
   if (!registerIfAvailable(a)) dormant.push(`${a.vendor} (set ${a.apiKeyEnv})`);
 }
 
-const CLIENT_ID = process.env.SCRAI_SERVER_NYM_ID ?? "scrai-server";
-const WS_PORT = Number(process.env.SCRAI_NYM_WS_PORT ?? DEFAULT_WS_PORT);
+const CLIENT_ID = (process.env.SERVER_NYM_ID ?? process.env.SCRAI_SERVER_NYM_ID) ?? "scrai-server";
+const WS_PORT = Number((process.env.NYM_WS_PORT ?? process.env.SCRAI_NYM_WS_PORT) ?? DEFAULT_WS_PORT);
 
 // Chunk batching. Every frame is a separate mixnet message that costs the
 // client a reply SURB, so per-token frames would be wasteful and slow. Batching
 // to ~a short phrase keeps it feeling live at a small fraction of the frames.
-const FLUSH_CHARS = Number(process.env.SCRAI_FLUSH_CHARS ?? 120);
-const FLUSH_MS = Number(process.env.SCRAI_FLUSH_MS ?? 500);
+const FLUSH_CHARS = Number((process.env.FLUSH_CHARS ?? process.env.SCRAI_FLUSH_CHARS) ?? 120);
+const FLUSH_MS = Number((process.env.FLUSH_MS ?? process.env.SCRAI_FLUSH_MS) ?? 500);
 
 /** Warn once at startup when the hand-maintained price table is older than this. */
-const STALE_PRICING_DAYS = Number(process.env.SCRAI_STALE_PRICING_DAYS ?? 30);
+const STALE_PRICING_DAYS = Number((process.env.STALE_PRICING_DAYS ?? process.env.SCRAI_STALE_PRICING_DAYS) ?? 30);
 
 // Payment enforcement. On by default — an unenforced server is one where every
 // client rides free, which is the state this whole layer exists to end.
-const REQUIRE_PAYMENT = process.env.SCRAI_REQUIRE_PAYMENT !== "0";
+const REQUIRE_PAYMENT = (process.env.REQUIRE_PAYMENT ?? process.env.SCRAI_REQUIRE_PAYMENT) !== "0";
 // Dev minting hands out funding tokens for nothing. It is what stands in for a
 // payment provider until one exists, and it must never be on in public.
-const ALLOW_DEV_MINT = process.env.SCRAI_DEV_MINT === "1";
-const SESSION_TTL_MS = Number(process.env.SCRAI_SESSION_TTL_SEC ?? 30 * 86_400) * 1000;
+const ALLOW_DEV_MINT = (process.env.DEV_MINT ?? process.env.SCRAI_DEV_MINT) === "1";
+const SESSION_TTL_MS = Number((process.env.SESSION_TTL_SEC ?? process.env.SCRAI_SESSION_TTL_SEC) ?? 30 * 86_400) * 1000;
 
-const money = new MoneyStore(process.env.SCRAI_MONEY_DB ?? "./data/money.db");
+const money = new MoneyStore((process.env.MONEY_DB ?? process.env.SCRAI_MONEY_DB) ?? "./data/money.db");
 
 // The mint's whole keyset is derived from one seed. SCRAI_ISSUER_SECRET when
 // set (keeps the seed out of the DB); otherwise a persisted random seed, so
 // tokens survive a restart. The mint exists independently of the gateway so
 // that redeeming already-bought tokens and serving the keyset keep working on a
 // server that cannot sell new TOKU.
-const mintSeed = process.env.SCRAI_ISSUER_SECRET
-  ? Buffer.from(process.env.SCRAI_ISSUER_SECRET, "utf8")
-  : money.getOrCreateMintSeed();
+const issuerSecret = process.env.ISSUER_SECRET ?? process.env.SCRAI_ISSUER_SECRET;
+const mintSeed = issuerSecret ? Buffer.from(issuerSecret, "utf8") : money.getOrCreateMintSeed();
 const mint = new Mint(mintSeed);
 
 // The issuer is only wired up when a gateway is configured. Without one the
@@ -132,7 +131,7 @@ function ceilingFor(req: { model: string; messages: Array<{ content: string; att
 }
 
 /** Assumed output ceiling when a client sends no maxTokens of its own. */
-const DEFAULT_MAX_TOKENS = Number(process.env.SCRAI_DEFAULT_MAX_TOKENS ?? 4096);
+const DEFAULT_MAX_TOKENS = Number((process.env.DEFAULT_MAX_TOKENS ?? process.env.SCRAI_DEFAULT_MAX_TOKENS) ?? 4096);
 
 /**
  * Cap on thinking tokens. On Gemini these bill AS OUTPUT but are NOT bounded by
@@ -143,7 +142,7 @@ const DEFAULT_MAX_TOKENS = Number(process.env.SCRAI_DEFAULT_MAX_TOKENS ?? 4096);
  * the two cannot drift. 0 disables thinking; raise it to trade a larger
  * reservation for more reasoning depth.
  */
-const THINKING_BUDGET = Number(process.env.SCRAI_THINKING_BUDGET ?? 2048);
+const THINKING_BUDGET = Number((process.env.THINKING_BUDGET ?? process.env.SCRAI_THINKING_BUDGET) ?? 2048);
 
 /**
  * The output the provider is ALLOWED to produce, split into the visible answer
@@ -253,9 +252,9 @@ function resolveUploads(messages: ChatMessage[]): ChatMessage[] {
 // caps stop one account spamming; the global cap protects BTCPay from a swarm of
 // throwaway accounts. Sliding windows; opportunistically pruned so a throwaway
 // swarm cannot grow the map without bound.
-const INVOICE_PER_ACCT = Number(process.env.SCRAI_INVOICE_PER_ACCT ?? 5);
-const INVOICE_ACCT_WINDOW_MS = Number(process.env.SCRAI_INVOICE_ACCT_WINDOW_SEC ?? 600) * 1000;
-const INVOICE_GLOBAL_PER_MIN = Number(process.env.SCRAI_INVOICE_GLOBAL_PER_MIN ?? 30);
+const INVOICE_PER_ACCT = Number((process.env.INVOICE_PER_ACCT ?? process.env.SCRAI_INVOICE_PER_ACCT) ?? 5);
+const INVOICE_ACCT_WINDOW_MS = Number((process.env.INVOICE_ACCT_WINDOW_SEC ?? process.env.SCRAI_INVOICE_ACCT_WINDOW_SEC) ?? 600) * 1000;
+const INVOICE_GLOBAL_PER_MIN = Number((process.env.INVOICE_GLOBAL_PER_MIN ?? process.env.SCRAI_INVOICE_GLOBAL_PER_MIN) ?? 30);
 const invoiceHits = new Map<string, number[]>();
 let invoiceGlobal: number[] = [];
 
@@ -720,7 +719,7 @@ async function main(): Promise<void> {
   if (catalog().length === 0) fail("no PRICED model is available — add prices to pricing.json for models your keys can serve");
 
   console.log(`[nym] starting nym-client "${CLIENT_ID}"…`);
-  const running = await nym.start(CLIENT_ID, { port: WS_PORT, verbose: process.env.SCRAI_VERBOSE === "1" });
+  const running = await nym.start(CLIENT_ID, { port: WS_PORT, verbose: (process.env.VERBOSE ?? process.env.SCRAI_VERBOSE) === "1" });
   const sock = await NymSocket.connect(WS_PORT);
   const address = await sock.selfAddress();
 
@@ -740,7 +739,7 @@ async function main(): Promise<void> {
   // confirm an hour after the client gave up waiting, and nothing else would
   // ever notice.
   if (issuer) {
-    const every = Number(process.env.SCRAI_SWEEP_SEC ?? 120) * 1000;
+    const every = Number((process.env.SWEEP_SEC ?? process.env.SCRAI_SWEEP_SEC) ?? 120) * 1000;
     setInterval(() => {
       void issuer
         .sweep()

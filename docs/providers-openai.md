@@ -12,13 +12,13 @@ day: Responses API shapes, moderation endpoint, prices.
 | reasoning | `thinkingBudget` tokens | `reasoning.effort` low/medium/high, mapped from the app's slider (≤1k → low, ≤8k → medium, else high); reasoning tokens are billed as **output** and count against `max_output_tokens` (= maxTokens + budget) |
 | latency | seconds | reasoning answers can take 1–2 min → catalog `timeoutMs` 180 000, the app waits that long for these models |
 | caching | explicit | automatic; `input_tokens_details.cached_tokens` billed at `cached_in` |
-| web search | grounding, 5 000 free queries/month, then $14/1k | `web_search` tool, **every call billed** ($10/1k for our reasoning models; `SCRAI_OPENAI_SEARCH_USD`), reserved at 10 calls/turn like grounding |
+| web search | grounding, 5 000 free queries/month, then $14/1k | `web_search` tool, **every call billed** ($10/1k for our reasoning models; `OPENAI_SEARCH_USD`), reserved at 10 calls/turn like grounding |
 | training | paid tier: no | API: no (business terms) |
-| retention | brief abuse logging | ~30 days abuse monitoring unless the org has Zero Data Retention → badge shows `retentionDays` (`SCRAI_OPENAI_RETENTION_DAYS`) |
+| retention | brief abuse logging | ~30 days abuse monitoring unless the org has Zero Data Retention → badge shows `retentionDays` (`OPENAI_RETENTION_DAYS`) |
 | storage | — | `store: false` on every request (nothing kept in OpenAI's response store) |
 | attachments | inlineData (images, PDFs, text) | `input_image` (images), `input_file` (PDF); other types are named but not sent |
 | model list | live from the provider ∩ pricing.json | fixed allowlist (`OPENAI_MODELS` in catalog.rs) ∩ pricing.json — `/v1/models` mixes in embeddings/TTS/fine-tunes |
-| concurrency | `SCRAI_MAX_INFLIGHT_CHATS` | own pool `SCRAI_MAX_INFLIGHT_OPENAI` (rate limits are per org tier; get the account to tier ≥ 2 before launch) |
+| concurrency | `MAX_INFLIGHT_CHATS` | own pool `MAX_INFLIGHT_OPENAI` (rate limits are per org tier; get the account to tier ≥ 2 before launch) |
 | decline text | "Declined by Google (…)" | "Declined by OpenAI (policy / content filter / moderation: …)" |
 
 ## Anonymous users behind one org key
@@ -28,7 +28,7 @@ safeguards, (c) respond to abuse reports. What we do:
 
 - **Identifier**: `sha256(salt | UTC day | session id)[..24]` — stable within a day so OpenAI
   can act on ONE user's abuse instead of throttling our whole key; different tomorrow; never
-  the raw session id, never an account. Salt from `SCRAI_ABUSE_SALT` (else random per boot).
+  the raw session id, never an account. Salt from `ABUSE_SALT` (else random per boot).
 - **Prefilter**: `MODERATION_PREFILTER=1` runs the free `omni-moderation-latest` on the
   user's latest turn (text + images) before the model call; flagged input is declined by us.
   Only OpenAI-routed chats — the prompt goes to OpenAI anyway, so no extra data flow. A

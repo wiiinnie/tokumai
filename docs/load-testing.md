@@ -29,7 +29,7 @@ Four distinct levers, each with its own signature in the numbers:
 |---|---|---|
 | mixnet ingress (server's single client/gateway) | `ping` p50 rises with clients even though the server is idle; "duplicate fragment" noise; timeouts with no `busy` errors | more server Nym identities (multi-address server, §"Load distribution") |
 | dispatch loop / disk | `session.status` + `redeem` slow down together; server CPU/iowait up | batch persistence, move signature checks off-loop |
-| chat cap (64) / provider | `busy: the server is busy with too many chats` after ~30 s waits; p99 ≈ QUEUE_WAIT | raise `SCRAI_MAX_INFLIGHT_CHATS`, more provider keys, second server |
+| chat cap (64) / provider | `busy: the server is busy with too many chats` after ~30 s waits; p99 ≈ QUEUE_WAIT | raise `MAX_INFLIGHT_CHATS`, more provider keys, second server |
 | reply size (SURBs) | big `models`/image replies time out while `ping` is fine | fewer/lighter replies, chunking (already done for images) |
 
 `ping` measures the mixnet + loop only (no state, no provider) — it is the baseline every
@@ -50,18 +50,18 @@ scripts/loadtest.sh local ping 20,50,100  # ingress + loop only
 The script starts a **throw-away server** under `.loadtest/server/` (own `.env`, own
 data dir, own Nym identity) with
 
-- `SCRAI_FAKE_PAYMENTS=1` — invoices settle on the first poll, so each simulated user can
+- `FAKE_PAYMENTS=1` — invoices settle on the first poll, so each simulated user can
   really buy $5, withdraw a 500-coin ticketbook and redeem 100 coins, exactly like the app;
-- `SCRAI_MOCK_PROVIDER=1500:800` — every chat answers a canned 800-char text after 1.5 s
+- `MOCK_PROVIDER=1500:800` — every chat answers a canned 800-char text after 1.5 s
   instead of calling Gemini. The variable is **only honoured together with
-  `SCRAI_FAKE_PAYMENTS=1`** (a real-money server ignores it and says so at boot), so it can
+  `FAKE_PAYMENTS=1`** (a real-money server ignores it and says so at boot), so it can
   never fake an answer someone paid for.
 
 Then it runs one `scrai-loadtest` per stage. The server log is `.loadtest/server/server.log`
 (`grep -c busy` for cap refusals). Knobs: `REQUESTS` (per user), `THINK_MS` (pause between a
 user's requests — 0 is a stress test, 10 000–30 000 is a realistic chat user), `RAMP_MS`,
 `MOCK` (`<delay_ms>:<chars>`, e.g. `MOCK=6000:2500` for a long thinking answer),
-`SCRAI_MAX_INFLIGHT_CHATS`, `EXTRA="--fast"` (mixnet slider at the performance end).
+`MAX_INFLIGHT_CHATS`, `EXTRA="--fast"` (mixnet slider at the performance end).
 
 The local box runs the server **and** N Nym clients, so above ~50 clients the harness
 itself starts to matter (each client is a full Sphinx client; expect ~1 CPU-second and
@@ -147,19 +147,19 @@ Compare runs with `--fast` (the app's performance slider) — the mixnet's own p
 delays dominate small-request latency, so the *same* server looks 2–3× faster to a client
 at the performance end.
 
-## Multi-identity server (`SCRAI_MIX_CLIENTS`) — built and measured 2026-09-02
+## Multi-identity server (`MIX_CLIENTS`) — built and measured 2026-09-02
 
-One process, one state, K Nym identities on K gateways: `SCRAI_GATEWAY_MASTER` pins the
-primary, `SCRAI_GATEWAY_FALLBACK=gw1,gw2` pins the extra identities (one each; K follows
-from the list, `SCRAI_MIX_CLIENTS` only overrides it). A pin is applied on every start and
+One process, one state, K Nym identities on K gateways: `GATEWAY_MASTER` pins the
+primary, `GATEWAY_FALLBACK=gw1,gw2` pins the extra identities (one each; K follows
+from the list, `MIX_CLIENTS` only overrides it). A pin is applied on every start and
 moves the identity if needed; an unpinned existing identity keeps its gateway. Every identity is another front door to the
 same dispatch loop; the reply always leaves through the identity that received the
 request (its SURBs live there). All addresses are written to `data/addresses.txt`.
 
-**Traffic shape — read this before touching `SCRAI_MIX_SEND_MS`.** The SDK's real-traffic
+**Traffic shape — read this before touching `MIX_SEND_MS`.** The SDK's real-traffic
 stream is a constant-rate Poisson stream: every tick sends a real packet if one is queued,
-else a loop-cover packet. `SCRAI_MIX_SEND_MS=4` with 10 identities therefore burned all
-6 VPS cores on idle padding (2,500 Sphinx packets/s). `SCRAI_MIX_BURST=1` disables the
+else a loop-cover packet. `MIX_SEND_MS=4` with 10 identities therefore burned all
+6 VPS cores on idle padding (2,500 Sphinx packets/s). `MIX_BURST=1` disables the
 Poisson distribution and the loop-cover stream: real packets go out at once, idle costs
 nothing (10 identities idle at 0.2 % CPU). The server has no traffic pattern to hide —
 the client's anonymity is in the SURB replies, not in the server's sending shape.
@@ -218,8 +218,8 @@ gets "retry in ~60 s". Both are fixable without touching the protocol: move the 
 off the loop (spawn like chat/pay, mutate state on the loop), and make the invoice cap an
 env knob sized for launch day.
 
-**After the two fixes** (`SCRAI_INVOICE_PER_MIN`, default 120; withdraw issuance + redeem
-verification in `spawn_blocking` behind `SCRAI_MAX_INFLIGHT_CRYPTO` = cores, entitlement
+**After the two fixes** (`INVOICE_PER_MIN`, default 120; withdraw issuance + redeem
+verification in `spawn_blocking` behind `MAX_INFLIGHT_CRYPTO` = cores, entitlement
 reserved before issuance and restored on failure): same run, all 40 users funded, 1040/1040
 requests ok, steady-state chat 2.8–3.1 s p50. The onboarding storm itself did NOT get
 faster on pl01 — it cannot: harness and server share the box, and 40 withdraws + 40 redeems
@@ -280,7 +280,7 @@ There is no TCP front door to put a load balancer in front of: a scrai-server **
 address, clients pick the address they send to. So "balancing" is **client-side selection
 from a signed directory**, plus a **load signal the server publishes**. The pieces:
 
-0. **Multi-identity — done** (`SCRAI_MIX_CLIENTS`, above); the directory lists all of a
+0. **Multi-identity — done** (`MIX_CLIENTS`, above); the directory lists all of a
    server's addresses.
 
 1. **Load signal — done.** `ping` now answers

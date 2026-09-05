@@ -14,7 +14,7 @@
 import { MoneyStore } from "../money/store.js";
 import { SCRAI_PER_USD } from "../billing.js";
 
-const db = process.env.SCRAI_MONEY_DB ?? "./data/money.db";
+const db = (process.env.MONEY_DB ?? process.env.SCRAI_MONEY_DB) ?? "./data/money.db";
 const money = new MoneyStore(db);
 const scrai = (n: number) => n.toLocaleString("en-US");
 

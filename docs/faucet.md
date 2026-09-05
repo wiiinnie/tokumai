@@ -12,8 +12,8 @@ it is a testnet server**.
 Two lines in `/opt/scrai/.env`:
 
 ```
-SCRAI_TESTNET=1
-SCRAI_TESTNET_FAUCET_ADDRESS=n1…   # the faucet wallet; scrai-faucet prints it at boot
+TESTNET=1
+TESTNET_FAUCET_ADDRESS=n1…   # the faucet wallet; scrai-faucet prints it at boot
 ```
 
 **Invite codes are the only way in.** A testnet server refuses every non-testnet purchase
@@ -25,7 +25,7 @@ refuses testnet purchases (fail closed) and says so at boot.
 
 | state | server | clients | faucet |
 |---|---|---|---|
-| `SCRAI_TESTNET=1` | accepts ONLY `testnet:true` for exactly $1 in NYM, settles it only from `SCRAI_TESTNET_FAUCET_ADDRESS`, reports `testnet:true` + `faucetUrl` with the model list | show the testnet card (fixed on), $1 tile only, NYM only | pays open $1 testnet invoices |
+| `TESTNET=1` | accepts ONLY `testnet:true` for exactly $1 in NYM, settles it only from `TESTNET_FAUCET_ADDRESS`, reports `testnet:true` + `faucetUrl` with the model list | show the testnet card (fixed on), $1 tile only, NYM only | pays open $1 testnet invoices |
 | unset / `0` | refuses `testnet:true` ("this server does not accept testnet purchases"), normal tiers only | toggle never renders; a stale client that still sends the flag gets the refusal | site serves downloads only, `/api/claim` → 403; `deploy.sh` disables the unit |
 
 ## Android
@@ -43,8 +43,8 @@ handover export on Android (the rest — chat, buy, guard, image generation — 
 
 | limit | value | set where | when hit |
 |---|---|---|---|
-| faucet claims per UTC day | 20 | `SCRAI_FAUCET_DAILY_MAX` in `/opt/scrai/.env`, then `systemctl restart scrai-faucet` | tester sees "daily limit is reached — try again tomorrow"; **log** `scrai-faucet: DAILY LIMIT reached …`; **scrai-admin** FAUCET panel `today N / max` turns red + ECONOMY line says `DAILY LIMIT` |
-| faucet wallet floor | 5 NYM | `SCRAI_FAUCET_RESERVE_UNYM` | tester sees "wallet is running low"; **log** `scrai-faucet: WALLET LOW — … top up …` |
+| faucet claims per UTC day | 20 | `FAUCET_DAILY_MAX` in `/opt/scrai/.env`, then `systemctl restart scrai-faucet` | tester sees "daily limit is reached — try again tomorrow"; **log** `scrai-faucet: DAILY LIMIT reached …`; **scrai-admin** FAUCET panel `today N / max` turns red + ECONOMY line says `DAILY LIMIT` |
+| faucet wallet floor | 5 NYM | `FAUCET_RESERVE_UNYM` | tester sees "wallet is running low"; **log** `scrai-faucet: WALLET LOW — … top up …` |
 | invoices per account | 5 per 10 min | `INVOICE_PER_ACCT` / `INVOICE_ACCT_WINDOW_MS` in `server/src/pay.rs` (compiled in) | app shows "too many invoices from this account — retry in ~Ns"; **log** `scrai-server: INVOICE LIMIT — account …` |
 | invoices server-wide | 30 per minute | `INVOICE_GLOBAL_PER_MIN` in `server/src/pay.rs` (compiled in) | app shows "issuing too many invoices right now"; **log** `scrai-server: INVOICE LIMIT — 30 invoices/min …` (once a minute) |
 | uses per invite code | 1 (default) | `scrai-faucet code new [uses]`, or `c` in scrai-admin | tester sees "this invite code has been used up"; FAUCET panel shows `0` left in grey |
@@ -56,8 +56,8 @@ Logs: `journalctl -u scrai-faucet -f` and `journalctl -u scrai -f` on the VPS.
 Two lines in `/opt/scrai/.env`, set **after** the new bundles are on the download site:
 
 ```
-SCRAI_MIN_APP=0.3.0
-SCRAI_UPDATE_URL=https://scrai-faucet.hermes-stakepool.de/
+MIN_APP=0.3.0
+UPDATE_URL=https://scrai-faucet.hermes-stakepool.de/
 ```
 
 Every request now carries the app's version (`app`, from tauri.conf.json). The server
@@ -70,7 +70,7 @@ Log: `scrai-server: UPDATE GATE — refused …`. Unset the variable → no gate
 
 Developer diagnostics (cost audit with the provider's price vs. ours) exist only in
 debug builds (`devBuild` from the backend) **and** only when the server sends the cost
-(`SCRAI_DEV_AUDIT=1`, never on a tester/customer server) — a shipped binary shows no
+(`DEV_AUDIT=1`, never on a tester/customer server) — a shipped binary shows no
 Developer section and a release server sends no margin.
 
 To switch off: remove the line, `sudo systemctl restart scrai scrai-faucet` (or run
@@ -81,7 +81,7 @@ No client update is needed — the client has no switch of its own.
 
 - **server** (`server/src/pay.rs`): `is_testnet_server()`, `TESTNET_USD = 1`, `Inv.testnet`,
   `Pay::testnet_invoices()` (read-only view for faucet + admin). Catalog reply carries
-  `testnet` and `faucetUrl` (`SCRAI_FAUCET_URL`, https only).
+  `testnet` and `faucetUrl` (`FAUCET_URL`, https only).
 - **app**: Buy dialog toggle card → `Backend.invoice(usd, method, testnet)` → Rust
   `invoice(.., testnet)` → `"testnet": true` on `invoice.create`. Invoice view shows a
   faucet note with the memo instructions and the faucet URL.
@@ -98,7 +98,7 @@ No client update is needed — the client has no switch of its own.
 - Amount is the **server-pinned** `expected_unym` of the invoice — the page has no amount field.
 - One payment per memo and per invoice id (`UNIQUE`, row inserted *before* broadcast).
 - Invite code required (`scrai-faucet code new [uses] [note]`, default **1 use** — one code, one $1 claim).
-- Daily cap `SCRAI_FAUCET_DAILY_MAX` (20), wallet reserve `SCRAI_FAUCET_RESERVE_UNYM` (5 NYM).
+- Daily cap `FAUCET_DAILY_MAX` (20), wallet reserve `FAUCET_RESERVE_UNYM` (5 NYM).
 - 10 attempts per hour per client IP (in memory, IP hashed with a per-boot salt).
 - Only `pending` invoices with ≥60 s left, `amount_usd == 1`, NYM rail.
 - A $1 invoice without `testnet:true` is still refused (not a tier); `testnet:true` with
@@ -109,14 +109,14 @@ account — in the test a purchase is linkable to a tester. The site says so.
 
 ## VPS setup (once)
 
-1. `.env` — add the block from `.env.example` ("Testnet faucet"): `SCRAI_TESTNET=1`,
-   `SCRAI_FAUCET_URL`, `SCRAI_FAUCET_MNEMONIC` (quoted; a dedicated account on the chain
+1. `.env` — add the block from `.env.example` ("Testnet faucet"): `TESTNET=1`,
+   `FAUCET_URL`, `FAUCET_MNEMONIC` (quoted; a dedicated account on the chain
    the server watches — with `NYX_LCD_URL_TESTNET=https://validator-sandbox-1.nymtech.net/api`
    that is the Nym sandbox, funded with sandbox NYM), the chain RPC is derived from
-   `NYX_LCD_URL_*` (`<validator>/api` → `<validator>`; `SCRAI_FAUCET_RPC` only overrides),
+   `NYX_LCD_URL_*` (`<validator>/api` → `<validator>`; `FAUCET_RPC` only overrides),
    optionally explorer + iOS links. The faucet prints its address at boot — fund that one.
 2. `scripts/deploy.sh` builds all three binaries, installs `scrai-faucet.service` and
-   enables it when `SCRAI_TESTNET=1`. The root-owned apply script changed with this
+   enables it when `TESTNET=1`. The root-owned apply script changed with this
    feature — run `scripts/deploy.sh --install-apply` once (sudo prompt) before the
    normal deploy, or the old apply script will not install the faucet.
 3. Caddy — one site block; DNS `scrai-faucet.hermes-stakepool.de` → the VPS IP (an A
@@ -132,14 +132,14 @@ account — in the test a purchase is linkable to a tester. The site says so.
    }
    ```
    `sudo systemctl reload caddy`. Caddy fetches the certificate itself.
-4. Invite codes: `sudo -u scrai SCRAI_DATA=/opt/scrai/data /opt/scrai/bin/scrai-faucet code new 3 "alice"`.
+4. Invite codes: `sudo -u scrai DATA=/opt/scrai/data /opt/scrai/bin/scrai-faucet code new 3 "alice"`.
 5. Check: `curl -s https://scrai-faucet.hermes-stakepool.de/api/status` →
    `{"testnet":true,"wallet":true,"claimsToday":0,"dailyMax":20}`.
 
 ## Ticketbook size: $1 on testnet, $5 on mainnet
 
 Credit is withdrawn as uniform Coconut ticketbooks. Mainnet books are 500 coins
-($5 — the minimum purchase); a testnet server (`SCRAI_TESTNET=1`) issues 100-coin ($1)
+($5 — the minimum purchase); a testnet server (`TESTNET=1`) issues 100-coin ($1)
 books so a faucet-paid $1 is exactly one book and collects immediately. Redeeming into
 a session stays at 100-coin ($1) slices on both. The size is baked into the authority
 keys (`data/authority.json`): the server refuses to boot if the persisted authority's

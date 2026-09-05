@@ -18,9 +18,9 @@
 # Every stage = one scrai-loadtest run; results land in loadtest/results/<ts>-<label>/.
 # Knobs (env): REQUESTS (per user, default 10), THINK_MS (default 2000), RAMP_MS (default
 # 750), TIMEOUT_MS (default 120000), MOCK (server-side "<delay_ms>:<answer_chars>", default
-# 1500:800), EXTRA (extra flags for every run, e.g. EXTRA="--fast"), SCRAI_MIX_SEND_MS /
-# SCRAI_MIX_COVER_MS (server egress knobs, local only; e.g. SCRAI_MIX_SEND_MS=4),
-# SCRAI_MIX_CLIENTS=K (local: K identities) + SPREAD=all|primary|both (spread users or not).
+# 1500:800), EXTRA (extra flags for every run, e.g. EXTRA="--fast"), MIX_SEND_MS /
+# MIX_COVER_MS (server egress knobs, local only; e.g. MIX_SEND_MS=4),
+# MIX_CLIENTS=K (local: K identities) + SPREAD=all|primary|both (spread users or not).
 # ---------------------------------------------------------------------------
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -58,22 +58,22 @@ if [ "$TARGET" = "local" ]; then
   SRV_DIR="$ROOT/.loadtest/server"
   mkdir -p "$SRV_DIR/data"
   cat > "$SRV_DIR/.env" <<ENV
-SCRAI_FAKE_PAYMENTS=1
-SCRAI_MOCK_PROVIDER=$MOCK
-SCRAI_DATA=$SRV_DIR/data
-SCRAI_PRICING=$ROOT/pricing.json
+FAKE_PAYMENTS=1
+MOCK_PROVIDER=$MOCK
+DATA=$SRV_DIR/data
+PRICING=$ROOT/pricing.json
 # widen/narrow the chat cap to see where the semaphore starts refusing (default 64)
-SCRAI_MAX_INFLIGHT_CHATS=${SCRAI_MAX_INFLIGHT_CHATS:-64}
+MAX_INFLIGHT_CHATS=${MAX_INFLIGHT_CHATS:-64}
 # server egress: per-packet send delay / cover-stream delay (unset = SDK defaults 20 / 200)
-${SCRAI_MIX_BURST:+SCRAI_MIX_BURST=$SCRAI_MIX_BURST}
-${SCRAI_MIX_SEND_MS:+SCRAI_MIX_SEND_MS=$SCRAI_MIX_SEND_MS}
-${SCRAI_MIX_COVER_MS:+SCRAI_MIX_COVER_MS=$SCRAI_MIX_COVER_MS}
-# K Nym identities (front doors) for the one server process (SCRAI_MIX_CLIENTS=K, random
-# gateways; or SCRAI_GATEWAY_FALLBACK=gw1,gw2 to pin them); SPREAD=all spreads the
+${MIX_BURST:+MIX_BURST=$MIX_BURST}
+${MIX_SEND_MS:+MIX_SEND_MS=$MIX_SEND_MS}
+${MIX_COVER_MS:+MIX_COVER_MS=$MIX_COVER_MS}
+# K Nym identities (front doors) for the one server process (MIX_CLIENTS=K, random
+# gateways; or GATEWAY_FALLBACK=gw1,gw2 to pin them); SPREAD=all spreads the
 # simulated users over all of them, SPREAD=primary (default) hits only the first,
 # SPREAD=both runs every stage twice (primary, then all) against the same server
-${SCRAI_MIX_CLIENTS:+SCRAI_MIX_CLIENTS=$SCRAI_MIX_CLIENTS}
-${SCRAI_GATEWAY_FALLBACK:+SCRAI_GATEWAY_FALLBACK=$SCRAI_GATEWAY_FALLBACK}
+${MIX_CLIENTS:+MIX_CLIENTS=$MIX_CLIENTS}
+${GATEWAY_FALLBACK:+GATEWAY_FALLBACK=$GATEWAY_FALLBACK}
 ENV
   LOG="$SRV_DIR/server.log"
   : > "$LOG"
@@ -88,7 +88,7 @@ ENV
   done
   [ -n "${ADDR:-}" ] || { echo "server did not announce an address in time — see $LOG"; exit 1; }
   echo "→ local server live: $ADDR"
-  WANT="${SCRAI_MIX_CLIENTS:-1}"
+  WANT="${MIX_CLIENTS:-1}"
   if [ "$WANT" -gt 1 ]; then
     # the extra identities announce themselves as "  address[k]: …" once connected
     for _ in $(seq 1 180); do
@@ -104,7 +104,7 @@ else
   MODE="${MODE:-ping}"
   ADDR="$TARGET"
   if [ "$MODE" = "chat" ] || [ "$MODE" = "mixed" ]; then
-    echo "!! $MODE against an existing server needs SCRAI_FAKE_PAYMENTS=1 on that server (funding runs the fake rail)."
+    echo "!! $MODE against an existing server needs FAKE_PAYMENTS=1 on that server (funding runs the fake rail)."
   fi
 fi
 

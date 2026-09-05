@@ -15,7 +15,7 @@ selbst.** Dieses Design ist sicher **genau so lange, wie das gilt** (siehe §6 �
 > Betreiber fließt (Settlement/Clearing), ist das ein Zahlungsdienst bzw. E-Geld →
 > BaFin-Erlaubnis → GwG-Verpflichteter → **Identifizierung der Kunden**, was das anonyme
 > Modell beendet. Fremde Node-Betreiber partizipieren stattdessen auf der Nym-Ebene: als
-> **Entry-Gateways der scrai-Server** (`SCRAI_GATEWAY_MASTER`/`SCRAI_GATEWAY_FALLBACK`),
+> **Entry-Gateways der scrai-Server** (`GATEWAY_MASTER`/`GATEWAY_FALLBACK`),
 > vergütet über Nyms Bandbreiten-Ökonomie (heute frei, später bezahlte
 > Bandbreiten-Credentials). Dabei fließt kein Geld von uns an sie und kein Kundengeld über
 > sie. Begründung und Rest der Roadmap: `docs/ROADMAP.md` „Operating model".

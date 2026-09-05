@@ -3,7 +3,7 @@
 // N ephemeral Nym clients (one per simulated user) connect with a ramp, optionally buy +
 // withdraw + redeem credit the way the app does (fake-payments server only), then run a
 // request loop: ping (mixnet + dispatch loop only), models (spawned catalog), or signed
-// chat (reserve → provider → settle → persist; pair with SCRAI_MOCK_PROVIDER to keep the
+// chat (reserve → provider → settle → persist; pair with MOCK_PROVIDER to keep the
 // real model out of it). Every request is one CSV row; the end prints p50/p90/p99 per op.
 //
 //   cargo run --release -p scrai-loadtest -- --server <id.enc@gw> --mode ping --clients 10
@@ -64,7 +64,7 @@ struct Args {
 const USAGE: &str = "\
 scrai-loadtest — N simulated users against one scrai-server over the mixnet
 
-  --server <addr>[,<addr>…]   the server's Nym address(es) (or SCRAI_SERVER_ADDRESS);
+  --server <addr>[,<addr>…]   the server's Nym address(es) (or SERVER_ADDRESS);
                      several = the same server's extra identities, users spread round-robin
   --mode ping|models|chat|mixed   what each user sends (default ping)
   --clients N        simulated users = independent Nym clients (default 10)
@@ -90,7 +90,9 @@ scrai-loadtest — N simulated users against one scrai-server over the mixnet
 
 fn parse_args() -> Result<Args, String> {
     let mut a = Args {
-        server: std::env::var("SCRAI_SERVER_ADDRESS").unwrap_or_default(),
+        server: std::env::var("TOKUMAI_SERVER_ADDRESS")
+            .or_else(|_| std::env::var("SCRAI_SERVER_ADDRESS"))
+            .unwrap_or_default(),
         clients: 10,
         mode: Mode::Ping,
         requests: 10,

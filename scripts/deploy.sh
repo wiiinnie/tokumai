@@ -2,7 +2,7 @@
 # ---------------------------------------------------------------------------
 # deploy.sh — push the RUST server crate to the VPS, build there, install all three
 # binaries (scrai-server, scrai-admin, scrai-faucet) + pricing.json, restart scrai and
-# — when SCRAI_TESTNET=1 — scrai-faucet (disabled otherwise).
+# — when TESTNET=1 — scrai-faucet (disabled otherwise).
 #
 # What ships: core/ + server/ + pricing.json + Cargo.lock (a minimal cargo
 # workspace is generated on the VPS — src-tauri stays home). The build runs as
@@ -67,7 +67,7 @@ MODE=""
 # Default is `public`, i.e. what this script always did. Deploying the tokumai tree
 # without --faucet preview put the rebrand on the public host once (2026-09-04) —
 # hence the banner below, which names the units before anything is touched.
-FAUCET_TARGET="${SCRAI_DEPLOY_FAUCET:-public}"
+FAUCET_TARGET="${DEPLOY_FAUCET:-${SCRAI_DEPLOY_FAUCET:-public}}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --faucet)   FAUCET_TARGET="${2:-}"; shift 2 ;;
@@ -76,14 +76,14 @@ while [ $# -gt 0 ]; do
     *)          TARGET="$1"; shift ;;
   esac
 done
-TARGET="${TARGET:-${SCRAI_DEPLOY_TARGET:-}}"
+TARGET="${TARGET:-${DEPLOY_TARGET:-${SCRAI_DEPLOY_TARGET:-}}}"
 case "$FAUCET_TARGET" in
   public|preview|both|none) ;;
   *) echo "deploy.sh: --faucet must be public, preview, both or none (got '$FAUCET_TARGET')" >&2; exit 2 ;;
 esac
 if [ -z "$TARGET" ]; then
   echo "usage: scripts/deploy.sh <admin_user>@<vps-host> [--install-apply] [--faucet public|preview|both|none]" >&2
-  echo "       (or set SCRAI_DEPLOY_TARGET / SCRAI_DEPLOY_FAUCET)" >&2
+  echo "       (or set DEPLOY_TARGET / DEPLOY_FAUCET)" >&2
   exit 2
 fi
 if [ -z "$TARGET" ]; then
@@ -113,32 +113,32 @@ APPLY_BODY='set -e
 FAUCET_TARGET="${2:-public}"
 install -d -o scrai -g scrai /opt/scrai /opt/scrai/bin /opt/scrai/data
 install -o scrai -g scrai -m 755 \
-  "$SCRAI_ADMIN_HOME/scrai-stage/target/release/scrai-server" /opt/scrai/bin/scrai-server.new
+  "$ADMIN_HOME/scrai-stage/target/release/scrai-server" /opt/scrai/bin/scrai-server.new
 mv /opt/scrai/bin/scrai-server.new /opt/scrai/bin/scrai-server
 # read-only admin dashboard (htop-style) — same crate, installed alongside the server
 install -o scrai -g scrai -m 755 \
-  "$SCRAI_ADMIN_HOME/scrai-stage/target/release/scrai-admin" /opt/scrai/bin/scrai-admin.new
+  "$ADMIN_HOME/scrai-stage/target/release/scrai-admin" /opt/scrai/bin/scrai-admin.new
 mv /opt/scrai/bin/scrai-admin.new /opt/scrai/bin/scrai-admin
 # Faucet + distribution site (same crate). The site is baked in with include_str!, so
 # updating a site MEANS replacing the binary of that instance. Two instances exist:
 # public (scrai-faucet, no auth) and preview (scrai-faucet-tokumai, behind basic_auth).
 case "$FAUCET_TARGET" in public|both)
   install -o scrai -g scrai -m 755 \
-    "$SCRAI_ADMIN_HOME/scrai-stage/target/release/scrai-faucet" /opt/scrai/bin/scrai-faucet.new
+    "$ADMIN_HOME/scrai-stage/target/release/scrai-faucet" /opt/scrai/bin/scrai-faucet.new
   mv /opt/scrai/bin/scrai-faucet.new /opt/scrai/bin/scrai-faucet ;;
 esac
 case "$FAUCET_TARGET" in preview|both)
   install -o scrai -g scrai -m 755 \
-    "$SCRAI_ADMIN_HOME/scrai-stage/target/release/scrai-faucet" /opt/scrai/bin/scrai-faucet-tokumai.new
+    "$ADMIN_HOME/scrai-stage/target/release/scrai-faucet" /opt/scrai/bin/scrai-faucet-tokumai.new
   mv /opt/scrai/bin/scrai-faucet-tokumai.new /opt/scrai/bin/scrai-faucet-tokumai ;;
 esac
 install -o scrai -g scrai -m 644 \
-  "$SCRAI_ADMIN_HOME/scrai-stage/pricing.json" /opt/scrai/pricing.json
+  "$ADMIN_HOME/scrai-stage/pricing.json" /opt/scrai/pricing.json
 # payment placeholder page (Caddy serves /opt/scrai/site/payment as its own vhost);
 # tolerated missing so an older stage without the file still deploys
-if [ -f "$SCRAI_ADMIN_HOME/scrai-stage/server/site/payment/index.html" ]; then
+if [ -f "$ADMIN_HOME/scrai-stage/server/site/payment/index.html" ]; then
   install -D -o scrai -g scrai -m 644 \
-    "$SCRAI_ADMIN_HOME/scrai-stage/server/site/payment/index.html" /opt/scrai/site/payment/index.html
+    "$ADMIN_HOME/scrai-stage/server/site/payment/index.html" /opt/scrai/site/payment/index.html
 fi
 # retire the Node deployment (keep .env, data/, images/, and our bin/)
 rm -rf /opt/scrai/node_modules /opt/scrai/dist /opt/scrai/src /opt/scrai/scripts \
@@ -158,7 +158,7 @@ ExecStart=/opt/scrai/bin/scrai-server
 Restart=always
 RestartSec=5
 # dotenvy reads /opt/scrai/.env (CWD); data lands in /opt/scrai/data
-Environment=SCRAI_DATA=/opt/scrai/data
+Environment=DATA=/opt/scrai/data
 
 [Install]
 WantedBy=multi-user.target
@@ -176,7 +176,7 @@ WorkingDirectory=/opt/scrai
 ExecStart=/opt/scrai/bin/scrai-faucet
 Restart=always
 RestartSec=5
-Environment=SCRAI_DATA=/opt/scrai/data
+Environment=DATA=/opt/scrai/data
 
 [Install]
 WantedBy=multi-user.target
@@ -185,16 +185,18 @@ systemctl daemon-reload
 systemctl restart scrai
 systemctl --no-pager status scrai | head -6
 case "$FAUCET_TARGET" in public|both)
-  if grep -Eq "^SCRAI_TESTNET=(1|true)" /opt/scrai/.env 2>/dev/null; then
+  # Both spellings during the rename: the .env on the box may still say SCRAI_TESTNET, and
+  # reading it as "not set" would DISABLE the faucet and take the site down.
+  if grep -Eq "^(SCRAI_)?TESTNET=(1|true)" /opt/scrai/.env 2>/dev/null; then
     systemctl enable --now scrai-faucet >/dev/null 2>&1 || true
     systemctl restart scrai-faucet
     systemctl --no-pager status scrai-faucet | head -4
   else
     systemctl disable --now scrai-faucet >/dev/null 2>&1 || true
-    echo "scrai-faucet: not enabled (SCRAI_TESTNET is not 1 in /opt/scrai/.env)"
+    echo "scrai-faucet: not enabled (TESTNET is not 1 in /opt/scrai/.env)"
   fi ;;
 esac
-# The preview unit carries SCRAI_TESTNET=0 in its own ExecStart — it serves the site
+# The preview unit carries TESTNET=0 in its own ExecStart — it serves the site
 # only, so it restarts regardless of the .env kill switch.
 case "$FAUCET_TARGET" in preview|both)
   systemctl restart scrai-faucet-tokumai
@@ -219,7 +221,7 @@ esac
 if [ "$MODE" = "--install-apply" ]; then
   echo "→ installing /opt/scrai/bin/deploy-apply.sh (root-owned) — sudo once …"
   {
-    printf '#!/usr/bin/env bash\nSCRAI_ADMIN_HOME="${1:?admin home required}"\n'
+    printf '#!/usr/bin/env bash\nADMIN_HOME="${1:?admin home required}"\n'
     printf '%s\n' "$APPLY_BODY"
   } | ssh "${SSH_OPTS[@]}" "$TARGET" 'mkdir -p ~/scrai-stage && cat > ~/scrai-stage/deploy-apply.new'
   ssh -t "${SSH_OPTS[@]}" "$TARGET" \
@@ -303,7 +305,7 @@ ssh -t "${SSH_OPTS[@]}" "$TARGET" '
     sudo /opt/scrai/bin/deploy-apply.sh "$HOME" '"$FAUCET_TARGET"'
   else
     echo "   · (tip: run with --install-apply once + a NOPASSWD line for zero prompts)"
-    sudo env SCRAI_ADMIN_HOME="$HOME" bash -c '"'"''"$APPLY_BODY"''"'"' _ '"$FAUCET_TARGET"'
+    sudo env ADMIN_HOME="$HOME" bash -c '"'"''"$APPLY_BODY"''"'"' _ '"$FAUCET_TARGET"'
   fi
 '
 # What is actually running now — read back, not assumed (no sudo needed for is-active).

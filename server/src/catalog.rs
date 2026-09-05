@@ -24,11 +24,11 @@ use serde_json::{json, Value};
 const CATALOG_TTL: Duration = Duration::from_secs(60);
 static CATALOG_CACHE: Mutex<Option<(Instant, Vec<Value>)>> = Mutex::new(None);
 
-/// Provider allowlist: SCRAI_PROVIDERS="gemini" (comma list) limits the
+/// Provider allowlist: PROVIDERS="gemini" (comma list) limits the
 /// catalog to those providers; unset/empty/"all" offers everything available.
 /// Enforced for the picker here AND for every chat via `model_offered` below.
 pub fn provider_enabled(name: &str) -> bool {
-    match std::env::var("SCRAI_PROVIDERS") {
+    match crate::cfg("PROVIDERS") {
         Err(_) => true,
         Ok(v) => provider_in_list(name, &v),
     }
@@ -65,20 +65,20 @@ pub fn provider_of_model(model: &str) -> &'static str {
 /// hand-written request naming `gpt-5.4` was served on a TESTNET server — where the
 /// catalog offers nano only, precisely because testers pay in faucet dollars while
 /// OpenAI bills us real ones — and likewise reached any provider the operator had
-/// switched off with SCRAI_PROVIDERS while its key was still in the env.
+/// switched off with PROVIDERS while its key was still in the env.
 ///
 /// Rule of thumb for anything added here later: a restriction that only shapes the
 /// catalog is a UI hint. If it protects money, an API key or a policy, it has to be
 /// asked again on the path that does the work.
 pub fn model_offered(model: &str) -> bool {
-    offered_with(model, &std::env::var("SCRAI_PROVIDERS").unwrap_or_default(), &openai_model_ids())
+    offered_with(model, &crate::cfg("PROVIDERS").unwrap_or_default(), &openai_model_ids())
 }
 
 /// The decision itself, with the two config values passed in — pure, so the test below
 /// does not have to mutate env that the rest of this crate's tests read.
 fn offered_with(model: &str, providers: &str, openai_ids: &[String]) -> bool {
     let provider = provider_of_model(model);
-    // Fail closed on anything chat.rs cannot route. An empty SCRAI_PROVIDERS means "every
+    // Fail closed on anything chat.rs cannot route. An empty PROVIDERS means "every
     // provider we HAVE", never "any name a caller invents" — the removed test providers
     // land here, and so would a typo'd id that pricing.json happens to price.
     if provider == "unknown" {
@@ -87,7 +87,7 @@ fn offered_with(model: &str, providers: &str, openai_ids: &[String]) -> bool {
     if !provider_in_list(provider, providers) {
         return false;
     }
-    // OpenAI has no live listing — an explicit allowlist (`SCRAI_OPENAI_MODELS`, or the
+    // OpenAI has no live listing — an explicit allowlist (`OPENAI_MODELS`, or the
     // built-in set, narrowed to the cheapest model on a testnet server).
     if provider == "openai" && !openai_ids.iter().any(|id| id == model) {
         return false;
@@ -204,11 +204,11 @@ fn image_models(pricing: &PricingTable, margin: f64) -> Vec<Value> {
 /// it (an unpriced model is never offered). Verified ids/prices: 2026-09-03.
 const OPENAI_MODELS: [&str; 3] = ["gpt-5.4-nano", "gpt-5.4-mini", "gpt-5.4"];
 
-/// The ids actually offered: SCRAI_OPENAI_MODELS (comma list) overrides; otherwise the
+/// The ids actually offered: OPENAI_MODELS (comma list) overrides; otherwise the
 /// full allowlist — except on a TESTNET server, where testers pay with faucet dollars
 /// while OpenAI bills us real ones, so only the cheapest model is offered there.
 fn openai_model_ids() -> Vec<String> {
-    if let Ok(v) = std::env::var("SCRAI_OPENAI_MODELS") {
+    if let Ok(v) = crate::cfg("OPENAI_MODELS") {
         let ids: Vec<String> = v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
         if !ids.is_empty() {
             return ids;

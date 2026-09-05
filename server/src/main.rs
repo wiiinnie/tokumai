@@ -33,7 +33,7 @@ use scrai_core::session::SessionStore;
 // data/authority.json) and invalidates previously issued purses — fine while
 // everything is testnet.
 const TICKETBOOK_COINS: u64 = 500;
-/// Testnet servers (SCRAI_TESTNET=1) issue $1 books (100 coins) so a faucet-paid $1
+/// Testnet servers (TESTNET=1) issue $1 books (100 coins) so a faucet-paid $1
 /// purchase is exactly one book and collects at once. Mainnet stays at $5 — the minimum
 /// purchase — and redeems in the same $1 slices as before (REDEEM_CHUNK_COINS).
 const TESTNET_TICKETBOOK_COINS: u64 = 100;
@@ -63,7 +63,7 @@ async fn main() {
         let stale = scrai_server::testnet_rails_on_mainnet();
         if !stale.is_empty() {
             eprintln!(
-                "scrai-server: FATAL: SCRAI_TESTNET is off, but these rails only have a \
+                "scrai-server: FATAL: TESTNET is off, but these rails only have a \
                  _TESTNET value and would run against TEST infrastructure while real money \
                  is accepted: {}. Set the _MAINNET variant of each (or delete the _TESTNET \
                  one if the rail is unused). Mollie in particular would credit real balance \
@@ -89,14 +89,14 @@ async fn main() {
     }
 
     // Load-test mock provider: loud when active, loud when set but refused.
-    if std::env::var("SCRAI_MOCK_PROVIDER").is_ok() {
+    if scrai_server::cfg("MOCK_PROVIDER").is_ok() {
         match chat::mock_provider() {
             Some((d, c)) => eprintln!(
                 "scrai-server: MOCK PROVIDER ACTIVE — every chat answers a canned {c}-char text after {d} ms; \
-                 no model is called (SCRAI_MOCK_PROVIDER, load testing only)"
+                 no model is called (MOCK_PROVIDER, load testing only)"
             ),
             None => eprintln!(
-                "scrai-server: SCRAI_MOCK_PROVIDER is set but IGNORED — it only works together with SCRAI_FAKE_PAYMENTS=1"
+                "scrai-server: MOCK_PROVIDER is set but IGNORED — it only works together with FAKE_PAYMENTS=1"
             ),
         }
     }
@@ -110,7 +110,7 @@ async fn main() {
         .parse_default_env()
         .try_init()
         .ok();
-    let data_dir = PathBuf::from(std::env::var("SCRAI_DATA").unwrap_or_else(|_| "./data".into()));
+    let data_dir = PathBuf::from(scrai_server::cfg("DATA").unwrap_or_else(|_| "./data".into()));
     let authority = Arc::new(load_or_bootstrap(&data_dir.join("authority.json")));
 
     // Persistent Nym identity so the server keeps ONE address across restarts.
@@ -119,11 +119,11 @@ async fn main() {
     let mut builder = MixnetClientBuilder::new_with_default_storage(storage)
         .await
         .expect("mixnet client builder");
-    // Entry gateways. SCRAI_GATEWAY_MASTER pins the primary identity (the address the app
-    // ships with); SCRAI_GATEWAY_FALLBACK=gw1,gw2,… pins the extra identities #1, #2, … —
+    // Entry gateways. GATEWAY_MASTER pins the primary identity (the address the app
+    // ships with); GATEWAY_FALLBACK=gw1,gw2,… pins the extra identities #1, #2, … —
     // the same server on other gateways, which the app learns from the catalog reply and
     // falls back to when the master's gateway is down. The number of identities follows
-    // from that list (SCRAI_MIX_CLIENTS only overrides it). SCRAI_GATEWAY is the legacy
+    // from that list (MIX_CLIENTS only overrides it). GATEWAY is the legacy
     // name of the master pin.
     //
     // A pin is applied on EVERY start: `request_gateway` re-registers an existing identity
@@ -132,13 +132,13 @@ async fn main() {
     // random pick — it would move to a new gateway (= a new address) on every restart, as
     // the fallback slots once did (2026-09-03). Unpinned + existing = keep; unpinned + new
     // = curated random.
-    let fallback_gateways: Vec<String> = std::env::var("SCRAI_GATEWAY_FALLBACK")
+    let fallback_gateways: Vec<String> = scrai_server::cfg("GATEWAY_FALLBACK")
         .unwrap_or_default()
         .split(',')
         .map(|g| g.trim().to_string())
         .filter(|g| !g.is_empty())
         .collect();
-    let pinned = ["SCRAI_GATEWAY_MASTER", "SCRAI_GATEWAY"]
+    let pinned = ["GATEWAY_MASTER", "GATEWAY"]
         .iter()
         .find_map(|k| std::env::var(k).ok().map(|g| g.trim().to_string()).filter(|g| !g.is_empty()));
     let primary_exists = identity_exists(&data_dir.join(".nym-server"));
@@ -160,8 +160,8 @@ async fn main() {
     // privacy-preserving stream shape) is a CLIENT default: a service provider that
     // answers hundreds of users through ONE Nym client serialises every reply behind it —
     // a 109 KB coconut Keys reply alone is ~55 packets ≈ 1.1 s of the whole server's send
-    // budget. SCRAI_MIX_SEND_MS lowers the per-packet delay (Nym's own "high traffic
-    // volume" preset is 4 ms ≈ 250 packets/s); SCRAI_MIX_COVER_MS thins the loop cover
+    // budget. MIX_SEND_MS lowers the per-packet delay (Nym's own "high traffic
+    // volume" preset is 4 ms ≈ 250 packets/s); MIX_COVER_MS thins the loop cover
     // stream that a server does not need for its own anonymity. Unset = SDK defaults.
     // Measured in docs/load-testing.md.
     if let Some(cfg) = server_traffic_config() {
@@ -180,14 +180,14 @@ async fn main() {
         client.nym_address()
     );
 
-    // SCRAI_MIX_CLIENTS=K: K−1 EXTRA Nym identities (data/.nym-server-1 …), each on a
+    // MIX_CLIENTS=K: K−1 EXTRA Nym identities (data/.nym-server-1 …), each on a
     // different entry gateway, all feeding the SAME dispatch loop and state below. Every
     // packet for one identity funnels through one gateway and one Sphinx client; the load
     // test showed that path — not CPU — is what saturates first (docs/load-testing.md).
     // Extra addresses are more front doors to the same server: nothing about money
     // changes. The primary identity/address above is untouched, so existing clients
     // keep working; a missing K means 1 (today's behaviour).
-    let n_clients = env_usize("SCRAI_MIX_CLIENTS", 1 + fallback_gateways.len()).max(1);
+    let n_clients = env_usize("MIX_CLIENTS", 1 + fallback_gateways.len()).max(1);
     // Identity #k takes fallback entry k−1 (see above); a missing entry falls back to the
     // curated random pick. Operator-run gateways = monitorable, reproducible.
     let mut clients = vec![client];
@@ -199,7 +199,7 @@ async fn main() {
             .await
             .expect("mixnet client builder");
         if let Some(gw) = fallback_gateways.get(k - 1) {
-            println!("scrai-server: client #{k}: requesting entry gateway {gw} (SCRAI_GATEWAY_FALLBACK)");
+            println!("scrai-server: client #{k}: requesting entry gateway {gw} (GATEWAY_FALLBACK)");
             b = b.request_gateway(gw.clone());
         } else if identity_exists(&data_dir.join(format!(".nym-server-{k}"))) {
             println!("scrai-server: client #{k}: no gateway pin — the existing identity keeps its gateway");
@@ -237,7 +237,7 @@ async fn main() {
             // right; the fix is to re-home that slot (delete its data/.nym-server-k).
             eprintln!(
                 "scrai-server: WARNING: identities share a gateway (wanted {n_clients} distinct) — \
-                 check SCRAI_GATEWAY_MASTER / SCRAI_GATEWAY_FALLBACK and re-home the duplicate \
+                 check GATEWAY_MASTER / GATEWAY_FALLBACK and re-home the duplicate \
                  slot by deleting its data/.nym-server-k before the next start"
             );
         }
@@ -439,13 +439,13 @@ async fn main() {
     // operator deliberately overrides. A real t-of-n DKG (AUTHORITY_N ≥ 2) removes this.
     if AUTHORITY_N < 2
         && !gateway.is_fake()
-        && std::env::var("SCRAI_ALLOW_SINGLE_AUTHORITY").as_deref() != Ok("1")
+        && scrai_server::cfg("ALLOW_SINGLE_AUTHORITY").as_deref() != Ok("1")
     {
         eprintln!(
             "scrai-server: FATAL: refusing to issue real-money credentials from a single \
-             1-of-1 authority (it can forge unlimited coins). For dev use SCRAI_FAKE_PAYMENTS=1; \
+             1-of-1 authority (it can forge unlimited coins). For dev use FAKE_PAYMENTS=1; \
              for production run a real t-of-n DKG; to override deliberately (testnet only) set \
-             SCRAI_ALLOW_SINGLE_AUTHORITY=1."
+             ALLOW_SINGLE_AUTHORITY=1."
         );
         std::process::exit(1);
     }
@@ -503,14 +503,14 @@ async fn main() {
     // refunds it) instead of piling up behind a stalled provider. Gateway calls get a
     // smaller pool: an unauthenticated invoice.status must not be able to open hundreds
     // of LCD connections.
-    let max_chats = env_usize("SCRAI_MAX_INFLIGHT_CHATS", 64);
+    let max_chats = env_usize("MAX_INFLIGHT_CHATS", 64);
     // OpenAI gets its own pool: its rate limits are per org tier, and a throttled OpenAI
     // must not hold Gemini's slots.
-    let max_openai = env_usize("SCRAI_MAX_INFLIGHT_OPENAI", 16);
-    let max_gateway = env_usize("SCRAI_MAX_INFLIGHT_GATEWAY", 16);
+    let max_openai = env_usize("MAX_INFLIGHT_OPENAI", 16);
+    let max_gateway = env_usize("MAX_INFLIGHT_GATEWAY", 16);
     // BLS work is CPU-bound: cap it at the core count so a purchase storm can't starve
     // the runtime (each permit = one blocking thread busy for up to seconds).
-    let max_crypto = env_usize("SCRAI_MAX_INFLIGHT_CRYPTO", std::thread::available_parallelism().map(|n| n.get()).unwrap_or(2).max(1));
+    let max_crypto = env_usize("MAX_INFLIGHT_CRYPTO", std::thread::available_parallelism().map(|n| n.get()).unwrap_or(2).max(1));
     let chat_slots = Arc::new(Semaphore::new(max_chats));
     let openai_slots = Arc::new(Semaphore::new(max_openai));
     let gateway_slots = Arc::new(Semaphore::new(max_gateway));
@@ -528,8 +528,8 @@ async fn main() {
     }
     if pay::is_testnet_server() {
         match pay::testnet_faucet_address() {
-            Some(a) => println!("scrai-server: TESTNET mode — $1 faucet purchases only, settled only from faucet wallet {a} (SCRAI_TESTNET=1)"),
-            None => eprintln!("scrai-server: TESTNET mode but SCRAI_TESTNET_FAUCET_ADDRESS is unset — every purchase will be refused until the faucet wallet is pinned"),
+            Some(a) => println!("scrai-server: TESTNET mode — $1 faucet purchases only, settled only from faucet wallet {a} (TESTNET=1)"),
+            None => eprintln!("scrai-server: TESTNET mode but TESTNET_FAUCET_ADDRESS is unset — every purchase will be refused until the faucet wallet is pinned"),
         }
     }
 
@@ -687,7 +687,7 @@ async fn main() {
             // handled synchronously by the shared core.
             let envelope = serde_json::from_slice::<serde_json::Value>(&m.message).unwrap_or(serde_json::Value::Null);
             let kind = envelope.get("kind").and_then(|k| k.as_str()).map(String::from).unwrap_or_default();
-            // Release gate (SCRAI_MIN_APP): an outdated app gets nothing but the update
+            // Release gate (MIN_APP): an outdated app gets nothing but the update
             // notice. `models` answers with a one-entry pseudo catalogue so even a 0.2.x
             // client — which swallows a plain error on its start-up fetch — shows the
             // notice in its model header; everything else is a plain error carrying the link.
@@ -1073,7 +1073,7 @@ fn note_peak(db: &store::Store, inflight: &inflight::Inflight<ReplyTo>, written:
 
 /// A positive usize from the environment, or the default.
 fn env_usize(name: &str, default: usize) -> usize {
-    std::env::var(name).ok().and_then(|v| v.trim().parse().ok()).filter(|n| *n > 0).unwrap_or(default)
+    scrai_server::cfg(name).ok().and_then(|v| v.trim().parse().ok()).filter(|n| *n > 0).unwrap_or(default)
 }
 
 /// Load the persisted authority, or bootstrap + persist one on first run.
@@ -1086,7 +1086,7 @@ fn load_or_bootstrap(path: &Path) -> Authority {
             Ok(a) if a.total_coins() != want => {
                 eprintln!(
                     "scrai-server: {} holds a {}-coin authority but this mode needs {}-coin books \
-                     (SCRAI_TESTNET={}). Re-bootstrapping invalidates every ticketbook clients hold. \
+                     (TESTNET={}). Re-bootstrapping invalidates every ticketbook clients hold. \
                      To proceed on purpose: stop the server, move that file away, start again.",
                     path.display(),
                     a.total_coins(),
@@ -1136,7 +1136,7 @@ fn write_secret(path: &Path, contents: &str) -> std::io::Result<()> {
 }
 
 /// The metrics day the current moment falls into, as `YYYY-MM-DD`, in the operator's
-/// chosen zone (`SCRAI_METRICS_TZ`, default UTC). Pick the zone your provider's billing
+/// chosen zone (`METRICS_TZ`, default UTC). Pick the zone your provider's billing
 /// view uses so `scrai-admin` and the provider agree per day: Google's Cloud Billing
 /// reports bucket by America/Los_Angeles; the AI Studio dashboard by the browser's local
 /// time (Europe/Berlin for us). Pure integer math (Howard Hinnant's civil-date
@@ -1151,7 +1151,7 @@ fn today_utc() -> String {
 
 /// The zone name as configured (echoed to scrai-admin's table header).
 fn metrics_tz_name() -> String {
-    std::env::var("SCRAI_METRICS_TZ").ok().filter(|v| !v.trim().is_empty()).unwrap_or_else(|| "UTC".into())
+    scrai_server::cfg("METRICS_TZ").ok().filter(|v| !v.trim().is_empty()).unwrap_or_else(|| "UTC".into())
 }
 
 /// Seconds to ADD to UTC for the configured metrics zone at instant `secs`.
@@ -1182,7 +1182,7 @@ fn metrics_tz_offset(secs: i64) -> i64 {
             match (digits.get(0..2).and_then(|h| h.parse::<i64>().ok()), digits.get(2..4).and_then(|m| m.parse::<i64>().ok())) {
                 (Some(h), Some(m)) if h <= 14 && m < 60 => sign * (h * 3_600 + m * 60),
                 _ => {
-                    eprintln!("scrai-server: SCRAI_METRICS_TZ={s:?} not understood — using UTC");
+                    eprintln!("scrai-server: METRICS_TZ={s:?} not understood — using UTC");
                     0
                 }
             }
@@ -1257,21 +1257,21 @@ mod metrics_day_tests {
     }
     #[test]
     fn berlin_and_pacific_offsets() {
-        std::env::set_var("SCRAI_METRICS_TZ", "Europe/Berlin");
+        std::env::set_var("METRICS_TZ", "Europe/Berlin");
         assert_eq!(metrics_tz_offset(at(2026, 8, 28, 10)), 7_200);   // summer
         assert_eq!(metrics_tz_offset(at(2026, 1, 15, 10)), 3_600);   // winter
         assert_eq!(metrics_tz_offset(at(2026, 3, 29, 0)), 3_600);    // an hour before the switch
         assert_eq!(metrics_tz_offset(at(2026, 3, 29, 1)), 7_200);    // at the switch
         // 23:30 UTC on the 27th is already the 28th in Berlin
         assert_eq!(civil_day(at(2026, 8, 27, 23) + 1_800 + metrics_tz_offset(at(2026, 8, 27, 23))), "2026-08-28");
-        std::env::set_var("SCRAI_METRICS_TZ", "America/Los_Angeles");
+        std::env::set_var("METRICS_TZ", "America/Los_Angeles");
         assert_eq!(metrics_tz_offset(at(2026, 8, 28, 10)), -7 * 3_600);
         assert_eq!(metrics_tz_offset(at(2026, 12, 1, 10)), -8 * 3_600);
         // 03:00 UTC on the 28th is still the 27th in Los Angeles
         assert_eq!(civil_day(at(2026, 8, 28, 3) + metrics_tz_offset(at(2026, 8, 28, 3))), "2026-08-27");
-        std::env::set_var("SCRAI_METRICS_TZ", "+02:00");
+        std::env::set_var("METRICS_TZ", "+02:00");
         assert_eq!(metrics_tz_offset(0), 7_200);
-        std::env::set_var("SCRAI_METRICS_TZ", "UTC");
+        std::env::set_var("METRICS_TZ", "UTC");
         assert_eq!(metrics_tz_offset(0), 0);
     }
 }
@@ -1346,13 +1346,13 @@ async fn random_described_gateway_excluding(exclude: &[String]) -> Option<(Strin
     pool.choose(&mut rand::thread_rng()).cloned()
 }
 
-/// Load the pricing table: a file override (`SCRAI_PRICING`) if set, else the copy
+/// Load the pricing table: a file override (`PRICING`) if set, else the copy
 /// embedded at build time — so the server always has a valid table.
 /// Load `.env` from the working directory the way an operator writes it: `KEY=value`,
 /// value = the rest of the line, optionally in single or double quotes, `#` comments on
 /// their own line or after whitespace. UNQUOTED VALUES MAY CONTAIN SPACES — dotenvy
 /// stopped parsing at such a line and silently dropped everything below it (a mnemonic
-/// once, `SCRAI_PROVIDERS=gemini, openai` on 2026-09-03), which is how a freshly added
+/// once, `PROVIDERS=gemini, openai` on 2026-09-03), which is how a freshly added
 /// API key "wasn't there". Existing process-environment variables win, like dotenv.
 fn load_env_lenient() {
     let Ok(text) = std::fs::read_to_string(".env") else { return };
@@ -1403,11 +1403,11 @@ mod env_tests {
 
     #[test]
     fn lenient_env_keeps_spaces_quotes_and_comments_straight() {
-        let text = "# comment\nA=plain\nSCRAI_PROVIDERS=gemini, openai\nM=\"word word word\"\nS='single quoted'\nK=sk-proj-abc # trailing comment\nURL=https://x.y/#frag\nexport E=1\n\nbad line\n9X=nope\n";
+        let text = "# comment\nA=plain\nPROVIDERS=gemini, openai\nM=\"word word word\"\nS='single quoted'\nK=sk-proj-abc # trailing comment\nURL=https://x.y/#frag\nexport E=1\n\nbad line\n9X=nope\n";
         let v = parse_env_lines(text);
         let get = |k: &str| v.iter().find(|(kk, _)| kk == k).map(|(_, val)| val.as_str());
         assert_eq!(get("A"), Some("plain"));
-        assert_eq!(get("SCRAI_PROVIDERS"), Some("gemini, openai")); // the 2026-09-03 case
+        assert_eq!(get("PROVIDERS"), Some("gemini, openai")); // the 2026-09-03 case
         assert_eq!(get("M"), Some("word word word"));
         assert_eq!(get("S"), Some("single quoted"));
         assert_eq!(get("K"), Some("sk-proj-abc"));
@@ -1446,19 +1446,19 @@ async fn connect_identity(dir: &Path, gateway: Option<&str>) -> Result<MixnetCli
 /// Mixnet traffic knobs for the server's own Nym client (see the call site). `None` when
 /// neither variable is set, so the default stays byte-for-byte the SDK's.
 fn server_traffic_config() -> Option<nym_sdk::DebugConfig> {
-    let burst = std::env::var("SCRAI_MIX_BURST").as_deref() == Ok("1");
-    let send_ms = std::env::var("SCRAI_MIX_SEND_MS").ok().and_then(|v| v.trim().parse::<u64>().ok());
-    let cover_ms = std::env::var("SCRAI_MIX_COVER_MS").ok().and_then(|v| v.trim().parse::<u64>().ok());
+    let burst = scrai_server::cfg("MIX_BURST").as_deref() == Ok("1");
+    let send_ms = scrai_server::cfg("MIX_SEND_MS").ok().and_then(|v| v.trim().parse::<u64>().ok());
+    let cover_ms = scrai_server::cfg("MIX_COVER_MS").ok().and_then(|v| v.trim().parse::<u64>().ok());
     if !burst && send_ms.is_none() && cover_ms.is_none() {
         return None;
     }
     let mut d = nym_sdk::DebugConfig::default();
     if burst {
-        // SCRAI_MIX_BURST=1 — THE server setting. The SDK's real-traffic stream is a
+        // MIX_BURST=1 — THE server setting. The SDK's real-traffic stream is a
         // constant-rate Poisson stream: every tick sends a real packet if one is queued,
         // else a loop-cover packet. That shape hides a USER's traffic pattern; a service
         // provider has no pattern to hide, and pays for the padding with CPU: at
-        // SCRAI_MIX_SEND_MS=4 × 10 identities the padding alone was 2,500 Sphinx packets/s
+        // MIX_SEND_MS=4 × 10 identities the padding alone was 2,500 Sphinx packets/s
         // = all 6 cores of the VPS (2026-09-02). Disabling the Poisson distribution sends
         // real packets as soon as they are ready and nothing when idle; the separate loop
         // cover stream goes too. Replies are still SURB replies — the client's anonymity
@@ -1482,8 +1482,8 @@ fn server_traffic_config() -> Option<nym_sdk::DebugConfig> {
         if let Some(ms) = send_ms {
             if ms < 20 {
                 eprintln!(
-                    "scrai-server: WARNING: SCRAI_MIX_SEND_MS={ms} without SCRAI_MIX_BURST=1 pads the idle stream \
-                     with cover packets: ~{} Sphinx packets/s per identity, all CPU. Use SCRAI_MIX_BURST=1.",
+                    "scrai-server: WARNING: MIX_SEND_MS={ms} without MIX_BURST=1 pads the idle stream \
+                     with cover packets: ~{} Sphinx packets/s per identity, all CPU. Use MIX_BURST=1.",
                     (1000 / ms.max(1)) as usize
                 );
             }
@@ -1494,7 +1494,7 @@ fn server_traffic_config() -> Option<nym_sdk::DebugConfig> {
 
 fn load_pricing() -> PricingTable {
     const EMBEDDED: &str = include_str!("../../pricing.json");
-    let from_file = std::env::var("SCRAI_PRICING")
+    let from_file = scrai_server::cfg("PRICING")
         .ok()
         .and_then(|p| std::fs::read_to_string(p).ok());
     let json = from_file.as_deref().unwrap_or(EMBEDDED);

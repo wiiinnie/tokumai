@@ -62,7 +62,7 @@ one at a time.
 | Provider | Env | Free tier |
 |---|---|---|
 | Google Gemini | `GEMINI_API_KEY` | text yes; **images `limit: 0`**, needs billing |
-| OpenAI | `OPENAI_API_KEY` | none — prepaid, and off unless `SCRAI_PROVIDERS` names it |
+| OpenAI | `OPENAI_API_KEY` | none — prepaid, and off unless `PROVIDERS` names it |
 
 Groq, Cloudflare Workers AI and Pollinations were removed on 2026-09-04. They
 existed to develop against without a billed key; none of them ever served a
@@ -445,7 +445,7 @@ you gave it SURBs for.
 cannot probe from this host. Drop the flag; random selection is the default.
 
 **Port already in use** — the server owns 1977 and the client 1978. Override
-with `SCRAI_NYM_WS_PORT` *before* `setup`, since the port is baked into the
+with `NYM_WS_PORT` *before* `setup`, since the port is baked into the
 config at init.
 
 **`a nym-client for "…" is already running (pid N)`** — a leftover process still
@@ -475,12 +475,12 @@ the Google Cloud project. Text models are unaffected.
 | `GEMINI_API_KEY` | — | required, server only |
 | `MARGIN` | `1.1` | markup on provider cost; server-side only |
 | `MIN_CHARGE_SCRAI` | `0` | floor per request; 0 keeps free models free |
-| `SCRAI_FLUSH_CHARS` | `120` | chunk size before a stream frame is sent |
-| `SCRAI_FLUSH_MS` | `500` | max delay before flushing a partial chunk |
-| `SCRAI_TIMEOUT_MS` | `120000` | overall request timeout |
-| `SCRAI_IDLE_MS` | `45000` | give up after this long with no frame |
-| `SCRAI_SHUTDOWN_MS` | `4000` | grace period for nym-client to flush on exit |
-| `SCRAI_VERBOSE` | — | `1` to see raw nym-client logs |
+| `FLUSH_CHARS` | `120` | chunk size before a stream frame is sent |
+| `FLUSH_MS` | `500` | max delay before flushing a partial chunk |
+| `TIMEOUT_MS` | `120000` | overall request timeout |
+| `IDLE_MS` | `45000` | give up after this long with no frame |
+| `SHUTDOWN_MS` | `4000` | grace period for nym-client to flush on exit |
+| `VERBOSE` | — | `1` to see raw nym-client logs |
 
 ---
 
@@ -508,7 +508,7 @@ URL anything calls.
 That is a real operational gap: if a provider raises a rate, this file keeps
 charging the old one and the operator absorbs the difference, silently and
 indefinitely. The server therefore warns at startup when the table's `version`
-date is more than 30 days old (`SCRAI_STALE_PRICING_DAYS`).
+date is more than 30 days old (`STALE_PRICING_DAYS`).
 
 If you want the table refreshed automatically, `pricing.ts` already supports it:
 set `PRICING_URL` to a table **you** publish and the server re-fetches on a TTL
@@ -577,7 +577,7 @@ is the second line of defence: note it at creation, compare it after restoring.
 
 ### Faking the payments
 
-No money moves yet. `SCRAI_FAKE_PAYMENTS=1` selects a gateway whose invoices
+No money moves yet. `FAKE_PAYMENTS=1` selects a gateway whose invoices
 settle by command instead of by payment:
 
 **Two terminals.** `credit` raises an invoice and then waits, polling; the
@@ -614,7 +614,7 @@ means filling in one class and changing one variable — no protocol change, no
 issuer change, no client change.
 
 Two guards against shipping the fake by accident: `FakeGateway` throws unless
-`SCRAI_FAKE_PAYMENTS=1` is explicitly set, and `selectGateway()` never falls
+`FAKE_PAYMENTS=1` is explicitly set, and `selectGateway()` never falls
 back to it — a missing configuration is an error, not a free-money default.
 
 ### Going live with BTCPay
@@ -623,10 +623,10 @@ back to it — a missing configuration is an error, not a free-money default.
 BTCPAY_URL=https://pay.example.com
 BTCPAY_STORE_ID=…
 BTCPAY_API_KEY=…
-# and remove SCRAI_FAKE_PAYMENTS
+# and remove FAKE_PAYMENTS
 ```
 
-`SCRAI_FAKE_PAYMENTS` takes precedence over everything, so **comment it out** —
+`FAKE_PAYMENTS` takes precedence over everything, so **comment it out** —
 otherwise BTCPay is configured and silently ignored. The server warns when that
 happens rather than leaving you to guess.
 
@@ -674,7 +674,7 @@ closes, and settles whenever a payment it already saw confirms. But somebody has
 to ask.
 
 The client gives up after 10 minutes, so the **server sweeps every 2 minutes**
-(`SCRAI_SWEEP_SEC`) and re-checks every pending invoice. A withdrawal also
+(`SWEEP_SEC`) and re-checks every pending invoice. A withdrawal also
 sweeps first, so `claim` never reports an empty account that is actually funded.
 
 Without that sweep, a late confirmation is money taken and never credited — the
@@ -805,7 +805,7 @@ for an answer that never came.
 ```
 
 > **Historical note (TypeScript prototype only):** the retired TS server minted
-> HMAC-signed funding tokens (`SCRAI_DEV_MINT=1`), which let the issuer link a
+> HMAC-signed funding tokens (`DEV_MINT=1`), which let the issuer link a
 > session to the mint that funded it. The deployed **Rust** server replaced that
 > with blind Coconut issuance (`nym-compact-ecash`, see `core/src/coconut.rs`) —
 > the issuer never sees a coin's serial. The TS stack remains only as the

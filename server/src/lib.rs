@@ -23,15 +23,15 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// (whichever is set and non-empty), falling back to the legacy plain `{base}`. The
 /// scrai-admin network toggle keeps exactly one suffix uncommented in the .env, so at
 /// most one is ever present. Mirrors the two Gemini key slots (see chat::gemini_api_key).
-/// Release gate: `SCRAI_MIN_APP=0.3.0` makes the server refuse every request from an app
+/// Release gate: `MIN_APP=0.3.0` makes the server refuse every request from an app
 /// older than that (or one that sends no `app` version at all — 0.2.x never did), pointing
-/// at `SCRAI_UPDATE_URL` (fallback: the faucet/download site). Unset → no gate.
+/// at `UPDATE_URL` (fallback: the faucet/download site). Unset → no gate.
 pub fn min_app() -> Option<(u64, u64, u64)> {
-    std::env::var("SCRAI_MIN_APP").ok().and_then(|v| parse_ver(&v))
+    cfg("MIN_APP").ok().and_then(|v| parse_ver(&v))
 }
 
 pub fn update_url() -> String {
-    std::env::var("SCRAI_UPDATE_URL")
+    cfg("UPDATE_URL")
         .ok()
         .filter(|u| u.starts_with("https://"))
         .or_else(pay::faucet_url)
@@ -47,13 +47,32 @@ pub fn parse_ver(s: &str) -> Option<(u64, u64, u64)> {
 }
 
 /// The gate's verdict for one request: `Some((min_as_text, url))` when the client must
-/// update — its `app` field is older than SCRAI_MIN_APP, or missing while a gate is set.
+/// update — its `app` field is older than MIN_APP, or missing while a gate is set.
 pub fn app_outdated(req: &serde_json::Value) -> Option<(String, String)> {
     let min = min_app()?;
     let app = req.get("app").and_then(|a| a.as_str()).and_then(parse_ver);
     match app {
         Some(v) if v >= min => None,
         _ => Some((format!("{}.{}.{}", min.0, min.1, min.2), update_url())),
+    }
+}
+
+/// Read a config value by its NEW, prefix-free name, falling back to the old `SCRAI_`
+/// one. The prefix is being dropped as part of the tokumai rename (ALLOW_SINGLE_AUTHORITY,
+/// not SCRAI_ALLOW_SINGLE_AUTHORITY).
+///
+/// The fallback exists so the rename can ship WITHOUT touching /opt/tokumai/.env in the
+/// same breath. Several of these are fail-closed — a missing ALLOW_SINGLE_AUTHORITY stops
+/// the server dead — so a deploy that renamed the code but not the file would take the box
+/// down. Migrate the .env at leisure, then delete this function and the `SCRAI_` half.
+///
+/// Returns `Result` on purpose, so every existing call site (`.ok()`, `.is_ok()`,
+/// `.as_deref() == Ok("1")`, `.unwrap_or_else(|_| …)`) keeps its exact meaning. An EMPTY
+/// new-style value falls through to the old name rather than masking it.
+pub fn cfg(name: &str) -> Result<String, std::env::VarError> {
+    match std::env::var(name) {
+        Ok(v) if !v.trim().is_empty() => Ok(v),
+        _ => std::env::var(format!("SCRAI_{name}")),
     }
 }
 
@@ -73,7 +92,7 @@ pub const MONEY_RAILS: [&str; 6] = [
 ///
 /// `net_var` resolves `_MAINNET` → `_TESTNET` → bare, and that fallback ignores whether the
 /// server is actually in testnet mode. With only `_TESTNET` values in .env — the normal
-/// state of a testnet box — flipping SCRAI_TESTNET to 0 keeps every rail pointed at the
+/// state of a testnet box — flipping TESTNET to 0 keeps every rail pointed at the
 /// test world while the server starts accepting real money. The worst of them is Mollie:
 /// its test checkout lets the payer pick "paid" for free, so anyone could mint credit and
 /// spend it on provider calls we pay for. Refuse to boot instead.
@@ -101,6 +120,36 @@ pub fn net_var(base: &str) -> Option<String> {
 }
 
 #[cfg(test)]
+mod cfg_tests {
+    use super::*;
+
+    /// The rename ships before the .env is migrated, so BOTH names must resolve — and a
+    /// fail-closed value like ALLOW_SINGLE_AUTHORITY must never read as absent just because
+    /// the box still carries the old spelling. Uses names nothing else in the crate touches.
+    #[test]
+    fn the_new_name_wins_and_the_old_one_still_works() {
+        std::env::remove_var("CFG_PROBE");
+        std::env::remove_var("SCRAI_CFG_PROBE");
+        assert!(cfg("CFG_PROBE").is_err(), "neither set → absent");
+
+        // an un-migrated .env: only the old spelling
+        std::env::set_var("SCRAI_CFG_PROBE", "old");
+        assert_eq!(cfg("CFG_PROBE").as_deref(), Ok("old"));
+
+        // migrated: the new name wins
+        std::env::set_var("CFG_PROBE", "new");
+        assert_eq!(cfg("CFG_PROBE").as_deref(), Ok("new"));
+
+        // an EMPTY new value must not mask the old one (a commented-out line left as `X=`)
+        std::env::set_var("CFG_PROBE", "   ");
+        assert_eq!(cfg("CFG_PROBE").as_deref(), Ok("old"));
+
+        std::env::remove_var("CFG_PROBE");
+        std::env::remove_var("SCRAI_CFG_PROBE");
+    }
+}
+
+#[cfg(test)]
 mod rail_guard_tests {
     use super::*;
     use std::collections::HashMap;
@@ -112,7 +161,7 @@ mod rail_guard_tests {
     }
 
     /// The scenario this exists for: a testnet box whose .env only has _TESTNET rails, and
-    /// someone flips SCRAI_TESTNET to 0. Mollie would then run on its `test_` key, whose
+    /// someone flips TESTNET to 0. Mollie would then run on its `test_` key, whose
     /// checkout lets the payer choose "paid" for free — real credit, no money moved.
     #[test]
     fn a_mainnet_server_refuses_rails_that_only_have_a_testnet_value() {
@@ -161,10 +210,10 @@ mod release_gate_tests {
 
     #[test]
     fn gate_refuses_old_and_missing_only_when_set() {
-        // env is process-global; this is the only test touching SCRAI_MIN_APP
-        std::env::remove_var("SCRAI_MIN_APP");
+        // env is process-global; this is the only test touching MIN_APP
+        std::env::remove_var("MIN_APP");
         assert!(app_outdated(&json!({"kind":"chat"})).is_none());
-        std::env::set_var("SCRAI_MIN_APP", "0.3.0");
+        std::env::set_var("MIN_APP", "0.3.0");
         assert!(app_outdated(&json!({"kind":"chat"})).is_some(), "0.2.x sends no app field");
         assert!(app_outdated(&json!({"kind":"chat","app":"0.2.3"})).is_some());
         assert!(app_outdated(&json!({"kind":"chat","app":"0.3.0"})).is_none());
@@ -172,6 +221,6 @@ mod release_gate_tests {
         let (min, url) = app_outdated(&json!({"kind":"chat","app":"0.1.0"})).unwrap();
         assert_eq!(min, "0.3.0");
         assert!(url.starts_with("https://"));
-        std::env::remove_var("SCRAI_MIN_APP");
+        std::env::remove_var("MIN_APP");
     }
 }

@@ -1,14 +1,14 @@
 // scrai-faucet — pays testers' $1 testnet invoices from a Nyx testnet wallet.
 //
 // The app raises an ordinary invoice flagged `testnet:true` ($1, NYM rail) against a
-// server running with SCRAI_TESTNET=1. The tester pastes the invoice's memo plus an
+// server running with TESTNET=1. The tester pastes the invoice's memo plus an
 // invite code on the site this binary serves; the faucet checks the memo against the
 // server's own state (read-only), sends EXACTLY the unym the server quoted to the
 // server's receive address with that memo, and the server's chain watcher credits
 // the account like any customer payment. No special credit path exists anywhere.
 //
 // Run modes:
-//   scrai-faucet                       serve the site + API (default; needs SCRAI_TESTNET=1)
+//   scrai-faucet                       serve the site + API (default; needs TESTNET=1)
 //   scrai-faucet code new [uses] [note] mint an invite code (printed once)
 //   scrai-faucet code list             invite codes + remaining uses
 //   scrai-faucet claims                payments made so far
@@ -17,17 +17,17 @@
 //   · one payment per memo (UNIQUE), one per invoice id (UNIQUE)
 //   · invite code required, N uses each (default 3)
 //   · amount = the server-pinned quote, never a client number
-//   · daily claim cap (SCRAI_FAUCET_DAILY_MAX, default 20)
-//   · wallet reserve the faucet will not dip below (SCRAI_FAUCET_RESERVE_UNYM, default 5 NYM)
+//   · daily claim cap (FAUCET_DAILY_MAX, default 20)
+//   · wallet reserve the faucet will not dip below (FAUCET_RESERVE_UNYM, default 5 NYM)
 //   · per-IP attempt limit (10/h, in memory, IP only ever hashed with a boot-time salt)
 //
-// Kill switch: SCRAI_TESTNET unset/0 → the site still serves (downloads) but the faucet
+// Kill switch: TESTNET unset/0 → the site still serves (downloads) but the faucet
 // section is hidden and /api/claim answers 403. The server side refuses testnet invoices
 // under the same variable, so nothing half-works.
 //
 // HTTP: a deliberately tiny HTTP/1.1 responder on loopback, meant to sit behind Caddy or
 // nginx (TLS, hostname, request normalisation). It refuses to bind a non-loopback
-// address unless SCRAI_FAUCET_INSECURE_PUBLIC=1 — testers paste memos here, that must
+// address unless FAUCET_INSECURE_PUBLIC=1 — testers paste memos here, that must
 // not travel in the clear.
 
 use std::collections::HashMap;
@@ -135,7 +135,7 @@ fn now() -> u64 {
 }
 
 fn env_or(name: &str, default: &str) -> String {
-    std::env::var(name).ok().filter(|v| !v.trim().is_empty()).unwrap_or_else(|| default.to_string())
+    scrai_server::cfg(name).ok().filter(|v| !v.trim().is_empty()).unwrap_or_else(|| default.to_string())
 }
 
 /// `https://validator-sandbox-1.nymtech.net/api` → `https://validator-sandbox-1.nymtech.net`.
@@ -174,21 +174,21 @@ impl Cfg {
             }
         }
         Cfg {
-            data: PathBuf::from(env_or("SCRAI_DATA", "./data")),
-            listen: env_or("SCRAI_FAUCET_LISTEN", "127.0.0.1:8790"),
+            data: PathBuf::from(env_or("DATA", "./data")),
+            listen: env_or("FAUCET_LISTEN", "127.0.0.1:8790"),
             // Tendermint RPC of the chain the server watches. Derived from the LCD the
             // server uses (NYX_LCD_URL_*: `<validator>/api` → `<validator>`), so the faucet
-            // can never pay on a different chain by accident; SCRAI_FAUCET_RPC overrides
+            // can never pay on a different chain by accident; FAUCET_RPC overrides
             // for hosts where LCD and RPC don't share a root.
-            rpc: env_or("SCRAI_FAUCET_RPC", &rpc_from_lcd(scrai_server::net_var("NYX_LCD_URL").as_deref())),
+            rpc: env_or("FAUCET_RPC", &rpc_from_lcd(scrai_server::net_var("NYX_LCD_URL").as_deref())),
             // the SAME receive address the server watches — a payment anywhere else is lost
             receive: scrai_server::net_var("NYX_RECEIVE_ADDRESS").unwrap_or_default(),
-            daily_max: env_or("SCRAI_FAUCET_DAILY_MAX", "20").parse().unwrap_or(20),
-            reserve_unym: env_or("SCRAI_FAUCET_RESERVE_UNYM", "5000000").parse().unwrap_or(5_000_000),
-            explorer: std::env::var("SCRAI_FAUCET_EXPLORER").ok().filter(|u| u.starts_with("https://")),
-            prefix: env_or("SCRAI_FAUCET_BECH32_PREFIX", "n"),
-            denom: env_or("SCRAI_FAUCET_DENOM", "unym"),
-            dl_dir: PathBuf::from(env_or("SCRAI_SITE_DL_DIR", "/opt/scrai/site/dl")),
+            daily_max: env_or("FAUCET_DAILY_MAX", "20").parse().unwrap_or(20),
+            reserve_unym: env_or("FAUCET_RESERVE_UNYM", "5000000").parse().unwrap_or(5_000_000),
+            explorer: scrai_server::cfg("FAUCET_EXPLORER").ok().filter(|u| u.starts_with("https://")),
+            prefix: env_or("FAUCET_BECH32_PREFIX", "n"),
+            denom: env_or("FAUCET_DENOM", "unym"),
+            dl_dir: PathBuf::from(env_or("SITE_DL_DIR", "/opt/scrai/site/dl")),
         }
     }
     fn state_db(&self) -> PathBuf {
@@ -236,13 +236,13 @@ struct Wallet {
 
 impl Wallet {
     fn connect(cfg: &Cfg) -> Result<Option<Wallet>, String> {
-        let Some(m) = std::env::var("SCRAI_FAUCET_MNEMONIC").ok().filter(|m| !m.trim().is_empty()) else {
+        let Some(m) = scrai_server::cfg("FAUCET_MNEMONIC").ok().filter(|m| !m.trim().is_empty()) else {
             return Ok(None);
         };
         if cfg.rpc.is_empty() {
-            return Err("no chain RPC: set NYX_LCD_URL_* (the faucet derives the RPC from it) or SCRAI_FAUCET_RPC".into());
+            return Err("no chain RPC: set NYX_LCD_URL_* (the faucet derives the RPC from it) or FAUCET_RPC".into());
         }
-        let mnemonic: bip39::Mnemonic = m.trim().parse().map_err(|e| format!("SCRAI_FAUCET_MNEMONIC: {e}"))?;
+        let mnemonic: bip39::Mnemonic = m.trim().parse().map_err(|e| format!("FAUCET_MNEMONIC: {e}"))?;
         // Chain details: the Nyx sandbox shares prefix + denom with mainnet; the chain id
         // is read from the node on signing, contracts play no part in a bank send.
         let mut details = NymNetworkDetails::new_mainnet();
@@ -376,10 +376,10 @@ impl Faucet {
         let day_start = ts - ts % 86_400;
         if claims_since(&db, day_start) > self.cfg.daily_max {
             let _ = db.execute("DELETE FROM claims WHERE memo = ?1 AND stage = 'sending'", [memo]);
-            // Operator signal: the cap is SCRAI_FAUCET_DAILY_MAX in /opt/scrai/.env (restart
+            // Operator signal: the cap is FAUCET_DAILY_MAX in /opt/scrai/.env (restart
             // scrai-faucet after raising it). scrai-admin shows the same count in red.
             eprintln!(
-                "scrai-faucet: DAILY LIMIT reached — {} claims today, max {} (SCRAI_FAUCET_DAILY_MAX in .env; restart scrai-faucet after raising) — refused memo {memo} code {code}",
+                "scrai-faucet: DAILY LIMIT reached — {} claims today, max {} (FAUCET_DAILY_MAX in .env; restart scrai-faucet after raising) — refused memo {memo} code {code}",
                 self.cfg.daily_max, self.cfg.daily_max
             );
             return Err("the faucet's daily limit is reached — try again tomorrow (the operator sees this and can raise it)".into());
@@ -533,8 +533,8 @@ fn site_html(dl_dir: &Path) -> String {
     }
     // iOS lives elsewhere (TestFlight / a guide page): env links.
     for (ph, var, label, primary) in [
-        ("{{DL_IOS}}", "SCRAI_DL_IOS", "Join on TestFlight", true),
-        ("{{DL_IOS_GUIDE}}", "SCRAI_DL_IOS_GUIDE", "Sideload guide for testers", false),
+        ("{{DL_IOS}}", "DL_IOS", "Join on TestFlight", true),
+        ("{{DL_IOS_GUIDE}}", "DL_IOS_GUIDE", "Sideload guide for testers", false),
     ] {
         let cls = if primary { "btn primary" } else { "btn" };
         let html = match env_link(var) {
@@ -557,12 +557,12 @@ fn site_html(dl_dir: &Path) -> String {
     s = s.replace("{{CLS_ANDROID}}", if files.contains_key("android") { " has" } else { "" });
     s = s.replace("{{META_ANDROID}}", &meta("android", "APK · arm64 · Android 8+"));
     s = s.replace("{{SHA_ANDROID}}", &sha("android"));
-    s = s.replace("{{CLS_IOS}}", if env_link("SCRAI_DL_IOS").is_some() { " has" } else { " soon" });
-    // Only say "review pending" while there is no join link — once SCRAI_DL_IOS is set
+    s = s.replace("{{CLS_IOS}}", if env_link("DL_IOS").is_some() { " has" } else { " soon" });
+    // Only say "review pending" while there is no join link — once DL_IOS is set
     // the sentence would contradict the button right above it.
     s = s.replace(
         "{{NOTE_IOS_PENDING}}",
-        if env_link("SCRAI_DL_IOS").is_some() {
+        if env_link("DL_IOS").is_some() {
             ""
         } else {
             r#"<div style="margin-top:8px">Apple Beta App Review pending — the join link appears here as soon as it is approved.</div>"#
@@ -585,7 +585,7 @@ fn site_html(dl_dir: &Path) -> String {
     // hero caption: just the number ("0.3.2"), or the build label when no manifest is published
     let short = mver.clone().unwrap_or_else(|| "testnet build".into());
     s = s.replace("{{VERSION_SHORT}}", &html_escape(&short));
-    let version = mver.map(|v| format!("Testnet build {v}")).unwrap_or_else(|| env_or("SCRAI_SITE_VERSION", "testnet build"));
+    let version = mver.map(|v| format!("Testnet build {v}")).unwrap_or_else(|| env_or("SITE_VERSION", "testnet build"));
     s = s.replace("{{VERSION}}", &html_escape(&version));
     s = s.replace("{{TESTNET}}", if testnet_on() { "on" } else { "off" });
     s
@@ -744,11 +744,11 @@ async fn handle(f: Arc<Faucet>, mut sock: tokio::net::TcpStream, peer: SocketAdd
 }
 
 async fn serve(cfg: Cfg) -> Result<(), String> {
-    let addr: SocketAddr = cfg.listen.parse().map_err(|e| format!("SCRAI_FAUCET_LISTEN: {e}"))?;
-    if !addr.ip().is_loopback() && env_or("SCRAI_FAUCET_INSECURE_PUBLIC", "0") != "1" {
+    let addr: SocketAddr = cfg.listen.parse().map_err(|e| format!("FAUCET_LISTEN: {e}"))?;
+    if !addr.ip().is_loopback() && env_or("FAUCET_INSECURE_PUBLIC", "0") != "1" {
         return Err(format!(
             "refusing to listen on {addr}: put the faucet behind Caddy/nginx (TLS) on loopback, \
-             or set SCRAI_FAUCET_INSECURE_PUBLIC=1 if you really mean plain HTTP"
+             or set FAUCET_INSECURE_PUBLIC=1 if you really mean plain HTTP"
         ));
     }
     let wallet = Wallet::connect(&cfg)?;
@@ -762,7 +762,7 @@ async fn serve(cfg: Cfg) -> Result<(), String> {
             }
         }
         (None, true) => eprintln!("scrai-faucet: TESTNET on but no faucet wallet configured (see .env.example) — site only, claims refused"),
-        (_, false) => println!("scrai-faucet: testnet OFF (SCRAI_TESTNET unset) — serving downloads only, faucet hidden"),
+        (_, false) => println!("scrai-faucet: testnet OFF (TESTNET unset) — serving downloads only, faucet hidden"),
     }
     let faucet = Arc::new(Faucet {
         cfg,

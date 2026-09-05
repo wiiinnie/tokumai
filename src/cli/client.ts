@@ -46,10 +46,10 @@ import type { ChatMessage } from "../types.js";
 // machine is the normal dev case, so the client lives one port up. The value is
 // baked into the config at `setup` time, so changing it means setting it before
 // setup — not after.
-const WS_PORT = Number(process.env.SCRAI_NYM_WS_PORT ?? DEFAULT_WS_PORT + 1);
-const REPLY_TIMEOUT_MS = Number(process.env.SCRAI_TIMEOUT_MS ?? 120_000);
+const WS_PORT = Number((process.env.NYM_WS_PORT ?? process.env.SCRAI_NYM_WS_PORT) ?? DEFAULT_WS_PORT + 1);
+const REPLY_TIMEOUT_MS = Number((process.env.TIMEOUT_MS ?? process.env.SCRAI_TIMEOUT_MS) ?? 120_000);
 /** Gap between payment checks. Generous because each one crosses the mixnet twice. */
-const POLL_INTERVAL_MS = Number(process.env.SCRAI_POLL_MS ?? 15_000);
+const POLL_INTERVAL_MS = Number((process.env.POLL_MS ?? process.env.SCRAI_POLL_MS) ?? 15_000);
 
 function fail(msg: string): never {
   console.error(msg);
@@ -101,7 +101,7 @@ async function withMixnet<T>(
   } else {
     started = await nym.start(c.clientId, {
       port: WS_PORT,
-      verbose: process.env.SCRAI_VERBOSE === "1",
+      verbose: (process.env.VERBOSE ?? process.env.SCRAI_VERBOSE) === "1",
       onPhase: (phase) => p?.phase(phase),
     });
   }
@@ -554,7 +554,7 @@ async function streamRoundTrip(
   balance?: number;
 }> {
   const c = cfg.load();
-  const idleMs = Number(process.env.SCRAI_IDLE_MS ?? 45_000);
+  const idleMs = Number((process.env.IDLE_MS ?? process.env.SCRAI_IDLE_MS) ?? 45_000);
   let frames = 0;
   let bytes = 0;
   let firstFrameAt = 0;
@@ -697,7 +697,7 @@ async function cmdDaemon(): Promise<void> {
   const prog = new Progress("starting nym-client");
   const running = await nym.start(c.clientId, {
     port: WS_PORT,
-    verbose: process.env.SCRAI_VERBOSE === "1",
+    verbose: (process.env.VERBOSE ?? process.env.SCRAI_VERBOSE) === "1",
     onPhase: (phase) => prog.phase(phase),
   });
 
@@ -1092,7 +1092,7 @@ async function cmdRepl(): Promise<void> {
     const prog = new Progress("starting mixnet client");
     held = await nym.start(c.clientId, {
       port: WS_PORT,
-      verbose: process.env.SCRAI_VERBOSE === "1",
+      verbose: (process.env.VERBOSE ?? process.env.SCRAI_VERBOSE) === "1",
       onPhase: (phase) => prog.phase(phase),
     });
     prog.stop();

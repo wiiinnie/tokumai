@@ -37,7 +37,7 @@ static SERVER_VERSION: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(
 /// shown by the UI as a blocking "Update available" gate.
 static SERVER_UPDATE: std::sync::Mutex<Option<Value>> = std::sync::Mutex::new(None);
 /// tauri.conf.json's version, read once at launch; goes out as `app` on every request so
-/// the server's release gate (SCRAI_MIN_APP) can tell an outdated build apart.
+/// the server's release gate (MIN_APP) can tell an outdated build apart.
 static APP_VER: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 pub fn app_version() -> &'static str {
     APP_VER.get().map(String::as_str).unwrap_or("0.0.0")
@@ -245,6 +245,17 @@ fn fair_price_estimate(model: &str, messages: &Value, reply_text: &str) -> Optio
     Some(compute_billing(&price, &usage, CLIENT_RETAIL_MARGIN, 1, true).price_scrai)
 }
 
+/// Dev-only environment overrides. These read the AMBIENT environment of a user's machine,
+/// not a config file we own, so unlike the server they keep a namespace: a bare `CONFIG` or
+/// `SERVER_ADDRESS` would collide with any unrelated tool that happens to set one.
+/// `TOKUMAI_` is the new prefix, `SCRAI_` still read so existing dev setups keep working.
+fn dev_env(name: &str) -> Option<String> {
+    std::env::var(format!("TOKUMAI_{name}"))
+        .or_else(|_| std::env::var(format!("SCRAI_{name}")))
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+}
+
 fn data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     app.path().app_data_dir().map_err(|e| e.to_string())
 }
@@ -326,7 +337,7 @@ fn diag(app: &AppHandle, msg: &str) {
 /// The CLI stores its server address in ~/.scrai/cli.json; read it as a fallback
 /// so `npm run client -- server <addr>` also configures the app.
 fn cli_config_server() -> Option<String> {
-    let path = std::env::var("SCRAI_CONFIG").map(PathBuf::from).ok().or_else(|| {
+    let path = dev_env("CONFIG").map(PathBuf::from).or_else(|| {
         std::env::var("HOME").ok().map(|h| PathBuf::from(h).join(".scrai").join("cli.json"))
     })?;
     let s = std::fs::read_to_string(path).ok()?;
@@ -336,7 +347,7 @@ fn cli_config_server() -> Option<String> {
 
 // Temporary: the single official scrai-server, hardcoded so a fresh install works
 // out-of-the-box while there is exactly one operator. The frontend pins the same address
-// (KNOWN_SERVERS). A wallet-set server (your own or a 3rd-party) or SCRAI_SERVER_ADDRESS
+// (KNOWN_SERVERS). A wallet-set server (your own or a 3rd-party) or SERVER_ADDRESS
 // always OVERRIDES this. Replace with a signed directory when onboarding other servers
 // (docs/federation-shared-ledger.md). This also makes server config self-healing: even if
 // the on-device wallet loses its `server` field, requests still reach the official server.
@@ -351,7 +362,7 @@ fn server_addr(w: &wallet::Wallet) -> Result<String, String> {
     Ok(w.server
         .clone()
         .filter(|s| !s.is_empty())
-        .or_else(|| std::env::var("SCRAI_SERVER_ADDRESS").ok().and_then(&valid))
+        .or_else(|| dev_env("SERVER_ADDRESS").and_then(&valid))
         .or_else(|| cli_config_server().and_then(&valid))
         .unwrap_or_else(|| OFFICIAL_SERVER.to_string()))
 }
@@ -1123,7 +1134,7 @@ async fn invoice(
     let sig = a.sign(&format!("invoice:{}", usd), &nonce);
     let mut req = json!({"v":PROTO,"kind":"invoice.create","id":rand_hex(16),"publicKey":a.public_key_pem,"usd":usd,"method":method,"nonce":nonce,"sig":sig});
     // Tester's $1 paid by the server's faucet. The server refuses it unless it runs
-    // with SCRAI_TESTNET=1 — the client only ever offers the toggle when it does.
+    // with TESTNET=1 — the client only ever offers the toggle when it does.
     if testnet == Some(true) {
         req["testnet"] = json!(true);
     }

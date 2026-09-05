@@ -35,7 +35,7 @@ export const SCRAI_PER_USD = 100_000;
 export const DEFAULT_PURCHASE_TIERS = [5, 10, 20, 50];
 
 export function purchaseTiers(): number[] {
-  const raw = process.env.SCRAI_PURCHASE_TIERS;
+  const raw = (process.env.PURCHASE_TIERS ?? process.env.SCRAI_PURCHASE_TIERS);
   if (!raw) return DEFAULT_PURCHASE_TIERS;
   const parsed = raw
     .split(",")

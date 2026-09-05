@@ -109,7 +109,7 @@ export class FakeGateway implements PaymentGateway {
   private settled = new Set<string>();
 
   constructor() {
-    if (process.env.SCRAI_FAKE_PAYMENTS !== "1") {
+    if ((process.env.FAKE_PAYMENTS ?? process.env.SCRAI_FAKE_PAYMENTS) !== "1") {
       throw new Error(
         "the fake payment gateway needs SCRAI_FAKE_PAYMENTS=1 — it accepts money that does not exist",
       );
@@ -329,7 +329,7 @@ function explainBTCPay(status: number, body: string, path: string): string {
  * the default.
  */
 export function selectGateway(): PaymentGateway {
-  if (process.env.SCRAI_FAKE_PAYMENTS === "1") {
+  if ((process.env.FAKE_PAYMENTS ?? process.env.SCRAI_FAKE_PAYMENTS) === "1") {
     // Say so when the fake wins despite real credentials being present. Silently
     // ignoring a configured BTCPay is exactly the kind of surprise that costs an
     // afternoon: the operator sees "gateway=fake", checks their keys, finds them

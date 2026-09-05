@@ -52,7 +52,7 @@ struct Inv {
     amount_scrai: u64,
     #[serde(default)]
     status: String,
-    /// raised as a $1 faucet-paid testnet purchase (SCRAI_TESTNET servers)
+    /// raised as a $1 faucet-paid testnet purchase (TESTNET servers)
     #[serde(default)]
     testnet: bool,
     /// rail that served it: "btc" | "nyx" | "card" (Mollie) — absent on pre-card records
@@ -200,11 +200,11 @@ struct Metrics {
     peak_clients_max: u64,
     /// model ids seen in the shown days, most-used first — one table column each
     models: Vec<String>,
-    /// day-boundary zone the server buckets with (SCRAI_METRICS_TZ; "UTC" if unset/old server)
+    /// day-boundary zone the server buckets with (METRICS_TZ; "UTC" if unset/old server)
     metrics_tz: String,
     // live-grounding queries used this UTC month (Gemini's 5,000/mo free allowance)
     grounding_used: u64,
-    // testnet faucet (SCRAI_TESTNET servers): invoices flagged testnet + faucet.db claims
+    // testnet faucet (TESTNET servers): invoices flagged testnet + faucet.db claims
     testnet_paid: usize,
     testnet_pending: usize,
     faucet_claims: u64,
@@ -212,7 +212,7 @@ struct Metrics {
     faucet_stuck: u64,
     /// claim rows stamped today (UTC) — the number `scrai-faucet` compares with its cap
     faucet_today: u64,
-    /// SCRAI_FAUCET_DAILY_MAX from the env file (default 20, as in scrai-faucet)
+    /// FAUCET_DAILY_MAX from the env file (default 20, as in scrai-faucet)
     faucet_daily_max: u64,
     has_faucet: bool,
     /// invite codes (newest first) — minted here with `c`
@@ -270,7 +270,7 @@ const NET_VARS: &[&str] = &[
 ];
 
 fn env_file_path() -> String {
-    std::env::var("SCRAI_ENV_FILE").unwrap_or_else(|_| "/opt/scrai/.env".into())
+    scrai_server::cfg("ENV_FILE").unwrap_or_else(|_| "/opt/scrai/.env".into())
 }
 
 /// `KEY=value` from the env file (uncommented lines only; quotes stripped), falling back to
@@ -529,7 +529,7 @@ fn read_metrics(path: &PathBuf) -> Metrics {
         if fdb.exists() {
             if let Ok(fc) = Connection::open_with_flags(&fdb, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX) {
                 m.has_faucet = true;
-                m.faucet_daily_max = env_file_value("SCRAI_FAUCET_DAILY_MAX").and_then(|v| v.parse().ok()).unwrap_or(20);
+                m.faucet_daily_max = env_file_value("FAUCET_DAILY_MAX").and_then(|v| v.parse().ok()).unwrap_or(20);
                 let today_start = { let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0); t - t % 86_400 };
                 m.faucet_codes = scrai_server::faucet::list_codes(&fc).unwrap_or_default();
                 if let Ok(mut st) = fc.prepare("SELECT ts, unym, stage FROM claims") {
@@ -582,10 +582,10 @@ fn usd4(scrai: u64) -> String {
 }
 
 /// € per $ for the cost columns — Google's AI Studio dashboard and invoice are in EUR at
-/// Google's own monthly rate, so the operator sets the rate they see (`SCRAI_FX_EUR_PER_USD`
+/// Google's own monthly rate, so the operator sets the rate they see (`FX_EUR_PER_USD`
 /// in .env). None → dollars only, no silent conversion.
 fn eur_per_usd() -> Option<f64> {
-    env_file_value("SCRAI_FX_EUR_PER_USD").and_then(|v| v.replace(',', ".").parse::<f64>().ok()).filter(|r| *r > 0.0)
+    env_file_value("FX_EUR_PER_USD").and_then(|v| v.replace(',', ".").parse::<f64>().ok()).filter(|r| *r > 0.0)
 }
 
 fn eur(scrai: u64, rate: f64) -> String {
@@ -722,8 +722,8 @@ fn ui(f: &mut Frame, m: &Metrics, view: &View, path: &str, clock: &str, network:
         kv(
             "  € rate",
             match eur_per_usd() {
-                Some(r) => format!("{r:.3} €/$ — SCRAI_FX_EUR_PER_USD, Google's invoice rate"),
-                None => "not set (SCRAI_FX_EUR_PER_USD) — dollars only".into(),
+                Some(r) => format!("{r:.3} €/$ — FX_EUR_PER_USD, Google's invoice rate"),
+                None => "not set (FX_EUR_PER_USD) — dollars only".into(),
             },
             DIM,
         ),
@@ -982,7 +982,7 @@ fn ui(f: &mut Frame, m: &Metrics, view: &View, path: &str, clock: &str, network:
                 kv("funded", format!("{} · {:.1} NYM", m.faucet_claims, m.faucet_unym as f64 / 1e6), GOLD),
                 kv(
                     "today",
-                    format!("{} / {}{}", m.faucet_today, m.faucet_daily_max, if m.faucet_today >= m.faucet_daily_max { "  LIMIT — raise SCRAI_FAUCET_DAILY_MAX" } else { "" }),
+                    format!("{} / {}{}", m.faucet_today, m.faucet_daily_max, if m.faucet_today >= m.faucet_daily_max { "  LIMIT — raise FAUCET_DAILY_MAX" } else { "" }),
                     if m.faucet_today >= m.faucet_daily_max { RUST } else if m.faucet_today > 0 { GOLD } else { DIM },
                 ),
                 kv("open invoices", grp(m.testnet_pending as u64), if m.testnet_pending > 0 { GOLD } else { DIM }),
@@ -1032,7 +1032,7 @@ fn clock_utc() -> String {
 
 fn main() -> io::Result<()> {
     let path: PathBuf = std::env::args().nth(1).map(PathBuf::from).unwrap_or_else(|| {
-        let data = std::env::var("SCRAI_DATA").unwrap_or_else(|_| "./data".into());
+        let data = scrai_server::cfg("DATA").unwrap_or_else(|_| "./data".into());
         PathBuf::from(data).join("state.db")
     });
     let path_str = path.display().to_string();
@@ -1130,7 +1130,7 @@ OTHER=1
         assert_eq!(managed_suffix("GEMINI_API_KEY_MAINNET=x"), Some("mainnet"));
         assert_eq!(managed_suffix("# NYX_LCD_URL_TESTNET=y"), Some("testnet"));
         assert_eq!(managed_suffix("GEMINI_API_KEY=legacy"), None); // unsuffixed = not managed
-        assert_eq!(managed_suffix("SCRAI_GATEWAY_MAINNET=z"), None); // not in the managed set
+        assert_eq!(managed_suffix("GATEWAY_MAINNET=z"), None); // not in the managed set
         assert_eq!(managed_suffix("NOTES_MAINNET is a sentence"), None); // no '='
     }
 }

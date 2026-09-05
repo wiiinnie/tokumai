@@ -174,7 +174,7 @@ export interface RunningClient {
 }
 
 /** How long nym-client gets to flush its SURB store before we insist. */
-const SHUTDOWN_GRACE_MS = Number(process.env.SCRAI_SHUTDOWN_MS ?? 4000);
+const SHUTDOWN_GRACE_MS = Number((process.env.SHUTDOWN_MS ?? process.env.SCRAI_SHUTDOWN_MS) ?? 4000);
 
 /**
  * Start `nym-client run` and resolve once it is actually up.
