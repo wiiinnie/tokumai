@@ -241,7 +241,9 @@
   .pm.sel{border-color:var(--signal);background:color-mix(in srgb,var(--signal) 11%,var(--surface-2))}
   .pm.sel .pmtag{color:var(--signal)}
   .pm.soon{opacity:.5;cursor:not-allowed}
-  .cardmarks{display:flex;align-items:center;gap:4px;flex-wrap:wrap;justify-content:center}
+  /* The card marks sit in a row that is otherwise built around a 26px square logo, so the
+     box has to grow to fit them — left as-is they wrapped into a vertical stack. */
+  .cardmarks{display:flex;align-items:center;gap:4px;flex-wrap:nowrap}
   .cardmarks svg{border-radius:3px;display:block}
   .pm.dis,.tiletier.dis{opacity:.32;pointer-events:none;filter:saturate(.4)}
   /* Invite code: the card above the amounts + the memo note on the invoice */
@@ -262,7 +264,8 @@
   .pm.soon .pmtag{color:var(--signal)}
   /* the card row: full width BELOW the coins, one line, tagged "less private" */
   .pm.row{flex:1 1 100%;flex-direction:row;justify-content:flex-start;gap:12px;padding:11px 14px;min-width:0}
-  .pm.row .pmname{flex:1 1 auto}
+  .pm.row .pmlogo{width:auto;height:auto;flex:none}
+  .pm.row .pmname{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .pm.row .pmtag.less{color:var(--gold)}
   .pm.row.sel .pmtag.less{color:var(--gold)}
   .cardwait{font-size:13.5px;line-height:1.5;color:var(--bone);margin:0 0 12px}

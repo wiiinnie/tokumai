@@ -270,7 +270,10 @@ const NET_VARS: &[&str] = &[
 ];
 
 fn env_file_path() -> String {
-    scrai_server::cfg("ENV_FILE").unwrap_or_else(|_| "/opt/scrai/.env".into())
+    // Was hardcoded to /opt/scrai/.env, which stopped existing with the move to
+    // /opt/tokumai — the panel then silently showed compiled-in defaults instead of the
+    // caps the services run with.
+    scrai_server::env_file().display().to_string()
 }
 
 /// `KEY=value` from the env file (uncommented lines only; quotes stripped), falling back to
@@ -1035,10 +1038,10 @@ fn clock_utc() -> String {
 }
 
 fn main() -> io::Result<()> {
-    let path: PathBuf = std::env::args().nth(1).map(PathBuf::from).unwrap_or_else(|| {
-        let data = scrai_server::cfg("DATA").unwrap_or_else(|_| "./data".into());
-        PathBuf::from(data).join("state.db")
-    });
+    let path: PathBuf = std::env::args()
+        .nth(1)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| scrai_server::data_dir().join("state.db"));
     let path_str = path.display().to_string();
 
     enable_raw_mode()?;

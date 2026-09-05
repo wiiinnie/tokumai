@@ -76,6 +76,42 @@ pub fn cfg(name: &str) -> Result<String, std::env::VarError> {
     }
 }
 
+/// Where this binary is installed: `/opt/tokumai/bin/<exe>` → `/opt/tokumai`.
+///
+/// The CLIs used to resolve DATA and the .env against the CURRENT DIRECTORY, so running
+/// one the obvious way — `sudo -u scrai /opt/tokumai/bin/tokumai-faucet code new` from a
+/// home directory — died with "./data/faucet.db: unable to open database file", and
+/// scrai-admin read no .env at all. The install root is derived from the executable, so
+/// the tools work from anywhere. Returns None for a binary that is not in a `bin/` dir
+/// (cargo run, tests) — the caller then keeps the relative default.
+pub fn install_root() -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let bin = exe.parent()?;
+    (bin.file_name()? == "bin").then(|| bin.parent().map(|r| r.to_path_buf()))?
+}
+
+/// The state directory: `DATA` if set, else `./data` when it exists (a dev checkout),
+/// else `<install root>/data`.
+pub fn data_dir() -> std::path::PathBuf {
+    if let Ok(d) = cfg("DATA") {
+        return std::path::PathBuf::from(d);
+    }
+    let here = std::path::PathBuf::from("./data");
+    if here.is_dir() {
+        return here;
+    }
+    install_root().map(|r| r.join("data")).unwrap_or(here)
+}
+
+/// The .env the services actually run with: `ENV_FILE` if set, else `<install root>/.env`,
+/// else `./.env` (dev checkout).
+pub fn env_file() -> std::path::PathBuf {
+    if let Ok(f) = cfg("ENV_FILE") {
+        return std::path::PathBuf::from(f);
+    }
+    install_root().map(|r| r.join(".env")).unwrap_or_else(|| std::path::PathBuf::from("./.env"))
+}
+
 /// Money rails whose configuration is network-scoped (`{base}_MAINNET` / `{base}_TESTNET`).
 /// Getting one of these wrong does not fail loudly — it settles invoices against the wrong
 /// world — so they are checked at boot (`testnet_rails_on_mainnet`).

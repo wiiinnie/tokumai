@@ -198,6 +198,18 @@ pub fn is_testnet_server() -> bool {
         .unwrap_or(false)
 }
 
+/// Every request kind `Pay::begin` answers — the dispatch loop in main.rs routes by this
+/// list. It lives HERE so the two cannot drift: adding a handler in `begin` without adding
+/// its name to main.rs meant the message never reached the paywall and the client got
+/// "unknown kind: invite.check" from a server that had the handler compiled in (2026-09-05).
+pub const PAY_KINDS: [&str; 5] = [
+    "invoice.create",
+    "invoice.status",
+    "invoice.cancel",
+    "entitlement",
+    "invite.check",
+];
+
 /// The only amount a testnet (faucet-paid) purchase may have.
 pub const TESTNET_USD: u32 = 1;
 
@@ -2096,6 +2108,25 @@ mod tests {
         assert!(back.issuance(&req_key).is_some());
         back.abort_issuance(&req_key);
         assert!(back.issuance(&req_key).is_none());
+    }
+
+    /// Every kind the dispatch loop routes to the paywall must actually be answered by
+    /// `begin` — the drift between the two lists is what produced "unknown kind:
+    /// invite.check" from a server that had the handler (2026-09-05). Unsigned requests, so
+    /// each one fails on the signature; what matters is that none falls through.
+    #[test]
+    fn every_routed_kind_reaches_a_handler() {
+        let gw = Gateway { rail: Rail::Fake, nyx: None, card: CardRail::None };
+        let mut pay = Pay::default();
+        for kind in PAY_KINDS {
+            let req = json!({"kind": kind, "id": "x"});
+            let PayStep::Reply(r) = pay.begin(req.to_string().as_bytes(), &gw) else {
+                continue; // reached the gateway phase — routed, which is the point
+            };
+            let r: Value = serde_json::from_slice(&r).unwrap();
+            let e = r["error"].as_str().unwrap_or_default();
+            assert!(!e.contains("unknown kind"), "{kind} is routed but not handled: {r}");
+        }
     }
 
     /// The pay snapshot is the one place where a field NAME is a wire format: main.rs

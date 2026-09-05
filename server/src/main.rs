@@ -820,7 +820,7 @@ async fn main() {
             // H2 (pay): authenticate/throttle on the loop, then run the gateway HTTP in a
             // spawned task — its result comes back via pay_tx and finish() runs here. A slow
             // LCD node used to stall every chat reserve/settle for up to 15 s.
-            if matches!(kind.as_str(), "invoice.create" | "invoice.status" | "invoice.cancel" | "entitlement") {
+            if pay::PAY_KINDS.contains(&kind.as_str()) {
                 let response = match paywall.begin(&m.message, &gateway) {
                     pay::PayStep::Reply(response) => response,
                     pay::PayStep::Pending(pending) => {

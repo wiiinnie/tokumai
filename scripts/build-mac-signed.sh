@@ -39,6 +39,14 @@ fi
 echo "→ signing as: $APPLE_SIGNING_IDENTITY"
 echo "→ notarising with $APPLE_ID (team $APPLE_TEAM_ID)"
 
+# A DMG left mounted from an earlier run makes bundle_dmg.sh fail at the very last step —
+# after signing AND notarising, so the failure costs a full Apple round trip. Detach any
+# volume of ours first (2026-09-05: /Volumes/tokumai and a stray /Volumes/dmg.* survived a
+# cancelled build and the next one died on them).
+for v in /Volumes/tokumai /Volumes/dmg.*; do
+  [ -d "$v" ] && { echo "→ detaching stale $v"; hdiutil detach "$v" -force >/dev/null 2>&1 || true; }
+done
+
 npm run -s tauri:build
 
 APP="$SRC/target/release/bundle/macos/tokumai.app"
