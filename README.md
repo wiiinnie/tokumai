@@ -684,6 +684,44 @@ worst failure this system can have. It is covered by a test.
 npm run issuer -- pending    # what is still awaiting payment or confirmation
 ```
 
+### Or CoinGate instead of a node
+
+BTCPay means running the node and holding the coin. The alternative is an EU-licensed
+processor — CoinGate (UAB Decentralized, Vilnius; MiCA CASP + Bank of Lithuania payment
+institution) — which takes the coin and settles EUR to the bank account:
+
+```bash
+COINGATE_API_KEY_MAINNET=…      # sandbox keys are separate: COINGATE_API_KEY_TESTNET
+# and remove FAKE_PAYMENTS
+```
+
+A CoinGate key **wins over BTCPay** (the server logs that it is ignoring the BTCPay
+store), and `Rail::CoinGate` raises the invoice in two calls: `POST /orders` prices it in
+USD, then `POST /orders/{id}/checkout` locks it to one coin and returns the bare
+`payment_address`. That second call is the whole reason this rail is usable here — the
+default integration is a redirect to CoinGate's hosted checkout, which would have the
+customer's browser connect to the payment processor at the exact moment the mixnet is
+protecting them.
+
+Which key is set also decides which host is used (`api.coingate.com` vs
+`api-sandbox.coingate.com`), never `TESTNET`: a sandbox order can be marked paid for
+free, so a leftover sandbox key must not be able to mint credit on a real server. The
+`MONEY_RAILS` boot guard refuses to start a mainnet server that has only the `_TESTNET`
+key, for the same reason it does for Mollie.
+
+Two things are genuinely worse than BTCPay, and both are CoinGate's model rather than
+this code:
+
+| | BTCPay | CoinGate |
+|---|---|---|
+| coins per invoice | all enabled methods at once (on-chain **and** Lightning) | exactly one (`COINGATE_PAY_CURRENCY` + `COINGATE_PLATFORM_ID`) |
+| late confirmation | keeps watching; the 2-minute sweep credits it | order dies after 20 min, support case |
+
+`coingate_status()` maps their statuses onto ours: `paid` → paid, `confirming` →
+**pending** (same call as BTCPay's `Processing` — visible is not final), and every
+terminal not-paid state (`expired`, `canceled`, `invalid`, `refunded`,
+`partially_refunded`) → expired.
+
 **Polling, not webhooks.** `issuer.status()` asks BTCPay directly, so no inbound
 connection to the issuer is needed and it requires no public endpoint. A webhook
 would be faster; it would also mean opening a port. Settlement is idempotent, so
