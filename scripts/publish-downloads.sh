@@ -9,13 +9,13 @@
 #
 # Usage:  scripts/publish-downloads.sh <admin_user>@<vps-host> [https://site-host] [--force]
 #         (target falls back to DEPLOY_TARGET; site host defaults to
-#          https://scrai-faucet.hermes-stakepool.de)
+#          https://tokumai.com)
 #
 # One sudo prompt on the VPS (the target dir belongs to scrai, not the admin user).
 set -euo pipefail
 
 TARGET="${1:-${DEPLOY_TARGET:-}}"
-SITE="${2:-https://scrai-faucet.hermes-stakepool.de}"
+SITE="${2:-https://tokumai.com}"
 if [ -z "$TARGET" ]; then
   echo "usage: scripts/publish-downloads.sh <admin_user>@<vps-host> [https://site-host]" >&2
   exit 2

@@ -138,9 +138,12 @@ async fn main() {
         .map(|g| g.trim().to_string())
         .filter(|g| !g.is_empty())
         .collect();
+    // Through cfg(), like everything else: read raw this missed a .env that still spells
+    // the key SCRAI_GATEWAY_MASTER, and the pin then quietly did nothing (the existing
+    // identity keeps its gateway, so it only shows up the day one is recreated).
     let pinned = ["GATEWAY_MASTER", "GATEWAY"]
         .iter()
-        .find_map(|k| std::env::var(k).ok().map(|g| g.trim().to_string()).filter(|g| !g.is_empty()));
+        .find_map(|k| scrai_server::cfg(k).ok().map(|g| g.trim().to_string()).filter(|g| !g.is_empty()));
     let primary_exists = identity_exists(&data_dir.join(".nym-server"));
     if let Some(gw) = pinned {
         println!("scrai-server: requesting entry gateway {gw}");
@@ -517,7 +520,7 @@ async fn main() {
     let crypto_slots = Arc::new(Semaphore::new(max_crypto));
     const QUEUE_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
     println!("scrai-server: concurrency caps — chats {max_chats} (openai {max_openai}), gateway calls {max_gateway}, coconut crypto {max_crypto}");
-    if std::env::var("OPENAI_API_KEY").is_ok_and(|k| !k.trim().is_empty()) {
+    if scrai_server::cfg("OPENAI_API_KEY").is_ok_and(|k| !k.trim().is_empty()) {
         println!(
             "scrai-server: OpenAI enabled — moderation prefilter {}, {} strikes/day per session, retention badge {} days, web search ${:.3}/call",
             if chat::openai_prefilter() { "ON" } else { "off" },
@@ -1513,7 +1516,7 @@ fn load_pricing() -> PricingTable {
 
 /// Retail margin from the MARGIN env (clamped ≥ 1), default 1.4. Never in the table.
 fn pricing_margin() -> f64 {
-    std::env::var("MARGIN")
+    scrai_server::cfg("MARGIN")
         .ok()
         .and_then(|m| m.parse::<f64>().ok())
         .map(scrai_core::billing::clamp_margin)

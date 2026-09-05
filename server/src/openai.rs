@@ -49,7 +49,7 @@ pub fn is_openai_model(model: &str) -> bool {
 }
 
 pub fn api_key() -> Result<String, String> {
-    std::env::var("OPENAI_API_KEY")
+    crate::cfg("OPENAI_API_KEY")
         .ok()
         .filter(|k| !k.trim().is_empty())
         .ok_or_else(|| "OPENAI_API_KEY not set".to_string())
@@ -70,7 +70,7 @@ pub fn search_usd_per_call() -> f64 {
 /// MODERATION_PREFILTER=1 (default): run the free moderation endpoint on the user's
 /// latest turn before the model call, and decline flagged input ourselves.
 pub fn prefilter_enabled() -> bool {
-    std::env::var("MODERATION_PREFILTER").map(|v| v.trim() != "0").unwrap_or(true)
+    crate::cfg("MODERATION_PREFILTER").map(|v| v.trim() != "0").unwrap_or(true)
 }
 
 /// The app's thinking budget (tokens) → `reasoning.effort`. Every current model accepts
@@ -129,7 +129,7 @@ pub fn safety_identifier(session_id: &str, day: u64) -> String {
 /// OpenAI declines pause OpenAI, Gemini stays usable, and vice versa. The session's
 /// balance stays where it is — the only "penalty" an anonymous session can carry.
 pub fn strikes_per_day() -> u32 {
-    std::env::var("ABUSE_STRIKES_PER_DAY").ok().and_then(|v| v.trim().parse().ok()).filter(|n| *n > 0).unwrap_or(3)
+    crate::cfg("ABUSE_STRIKES_PER_DAY").ok().and_then(|v| v.trim().parse().ok()).filter(|n| *n > 0).unwrap_or(3)
 }
 
 /// (session, provider) → (day, strikes today).

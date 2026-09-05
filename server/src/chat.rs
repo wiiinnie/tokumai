@@ -33,8 +33,8 @@ const MAX_CACHED_SESSIONS: usize = 64;
 /// (e.g. a larger floor to cover per-request overhead / discourage dust spam).
 const MIN_CHARGE_DEFAULT: u64 = 1;
 fn min_charge() -> u64 {
-    std::env::var("MIN_CHARGE_TOKU")
-        .or_else(|_| std::env::var("MIN_CHARGE_SCRAI"))   // pre-rename .env
+    crate::cfg("MIN_CHARGE_TOKU")
+        .or_else(|_| crate::cfg("MIN_CHARGE_SCRAI"))   // pre-rename .env
         .ok()
         .and_then(|v| v.trim().parse::<u64>().ok())
         .unwrap_or(MIN_CHARGE_DEFAULT)
@@ -268,7 +268,7 @@ pub fn effective_price(p: scrai_core::billing::ModelPrice) -> scrai_core::billin
     if p.tier != Tier::FreeTier {
         return p;
     }
-    let f = std::env::var("FREE_TIER_FACTOR")
+    let f = crate::cfg("FREE_TIER_FACTOR")
         .ok()
         .and_then(|v| v.parse::<f64>().ok())
         .map(|v| v.clamp(0.0, 1.0))

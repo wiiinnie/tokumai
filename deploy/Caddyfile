@@ -1,0 +1,54 @@
+# tokumai.com — one backend, three names.
+#
+# The website, the payment page and the invite/faucet page are all pages of ONE
+# program: tokumai-faucet.service on 127.0.0.1:8790, with the HTML compiled into
+# the binary (include_str!). So there is nothing to point a file_server at, and no
+# second instance to keep in sync — the subdomains are thin doors onto the same
+# process, rewritten to the path that serves them.
+#
+# The only real files on disk are the app bundles under /opt/tokumai/site/dl,
+# put there by scripts/publish-downloads.sh and served by Caddy itself.
+#
+# Apply:
+#   scp deploy/Caddyfile <admin>@<vps>:/tmp/Caddyfile
+#   sudo cp /etc/caddy/Caddyfile /etc/caddy/Caddyfile.bak
+#   sudo cp /tmp/Caddyfile /etc/caddy/Caddyfile
+#   sudo caddy validate --config /etc/caddy/Caddyfile && sudo systemctl reload caddy
+#
+# If the box has a global options block (ACME e-mail, log level), keep it at the top
+# of the file — it is not reproduced here.
+
+tokumai.com {
+	encode zstd gzip
+
+	# App bundles + manifest.json: real files, served straight off the disk.
+	handle /dl/* {
+		root * /opt/tokumai/site
+		file_server
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:8790
+	}
+}
+
+www.tokumai.com {
+	redir https://tokumai.com{uri} permanent
+}
+
+# Invite code -> 1 USD in TOKU. The page calls /api/claim on its own origin, so the
+# whole host is proxied and only the root path is rewritten; the address bar keeps
+# saying faucet.tokumai.com.
+faucet.tokumai.com {
+	encode zstd gzip
+	rewrite / /claim
+	reverse_proxy 127.0.0.1:8790
+}
+
+# Where the iOS top-up flow sends people. The invoice rides in the URL fragment,
+# which browsers never send — this server sees the path and nothing else.
+payment.tokumai.com {
+	encode zstd gzip
+	rewrite / /pay
+	reverse_proxy 127.0.0.1:8790
+}

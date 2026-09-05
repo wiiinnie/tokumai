@@ -1156,16 +1156,16 @@ impl Rail {
             if crate::net_var("BTCPAY_URL").is_some() {
                 eprintln!("scrai-server: a CoinGate app and a BTCPay store are both configured — raising invoices on CoinGate, ignoring BTCPay.");
             }
-            let pay_currency = std::env::var("COINGATE_PAY_CURRENCY")
+            let pay_currency = crate::cfg("COINGATE_PAY_CURRENCY")
                 .ok()
                 .map(|c| c.trim().to_uppercase())
                 .filter(|c| !c.is_empty())
                 .unwrap_or_else(|| "BTC".to_string());
-            let platform_id = std::env::var("COINGATE_PLATFORM_ID")
+            let platform_id = crate::cfg("COINGATE_PLATFORM_ID")
                 .ok()
                 .and_then(|p| p.trim().parse::<u64>().ok())
                 .unwrap_or(COINGATE_PLATFORM_BITCOIN);
-            let receive_currency = std::env::var("COINGATE_RECEIVE_CURRENCY")
+            let receive_currency = crate::cfg("COINGATE_RECEIVE_CURRENCY")
                 .ok()
                 .map(|c| c.trim().to_string())
                 .filter(|c| !c.is_empty());
@@ -1557,8 +1557,8 @@ async fn coingate(api_key: &str, req: reqwest::RequestBuilder) -> Result<Value, 
 
 const MOLLIE_API: &str = "https://api.mollie.com/v2";
 /// Where Mollie sends the browser after checkout when MOLLIE_REDIRECT_URL is unset:
-/// the static thank-you page on the download/faucet site (no order id, no cookie).
-const DEFAULT_PAID_URL: &str = "https://scrai-faucet.hermes-stakepool.de/paid";
+/// the static thank-you page on our own site (no order id, no cookie).
+const DEFAULT_PAID_URL: &str = "https://tokumai.com/paid";
 
 pub enum CardRail {
     Mollie { api_key: String, redirect_url: String },

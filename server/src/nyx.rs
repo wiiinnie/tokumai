@@ -46,7 +46,7 @@ impl Nyx {
         // an LCD/REST endpoint instead. Catch the stale var so the rail doesn't
         // just silently stay off after the migration.
         if crate::net_var("NYX_LCD_URL").is_none()
-            && std::env::var("NYX_RPC_HTTP").is_ok_and(|s| !s.trim().is_empty())
+            && crate::cfg("NYX_RPC_HTTP").is_ok_and(|s| !s.trim().is_empty())
         {
             eprintln!(
                 "scrai-server: NYX_RPC_HTTP is the old TS variable and is ignored — set NYX_LCD_URL \
@@ -60,7 +60,7 @@ impl Nyx {
         Some(Nyx {
             receive_address: addr.trim().to_string(),
             lcd_url: lcd.trim().trim_end_matches('/').to_string(),
-            price_url: std::env::var("NYX_PRICE_URL").ok().filter(|s| !s.trim().is_empty()),
+            price_url: crate::cfg("NYX_PRICE_URL").ok().filter(|s| !s.trim().is_empty()),
             price: Mutex::new((0.0, 0)),
             watch: Mutex::new((false, 0, None)),
         })

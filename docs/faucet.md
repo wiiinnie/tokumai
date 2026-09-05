@@ -57,7 +57,7 @@ Two lines in `/opt/scrai/.env`, set **after** the new bundles are on the downloa
 
 ```
 MIN_APP=0.3.0
-UPDATE_URL=https://scrai-faucet.hermes-stakepool.de/
+UPDATE_URL=https://tokumai.com/
 ```
 
 Every request now carries the app's version (`app`, from tauri.conf.json). The server
@@ -119,11 +119,11 @@ account — in the test a purchase is linkable to a tester. The site says so.
    enables it when `TESTNET=1`. The root-owned apply script changed with this
    feature — run `scripts/deploy.sh --install-apply` once (sudo prompt) before the
    normal deploy, or the old apply script will not install the faucet.
-3. Caddy — one site block; DNS `scrai-faucet.hermes-stakepool.de` → the VPS IP (an A
+3. Caddy — see `deploy/Caddyfile`; DNS `faucet.tokumai.com` → the VPS IP (an A
    record cannot carry a port; the port lives only behind the proxy):
 
    ```
-   scrai-faucet.hermes-stakepool.de {
+   faucet.tokumai.com {
        reverse_proxy 127.0.0.1:8790
        header {
            Strict-Transport-Security "max-age=31536000"
@@ -133,7 +133,7 @@ account — in the test a purchase is linkable to a tester. The site says so.
    ```
    `sudo systemctl reload caddy`. Caddy fetches the certificate itself.
 4. Invite codes: `sudo -u scrai DATA=/opt/scrai/data /opt/scrai/bin/scrai-faucet code new 3 "alice"`.
-5. Check: `curl -s https://scrai-faucet.hermes-stakepool.de/api/status` →
+5. Check: `curl -s https://faucet.tokumai.com/api/status` →
    `{"testnet":true,"wallet":true,"claimsToday":0,"dailyMax":20}`.
 
 ## Ticketbook size: $1 on testnet, $5 on mainnet

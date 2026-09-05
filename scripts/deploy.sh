@@ -34,18 +34,22 @@
 #        ssh-copy-id <admin_user>@<vps-host>
 #
 # ── WHICH SITE GOES WHERE ─────────────────────────────────────────────────
-# The site is baked into the faucet binary (include_str!), and the box runs TWO
-# faucet instances behind Caddy:
-#   --faucet public   (default)  tokumai-faucet.service          :8790
-#                                scrai-faucet.hermes-stakepool.de — NO auth
-#   --faucet preview             tokumai-faucet-preview.service  :8791
-#                                tokumai.com — behind basic_auth
-#   --faucet both | none
-# Deploying the tokumai tree without --faucet preview once put the unreleased brand
-# on the public host (2026-09-04). Step 4 now names the units before touching them.
+# ONE instance, three names. The site is baked into the faucet binary
+# (include_str!), so "update the website" means "replace that binary and restart
+# its unit" — and there is exactly one of it:
 #
-# NOTE: the faucet target reaches the root-owned apply script as its SECOND argument,
-# so after this change re-run --install-apply once, or the installed script ignores it.
+#   tokumai-faucet.service  127.0.0.1:8790   /opt/tokumai/bin/tokumai-faucet
+#     tokumai.com           the site, /pay, /paid, /imprint, /terms, /privacy
+#     faucet.tokumai.com    Caddy rewrites / to /claim (invite code, 1 USD in TOKU)
+#     payment.tokumai.com   Caddy rewrites / to /pay
+#
+# Caddy serves /dl/* straight off the disk; everything else is proxied to :8790.
+# The vhosts live in deploy/Caddyfile in this repo — copy it to /etc/caddy/Caddyfile.
+#
+# Until 2026-09-05 there was a SECOND instance on :8791 behind basic_auth, because
+# the tokumai brand was unreleased and had to stay off the public host. It is gone,
+# and so is the old scrai-faucet.hermes-stakepool.de vhost. A deploy disables the
+# leftover unit if it is still installed.
 #
 #   2. Passwordless sudo for JUST this deploy. On the VPS:
 #      `sudo visudo -f /etc/sudoers.d/scrai-deploy` and add exactly:
@@ -59,31 +63,22 @@ set -euo pipefail
 
 TARGET=""
 MODE=""
-# Which faucet instance gets the freshly built site. There are TWO on the box:
-#   public  → /opt/tokumai/bin/tokumai-faucet          + tokumai-faucet.service          (:8790)
-#             scrai-faucet.hermes-stakepool.de — NO auth, anyone can read it
-#   preview → /opt/tokumai/bin/tokumai-faucet-preview  + tokumai-faucet-preview.service  (:8791)
-#             tokumai.com — behind basic_auth, where an unreleased brand belongs
-# Default is `public`, i.e. what this script always did. Deploying the tokumai tree
-# without --faucet preview put the rebrand on the public host once (2026-09-04) —
-# hence the banner below, which names the units before anything is touched.
-FAUCET_TARGET="${DEPLOY_FAUCET:-${SCRAI_DEPLOY_FAUCET:-public}}"
 while [ $# -gt 0 ]; do
   case "$1" in
-    --faucet)   FAUCET_TARGET="${2:-}"; shift 2 ;;
-    --faucet=*) FAUCET_TARGET="${1#*=}"; shift ;;
+    # There is one site now (see WHICH SITE GOES WHERE). Fail loudly rather than
+    # accept a flag whose whole point — choosing between two instances — is gone.
+    --faucet|--faucet=*)
+      echo "deploy.sh: --faucet is gone. There is one site instance (tokumai-faucet.service)," >&2
+      echo "           reachable as tokumai.com, faucet.tokumai.com and payment.tokumai.com." >&2
+      exit 2 ;;
     --*)        MODE="$1"; shift ;;
     *)          TARGET="$1"; shift ;;
   esac
 done
 TARGET="${TARGET:-${DEPLOY_TARGET:-${SCRAI_DEPLOY_TARGET:-}}}"
-case "$FAUCET_TARGET" in
-  public|preview|both|none) ;;
-  *) echo "deploy.sh: --faucet must be public, preview, both or none (got '$FAUCET_TARGET')" >&2; exit 2 ;;
-esac
 if [ -z "$TARGET" ]; then
-  echo "usage: scripts/deploy.sh <admin_user>@<vps-host> [--install-apply] [--faucet public|preview|both|none]" >&2
-  echo "       (or set DEPLOY_TARGET / DEPLOY_FAUCET)" >&2
+  echo "usage: scripts/deploy.sh <admin_user>@<vps-host> [--install-apply]" >&2
+  echo "       (or set DEPLOY_TARGET)" >&2
   exit 2
 fi
 if [ -z "$TARGET" ]; then
@@ -117,7 +112,6 @@ fi
 # $1 = admin home (for the build stage), $2 = which faucet instance(s) to update.
 # Positional on purpose: the NOPASSWD sudoers line covers this exact command path, and
 # `sudo env FOO=... script` would be a different command and prompt for a password again.
-FAUCET_TARGET="${2:-public}"
 install -d -o scrai -g scrai /opt/tokumai /opt/tokumai/bin /opt/tokumai/data
 install -o scrai -g scrai -m 755 \
   "$ADMIN_HOME/scrai-stage/target/release/scrai-server" /opt/tokumai/bin/tokumai-server.new
@@ -126,27 +120,13 @@ mv /opt/tokumai/bin/tokumai-server.new /opt/tokumai/bin/tokumai-server
 install -o scrai -g scrai -m 755 \
   "$ADMIN_HOME/scrai-stage/target/release/scrai-admin" /opt/tokumai/bin/tokumai-admin.new
 mv /opt/tokumai/bin/tokumai-admin.new /opt/tokumai/bin/tokumai-admin
-# Faucet + distribution site (same crate). The site is baked in with include_str!, so
-# updating a site MEANS replacing the binary of that instance. Two instances exist:
-# public (tokumai-faucet, no auth) and preview (tokumai-faucet-preview, behind basic_auth).
-case "$FAUCET_TARGET" in public|both)
-  install -o scrai -g scrai -m 755 \
-    "$ADMIN_HOME/scrai-stage/target/release/scrai-faucet" /opt/tokumai/bin/tokumai-faucet.new
-  mv /opt/tokumai/bin/tokumai-faucet.new /opt/tokumai/bin/tokumai-faucet ;;
-esac
-case "$FAUCET_TARGET" in preview|both)
-  install -o scrai -g scrai -m 755 \
-    "$ADMIN_HOME/scrai-stage/target/release/scrai-faucet" /opt/tokumai/bin/tokumai-faucet-preview.new
-  mv /opt/tokumai/bin/tokumai-faucet-preview.new /opt/tokumai/bin/tokumai-faucet-preview ;;
-esac
+# Website + faucet (same crate, one binary). The pages are baked in with include_str!,
+# so updating the website MEANS replacing this binary and restarting its unit.
+install -o scrai -g scrai -m 755 \
+  "$ADMIN_HOME/scrai-stage/target/release/scrai-faucet" /opt/tokumai/bin/tokumai-faucet.new
+mv /opt/tokumai/bin/tokumai-faucet.new /opt/tokumai/bin/tokumai-faucet
 install -o scrai -g scrai -m 644 \
   "$ADMIN_HOME/scrai-stage/pricing.json" /opt/tokumai/pricing.json
-# payment placeholder page (Caddy serves /opt/tokumai/site/payment as its own vhost);
-# tolerated missing so an older stage without the file still deploys
-if [ -f "$ADMIN_HOME/scrai-stage/server/site/payment/index.html" ]; then
-  install -D -o scrai -g scrai -m 644 \
-    "$ADMIN_HOME/scrai-stage/server/site/payment/index.html" /opt/tokumai/site/payment/index.html
-fi
 # retire the Node deployment (keep .env, data/, images/, and our bin/)
 rm -rf /opt/tokumai/node_modules /opt/tokumai/dist /opt/tokumai/src /opt/tokumai/scripts \
   /opt/tokumai/public /opt/tokumai/package.json /opt/tokumai/package-lock.json \
@@ -191,24 +171,21 @@ UNIT
 systemctl daemon-reload
 systemctl restart tokumai
 systemctl --no-pager status tokumai | head -6
-case "$FAUCET_TARGET" in public|both)
-  # Both spellings during the rename: the .env on the box may still say SCRAI_TESTNET, and
-  # reading it as "not set" would DISABLE the faucet and take the site down.
-  if grep -Eq "^(SCRAI_)?TESTNET=(1|true)" /opt/tokumai/.env 2>/dev/null; then
-    systemctl enable --now tokumai-faucet >/dev/null 2>&1 || true
-    systemctl restart tokumai-faucet
-    systemctl --no-pager status tokumai-faucet | head -4
-  else
-    systemctl disable --now tokumai-faucet >/dev/null 2>&1 || true
-    echo "tokumai-faucet: not enabled (TESTNET is not 1 in /opt/tokumai/.env)"
-  fi ;;
-esac
-# The preview unit carries TESTNET=0 in its own ExecStart — it serves the site
-# only, so it restarts regardless of the .env kill switch.
-case "$FAUCET_TARGET" in preview|both)
-  systemctl restart tokumai-faucet-preview
-  systemctl --no-pager status tokumai-faucet-preview | head -4 ;;
-esac'
+# This unit serves tokumai.com, so it runs unconditionally. It used to be gated on
+# TESTNET=1 back when it was only a faucet: with the website on it, that switch would
+# have taken the site down on the day the testnet phase ends. TESTNET now only decides
+# whether the faucet PAGE inside it accepts claims (the binary logs which mode it is in).
+systemctl enable --now tokumai-faucet >/dev/null 2>&1 || true
+systemctl restart tokumai-faucet
+systemctl --no-pager status tokumai-faucet | head -4
+# The password-protected preview instance is gone (one site, three vhosts). Remove it
+# here so a box that still carries the unit stops running a second copy.
+if [ -f /etc/systemd/system/tokumai-faucet-preview.service ]; then
+  systemctl disable --now tokumai-faucet-preview >/dev/null 2>&1 || true
+  rm -f /etc/systemd/system/tokumai-faucet-preview.service /opt/tokumai/bin/tokumai-faucet-preview
+  systemctl daemon-reload
+  echo "removed the retired tokumai-faucet-preview instance"
+fi'
 
 # APPLY_BODY travels inside a SINGLE-QUOTED remote command. One literal apostrophe in it
 # ends that quoting and the remote bash dies with "unexpected EOF while looking for
@@ -289,19 +266,10 @@ ssh "${SSH_OPTS[@]}" "$TARGET" "WS_VER='$WS_VER'"'
   "$HOME/.cargo/bin/cargo" build --release -p scrai-server --bins
 '
 
-# Name the units BEFORE touching them. The site is baked into a binary, so "deploy the
-# website" always means "replace a binary and restart its unit" — and which unit that is
-# decides whether an unreleased brand lands on a public host or behind the password.
-case "$FAUCET_TARGET" in
-  public)  FAUCET_SAYS="tokumai-faucet.service  →  scrai-faucet.hermes-stakepool.de  (PUBLIC, no auth)" ;;
-  preview) FAUCET_SAYS="tokumai-faucet-preview.service  →  tokumai.com  (basic_auth)" ;;
-  both)    FAUCET_SAYS="BOTH — public host AND the password-protected preview" ;;
-  none)    FAUCET_SAYS="none — no site is updated, server only" ;;
-esac
 echo
 echo "   about to update, from $(basename "$SRC"):"
-echo "     scrai.service        →  scrai-server + scrai-admin + pricing.json"
-echo "     site  ($FAUCET_TARGET)   →  $FAUCET_SAYS"
+echo "     tokumai.service        →  tokumai-server + tokumai-admin + pricing.json"
+echo "     tokumai-faucet.service →  tokumai.com · faucet.tokumai.com · payment.tokumai.com"
 echo
 echo "→ 4/4  install binaries + pricing.json, restart the units named above"
 # If the root-owned apply script exists, run it (one sudo call — NOPASSWD-able);
@@ -309,20 +277,20 @@ echo "→ 4/4  install binaries + pricing.json, restart the units named above"
 ssh -t "${SSH_OPTS[@]}" "$TARGET" '
   set -e
   if [ -x /opt/tokumai/bin/deploy-apply.sh ]; then
-    sudo /opt/tokumai/bin/deploy-apply.sh "$HOME" '"$FAUCET_TARGET"'
+    sudo /opt/tokumai/bin/deploy-apply.sh "$HOME"
   else
     echo "   · (tip: run with --install-apply once + a NOPASSWD line for zero prompts)"
-    sudo env ADMIN_HOME="$HOME" bash -c '"'"''"$APPLY_BODY"''"'"' _ '"$FAUCET_TARGET"'
+    sudo env ADMIN_HOME="$HOME" bash -c '"'"''"$APPLY_BODY"''"'"' _
   fi
 '
 # What is actually running now — read back, not assumed (no sudo needed for is-active).
 echo "→ services after apply:"
 ssh "${SSH_OPTS[@]}" "$TARGET" '
-  for u in scrai scrai-faucet tokumai-faucet-preview; do
+  for u in tokumai tokumai-faucet; do
     printf "   %-13s %s" "$u" "$(systemctl is-active "$u" 2>/dev/null || true)"
     printf "  (enabled: %s)\n" "$(systemctl is-enabled "$u" 2>/dev/null || true)"
   done
 '
-echo "✓ deployed. Logs:  ssh $TARGET 'journalctl -u scrai -f'   ·   ssh $TARGET 'journalctl -u scrai-faucet -f'"
+echo "✓ deployed. Logs:  ssh $TARGET 'journalctl -u tokumai -f'   ·   ssh $TARGET 'journalctl -u tokumai-faucet -f'"
 echo "  First start bootstraps a fresh authority and a NEW Nym address — grab it"
 echo "  from the logs (scrai-server: … address: …) and set it in the app."

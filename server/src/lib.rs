@@ -35,7 +35,7 @@ pub fn update_url() -> String {
         .ok()
         .filter(|u| u.starts_with("https://"))
         .or_else(pay::faucet_url)
-        .unwrap_or_else(|| "https://scrai-faucet.hermes-stakepool.de/".into())
+        .unwrap_or_else(|| "https://tokumai.com/".into())
 }
 
 /// "0.3.0", "0.3.0 (peroni)", "v0.3.0-beta" → (0, 3, 0). Anything without three numbers → None.

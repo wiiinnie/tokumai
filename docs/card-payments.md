@@ -63,7 +63,7 @@ say. After WITHDRAW the coins are unlinkable, exactly as for a coin purchase.
   [[scrambleai-ios-attach-picker]]). On macOS/Linux/Windows it works today.
 - **Return page.** Mollie needs a `redirectUrl`. The app has no clearnet endpoint, so the redirect goes to a
   static thank-you page served by `scrai-faucet` (it already serves the site on
-  `scrai-faucet.hermes-stakepool.de`): `GET /paid` → "Payment received — back to tokumai", no cookie, no
+  `tokumai.com`): `GET /paid` → "Payment received — back to tokumai", no cookie, no
   order id, no JS. Optionally the button on that page is a `tokumai://paid` deep link so the app comes
   to the front (see §4 for whether Mollie accepts custom schemes as redirectUrl directly).
 - **Pending list** (`renderPending`): `coinOf()` currently says "NYM" or "Bitcoin" — add "Card". Resume

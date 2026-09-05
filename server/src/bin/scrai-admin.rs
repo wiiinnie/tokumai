@@ -276,6 +276,9 @@ fn env_file_path() -> String {
 /// `KEY=value` from the env file (uncommented lines only; quotes stripped), falling back to
 /// the process environment — so the panel shows the cap the services actually run with.
 fn env_file_value(key: &str) -> Option<String> {
+    // Both spellings, newest line wins — a .env that still carries SCRAI_<key> must read
+    // the same here as it does in the server (see scrai_server::cfg).
+    let legacy = format!("SCRAI_{key}");
     let from_file = std::fs::read_to_string(env_file_path()).ok().and_then(|s| {
         s.lines().rev().find_map(|l| {
             let l = l.trim();
@@ -283,10 +286,11 @@ fn env_file_value(key: &str) -> Option<String> {
                 return None;
             }
             let (k, v) = l.split_once('=')?;
-            (k.trim() == key).then(|| v.trim().trim_matches('"').trim_matches('\'').to_string())
+            let k = k.trim();
+            (k == key || k == legacy).then(|| v.trim().trim_matches('"').trim_matches('\'').to_string())
         })
     });
-    from_file.or_else(|| std::env::var(key).ok()).filter(|v| !v.is_empty())
+    from_file.or_else(|| scrai_server::cfg(key).ok()).filter(|v| !v.is_empty())
 }
 
 /// If `line` assigns one of the managed vars, which network slot is it (comment state ignored)?
