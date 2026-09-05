@@ -27,6 +27,12 @@ KEY="$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_ADMIN_KEY_ID}.p8"
 APPLE="$SRC/src-tauri/gen/apple"
 EXPORT_PLIST="$APPLE/build/asc-export.plist"
 
+# App Store icons may not carry an alpha channel. A build with a transparent 1024 icon
+# uploads fine and then shows a grey PLACEHOLDER in TestFlight and on the app record —
+# nothing tells you (2026-09-05, the first tokumai build). iOS masks the icon itself, so
+# the rounded corners in the source were never needed.
+python3 "$SRC/scripts/ios-icons-opaque.py"
+
 echo "→ 1/3 archive (tauri ios build; its export step is expected to fail)"
 export PATH="/opt/homebrew/bin:$HOME/.cargo/bin:$PATH"
 rm -rf "$APPLE/Externals/x86_64" "$APPLE/Externals/arm64/debug"   # one config in Externals, or Xcode sees duplicate libapp.a
