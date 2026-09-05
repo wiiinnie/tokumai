@@ -43,8 +43,23 @@ fi
 case "$MODE" in ""|--apply) ;; *) echo "unknown option: $MODE (only --apply)" >&2; exit 2 ;; esac
 
 echo "→ $TARGET  ($([ "$MODE" = --apply ] && echo "writing /opt/tokumai/.env.new" || echo "report only"))"
-# The script goes over STDIN, so nothing needs quoting on the remote side.
-ssh -t "$TARGET" "sudo python3 - ${MODE}" <<'PYEOF'
+
+# One authentication for the copy and the run.
+CM_SOCK="${TMPDIR:-/tmp}/tokumai-envrb-$$"
+SSH_OPTS=(-o ControlMaster=auto -o "ControlPath=${CM_SOCK}" -o ControlPersist=120)
+LOCAL_PY="$(mktemp)"
+REMOTE_PY="/tmp/tokumai-env-rebuild.$$.py"
+cleanup() {
+  ssh "${SSH_OPTS[@]}" "$TARGET" "rm -f $REMOTE_PY" >/dev/null 2>&1 || true
+  ssh "${SSH_OPTS[@]}" -O exit "$TARGET" >/dev/null 2>&1 || true
+  rm -f "$LOCAL_PY" "$CM_SOCK"
+}
+trap cleanup EXIT
+
+# The transformation is copied over as a FILE, not piped into stdin: sudo needs the
+# terminal to ask for the password, and ssh -t cannot give it one while stdin is a
+# heredoc ("a terminal is required to read the password").
+cat > "$LOCAL_PY" <<'PYEOF'
 import os, re, sys, pwd, grp
 
 ENV = "/opt/tokumai/.env"
@@ -344,3 +359,7 @@ print("    sudo -u scrai cp /opt/tokumai/.env /opt/tokumai/.env.bak")
 print("    sudo -u scrai mv /opt/tokumai/.env.new /opt/tokumai/.env")
 print("    sudo systemctl restart tokumai tokumai-faucet")
 PYEOF
+
+ssh "${SSH_OPTS[@]}" "$TARGET" true
+scp "${SSH_OPTS[@]}" -q "$LOCAL_PY" "$TARGET:$REMOTE_PY"
+ssh "${SSH_OPTS[@]}" -t "$TARGET" "sudo python3 $REMOTE_PY $MODE"
