@@ -123,9 +123,17 @@ def line_for(key, comment, default=None, force=None, sources=None, needed=False,
             note = "REVIEW: " + review[1]
             REVIEW.append((key, review[1]))
         report.append((key, mask(key, val), note))
+    elif needed:
+        # Left UNcommented and empty on purpose: a commented placeholder invites filling in
+        # the value while the # stays, and the key then reads as unset — which is exactly
+        # how the first mainnet start failed (2026-09-05). Empty is still unset, so the
+        # boot guard catches a forgotten one either way.
+        out.append("# TODO fill this in — the server refuses to start without it")
+        out.append(f"{key}=")
+        report.append((key, None, "NEEDS A VALUE"))
     else:
         out.append(f"#{key}=" + ("" if default is None else default))
-        report.append((key, None, "NEEDS A VALUE" if needed else "not set (optional)"))
+        report.append((key, None, "not set (optional)"))
     return out
 
 L = []

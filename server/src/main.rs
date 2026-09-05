@@ -27,21 +27,26 @@ use scrai_core::pricing::PricingTable;
 use scrai_core::quorum::QuorumStore;
 use scrai_core::session::SessionStore;
 
-// One issued ticketbook = 500 coins × 1000 TOKU = 500,000 TOKU = the $5
-// minimum purchase tier, so every tier is a whole number of books ($10 = 2,
-// $50 = 10). Changing this needs a FRESH authority bootstrap (delete
-// data/authority.json) and invalidates previously issued purses — fine while
-// everything is testnet.
-const TICKETBOOK_COINS: u64 = 500;
-/// Testnet servers (TESTNET=1) issue $1 books (100 coins) so a faucet-paid $1
-/// purchase is exactly one book and collects at once. Mainnet stays at $5 — the minimum
-/// purchase — and redeems in the same $1 slices as before (REDEEM_CHUNK_COINS).
-const TESTNET_TICKETBOOK_COINS: u64 = 100;
+// One issued ticketbook = 100 coins × 1000 TOKU = 100,000 TOKU = $1, the smallest
+// thing this server sells. Every tier is a whole number of books ($5 = 5, $50 = 50).
+//
+// It was 500 ($5) on mainnet and 100 on testnet, and that split does not survive the
+// invite rail: a withdrawal is always a WHOLE book, so a $1 invite credit on a 500-coin
+// server can never be withdrawn — it sits as entitlement the tester cannot spend
+// (gate_withdraw: "a ticketbook costs 500000 TOKU, this account holds 100000"). One size
+// everywhere, and the smallest book equals the smallest credit.
+//
+// The cost is round trips: collecting is one withdrawal per book, so $50 is 50 of them.
+// Worth revisiting by pipelining `collect`, NOT by growing the book again — the size is
+// baked into the authority keys, so changing it needs a fresh bootstrap and invalidates
+// every purse clients hold. (Operator decision, 2026-09-05, taken while bootstrapping
+// the mainnet authority so it cost nothing.)
+const TICKETBOOK_COINS: u64 = 100;
 
-/// Coins per ticketbook for THIS server's mode. Baked into the authority keys, so it is
-/// checked against the persisted authority at boot (see `load_or_bootstrap`).
+/// Coins per ticketbook. Baked into the authority keys, so it is checked against the
+/// persisted authority at boot (see `load_or_bootstrap`).
 fn ticketbook_coins() -> u64 {
-    if pay::is_testnet_server() { TESTNET_TICKETBOOK_COINS } else { TICKETBOOK_COINS }
+    TICKETBOOK_COINS
 }
 
 /// Number of issuing authorities this build runs. 1 = a single trusted-dealer
@@ -62,13 +67,16 @@ async fn main() {
     if !pay::is_testnet_server() {
         let stale = scrai_server::testnet_rails_on_mainnet();
         if !stale.is_empty() {
+            let wanted: Vec<String> = stale.iter().map(|b| format!("{b}_MAINNET")).collect();
             eprintln!(
                 "scrai-server: FATAL: TESTNET is off, but these rails only have a \
                  _TESTNET value and would run against TEST infrastructure while real money \
-                 is accepted: {}. Set the _MAINNET variant of each (or delete the _TESTNET \
-                 one if the rail is unused). Mollie in particular would credit real balance \
-                 for a free test-checkout payment.",
-                stale.join(", ")
+                 is accepted: {}. Set {} (or delete the _TESTNET one if the rail is unused). \
+                 A bare name does NOT count — a _TESTNET value outranks it. Check the line is \
+                 not still commented out. Mollie in particular would credit real balance for \
+                 a free test-checkout payment.",
+                stale.join(", "),
+                wanted.join(", ")
             );
             std::process::exit(1);
         }
