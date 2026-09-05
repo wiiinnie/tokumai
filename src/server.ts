@@ -140,8 +140,8 @@ function collectEntitlement(w: DevWallet): { collected: number; held: number } {
   const entitlement = issuer.entitlement(account.accountId);
   if (!entitlement) return { collected: 0, held: heldTotal(w) };
   const keys = mint.publicKeys();
-  for (const packetScrai of tierPackets(entitlement)) {
-    const { outputs, state } = blindPacket(packetScrai);
+  for (const packetToku of tierPackets(entitlement)) {
+    const { outputs, state } = blindPacket(packetToku);
     const { signatures } = issuer.withdraw(account.accountId, outputs);
     w.ecash.push(unblindPacket(state, signatures, keys));
     saveWallet(w); // persist each packet as it is drawn

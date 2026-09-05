@@ -12,7 +12,7 @@
 // ---------------------------------------------------------------------------
 
 import { MoneyStore } from "../money/store.js";
-import { SCRAI_PER_USD } from "../billing.js";
+import { TOKU_PER_USD } from "../billing.js";
 
 const db = (process.env.MONEY_DB ?? process.env.SCRAI_MONEY_DB) ?? "./data/money.db";
 const money = new MoneyStore(db);
@@ -46,7 +46,7 @@ switch (cmd) {
     console.log(`  ${"─".repeat(9)} ${"─".repeat(8)} ${"─".repeat(12)}  ${"─".repeat(10)} ${"─".repeat(28)}`);
     for (const r of rows) {
       console.log(
-        `  ${r.status.padEnd(9)} ${r.amount_usd.toFixed(2).padStart(8)} ${scrai(r.amount_scrai).padStart(12)}` +
+        `  ${r.status.padEnd(9)} ${r.amount_usd.toFixed(2).padStart(8)} ${scrai(r.amount_toku).padStart(12)}` +
           `  ${r.account_id.slice(0, 8).padEnd(10)} ${r.provider_ref}`,
       );
     }
@@ -70,7 +70,7 @@ switch (cmd) {
       console.log(`${arg} was already settled — nothing credited (this is correct)`);
       break;
     }
-    console.log(`settled ${arg} — credited ${scrai(res.credited)} TOKU (USD ${(res.credited / SCRAI_PER_USD).toFixed(2)})`);
+    console.log(`settled ${arg} — credited ${scrai(res.credited)} TOKU (USD ${(res.credited / TOKU_PER_USD).toFixed(2)})`);
     break;
   }
 

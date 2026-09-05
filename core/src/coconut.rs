@@ -34,17 +34,17 @@ use ce::setup::Parameters;
 
 // ---- economic parameters (docs/federation-params.md) ----------------------
 /// 10 USD = 1_000_000 TOKU (existing peg).
-pub const SCRAI_PER_USD: u64 = 100_000;
+pub const TOKU_PER_USD: u64 = 100_000;
 /// One ecash coin = 1000 TOKU = $0.01. Coarse on purpose (one serial per coin).
-pub const COIN_SCRAI: u64 = 1_000;
+pub const COIN_TOKU: u64 = 1_000;
 /// Redeem ~$1 (100 coins) into a session at a time, uniform across users.
 pub const REDEEM_CHUNK_COINS: u64 = 100;
 /// Ticket type / denomination class (single class for now).
 pub const DEFAULT_T_TYPE: u8 = 1;
 
-/// Number of coins in a ticketbook bought for `tier_scrai` TOKU.
-pub fn book_coins(tier_scrai: u64) -> u64 {
-    tier_scrai / COIN_SCRAI
+/// Number of coins in a ticketbook bought for `tier_toku` TOKU.
+pub fn book_coins(tier_toku: u64) -> u64 {
+    tier_toku / COIN_TOKU
 }
 
 fn err<E: std::fmt::Display>(e: E) -> String {

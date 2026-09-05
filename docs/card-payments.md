@@ -121,7 +121,7 @@ say. After WITHDRAW the coins are unlinkable, exactly as for a coin purchase.
 
 **Money**
 - USD is supported for cards; a non-primary-currency payout is converted at **1 %**. Keeping the tiles in USD
-  (SCRAI_PER_USD is fixed) costs that 1 % if the Mollie balance is EUR; charging EUR would need a rate.
+  (TOKU_PER_USD is fixed) costs that 1 % if the Mollie balance is EUR; charging EUR would need a rate.
   https://docs.mollie.com/docs/multicurrency
 - Card fees (mollie.com/pricing): EU consumer Visa/MC **1.80 % + €0.25**, EU commercial 2.90 % + €0.25,
   non-EU 3.25 % + €0.25, Amex 2.90 % + €0.25, Apple/Google Pay = rate of the underlying card. No monthly fee.

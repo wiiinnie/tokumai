@@ -1457,7 +1457,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   import { Vault, PassphraseCrypto, purgeWebData } from "./vault.js";
   import { Handover } from "./handover.js";
   import { Backend, isTauri } from "./backend.js";
-  import { formatScrai, formatTokens, billingNotes, billingDetail } from "./billing.js";
+  import { formatToku, formatTokens, billingNotes, billingDetail } from "./billing.js";
   import { pruneMessages, pruneForHandover, PRUNE_DEFAULTS } from "./prune.js";
   import { scanText, GUARD_DEFAULTS } from "./guard.js";
 
@@ -1525,7 +1525,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   const safeMollieUrl = u => /^https:\/\/([\w-]+\.)*mollie\.com\//i.test(u||"") ? u : "#";
   const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now())+Math.random());
   const usd = scrai => (scrai/100000);
-  function scraiLine(n){ return `${formatScrai(n)} TOKU · $${usd(n).toFixed(usd(n)<0.01?5:2)}`; }
+  function tokuLine(n){ return `${formatToku(n)} TOKU · $${usd(n).toFixed(usd(n)<0.01?5:2)}`; }
 
   // ---------- backend state ----------
   let modelRetries = 0;
@@ -1851,7 +1851,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     flashSaved._t=setTimeout(()=>{ s.style.opacity="0"; },1400);
   }
   function renderBal(){
-    $("bal").innerHTML = formatScrai(balance)+'<small> TOKU</small>';
+    $("bal").innerHTML = formatToku(balance)+'<small> TOKU</small>';
     $("balbar").style.width = Math.max(2,Math.min(100, balance/10000))+'%';
     $("acctLine").textContent = account
       ? `account ${account.fingerprint} · session #${account.sessionIndex}`
@@ -1859,7 +1859,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     if(held>0){
       $("heldLine").style.display="flex";
       // nosemgrep: scrai-taint-untrusted-to-html -- reviewed 2026-08-30: only formatted numbers + static copy
-      $("heldText").innerHTML = `${esc(formatScrai(Math.max(0,balance-held)))} in session · ${esc(formatScrai(held))} on this device only
+      $("heldText").innerHTML = `${esc(formatToku(Math.max(0,balance-held)))} in session · ${esc(formatToku(held))} on this device only
         <details class="why"><summary><span class="chev">›</span> What this means</summary>
           <div class="body">Coins on this device are blind-signed <b>cash</b>: not linked to your account, not restorable from your recovery phrase. They redeem into your recoverable balance in $1 steps as you chat. <b>Redeem everything before deleting the app or moving to another device</b> — “Move to another device” does that for you.</div>
         </details>`;
@@ -1875,7 +1875,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   function setPrice(usage){
     const frame = usage && usage.billing;
     if(!frame){ setStatus(usage ? formatTokens(usage) : "done"); return; }
-    $("price").textContent = frame.priceScrai===0 ? "free" : formatScrai(frame.priceScrai)+" TOKU";
+    $("price").textContent = (frame.priceToku ?? frame.priceScrai)===0 ? "free" : formatToku((frame.priceToku ?? frame.priceScrai))+" TOKU";
     $("price").title = billingDetail(frame);   // model + price-table version
     $("tok").textContent = formatTokens(usage);
     $("billNote").textContent = billingNotes(frame);
@@ -2143,7 +2143,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         return `<div class="dismissedline"><b>✕ dismissed</b> — already billed. The reply wasn’t retrieved.</div><div class="msgacts"><button class="msgact" data-click="retrieveMsg" data-args="${mi}" title="Fetches the same answer again — no second charge">↻ Retrieve</button></div>`;
       if(m.collapsed){
         const what=(m.images&&m.images.length)?'picture':'answer';
-        const cost=(typeof m.paidScrai==="number"&&m.paidScrai>0)?' · '+esc(formatScrai(m.paidScrai))+' TOKU':'';
+        const cost=(typeof m.paidToku==="number"&&m.paidToku>0)?' · '+esc(formatToku(m.paidToku))+' TOKU':'';
         return `<div class="dismissedline"><b>✕ dismissed</b></div><div class="arrival"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"></rect><circle cx="9" cy="10" r="1.6"></circle><path d="M3 17l5-5 4 4 3-3 6 6"></path></svg><span class="t">${what} arrived after dismiss — <b>already billed${cost}</b></span><button class="msgact" data-click="showDismissed" data-args="${mi}">Show</button></div>`;
       }
       // expanded after "Show" → normal rendering plus a quiet provenance note below
@@ -3510,7 +3510,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         stopMixPhase();
         dlProg=null;
         ai.streaming=false; busy=false;
-        if(ai.dismissed){ ai.collapsed=true; if(evt.usage&&typeof evt.usage.priceScrai==="number") ai.paidScrai=evt.usage.priceScrai; }
+        if(ai.dismissed){ ai.collapsed=true; if(evt.usage&&typeof evt.(usage.priceToku ?? usage.priceScrai)==="number") ai.paidToku=evt.(usage.priceToku ?? usage.priceScrai); }
         if(!tFirst) tFirst=performance.now();                       // image reply: no deltas
         if(typeof evt.balance==="number"){ balance=evt.balance; if(typeof evt.held==="number") held=evt.held; renderBal(); }
         if(Array.isArray(evt.images) && evt.images.length){ ai.images=evt.images; }
@@ -3526,7 +3526,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         const bf = evt.usage && evt.usage.billing;
         const timing = { ms: Math.round(performance.now()-t0), net: tSent ? Math.round(tFirst-tSent) : 0 };
         const drawn = evt.usage && evt.usage.imageSize;
-        ai.audit = bf ? { cost: bf.costScrai, charge: bf.priceScrai, ...timing } : { ...timing };
+        ai.audit = bf ? { cost: (bf.costToku ?? bf.costScrai), charge: (bf.priceToku ?? bf.priceScrai), ...timing } : { ...timing };
         if(timing.net) lastRtt = timing.net;
         if(drawn) ai.audit.size = drawn;
         // An empty Gemini answer arrives as "Declined by Google (REASON): …" from the server
@@ -4545,8 +4545,8 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     const idcard = `<div class="idcard">
       <div class="fp">${esc(account.fingerprint)}</div>
       <div class="ses">session #${account.sessionIndex} · fingerprint</div>
-      <div class="bal">${esc(scraiLine(balance))}</div>
-      ${held>0?`<div class="held">${esc(formatScrai(held))} held · ${esc(formatScrai(Math.max(0,balance-held)))} in session</div>`:``}
+      <div class="bal">${esc(tokuLine(balance))}</div>
+      ${held>0?`<div class="held">${esc(formatToku(held))} held · ${esc(formatToku(Math.max(0,balance-held)))} in session</div>`:``}
     </div>`;
 
     // ---- landing ----
@@ -4654,11 +4654,11 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     const scrai = d>=maxD ? held : d*100000;   // at max, drain the remainder too
     return `<div class="grouplbl">Held on this device</div>
     <div class="mprow">
-      <div class="mptop"><b>Redeem</b><span class="mpheld">${esc(formatScrai(held))} TOKU held</span></div>
+      <div class="mptop"><b>Redeem</b><span class="mpheld">${esc(formatToku(held))} TOKU held</span></div>
       <input type="range" id="redeemSlider" min="1" max="${maxD}" value="${d}" step="1"
         data-input="redeemSliderChanged" data-input-pass="value" class="mpslider flat">
       <div class="mpticks"><span>$1</span><span>${maxD>2?"$"+Math.ceil(maxD/2):""}</span><span>$${maxD} · all held</span></div>
-      <div class="mpout" id="redeemLabel">${esc(formatScrai(scrai))} TOKU ($${d}${d>=maxD?" · all held":""})</div>
+      <div class="mpout" id="redeemLabel">${esc(formatToku(scrai))} TOKU ($${d}${d>=maxD?" · all held":""})</div>
       <div class="btnrow center" style="margin-top:12px"><button class="btn primary" data-click="doRedeem">Redeem</button></div>
       ${why(`These coins are blind-signed <b>cash on this device</b>: not linked to your account, not restorable from your recovery phrase. Redeeming moves them into your recoverable balance in $1 steps — it also happens by itself as you chat. <b>Redeem everything before deleting the app or moving to another device</b> (“Move to another device” does that for you).`)}
     </div>`;
@@ -4669,7 +4669,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     const maxD = Math.max(1, Math.floor(held/100000));
     const d = Math.min(redeemDollars, maxD);
     const scrai = d>=maxD ? held : d*100000;
-    const lbl = $("redeemLabel"); if(lbl) lbl.textContent = `${formatScrai(scrai)} TOKU ($${d}${d>=maxD?" · all held":""})`;
+    const lbl = $("redeemLabel"); if(lbl) lbl.textContent = `${formatToku(scrai)} TOKU ($${d}${d>=maxD?" · all held":""})`;
   }
   function showRestore(){ acctView="restore"; acctPhrase=null; renderAccount(); }
   function askNew(){ acctView="confirmNew"; acctPhrase=null; renderAccount(); }
@@ -4732,7 +4732,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       }
       redeemDollars=null;
       renderAccount();
-      acctStatus(`✓ redeemed ${formatScrai(startHeld-held)} into your session balance`);
+      acctStatus(`✓ redeemed ${formatToku(startHeld-held)} into your session balance`);
     }catch(e){
       // A stale credential discarded mid-loop (or any error) stops here; refresh + report.
       try{ await refreshState(); }catch(_){}
@@ -4777,7 +4777,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   async function checkCredit(){
     acctStatus("checking the mixnet for settled payments…");
     try{ const r=await Backend.collect(); await refreshState(); renderAccount();
-      acctStatus(r&&r.collected>0?`+${formatScrai(r.collected)} TOKU collected — held, funds your next message.`:"no outstanding credit");
+      acctStatus(r&&r.collected>0?`+${formatToku(r.collected)} TOKU collected — held, funds your next message.`:"no outstanding credit");
     }catch(e){ acctStatus("failed: "+(e.message||e)); }
   }
 
@@ -4842,7 +4842,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       .filter(o=>!/ln|lightning/i.test(o.method||""))
       .map(o=>({ method:o.method||"", destination:o.destination||"", amount:o.amount||"", currency:o.currency||"", memo:o.memo||"" }));
     if(card ? checkout==="#" : !opts.length) return "";
-    const payload = { v:1, id:String(inv.invoiceId||""), usd:Number(inv.amountUsd||0), toku:Number(inv.amountScrai||0),
+    const payload = { v:1, id:String(inv.invoiceId||""), usd:Number(inv.amountUsd||0), toku:Number((inv.amountToku ?? inv.amountScrai)||0),
                       exp:Number(inv.expiresAt||0), rail: card?"card":"coin", checkout: card?checkout:"", opts: card?[]:opts };
     const base = payPageUrl();
     return base ? base + "#" + b64url(JSON.stringify(payload)) : "";
@@ -4911,7 +4911,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     syncTestnetRow(); renderTiers(); renderContinue();
     const s=$("buyStatus"); if(s) s.textContent = testnetBuy ? "Testnet purchase — $1, paid by the faucet. Continue to raise the invoice." : "Pick an amount and a coin.";
   }
-  function renderBuyBal(){ const el=$("buyBal"); if(el) el.innerHTML = `Balance <b>${esc(scraiLine(balance))}</b> · fixed amounts only — everyone buys the same, so a purchase reveals no per-user fingerprint.`; }
+  function renderBuyBal(){ const el=$("buyBal"); if(el) el.innerHTML = `Balance <b>${esc(tokuLine(balance))}</b> · fixed amounts only — everyone buys the same, so a purchase reveals no per-user fingerprint.`; }
   // Changing amount or coin abandons any in-flight invoice (its QR would be stale) and
   // returns to the chooser; the user taps Continue again to raise a fresh one.
   function abandonInvoice(){ if(!activeInvoice) return; stopPoll(); stopCountdown(); activeInvoice=null; const p=$("payPanel"); if(p) p.innerHTML=""; showChooser(true); const s=$("buyStatus"); if(s) s.textContent="Pick an amount and a coin."; }
@@ -5039,7 +5039,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     const rows = pendingList.slice().sort((a,b)=>a.expiresAt-b.expiresAt).map(p=>`
       <div class="pendrow" data-id="${escAttr(p.invoiceId)}" data-click="resumePayment" data-click-pass="id">
         <span class="pcoin">${esc(coinOf(p))}</span>
-        <span class="pamt">$${(p.amountUsd||0).toFixed(2)} · ${formatScrai(p.amountScrai||0)} TOKU</span>
+        <span class="pamt">$${(p.amountUsd||0).toFixed(2)} · ${formatToku((p.amountToku ?? p.amountScrai)||0)} TOKU</span>
         <span class="pleft">${fmtCountdown(p.expiresAt-Date.now())}</span>
         <span class="presume">Resume ▸</span>
         <button class="pcancel" title="Cancel this payment" data-click="cancelPending" data-id="${escAttr(p.invoiceId)}" data-click-pass="id" data-stop="1">✕</button>
@@ -5097,7 +5097,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       ? "● Checking with Mollie — finish the checkout in your browser; the credit lands here on its own, usually within seconds of paying."
       : "● Pending — waiting for your payment. Detected automatically; you can close this and come back.";
     else if(kind==="collecting")s.textContent="✓ Payment received — collecting your credit…";
-    else if(kind==="collected") s.textContent=`✓ +${formatScrai(extra||0)} TOKU collected — held, funds your next message.`;
+    else if(kind==="collected") s.textContent=`✓ +${formatToku(extra||0)} TOKU collected — held, funds your next message.`;
     else if(kind==="expired")   s.textContent="Invoice expired — pick an amount to try again.";
   }
   function fmtCountdown(ms){
@@ -5117,7 +5117,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     try{
       const r=await Backend.credit(usd);
       await refreshState();
-      $("buyStatus").textContent=`+${formatScrai(r.collected)} TOKU collected — held, funds your next message.`;
+      $("buyStatus").textContent=`+${formatToku(r.collected)} TOKU collected — held, funds your next message.`;
     }catch(e){ $("buyStatus").textContent=e.message||String(e); }
   }
 
@@ -5195,7 +5195,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     if(isCardInv(inv)){
       // Hosted checkout: nothing to copy or scan here — the browser does the paying, this
       // panel only waits. The URL is server-supplied → safeMollieUrl() + escAttr(); amounts
-      // are numbers rendered via toFixed()/formatScrai().
+      // are numbers rendered via toFixed()/formatToku().
       const url = cardCheckoutOf(inv);
       const btn = url!=="#"
         ? `<a class="btn primary" style="display:block;text-align:center" href="${escAttr(url)}" data-click="openLink" data-click-pass="href" data-prevent="1">Reopen checkout ↗</a>`
@@ -5203,9 +5203,9 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       // Finish on the web instead: same invoice, handed over in the URL fragment.
       const webBtn = webPayUrl(inv)
         ? `<button class="btn" style="display:block;width:100%;margin-top:8px" data-click="payOnWeb">Pay on tokumai.com ↗</button>` : ``;
-      // nosemgrep: scrai-taint-untrusted-to-html -- reviewed 2026-08-29: url is safeMollieUrl()-gated and escAttr()-wrapped; amountUsd/amountScrai are numbers (toFixed/formatScrai); nothing else from the server lands here
+      // nosemgrep: scrai-taint-untrusted-to-html -- reviewed 2026-08-29: url is safeMollieUrl()-gated and escAttr()-wrapped; amountUsd/amountScrai are numbers (toFixed/formatToku); nothing else from the server lands here
       $("payPanel").innerHTML = `<div class="paypanel">
-        <div class="paylead">Pay $${Number(inv.amountUsd||0).toFixed(2)} · ${formatScrai(inv.amountScrai||0)} TOKU by card · expires <span id="payExpiry">…</span></div>
+        <div class="paylead">Pay $${Number(inv.amountUsd||0).toFixed(2)} · ${formatToku((inv.amountToku ?? inv.amountScrai)||0)} TOKU by card · expires <span id="payExpiry">…</span></div>
         <div class="cardwait"><b>Checkout opened in your browser.</b> Finish the payment there — your credit is picked up here automatically, you don’t need to come back to any page.</div>
         ${btn}${webBtn}
         <div class="cardpriv">Mollie (EU) sees your name, card and IP address — never your tokumai account or what you use it for. Once collected, the credit is unlinkable, exactly like a coin purchase. No refunds after checkout.</div>
@@ -5250,7 +5250,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     // nosemgrep: scrai-taint-untrusted-to-html -- reviewed 2026-08-28: destination/memo/amount are esc()-wrapped in `blocks`, tnote's URL is escAttr()/esc()-wrapped; o.qr is an SVG the app renders locally (qrcode crate), the server only sends address + memo
     $("payPanel").innerHTML = `<div class="paypanel">
       ${tnote}
-      <div class="paylead">Pay $${inv.amountUsd.toFixed(2)} · ${formatScrai(inv.amountScrai)} TOKU · expires <span id="payExpiry">…</span></div>
+      <div class="paylead">Pay $${inv.amountUsd.toFixed(2)} · ${formatToku((inv.amountToku ?? inv.amountScrai))} TOKU · expires <span id="payExpiry">…</span></div>
       ${blocks}
       ${isNymInv?`<div id="watchState" class="watchrow"><span class="wd"></span> connecting to the Nyx chain…</div>`:""}
       ${webPayUrl(inv)?`<button class="btn" style="display:block;width:100%;margin-top:10px" data-click="payOnWeb">Open these details on tokumai.com ↗</button>`:""}

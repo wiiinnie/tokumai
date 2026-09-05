@@ -179,10 +179,10 @@ async function signPacket(account: Account, amountScrai: number, keys: PublicKey
  * so a crash mid-way cannot lose what was already signed. Nothing is redeemed
  * here — that happens later, apart in time (see redeemHeld).
  */
-async function withdrawPackets(account: Account, entitlementScrai: number): Promise<void> {
+async function withdrawPackets(account: Account, entitlementToku: number): Promise<void> {
   const keys = await fetchKeys();
-  for (const packetScrai of tierPackets(entitlementScrai)) {
-    const proofs = await signPacket(account, packetScrai, keys);
+  for (const packetToku of tierPackets(entitlementToku)) {
+    const proofs = await signPacket(account, packetToku, keys);
     wallet.storePacket(proofs);
   }
 }

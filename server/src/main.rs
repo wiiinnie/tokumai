@@ -424,13 +424,13 @@ async fn main() {
         quorum_meta: quorum.meta_revision(),
         pay: paywall.revision(),
     };
-    let book_scrai = ticketbook_coins() * scrai_core::coconut::COIN_SCRAI;
+    let book_toku = ticketbook_coins() * scrai_core::coconut::COIN_TOKU;
     println!(
         "scrai-server: gateway {} · ticketbook {} coins ({} TOKU = ${}){}",
         gateway.name(),
         ticketbook_coins(),
-        book_scrai,
-        book_scrai / scrai_core::coconut::SCRAI_PER_USD,
+        book_toku,
+        book_toku / scrai_core::coconut::TOKU_PER_USD,
         if pay::is_testnet_server() { " · testnet $1 books" } else { "" }
     );
 
@@ -617,7 +617,7 @@ async fn main() {
                         if matches!(resp, federation::FedResponse::Withdraw { .. }) {
                             paywall.finish_issuance(&req_key, serde_json::to_value(&resp).unwrap_or(serde_json::Value::Null));
                         } else {
-                            paywall.restore_entitlement(&account_id, book_scrai);
+                            paywall.restore_entitlement(&account_id, book_toku);
                             paywall.abort_issuance(&req_key);
                         }
                         let reply = serde_json::json!({ "id": id, "fed": serde_json::to_value(&resp).unwrap_or(serde_json::Value::Null) });
@@ -873,7 +873,7 @@ async fn main() {
                 // The entitlement is RESERVED here (so two in-flight withdraws of one
                 // account can't both pass), the 500-signature issuance runs in a blocking
                 // task, and a failed issuance restores the entitlement (crypto_rx above).
-                "coconut" => match paywall.gate_withdraw(&m.message, book_scrai) {
+                "coconut" => match paywall.gate_withdraw(&m.message, book_toku) {
                     pay::Gate::Denied(reply) => reply,
                     pay::Gate::NotAWithdraw => {
                         scrai_core::gateway::handle(&authority, &mut quorum, &mut sessions, &m.message).await
@@ -904,7 +904,7 @@ async fn main() {
                                     // `prepaid`: charged earlier, but the server went down before
                                     // issuing — issue now without charging again.
                                     if !prepaid {
-                                        paywall.consume_entitlement(&account_id, book_scrai);
+                                        paywall.consume_entitlement(&account_id, book_toku);
                                     } else {
                                         println!("scrai-server: withdraw retry for a charged-but-unissued body — issuing without a second charge");
                                     }

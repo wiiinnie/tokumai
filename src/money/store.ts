@@ -32,7 +32,7 @@ export interface InvoiceRow {
   provider_ref: string;
   account_id: string;
   amount_usd: number;
-  amount_scrai: number;
+  amount_toku: number;
   status: "pending" | "paid" | "expired";
   pay_to: string;
   method: string;
@@ -68,7 +68,7 @@ export class MoneyStore {
         provider_ref TEXT NOT NULL UNIQUE,
         account_id  TEXT NOT NULL,
         amount_usd  REAL NOT NULL,
-        amount_scrai INTEGER NOT NULL,
+        amount_toku INTEGER NOT NULL,
         status      TEXT NOT NULL,
         pay_to      TEXT NOT NULL,
         method      TEXT NOT NULL DEFAULT 'btc',
@@ -159,7 +159,7 @@ export class MoneyStore {
   }): void {
     this.db
       .prepare(
-        "INSERT INTO invoices (id, provider_ref, account_id, amount_usd, amount_scrai, status, pay_to, method, created, expires_at) " +
+        "INSERT INTO invoices (id, provider_ref, account_id, amount_usd, amount_toku, status, pay_to, method, created, expires_at) " +
           "VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)",
       )
       .run(
@@ -210,9 +210,9 @@ export class MoneyStore {
         "INSERT INTO entitlements (account_id, scrai, updated) VALUES (?, ?, ?) " +
           "ON CONFLICT(account_id) DO UPDATE SET scrai = scrai + excluded.scrai, updated = excluded.updated",
       )
-      .run(inv.account_id, inv.amount_scrai, Date.now());
+      .run(inv.account_id, inv.amount_toku, Date.now());
 
-    return { credited: inv.amount_scrai, alreadySettled: false };
+    return { credited: inv.amount_toku, alreadySettled: false };
   }
 
   entitlement(accountId: string): number {
@@ -389,12 +389,12 @@ export class MoneyStore {
       .run(Date.now() - olderThanMs).changes as number;
   }
 
-  stats(): { sessions: number; spent: number; pendingInvoices: number; owedScrai: number } {
+  stats(): { sessions: number; spent: number; pendingInvoices: number; owedToku: number } {
     const s = this.db.prepare("SELECT COUNT(*) AS n FROM sessions").get() as { n: number };
     const n = this.db.prepare("SELECT COUNT(*) AS n FROM nullifiers").get() as { n: number };
     const p = this.db.prepare("SELECT COUNT(*) AS n FROM invoices WHERE status = 'pending'").get() as { n: number };
     const e = this.db.prepare("SELECT COALESCE(SUM(scrai), 0) AS n FROM entitlements").get() as { n: number };
-    return { sessions: s.n, spent: n.n, pendingInvoices: p.n, owedScrai: e.n };
+    return { sessions: s.n, spent: n.n, pendingInvoices: p.n, owedToku: e.n };
   }
 
   close(): void {

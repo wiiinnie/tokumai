@@ -18,7 +18,7 @@
 const fmt = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
 
 /** "1,204" — TOKU amounts are whole numbers by construction. */
-export function formatScrai(scrai) {
+export function formatToku(scrai) {
   return fmt.format(Math.max(0, Math.round(scrai || 0)));
 }
 

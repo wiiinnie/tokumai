@@ -23,7 +23,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use scrai_core::auth;
-use scrai_core::coconut::SCRAI_PER_USD;
+use scrai_core::coconut::TOKU_PER_USD;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -211,7 +211,7 @@ pub struct Inv {
     provider_ref: String,
     account_id: String,
     amount_usd: u32,
-    amount_scrai: u64,
+    amount_toku: u64,
     method: String,
     status: String, // "pending" | "paid" | "expired"
     expires_at: u64,
@@ -458,7 +458,7 @@ impl Pay {
         if let Some(inv) = self.invoices.get_mut(invoice_id) {
             if inv.status != "paid" {
                 inv.status = "paid".into();
-                let scrai = inv.amount_scrai;
+                let scrai = inv.amount_toku;
                 let account = inv.account_id.clone();
                 *self.entitlements.entry(account).or_default() += scrai;
                 self.rev += 1;
@@ -642,7 +642,7 @@ impl Pay {
         };
         // The TOKU amount is fixed HERE, not at settlement, so the user gets
         // exactly what they were quoted regardless of the exchange rate.
-        let amount_scrai = usd as u64 * SCRAI_PER_USD;
+        let amount_toku = usd as u64 * TOKU_PER_USD;
         self.invoices.insert(
             our_id.clone(),
             Inv {
@@ -650,7 +650,7 @@ impl Pay {
                 provider_ref: raised.raised.provider_ref.clone(),
                 account_id: account,
                 amount_usd: usd,
-                amount_scrai,
+                amount_toku,
                 method: raised.method.clone(),
                 status: "pending".into(),
                 expires_at: raised.raised.expires_at,
@@ -667,7 +667,8 @@ impl Pay {
             "instruction": raised.raised.instruction,
             "options": raised.raised.options,
             "amountUsd": usd,
-            "amountScrai": amount_scrai,
+            "amountToku": amount_toku,
+            "amountScrai": amount_toku,   // pre-rename apps
             "expiresAt": raised.raised.expires_at,
             "testnet": testnet,
         })
@@ -745,7 +746,7 @@ impl Pay {
     /// Only `Withdraw` is gated (Keys and Spend stay open): it must carry a valid
     /// account signature and the account must hold a full ticketbook's worth of
     /// entitlement. Returns who to charge on success.
-    pub fn gate_withdraw(&mut self, request: &[u8], book_scrai: u64) -> Gate {
+    pub fn gate_withdraw(&mut self, request: &[u8], book_toku: u64) -> Gate {
         let v: Value = serde_json::from_slice(request).unwrap_or(Value::Null);
         let is_withdraw = v
             .pointer("/fed/Withdraw")
@@ -772,10 +773,10 @@ impl Pay {
             return Gate::Authorized { account_id: account, req_key, prepaid: true };
         }
         let held = self.entitlement(&account);
-        if held < book_scrai {
+        if held < book_toku {
             return Gate::Denied(encode(&err(
                 &id,
-                &format!("not enough entitlement: a ticketbook costs {book_scrai} TOKU, this account holds {held} — buy credit first"),
+                &format!("not enough entitlement: a ticketbook costs {book_toku} TOKU, this account holds {held} — buy credit first"),
             )));
         }
         Gate::Authorized { account_id: account, req_key, prepaid: false }
@@ -1490,10 +1491,10 @@ mod tests {
 
         // the flag rides in the durable record and the faucet view picks exactly those
         pay.invoices.insert("t1".into(), Inv { id: "t1".into(), provider_ref: "SCRAI-MEMO2345".into(), account_id: aid.clone(),
-            amount_usd: 1, amount_scrai: SCRAI_PER_USD, method: "nyx".into(), status: "pending".into(),
+            amount_usd: 1, amount_toku: TOKU_PER_USD, method: "nyx".into(), status: "pending".into(),
             expires_at: now_ms() + 60_000, expected_unym: 59_000_000, testnet: true });
         pay.invoices.insert("r1".into(), Inv { id: "r1".into(), provider_ref: "SCRAI-REAL2345".into(), account_id: aid,
-            amount_usd: 5, amount_scrai: 5 * SCRAI_PER_USD, method: "nyx".into(), status: "pending".into(),
+            amount_usd: 5, amount_toku: 5 * TOKU_PER_USD, method: "nyx".into(), status: "pending".into(),
             expires_at: now_ms() + 60_000, expected_unym: 295_000_000, testnet: false });
         let t = pay.testnet_invoices();
         assert_eq!(t.len(), 1);

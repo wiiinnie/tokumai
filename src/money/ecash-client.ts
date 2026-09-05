@@ -10,7 +10,7 @@
 
 import { blind, unblind, verifyDleq, decompose, newSecret, toHex, fromHex } from "./blind.js";
 import type { BlindedOutput, SignedOutput, Proof, PublicKey } from "./token.js";
-import { SCRAI_PER_USD, purchaseTiers } from "../billing.js";
+import { TOKU_PER_USD, purchaseTiers } from "../billing.js";
 
 /** Per-output secret state the client keeps between blinding and unblinding. */
 export interface OutputState {
@@ -62,13 +62,13 @@ export function unblindPacket(state: OutputState[], signatures: SignedOutput[], 
  * happen once tiers are enforced) is carried as its own packet so no money is
  * stranded.
  */
-export function tierPackets(entitlementScrai: number): number[] {
-  const tiersScrai = purchaseTiers()
-    .map((usd) => usd * SCRAI_PER_USD)
+export function tierPackets(entitlementToku: number): number[] {
+  const tiersToku = purchaseTiers()
+    .map((usd) => usd * TOKU_PER_USD)
     .sort((a, b) => b - a);
   const out: number[] = [];
-  let rem = entitlementScrai;
-  for (const t of tiersScrai) while (rem >= t) { out.push(t); rem -= t; }
+  let rem = entitlementToku;
+  for (const t of tiersToku) while (rem >= t) { out.push(t); rem -= t; }
   if (rem > 0) out.push(rem);
   return out;
 }

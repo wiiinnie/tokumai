@@ -7,7 +7,7 @@
 // separate data port; here `ModelPrice` is passed in explicitly.
 // ---------------------------------------------------------------------------
 
-use crate::coconut::SCRAI_PER_USD;
+use crate::coconut::TOKU_PER_USD;
 
 /// Token usage for one exchange (provider-reported or estimated).
 #[derive(Debug, Clone, Copy, Default)]
@@ -83,10 +83,10 @@ impl Tier {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BillingFrame {
     /// Provider cost to us, in TOKU, kept to 4 decimals (no rounding accretion).
-    pub cost_scrai: f64,
+    pub cost_toku: f64,
     /// What the user pays: whole TOKU, margin applied, floored — never free once a
     /// request actually reached the provider.
-    pub price_scrai: u64,
+    pub price_toku: u64,
     pub fallback_price: bool,
     pub estimated: bool,
 }
@@ -110,7 +110,7 @@ pub fn cost_usd(usage: &TokenUsage, price: &ModelPrice) -> f64 {
 /// `17100.000000000004` would ceil to `17101` and invent a cost the provider never
 /// charged. We first normalise to 12 significant figures (as JS `toPrecision(12)`
 /// does), dropping the noise while leaving genuine fractions intact, then ceil.
-pub fn ceil_scrai(scrai: f64) -> f64 {
+pub fn ceil_toku(scrai: f64) -> f64 {
     let scaled = scrai * 10_000.0;
     let normalized: f64 = format!("{scaled:.11e}").parse().unwrap_or(scaled);
     normalized.ceil() / 10_000.0
@@ -140,17 +140,17 @@ pub fn compute_billing(
     min_charge: u64,
     estimated: bool,
 ) -> BillingFrame {
-    let cost_scrai = ceil_scrai(cost_usd(usage, price) * SCRAI_PER_USD as f64);
+    let cost_toku = ceil_toku(cost_usd(usage, price) * TOKU_PER_USD as f64);
     let billable =
         usage.input + usage.cached_input + usage.audio_input + usage.output + usage.output_image;
-    let price_scrai = if billable > 0 {
-        ((cost_scrai * clamp_margin(margin)).ceil() as u64).max(min_charge)
+    let price_toku = if billable > 0 {
+        ((cost_toku * clamp_margin(margin)).ceil() as u64).max(min_charge)
     } else {
         0
     };
     BillingFrame {
-        cost_scrai,
-        price_scrai,
+        cost_toku,
+        price_toku,
         fallback_price: price.fallback,
         estimated,
     }
@@ -177,20 +177,20 @@ mod tests {
         // 1M input tokens @ $0.10/1M = $0.10 → 10_000 TOKU cost; ×1.1 margin → 11_000
         let u = TokenUsage { input: 1_000_000, ..Default::default() };
         let f = compute_billing(&P, &u, 1.1, 0, false);
-        assert_eq!(f.cost_scrai, 10_000.0);
-        assert_eq!(f.price_scrai, 11_000);
+        assert_eq!(f.cost_toku, 10_000.0);
+        assert_eq!(f.price_toku, 11_000);
         assert!(!f.fallback_price);
     }
 
     #[test]
     fn empty_usage_is_free_but_tiny_paid_is_floored_to_one() {
         // no tokens → 0
-        assert_eq!(compute_billing(&P, &TokenUsage::default(), 1.1, 0, false).price_scrai, 0);
+        assert_eq!(compute_billing(&P, &TokenUsage::default(), 1.1, 0, false).price_toku, 0);
         // 1 input token @ $0.10/1M = 0.01 TOKU cost → ceil(0.01×1.1)=ceil(0.011)=1
         let tiny = TokenUsage { input: 1, ..Default::default() };
         let f = compute_billing(&P, &tiny, 1.1, 0, false);
-        assert_eq!(f.cost_scrai, 0.01);
-        assert_eq!(f.price_scrai, 1);
+        assert_eq!(f.cost_toku, 0.01);
+        assert_eq!(f.price_toku, 1);
     }
 
     #[test]
@@ -198,8 +198,8 @@ mod tests {
         let free = ModelPrice { input: 0.0, output: 0.0, ..P };
         let u = TokenUsage { input: 1000, output: 1000, ..Default::default() };
         let f = compute_billing(&free, &u, 1.1, 0, false);
-        assert_eq!(f.cost_scrai, 0.0);
-        assert_eq!(f.price_scrai, 0);
+        assert_eq!(f.cost_toku, 0.0);
+        assert_eq!(f.price_toku, 0);
     }
 
     #[test]
@@ -209,18 +209,18 @@ mod tests {
         // min_charge floor lifts a tiny cost up to 3
         let f = compute_billing(&fb, &u, 1.1, 3, false);
         assert!(f.fallback_price);
-        assert_eq!(f.price_scrai, 3);
+        assert_eq!(f.price_toku, 3);
     }
 
     #[test]
     fn ceil_scrai_rounds_up_but_never_inflates_from_noise() {
         // exact 4-decimal amounts must round to themselves (no float-noise inflation)
         for x in [0.0, 1.71, 133.4, 155.0, 10_000.0] {
-            assert_eq!(ceil_scrai(x), x, "ceil_scrai inflated {x}");
+            assert_eq!(ceil_toku(x), x, "ceil_toku inflated {x}");
         }
         // a genuine 5th-decimal fraction rounds UP to 4 decimals
-        assert_eq!(ceil_scrai(1.234_55), 1.2346);
-        assert_eq!(ceil_scrai(2.795_1), 2.7951);
+        assert_eq!(ceil_toku(1.234_55), 1.2346);
+        assert_eq!(ceil_toku(2.795_1), 2.7951);
     }
 
     #[test]
@@ -250,15 +250,15 @@ mod tests {
         // billing it all at the image rate would have been 2820×60 = $0.1692 — the bug.
         assert!(usd < 0.08);
         let f = compute_billing(&nb2, &u, 1.0, 0, false);
-        assert_eq!(f.cost_scrai, 7230.0);
-        assert_eq!(f.price_scrai, 7230);
+        assert_eq!(f.cost_toku, 7230.0);
+        assert_eq!(f.price_toku, 7230);
     }
 
     #[test]
     fn output_image_tokens_count_as_billable_even_without_text() {
         let nb2 = ModelPrice { output: 60.0, output_text: Some(3.0), ..P };
         let u = TokenUsage { output_image: 1120, ..Default::default() };
-        assert!(compute_billing(&nb2, &u, 1.4, 0, false).price_scrai > 0);
+        assert!(compute_billing(&nb2, &u, 1.4, 0, false).price_toku > 0);
     }
 
     #[test]
@@ -266,6 +266,6 @@ mod tests {
         let u = TokenUsage { input: 1_000_000, ..Default::default() };
         // a nonsense margin of 0.5 must not reduce the price below cost
         let f = compute_billing(&P, &u, 0.5, 0, false);
-        assert_eq!(f.price_scrai, 10_000); // clamped to ×1.0
+        assert_eq!(f.price_toku, 10_000); // clamped to ×1.0
     }
 }

@@ -17,7 +17,7 @@
 // re-opens rather than resets.
 // ---------------------------------------------------------------------------
 
-import { SCRAI_PER_USD } from "../billing.js";
+import { TOKU_PER_USD } from "../billing.js";
 import { generateSessionKeys, signRequest, type SessionKeys } from "../money/session.js";
 import { deriveSessionKeys } from "../money/account.js";
 import type { Proof } from "../protocol.js";
@@ -170,7 +170,7 @@ export function available(): number {
 }
 
 export function scraiFor(usd: number): number {
-  return Math.floor(usd * SCRAI_PER_USD);
+  return Math.floor(usd * TOKU_PER_USD);
 }
 
 /** "1,000,000 TOKU (USD 10.00)" */
@@ -187,7 +187,7 @@ export function format(scrai: number): string {
  * round, full precision whenever the sub-cent digits carry information.
  */
 export function usd(scrai: number): string {
-  const v = scrai / SCRAI_PER_USD;
+  const v = scrai / TOKU_PER_USD;
   if (v === 0) return "0.00";
   const cents = v.toFixed(2);
   return Number(cents) === v ? cents : v.toFixed(5).replace(/0+$/, "").replace(/\.$/, ".0");

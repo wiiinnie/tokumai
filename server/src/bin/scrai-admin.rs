@@ -20,7 +20,7 @@ use ratatui::{prelude::*, widgets::*};
 use rusqlite::{Connection, OpenFlags};
 use serde::Deserialize;
 
-const SCRAI_PER_USD: u64 = 100_000; // one coconut coin = $1 = 100_000 TOKU
+const TOKU_PER_USD: u64 = 100_000; // one coconut coin = $1 = 100_000 TOKU
 
 // ---- blob shapes (subset; serde ignores the fields we don't name) ----------
 #[derive(Deserialize, Default)]
@@ -49,7 +49,7 @@ struct Inv {
     #[serde(default)]
     amount_usd: u32,
     #[serde(default)]
-    amount_scrai: u64,
+    amount_toku: u64,
     #[serde(default)]
     status: String,
     /// raised as a $1 faucet-paid testnet purchase (TESTNET servers)
@@ -172,14 +172,14 @@ struct Metrics {
     inv_paid: usize,
     inv_pending: usize,
     inv_expired: usize,
-    purchased_scrai: u64,
+    purchased_toku: u64,
     purchased_usd: u64,
     // card rail (Mollie): separately visible because it is the one rail with chargebacks
     card_paid: usize,
     card_pending: usize,
     card_usd: u64,
     entitlement_out: u64,
-    withdrawn_scrai: u64,
+    withdrawn_toku: u64,
     // usage
     sessions: usize,
     session_balance: u64,
@@ -402,7 +402,7 @@ fn read_metrics(path: &PathBuf) -> Metrics {
         match inv.status.as_str() {
             "paid" => {
                 m.inv_paid += 1;
-                m.purchased_scrai += inv.amount_scrai;
+                m.purchased_toku += inv.amount_toku;
                 m.purchased_usd += inv.amount_usd as u64;
                 if !inv.account_id.is_empty() {
                     payers.insert(inv.account_id.as_str());
@@ -426,7 +426,7 @@ fn read_metrics(path: &PathBuf) -> Metrics {
     }
     m.paying_accounts = payers.len();
     m.entitlement_out = pay.entitlements.values().sum();
-    m.withdrawn_scrai = m.purchased_scrai.saturating_sub(m.entitlement_out);
+    m.withdrawn_toku = m.purchased_toku.saturating_sub(m.entitlement_out);
 
     // usage
     m.sessions = sess.sessions.len();
@@ -573,12 +573,12 @@ fn grp(n: u64) -> String {
     out
 }
 fn usd(scrai: u64) -> String {
-    format!("${:.2}", scrai as f64 / SCRAI_PER_USD as f64)
+    format!("${:.2}", scrai as f64 / TOKU_PER_USD as f64)
 }
 /// Four decimals — the drill-down's per-model figures: a nano-model prompt costs a few
 /// thousandths of a cent, and "$0.04 / $0.04" at two decimals hides the margin.
 fn usd4(scrai: u64) -> String {
-    format!("${:.4}", scrai as f64 / SCRAI_PER_USD as f64)
+    format!("${:.4}", scrai as f64 / TOKU_PER_USD as f64)
 }
 
 /// € per $ for the cost columns — Google's AI Studio dashboard and invoice are in EUR at
@@ -589,7 +589,7 @@ fn eur_per_usd() -> Option<f64> {
 }
 
 fn eur(scrai: u64, rate: f64) -> String {
-    format!("€{:.2}", scrai as f64 / SCRAI_PER_USD as f64 * rate)
+    format!("€{:.2}", scrai as f64 / TOKU_PER_USD as f64 * rate)
 }
 
 const GOLD: Color = Color::Rgb(203, 161, 78);
@@ -664,7 +664,7 @@ fn ui(f: &mut Frame, m: &Metrics, view: &View, path: &str, clock: &str, network:
     let econ = vec![
         kv("paying accounts", grp(m.paying_accounts as u64), SAGE),
         kv("invoices", format!("{} paid · {} pending · {} exp", m.inv_paid, m.inv_pending, m.inv_expired), BONE),
-        kv("purchased", format!("{}  ({} scrai)", usd(m.purchased_scrai), grp(m.purchased_scrai)), GOLD),
+        kv("purchased", format!("{}  ({} scrai)", usd(m.purchased_toku), grp(m.purchased_toku)), GOLD),
         // cards (Mollie): the only rail money can be pulled back from — watch it separately
         kv(
             "-> by card",
@@ -676,7 +676,7 @@ fn ui(f: &mut Frame, m: &Metrics, view: &View, path: &str, clock: &str, network:
             if m.card_paid > 0 { GOLD } else { DIM },
         ),
         kv("entitlement open", format!("{}  ({} scrai)", usd(m.entitlement_out), grp(m.entitlement_out)), BONE),
-        kv("-> withdrawn ecash", format!("{}  ({} scrai)", usd(m.withdrawn_scrai), grp(m.withdrawn_scrai)), SAGE),
+        kv("-> withdrawn ecash", format!("{}  ({} scrai)", usd(m.withdrawn_toku), grp(m.withdrawn_toku)), SAGE),
         // testnet faucet: how many $1 test buys were funded, and what that cost in NYM
         kv(
             "testnet faucet",
@@ -700,7 +700,7 @@ fn ui(f: &mut Frame, m: &Metrics, view: &View, path: &str, clock: &str, network:
     f.render_widget(eb, top[0]);
     let er = Layout::vertical([Constraint::Min(5), Constraint::Length(1)]).split(ei);
     f.render_widget(Paragraph::new(econ), er[0]);
-    let g1 = ratio(m.withdrawn_scrai, m.purchased_scrai);
+    let g1 = ratio(m.withdrawn_toku, m.purchased_toku);
     f.render_widget(
         Gauge::default().gauge_style(Style::default().fg(SAGE)).ratio(g1).label(format!("withdrawn {:.0}%", g1 * 100.0)),
         er[1],
@@ -760,7 +760,7 @@ fn ui(f: &mut Frame, m: &Metrics, view: &View, path: &str, clock: &str, network:
     let ur = Layout::vertical([Constraint::Min(5), Constraint::Length(1)]).split(ui_area);
     f.render_widget(Paragraph::new(usage), ur[0]);
     // honest gauge: real spend (daily counters) against what was purchased
-    let g2 = ratio(m.total_spent, m.purchased_scrai);
+    let g2 = ratio(m.total_spent, m.purchased_toku);
     f.render_widget(
         Gauge::default().gauge_style(Style::default().fg(GOLD)).ratio(g2).label(format!("spent of purchased {:.0}%", g2 * 100.0)),
         ur[1],

@@ -8,14 +8,14 @@
  */
 
 import assert from "node:assert/strict";
-import { computeBilling, createMeter, ceilScrai, retailRate, EMPTY_USAGE } from "../src/billing.js";
+import { computeBilling, createMeter, ceilToku, retailRate, EMPTY_USAGE } from "../src/billing.js";
 import { parseGeminiUsage, mergeGeminiUsage } from "../src/adapters/gemini-usage.js";
 import type { ChatChunk, TokenUsage } from "../src/types.js";
 
 // billing.ts reads MARGIN when it is called, not at import time, so setting it
 // here still takes effect despite ESM hoisting.
 process.env.MARGIN = "1.4";
-process.env.MIN_CHARGE_SCRAI = "1";
+process.env.MIN_CHARGE_TOKU = "1";
 
 /* 1) Ordinary in/out on flash-lite:
       (1000×0.30 + 500×2.50)/1M = $0.00155 = 155 TOKU */
@@ -140,10 +140,10 @@ assert.ok(salvage.priceScrai >= 1);
 assert.equal(salvage.estimated, true);
 
 
-/* 10) MIN_CHARGE_SCRAI=0: a paid model still never rounds down to zero, because
+/* 10) MIN_CHARGE_TOKU=0: a paid model still never rounds down to zero, because
       the price is formed with ceil(). (There is no 0/0 model left in the table —
       the keyless test providers were removed before mainnet.) */
-process.env.MIN_CHARGE_SCRAI = "0";
+process.env.MIN_CHARGE_TOKU = "0";
 
 const paidTiny = computeBilling("gemini-3.5-flash-lite", { ...EMPTY_USAGE, inputTokens: 1 });
 assert.ok(paidTiny.costScrai > 0);
@@ -152,9 +152,9 @@ assert.equal(paidTiny.priceScrai, 1); // ceil() keeps it above zero
 /* 11) Round up without inventing money out of floating-point noise.
       57 in × $0.30/1M computes to 27960.000000000004 — naive ceil() would turn
       that into 2.7961, a cost the provider never charged. */
-assert.equal(ceilScrai(27960.000000000004 / 10_000), 2.796);
-assert.equal(ceilScrai(2.7960001), 2.7961);   // a genuine fraction does round up
-assert.equal(ceilScrai(0), 0);
+assert.equal(ceilToku(27960.000000000004 / 10_000), 2.796);
+assert.equal(ceilToku(2.7960001), 2.7961);   // a genuine fraction does round up
+assert.equal(ceilToku(0), 0);
 
 /* 12) Retail rates carry the margin and round up */
 process.env.MARGIN = "1.1";

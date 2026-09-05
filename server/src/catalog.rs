@@ -11,8 +11,8 @@
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use scrai_core::billing::ceil_scrai;
-use scrai_core::coconut::SCRAI_PER_USD;
+use scrai_core::billing::ceil_toku;
+use scrai_core::coconut::TOKU_PER_USD;
 use scrai_core::pricing::PricingTable;
 use serde_json::{json, Value};
 
@@ -140,7 +140,7 @@ async fn fetch_models(pricing: &PricingTable, margin: f64) -> Vec<Value> {
 
 /// Retail rate in TOKU per 1M tokens (provider USD price × peg × margin).
 fn retail(usd_per_million: f64, margin: f64) -> u64 {
-    ceil_scrai(usd_per_million * SCRAI_PER_USD as f64 * margin).ceil() as u64
+    ceil_toku(usd_per_million * TOKU_PER_USD as f64 * margin).ceil() as u64
 }
 
 /// The image models, all Google's — billed by tokens like any other Gemini call.

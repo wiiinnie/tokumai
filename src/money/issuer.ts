@@ -24,7 +24,7 @@
 // ---------------------------------------------------------------------------
 
 import { randomUUID } from "node:crypto";
-import { SCRAI_PER_USD, purchaseTiers } from "../billing.js";
+import { TOKU_PER_USD, purchaseTiers } from "../billing.js";
 import type { MoneyStore } from "./store.js";
 import type { Invoice, InvoiceStatus, PaymentGateway, WatchState } from "./gateway.js";
 import type { Mint, BlindedOutput, SignedOutput } from "./token.js";
@@ -84,7 +84,7 @@ export class Issuer {
     }
     const id = randomUUID();
     const raised = await this.gw(method).createInvoice(amountUsd, id);
-    const amountScrai = Math.floor(amountUsd * SCRAI_PER_USD);
+    const amountScrai = Math.floor(amountUsd * TOKU_PER_USD);
 
     // provider_ref stays the gateway's OWN id; the method is recorded alongside
     // it so status()/sweep() route each invoice back to the chain that raised it.

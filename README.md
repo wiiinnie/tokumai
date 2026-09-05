@@ -474,7 +474,7 @@ the Google Cloud project. Text models are unaffected.
 |---|---|---|
 | `GEMINI_API_KEY` | — | required, server only |
 | `MARGIN` | `1.1` | markup on provider cost; server-side only |
-| `MIN_CHARGE_SCRAI` | `0` | floor per request; 0 keeps free models free |
+| `MIN_CHARGE_TOKU` | `0` | floor per request; 0 keeps free models free |
 | `FLUSH_CHARS` | `120` | chunk size before a stream frame is sent |
 | `FLUSH_MS` | `500` | max delay before flushing a partial chunk |
 | `TIMEOUT_MS` | `120000` | overall request timeout |
@@ -822,7 +822,7 @@ for an answer that never came.
 `8 in` / `115 out` are the tokens the provider reported; `thinking` is a subset
 of output, shown for transparency and never billed twice.
 
-A free-tier model shows `free` and deducts nothing. That is deliberate — `MIN_CHARGE_SCRAI`
+A free-tier model shows `free` and deducts nothing. That is deliberate — `MIN_CHARGE_TOKU`
 defaults to 0, so a model that costs nothing to serve costs nothing to use. Paid
 models can never round down to zero, because the price is formed with `ceil()`.
 

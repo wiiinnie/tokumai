@@ -29,11 +29,12 @@ const MAX_CACHED_REPLY: usize = 256 * 1024;
 const MAX_CACHED_SESSIONS: usize = 64;
 
 /// A request that reached the provider is never free, even if it rounds to sub-1 TOKU.
-/// Default 1 TOKU ($0.00001); override per-operator with the `MIN_CHARGE_SCRAI` env var
+/// Default 1 TOKU ($0.00001); override per-operator with the `MIN_CHARGE_TOKU` env var
 /// (e.g. a larger floor to cover per-request overhead / discourage dust spam).
 const MIN_CHARGE_DEFAULT: u64 = 1;
 fn min_charge() -> u64 {
-    std::env::var("MIN_CHARGE_SCRAI")
+    std::env::var("MIN_CHARGE_TOKU")
+        .or_else(|_| std::env::var("MIN_CHARGE_SCRAI"))   // pre-rename .env
         .ok()
         .and_then(|v| v.trim().parse::<u64>().ok())
         .unwrap_or(MIN_CHARGE_DEFAULT)
@@ -182,12 +183,12 @@ fn search_usd_per_query(model: &str) -> f64 {
 }
 
 fn grounding_charge_at(queries: u64, usd_per_query: f64, margin: f64) -> (f64, u64) {
-    use scrai_core::billing::{ceil_scrai, clamp_margin};
-    use scrai_core::coconut::SCRAI_PER_USD;
+    use scrai_core::billing::{ceil_toku, clamp_margin};
+    use scrai_core::coconut::TOKU_PER_USD;
     if queries == 0 {
         return (0.0, 0);
     }
-    let cost = ceil_scrai(queries as f64 * usd_per_query * SCRAI_PER_USD as f64);
+    let cost = ceil_toku(queries as f64 * usd_per_query * TOKU_PER_USD as f64);
     let retail = (cost * clamp_margin(margin)).ceil() as u64;
     (cost, retail)
 }
@@ -204,10 +205,10 @@ fn ceiling_for(
     image_size: &str,
     model: &str,
 ) -> u64 {
-    use scrai_core::billing::{ceil_scrai, clamp_margin};
-    use scrai_core::coconut::SCRAI_PER_USD;
+    use scrai_core::billing::{ceil_toku, clamp_margin};
+    use scrai_core::coconut::TOKU_PER_USD;
     let retail = |usd_per_million: f64| {
-        ceil_scrai(usd_per_million * SCRAI_PER_USD as f64 * clamp_margin(margin)).ceil()
+        ceil_toku(usd_per_million * TOKU_PER_USD as f64 * clamp_margin(margin)).ceil()
     };
     let empty = Vec::new();
     let in_tokens: u64 = messages
@@ -243,16 +244,16 @@ fn ceiling_for(
     } else {
         0
     };
-    tokens + per_image_scrai(price, margin) + grounding
+    tokens + per_image_toku(price, margin) + grounding
 }
 
 /// Retail TOKU for ONE generated image (0 for text models).
-pub fn per_image_scrai(price: &scrai_core::billing::ModelPrice, margin: f64) -> u64 {
-    use scrai_core::billing::{ceil_scrai, clamp_margin};
-    use scrai_core::coconut::SCRAI_PER_USD;
+pub fn per_image_toku(price: &scrai_core::billing::ModelPrice, margin: f64) -> u64 {
+    use scrai_core::billing::{ceil_toku, clamp_margin};
+    use scrai_core::coconut::TOKU_PER_USD;
     match price.per_image {
         Some(usd) if usd > 0.0 => {
-            ceil_scrai(usd * SCRAI_PER_USD as f64 * clamp_margin(margin)).ceil() as u64
+            ceil_toku(usd * TOKU_PER_USD as f64 * clamp_margin(margin)).ceil() as u64
         }
         _ => 0,
     }
@@ -544,7 +545,7 @@ pub fn settle(
         let reply = match result {
             Ok((text, usage, images)) => {
                 let frame = compute_billing(&p.price, &usage, p.margin, 0, usage.estimated);
-                provider_cost = Some(frame.cost_scrai);
+                provider_cost = Some(frame.cost_toku);
                 let usage_json = json!({
                     "inputTokens": usage.input,
                     "cachedInputTokens": usage.cached_input,
@@ -553,8 +554,12 @@ pub fn settle(
                     "outputImageTokens": usage.output_image,
                     "imageSize": p.image_size,
                     "billing": {
-                        "priceScrai": frame.price_scrai,
-                        "costScrai": dev_audit_cost(frame.cost_scrai),
+                        // Both spellings during the rename: a 0.4.6 app reads *Scrai, a
+                        // newer one *Toku. Drop the Scrai pair once the fleet has moved.
+                        "priceToku": frame.price_toku,
+                        "costToku": dev_audit_cost(frame.cost_toku),
+                        "priceScrai": frame.price_toku,
+                        "costScrai": dev_audit_cost(frame.cost_toku),
                         "model": p.model,
                         "pricingVersion": p.pricing_version,
                         "estimated": frame.estimated,
@@ -584,8 +589,8 @@ pub fn settle(
             // the allowance grounding is genuinely free → nothing added.
             let billable_queries = usage.grounding_queries.saturating_sub(p.grounding_free);
             let (g_cost, g_retail) = grounding_charge_at(billable_queries, search_usd_per_query(&p.model), p.margin);
-            frame.cost_scrai += g_cost;
-            provider_cost = Some(frame.cost_scrai);
+            frame.cost_toku += g_cost;
+            provider_cost = Some(frame.cost_toku);
             // One line per answer, the numbers the provider's console shows — so a spend
             // mismatch is a journal grep, not a reconstruction. No content, no identifiers.
             eprintln!(
@@ -597,13 +602,13 @@ pub fn settle(
                 usage.output_image,
                 usage.grounding_queries,
                 billable_queries,
-                frame.cost_scrai,
-                frame.price_scrai + g_retail,
+                frame.cost_toku,
+                frame.price_toku + g_retail,
                 if usage.estimated { " ESTIMATED" } else { "" }
             );
             // Token cost + per-image cost (image models report zero tokens) + grounding.
             let n_images = images.as_ref().and_then(|i| i.as_array()).map(|a| a.len()).unwrap_or(0) as u64;
-            let cost = frame.price_scrai + n_images * per_image_scrai(&p.price, p.margin) + g_retail;
+            let cost = frame.price_toku + n_images * per_image_toku(&p.price, p.margin) + g_retail;
             // Settle: the unused part of the reservation comes back.
             let balance = sessions.settle(&paid.session_id, paid.ceiling, cost);
             // Canonical usage the UI expects (camelCase) + a billing frame whose
@@ -617,8 +622,10 @@ pub fn settle(
                 "imageSize": p.image_size,
                 "groundingQueries": usage.grounding_queries,
                 "billing": {
+                    "priceToku": cost,
+                    "costToku": dev_audit_cost(frame.cost_toku),
                     "priceScrai": cost,
-                    "costScrai": dev_audit_cost(frame.cost_scrai),
+                    "costScrai": dev_audit_cost(frame.cost_toku),
                     "model": p.model,
                     "pricingVersion": p.pricing_version,
                     "estimated": frame.estimated,
@@ -1427,6 +1434,34 @@ mod tests {
         assert!(r["error"].as_str().unwrap().contains("already used"));
     }
 
+    // The unit rename ships server-first, so one reply has to satisfy both: a 0.4.6 app
+    // reading *Scrai and a newer one reading *Toku. Same number under both names.
+    #[tokio::test]
+    async fn a_reply_carries_the_billing_numbers_under_both_names() {
+        let (sk, pem, sid) = session_keypair();
+        let mut sessions = scrai_core::session::SessionStore::default();
+        let mut uploads = crate::uploads::UploadStore::default();
+        let mut replies: std::collections::HashMap<String, (u64, Vec<u8>)> = std::collections::HashMap::new();
+        let pricing = PricingTable::parse(
+            r#"{"version":"t","default":{"in":1.0,"out":4.0,"fallback":true},"models":{"gemini-b":{"in":1.0,"out":4.0}}}"#,
+        )
+        .unwrap();
+        sessions.credit(&sid, 1_000_000);
+        let Reserved::Proceed(p) = reserve(&signed_chat(&sk, &pem, &sid, 1, "gemini-b"), &mut sessions, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH)
+        else {
+            panic!("should reserve");
+        };
+        let usage = TokenUsage { input: 5_000, output: 5_000, ..Default::default() };
+        let r: Value = serde_json::from_slice(
+            &settle(*p, Ok(("hi".to_string(), usage, None)), &mut sessions, &mut replies).reply,
+        )
+        .unwrap();
+        let b = &r["usage"]["billing"];
+        assert!(b["priceToku"].as_u64().unwrap() > 0, "priced");
+        assert_eq!(b["priceToku"], b["priceScrai"], "old and new name must agree");
+        assert_eq!(b["costToku"], b["costScrai"]);
+    }
+
     // Regression (2026-09-04): OpenAI web-search calls were billed as if Gemini's monthly
     // free allowance applied — the OpenAI override was decided after the closure that
     // carries grounding_free into settle() had already captured the Gemini value.
@@ -1551,8 +1586,8 @@ mod tests {
         assert_eq!(pd.input, 1.0); // paid: untouched
         assert_eq!(pd.output, 4.0);
         // Per-image retail: 0.0005 USD × 100_000 TOKU/USD × margin 1.4 = 70 TOKU.
-        assert_eq!(per_image_scrai(&ft, 1.4), 70);
-        assert_eq!(per_image_scrai(&pd, 1.4), 0);
+        assert_eq!(per_image_toku(&ft, 1.4), 70);
+        assert_eq!(per_image_toku(&pd, 1.4), 0);
     }
 
     #[tokio::test]
@@ -1599,9 +1634,9 @@ mod tests {
 /// What the provider billed us for one answer. That number is the margin in plain sight,
 /// so it leaves the server ONLY when `DEV_AUDIT=1` (a developer's own server);
 /// release servers send null and the app's cost-audit overlay has nothing to show.
-fn dev_audit_cost(cost_scrai: f64) -> serde_json::Value {
+fn dev_audit_cost(cost_toku: f64) -> serde_json::Value {
     if crate::cfg("DEV_AUDIT").as_deref() == Ok("1") {
-        serde_json::json!(cost_scrai)
+        serde_json::json!(cost_toku)
     } else {
         serde_json::Value::Null
     }

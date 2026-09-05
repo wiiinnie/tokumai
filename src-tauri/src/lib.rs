@@ -242,7 +242,7 @@ fn fair_price_estimate(model: &str, messages: &Value, reply_text: &str) -> Optio
         output: estimate_tokens(reply_text.chars().count() as u64),
         ..Default::default()
     };
-    Some(compute_billing(&price, &usage, CLIENT_RETAIL_MARGIN, 1, true).price_scrai)
+    Some(compute_billing(&price, &usage, CLIENT_RETAIL_MARGIN, 1, true).price_toku)
 }
 
 /// Dev-only environment overrides. These read the AMBIENT environment of a user's machine,
@@ -761,13 +761,13 @@ fn first_funded_purse(purses: &[String]) -> Option<(usize, scrai_core::purse::Pu
     None
 }
 
-fn coconut_held_scrai(app: &AppHandle) -> u64 {
+fn coconut_held_toku(app: &AppHandle) -> u64 {
     let Ok(dir) = data_dir(app) else { return 0 };
     let w = wallet::load(&dir);
     w.coconut_purses
         .iter()
         .filter_map(|pj| scrai_core::purse::Purse::restore(pj).ok())
-        .map(|p| p.remaining_coins() * scrai_core::coconut::COIN_SCRAI)
+        .map(|p| p.remaining_coins() * scrai_core::coconut::COIN_TOKU)
         .sum()
 }
 
@@ -807,7 +807,7 @@ fn local_state(app: AppHandle) -> Result<Value, String> {
     Ok(json!({
         "account": account,
         "server": server_addr(&w).ok(),
-        "held": coconut_held_scrai(&app),
+        "held": coconut_held_toku(&app),
     }))
 }
 
@@ -915,7 +915,7 @@ async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<V
     // Show TOTAL spendable credit: the funded session balance PLUS coconut coins not
     // yet redeemed (redeem is lazy — it happens on first chat — but the money is
     // already the user's, so a fresh credential shouldn't read as "0").
-    balance = balance.saturating_add(coconut_held_scrai(&app));
+    balance = balance.saturating_add(coconut_held_toku(&app));
     let (testnet, faucet_url) = SERVER_TESTNET.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let update = SERVER_UPDATE.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let card = SERVER_CARD.lock().unwrap_or_else(|e| e.into_inner()).clone();
@@ -931,7 +931,7 @@ async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<V
         "update": update,
         "account": account,
         "balance": balance,
-        "held": coconut_held_scrai(&app),
+        "held": coconut_held_toku(&app),
         "tiers": TIERS,
         "fakePayments": false,
         "gateway": "btcpay",
@@ -1180,6 +1180,7 @@ async fn invoice(
     Ok(json!({
         "invoiceId": resp.get("invoiceId"),
         "amountUsd": resp.get("amountUsd"),
+        "amountToku": resp.get("amountToku").or_else(|| resp.get("amountScrai")),
         "amountScrai": resp.get("amountScrai"),
         "expiresAt": resp.get("expiresAt"),
         "instruction": resp.get("instruction"),
@@ -1352,13 +1353,13 @@ async fn collect(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result
     // the server may already have charged for it, so it must not count as owed again.
     if w0.pending_withdraw.as_ref().is_some_and(|p| p.server == srv) {
         let purse = withdraw_purse(&transport, &srv, &a, &dir).await?;
-        let book_scrai = purse.total_coins() * scrai_core::coconut::COIN_SCRAI;
+        let book_toku = purse.total_coins() * scrai_core::coconut::COIN_TOKU;
         let mut w = wallet::load(&dir);
         w.coconut_purses.push(purse.persist()?);
         w.pending_withdraw = None;
         wallet::save(&dir, &w)?;
-        collected += book_scrai;
-        log::info!("[coconut] recovered an interrupted {book_scrai}-SCRAI book");
+        collected += book_toku;
+        log::info!("[coconut] recovered an interrupted {book_toku}-SCRAI book");
     }
 
     // How much is owed?
@@ -1377,17 +1378,17 @@ async fn collect(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result
             Err(e) if e.contains("not enough entitlement") => break,
             Err(e) => return Err(e),
         };
-        let book_scrai = purse.total_coins() * scrai_core::coconut::COIN_SCRAI;
+        let book_toku = purse.total_coins() * scrai_core::coconut::COIN_TOKU;
         let mut w = wallet::load(&dir);
         w.coconut_purses.push(purse.persist()?);
         w.pending_withdraw = None; // the book is on disk — the retry window is closed
         wallet::save(&dir, &w)?;
-        collected += book_scrai;
-        owed = owed.saturating_sub(book_scrai);
-        log::info!("[coconut] collected a {book_scrai}-SCRAI book ({owed} entitlement left)");
+        collected += book_toku;
+        owed = owed.saturating_sub(book_toku);
+        log::info!("[coconut] collected a {book_toku}-SCRAI book ({owed} entitlement left)");
     }
     diag(&app, "collect: about to respond");
-    Ok(json!({ "collected": collected, "held": coconut_held_scrai(&app) }))
+    Ok(json!({ "collected": collected, "held": coconut_held_toku(&app) }))
 }
 
 /// Manually redeem one chunk of held coconut credit into the session balance
@@ -1398,7 +1399,7 @@ async fn redeem(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<
     let w = wallet::load(&data_dir(&app)?);
     let srv = server_addr(&w)?;
     let balance = redeem_coconut(&app, &transport, &srv, REDEEM_CHUNK_COINS).await?;
-    let held = coconut_held_scrai(&app);
+    let held = coconut_held_toku(&app);
     Ok(json!({ "balance": balance.saturating_add(held), "held": held }))
 }
 
@@ -1659,7 +1660,7 @@ async fn chat_impl(
 /// blank and silent.
 fn paid_chat_reply(app: &AppHandle, resp: &Value, price_warning: Value) -> Value {
     let session_balance = resp.get("balance").and_then(|b| b.as_u64()).unwrap_or(0);
-    let held = coconut_held_scrai(app);
+    let held = coconut_held_toku(app);
     json!({
         "text": resp.get("text"),
         "usage": resp.get("usage"),

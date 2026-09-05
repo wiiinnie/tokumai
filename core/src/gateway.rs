@@ -12,8 +12,8 @@
 
 use serde_json::{json, Value};
 
-use crate::billing::ceil_scrai;
-use crate::coconut::{PayInfo, Payment, COIN_SCRAI, SCRAI_PER_USD};
+use crate::billing::ceil_toku;
+use crate::coconut::{PayInfo, Payment, COIN_TOKU, TOKU_PER_USD};
 use crate::federation::{self, Authority};
 use crate::ledger::Ledger;
 use crate::quorum::{QuorumStore, ServerId, Verdict};
@@ -61,7 +61,7 @@ fn encode(v: &Value) -> Vec<u8> {
 
 /// Handle a `redeem`: `{sessionId, payment, pay_info:[u8;72], spend_date}`. Verify the
 /// payment offline, record it in the double-spend quorum, and on a fresh accept credit
-/// the session by `coins × COIN_SCRAI`. A benign replay (same pay_info) is idempotent —
+/// the session by `coins × COIN_TOKU`. A benign replay (same pay_info) is idempotent —
 /// it was already credited, so we return the current balance without double-crediting.
 ///
 /// Three steps so the server can run the expensive one off its dispatch loop:
@@ -129,7 +129,7 @@ pub async fn redeem_apply(
     let pi = PayInfo { pay_info_bytes: r.pay_info };
     let coins = r.payment.ss.len() as u64;
     match quorum.submit(&r.payment, pi, THIS_SERVER) {
-        Verdict::Accepted => match sessions.session_credit(&r.session_id, coins * COIN_SCRAI).await {
+        Verdict::Accepted => match sessions.session_credit(&r.session_id, coins * COIN_TOKU).await {
             Ok(balance) => json!({ "id": id, "accepted": true, "coins": coins, "balance": balance }),
             // Local `SessionStore` never fails here (credit is in-process, same store as the
             // serial record — the H2 atomic-persist covers it). This arm only becomes live
@@ -149,7 +149,7 @@ pub async fn redeem_apply(
 
 /// Retail rate in TOKU per 1M tokens (provider USD price × peg × margin, rounded).
 fn retail(usd_per_million: f64) -> u64 {
-    ceil_scrai(usd_per_million * SCRAI_PER_USD as f64 * MARGIN) as u64
+    ceil_toku(usd_per_million * TOKU_PER_USD as f64 * MARGIN) as u64
 }
 
 fn model(id: &str, vendor: &str, kind: &str, in_usd: f64, out_usd: f64) -> Value {
@@ -287,12 +287,12 @@ mod tests {
         let first = redeem(&mut quorum, &mut sessions);
         assert_eq!(first["accepted"], true);
         assert_eq!(first["coins"], 3);
-        assert_eq!(first["balance"], 3 * COIN_SCRAI); // 3000 TOKU
+        assert_eq!(first["balance"], 3 * COIN_TOKU); // 3000 TOKU
 
         // replay the SAME payment → idempotent, no double-credit
         let again = redeem(&mut quorum, &mut sessions);
         assert_eq!(again["accepted"], true);
-        assert_eq!(again["balance"], 3 * COIN_SCRAI);
-        assert_eq!(sessions.balance("sess-1"), 3 * COIN_SCRAI);
+        assert_eq!(again["balance"], 3 * COIN_TOKU);
+        assert_eq!(sessions.balance("sess-1"), 3 * COIN_TOKU);
     }
 }

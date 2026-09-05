@@ -30,7 +30,7 @@ import { accountIdFor } from "../money/account.js";
 import { createPublicKey, verify as verifySignature, randomBytes } from "node:crypto";
 import type { ChatMessage } from "../types.js";
 import { verifyRequest, keyMatchesSession, sessionIdFor as sessionIdOf } from "../money/session.js";
-import { SCRAI_PER_USD } from "../billing.js";
+import { TOKU_PER_USD } from "../billing.js";
 import { NymSocket, DEFAULT_WS_PORT } from "../nym/socket.js";
 import * as nym from "../nym/process.js";
 
@@ -795,7 +795,7 @@ async function main(): Promise<void> {
     const stale = issuer.expireStale();
     console.log(
       `issuer: gateway=${issuer.gatewayName} · methods=${issuer.availableMethods().join(",")}` +
-        ` · ${ms.pendingInvoices} invoices pending · ${ms.owedScrai.toLocaleString("en-US")} TOKU owed` +
+        ` · ${ms.pendingInvoices} invoices pending · ${ms.owedToku.toLocaleString("en-US")} TOKU owed` +
         (stale ? ` · ${stale} expired` : ""),
     );
     if (issuer.isFake) {

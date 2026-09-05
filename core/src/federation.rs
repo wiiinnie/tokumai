@@ -106,7 +106,7 @@ impl Authority {
 
     /// Coins per issued ticketbook — what one authorized Withdraw hands out.
     /// The paywall (server/pay.rs) prices a withdrawal as
-    /// `total_coins × COIN_SCRAI` of entitlement.
+    /// `total_coins × COIN_TOKU` of entitlement.
     pub fn total_coins(&self) -> u64 {
         self.total_coins
     }

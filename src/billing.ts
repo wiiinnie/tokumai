@@ -21,7 +21,7 @@ import { priceFor, pricingVersion, type ModelPrice } from "./pricing.js";
 import type { BillingFrame, ChatChunk, TokenUsage } from "./types.js";
 
 /** 1 TOKU = USD 0.00001, so 10 USD buys 1 000 000 TOKU. */
-export const SCRAI_PER_USD = 100_000;
+export const TOKU_PER_USD = 100_000;
 
 /**
  * Fixed purchase amounts, in USD.
@@ -69,7 +69,7 @@ function margin(): number {
  * model paid, so think before you do.
  */
 function minCharge(): number {
-  const raw = Number(process.env.MIN_CHARGE_SCRAI ?? 0);
+  const raw = Number(process.env.MIN_CHARGE_TOKU ?? 0);
   return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 0;
 }
 
@@ -95,7 +95,7 @@ export function costUsd(usage: TokenUsage, price: ModelPrice): number {
  * instead of 2.796 — a cost the provider never charged. Normalising the
  * significant digits first drops the noise and leaves genuine fractions intact.
  */
-export function ceilScrai(scrai: number): number {
+export function ceilToku(scrai: number): number {
   const scaled = scrai * 10_000;
   return Math.ceil(Number(scaled.toPrecision(12))) / 10_000;
 }
@@ -116,7 +116,7 @@ export function computeBilling(
   opts: { estimated?: boolean } = {},
 ): BillingFrame {
   const price = priceFor(model);
-  const cost = ceilScrai(costUsd(usage, price) * SCRAI_PER_USD);
+  const cost = ceilToku(costUsd(usage, price) * TOKU_PER_USD);
   const billable =
     usage.inputTokens +
     (usage.cachedInputTokens ?? 0) +
@@ -146,8 +146,8 @@ export function retailRate(model: string): { in: number; out: number } {
   const p = priceFor(model);
   const m = margin();
   return {
-    in: ceilScrai(p.in * SCRAI_PER_USD * m),
-    out: ceilScrai(p.out * SCRAI_PER_USD * m),
+    in: ceilToku(p.in * TOKU_PER_USD * m),
+    out: ceilToku(p.out * TOKU_PER_USD * m),
   };
 }
 
