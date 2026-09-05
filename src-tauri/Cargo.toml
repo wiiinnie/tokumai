@@ -109,7 +109,7 @@ objc2-local-authentication = { version = "0.3", features = ["LAContext", "LAErro
 #     other platforms fall back to the bundled Tesseract-WASM frontend) ---
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSData", "NSString", "NSArray", "NSDictionary"] }
+objc2-foundation = { version = "0.3", features = ["NSData", "NSString", "NSArray", "NSDictionary", "NSURL"] }
 objc2-vision = { version = "0.3", features = ["VNRequest", "VNRecognizeTextRequest", "VNRequestHandler", "VNObservation", "VNTypes", "VNError", "alloc", "std"] }
 # Render scanned-PDF pages off-screen for OCR (CGPDFDocument → bitmap → CGImage).
 objc2-core-graphics = { version = "0.3", features = ["CGDataProvider", "CGPDFDocument", "CGPDFPage", "CGContext", "CGColorSpace", "CGImage", "CGBitmapContext"] }

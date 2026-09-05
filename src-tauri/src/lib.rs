@@ -30,6 +30,12 @@ static SERVER_SITE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(Non
 /// What the server said about cards with the catalog (`{enabled, minUsd}`) — the card
 /// row exists only when a server has a Mollie key, and the minimum tile is its call.
 static SERVER_CARD: std::sync::Mutex<Option<Value>> = std::sync::Mutex::new(None);
+/// Which payment rails the server can actually raise an invoice on (`rails` on the catalog
+/// reply: `{nyx, btc, card, invite}`). The buy sheet greys out what is missing, and the
+/// invite field exists only when the server has a faucet wallet pinned. Cached with the
+/// models, like the rest — and it MUST be forwarded into the state object below, or the
+/// webview falls back to its defaults and the invite field never appears (2026-09-05).
+static SERVER_RAILS: std::sync::Mutex<Option<Value>> = std::sync::Mutex::new(None);
 /// The server's own version (`serverVersion` on the catalog reply; older servers send
 /// none) — shown under Settings next to the app version.
 static SERVER_VERSION: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
@@ -923,6 +929,10 @@ async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<V
                         *c = resp.get("card").filter(|c| c.is_object()).cloned();
                     }
                     {
+                        let mut r = SERVER_RAILS.lock().unwrap_or_else(|e| e.into_inner());
+                        *r = resp.get("rails").filter(|r| r.is_object()).cloned();
+                    }
+                    {
                         let mut v = SERVER_VERSION.lock().unwrap_or_else(|e| e.into_inner());
                         *v = resp.get("serverVersion").and_then(|s| s.as_str()).map(|s| s.chars().take(32).collect());
                     }
@@ -950,6 +960,7 @@ async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<V
     let (testnet, faucet_url) = SERVER_TESTNET.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let update = SERVER_UPDATE.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let card = SERVER_CARD.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let rails = SERVER_RAILS.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let server_version = SERVER_VERSION.lock().unwrap_or_else(|e| e.into_inner()).clone();
 
     let out = json!({
@@ -970,6 +981,7 @@ async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<V
         "faucetUrl": faucet_url,
         "siteUrl": SERVER_SITE.lock().unwrap_or_else(|e| e.into_inner()).clone(),
         "card": card,
+        "rails": rails,
         "models": models,
         "server": server,
         "serverAlternates": w.server_alternates,
@@ -1003,6 +1015,7 @@ async fn set_server(app: AppHandle, transport: State<'_, Arc<Transport>>, addres
     *SERVER_TESTNET.lock().unwrap_or_else(|e| e.into_inner()) = (false, None);
     *SERVER_SITE.lock().unwrap_or_else(|e| e.into_inner()) = None;
     *SERVER_CARD.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    *SERVER_RAILS.lock().unwrap_or_else(|e| e.into_inner()) = None;
     *SERVER_VERSION.lock().unwrap_or_else(|e| e.into_inner()) = None;
     *SERVER_UPDATE.lock().unwrap_or_else(|e| e.into_inner()) = None;
     // Check the NEW address right away: over the live route it's a single ping, and a
@@ -2713,8 +2726,44 @@ fn open_external(app: AppHandle, url: String) -> Result<(), String> {
     if !is_openable_url(&url) {
         return Err("only plain http(s) urls are allowed".into());
     }
-    use tauri_plugin_opener::OpenerExt;
-    app.opener().open_url(&url, None::<&str>).map_err(|e| e.to_string())
+    #[cfg(target_os = "ios")]
+    {
+        return ios_open_url(&app, url);
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        use tauri_plugin_opener::OpenerExt;
+        app.opener().open_url(&url, None::<&str>).map_err(|e| e.to_string())
+    }
+}
+
+/// iOS: hand the URL to UIApplication directly instead of to the opener plugin.
+///
+/// The plugin's iOS half is a Swift package that this project never links (gen/apple has
+/// no plugin packages), so `open_url` resolved to nothing on device: the disclosure sheet
+/// closed and Safari never opened — no error anywhere, because the webview drops the
+/// rejected promise. Same reasoning as the native image picker: on iOS, go through UIKit.
+#[cfg(target_os = "ios")]
+fn ios_open_url(app: &AppHandle, url: String) -> Result<(), String> {
+    app.run_on_main_thread(move || {
+        use objc2::MainThreadMarker;
+        use objc2_foundation::{NSDictionary, NSString, NSURL};
+        use objc2_ui_kit::UIApplication;
+        let Some(mtm) = MainThreadMarker::new() else {
+            log::warn!("[open] not on the main thread — url not opened");
+            return;
+        };
+        let s = NSString::from_str(&url);
+        let Some(nsurl) = (unsafe { NSURL::URLWithString(&s) }) else {
+            log::warn!("[open] UIKit rejected the url");
+            return;
+        };
+        let options = NSDictionary::new();
+        unsafe {
+            UIApplication::sharedApplication(mtm).openURL_options_completionHandler(&nsurl, &options, None);
+        }
+    })
+    .map_err(|e| e.to_string())
 }
 
 /// Android: hand rustls-platform-verifier the JVM + app Context so TLS verification can use
