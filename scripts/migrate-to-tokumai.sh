@@ -11,6 +11,9 @@
 #   scrai-faucet.service         → tokumai-faucet.service
 #   scrai-faucet-tokumai.service → tokumai-faucet-preview.service
 #
+# Caddy, the NOPASSWD sudoers rule and the service account home are updated too —
+# `inspect` lists everything under /etc that still points at the old path.
+#
 # Caddy IS touched, in one place: both vhosts serve /dl/* straight out of the site
 # directory being moved (`root * /opt/scrai/site/dl`). Left alone, every download link 404s
 # the moment the tree changes name. The Caddyfile is backed up, edited, validated and
@@ -182,6 +185,10 @@ if [ "$MODE" = rollback ]; then
     systemctl reload caddy || true
   fi
   [ -f "$BAK/deploy-apply.sh.stale" ] && mv "$BAK/deploy-apply.sh.stale" "$OLD/bin/deploy-apply.sh" || true
+  if [ -f "$BAK/sudoers.backup" ]; then
+    install -o root -g root -m 0440 "$BAK/sudoers.backup" /etc/sudoers.d/scrai-deploy
+  fi
+  [ "$(getent passwd scrai 2>/dev/null | cut -d: -f6)" = "$NEW" ] && usermod -d "$OLD" scrai 2>/dev/null || true
   systemctl daemon-reload
   systemctl enable --now scrai >/dev/null 2>&1 || true
   systemctl restart scrai || true
@@ -240,6 +247,36 @@ if [ -f "$CADDY" ] && grep -q "/opt/scrai" "$CADDY"; then
   fi
   systemctl reload caddy || systemctl restart caddy || true
   say "Caddy updated and reloaded (backup in $BAK/Caddyfile.backup)"
+fi
+
+# The NOPASSWD sudoers rule names the apply script BY PATH, so after the move it stops
+# matching and every deploy asks for a password again. Edited through a temp file and
+# visudo -c, never in place: a malformed sudoers file locks sudo out of the box entirely.
+SUDOERS=/etc/sudoers.d/scrai-deploy
+if [ -f "$SUDOERS" ] && grep -q "/opt/scrai" "$SUDOERS"; then
+  echo "updating the sudoers rule (it names the apply script by path) …"
+  cp -a "$SUDOERS" "$BAK/sudoers.backup"
+  TMP_SUDO=$(mktemp)
+  sed "s|/opt/scrai|/opt/tokumai|g" "$SUDOERS" > "$TMP_SUDO"
+  if visudo -c -f "$TMP_SUDO" >/dev/null 2>&1; then
+    if install -o root -g root -m 0440 "$TMP_SUDO" "$SUDOERS"; then
+      say "sudoers updated (backup in $BAK/sudoers.backup)"
+    else
+      say "WARNING: could not write $SUDOERS - deploys will ask for a password."
+    fi
+  else
+    say "WARNING: the rewritten sudoers rule does not validate - left untouched."
+    say "         Deploys will ask for a password until you fix $SUDOERS by hand."
+  fi
+  rm -f "$TMP_SUDO"
+fi
+
+# The service account home points into the tree as well. Cosmetic for the units (they set
+# WorkingDirectory themselves) but a home that does not exist bites anything using ~scrai.
+HOME_NOW=$(getent passwd scrai 2>/dev/null | cut -d: -f6)
+if [ "$HOME_NOW" = "$OLD" ]; then
+  usermod -d "$NEW" scrai 2>/dev/null && say "home of user scrai: $OLD -> $NEW" || \
+    say "WARNING: could not move the home of user scrai (still $OLD)"
 fi
 
 # The root-owned apply script still points at /opt/scrai. Remove it rather than leave a
