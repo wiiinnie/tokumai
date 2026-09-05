@@ -85,14 +85,25 @@ def mask(k, v):
     return v if len(v) <= 46 else v[:43] + "…"
 
 used = set()
+DUPES = []             # (spelling that lost, key it belongs to)
 def take(*names):
-    """First of `names` that is set in the old file (bare or SCRAI_-prefixed)."""
+    """First of `names` that is set in the old file (bare or SCRAI_-prefixed).
+
+    Every spelling of every candidate counts as consumed, not just the winner —
+    otherwise a box carrying both FAUCET_URL and SCRAI_FAUCET_URL would have the loser
+    copied into the new file as an unrecognised key, where it reads like a second
+    setting. cfg() prefers the bare name, so the winner here is the one in effect.
+    """
+    hit = None
     for n in names:
         for cand in (n, "SCRAI_" + n):
             if old.get(cand, "").strip():
+                if hit is None:
+                    hit = (old[cand], cand)
+                elif cand not in used:
+                    DUPES.append((cand, hit[1]))
                 used.add(cand)
-                return old[cand], cand
-    return None, None
+    return hit if hit else (None, None)
 
 report = []            # (new key, value-or-None, note)
 REVIEW = []            # carried values that are probably stale
@@ -205,6 +216,10 @@ section("Pricing + metrics",
     ], default="1.15", needed=True),
     line_for("MIN_CHARGE_TOKU", ["Floor per request in TOKU (was MIN_CHARGE_SCRAI)."],
              sources=["MIN_CHARGE_TOKU", "MIN_CHARGE_SCRAI"]),
+    line_for("FREE_TIER_FACTOR", [
+        "Discount on models served from a provider's free daily allowance (0..1,",
+        "default 0.5). The margin still applies on top.",
+    ]),
     line_for("PURCHASE_TIERS", ["Sellable amounts in USD (empty = 5,10,20,50)."]),
     line_for("CARD_MIN_USD", ["Smallest amount the card rail sells (fees + chargeback exposure)."]),
     line_for("FX_EUR_PER_USD", ["EUR per USD, for the admin view only."]),
@@ -329,6 +344,10 @@ if DROPPED:
     print("\n  dropped (a mainnet server refuses to boot with these):")
     for k in DROPPED:
         print("    " + k)
+if DUPES:
+    print("\n  duplicate spellings, dropped (the one in effect was kept):")
+    for lost, winner in DUPES:
+        print("    " + lost.ljust(30) + "-> " + winner)
 if leftover:
     print("\n  carried over unrecognised:")
     for k in sorted(leftover):
