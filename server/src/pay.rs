@@ -211,6 +211,14 @@ pub struct Inv {
     provider_ref: String,
     account_id: String,
     amount_usd: u32,
+    /// ON DISK THIS FIELD IS STILL `amount_scrai`, on purpose. It is inside the pay
+    /// snapshot in state.db, and the server refuses to start on a snapshot it cannot
+    /// parse (a silent reset would drop paid invoices and entitlements) — so renaming the
+    /// key took the live server down on 2026-09-05. Keeping the stored name means no
+    /// migration and a binary rollback still reads what this build wrote. The alias lets
+    /// the new spelling be read too, so the stored name can be retired later with a
+    /// snapshot rewrite, once nothing that could be rolled back to is still around.
+    #[serde(rename = "amount_scrai", alias = "amount_toku")]
     amount_toku: u64,
     method: String,
     status: String, // "pending" | "paid" | "expired"
@@ -1490,15 +1498,15 @@ mod tests {
         assert!(pay.testnet_invoices().is_empty());
 
         // the flag rides in the durable record and the faucet view picks exactly those
-        pay.invoices.insert("t1".into(), Inv { id: "t1".into(), provider_ref: "SCRAI-MEMO2345".into(), account_id: aid.clone(),
+        pay.invoices.insert("t1".into(), Inv { id: "t1".into(), provider_ref: "TOKU-MEMO2345".into(), account_id: aid.clone(),
             amount_usd: 1, amount_toku: TOKU_PER_USD, method: "nyx".into(), status: "pending".into(),
             expires_at: now_ms() + 60_000, expected_unym: 59_000_000, testnet: true });
-        pay.invoices.insert("r1".into(), Inv { id: "r1".into(), provider_ref: "SCRAI-REAL2345".into(), account_id: aid,
+        pay.invoices.insert("r1".into(), Inv { id: "r1".into(), provider_ref: "TOKU-REAL2345".into(), account_id: aid,
             amount_usd: 5, amount_toku: 5 * TOKU_PER_USD, method: "nyx".into(), status: "pending".into(),
             expires_at: now_ms() + 60_000, expected_unym: 295_000_000, testnet: false });
         let t = pay.testnet_invoices();
         assert_eq!(t.len(), 1);
-        assert_eq!((t[0].amount_usd, t[0].memo.as_str(), t[0].unym), (1, "SCRAI-MEMO2345", 59_000_000));
+        assert_eq!((t[0].amount_usd, t[0].memo.as_str(), t[0].unym), (1, "TOKU-MEMO2345", 59_000_000));
     }
 
     // H2 (pay): the split API. Two status polls for the same invoice can be in flight at
@@ -1706,6 +1714,27 @@ mod tests {
         assert!(back.issuance(&req_key).is_some());
         back.abort_issuance(&req_key);
         assert!(back.issuance(&req_key).is_none());
+    }
+
+    /// The pay snapshot is the one place where a field NAME is a wire format: main.rs
+    /// refuses to start on a snapshot it cannot parse, so renaming the currency unit in
+    /// code must not rename the stored key. It did once — the live server crash-looped on
+    /// `missing field amount_toku` (2026-09-05). Both spellings must read, and what this
+    /// build writes must stay readable by the build it could be rolled back to.
+    #[test]
+    fn a_pre_rebrand_pay_snapshot_still_loads() {
+        let old = r#"{"invoices":{"i1":{"id":"i1","provider_ref":"SCRAIABCD2345","account_id":"a1",
+            "amount_usd":5,"amount_scrai":500000,"method":"nyx","status":"pending","expires_at":0}},
+            "entitlements":{"a1":100},"nonces":[]}"#;
+        let p: Pay = serde_json::from_str(old).expect("a snapshot from before the rename must load");
+        assert_eq!(p.invoices["i1"].amount_toku, 500_000);
+        assert_eq!(p.entitlements["a1"], 100);
+        // what we write keeps the stored name, so the previous binary still reads it
+        assert!(p.snapshot().contains(r#""amount_scrai":500000"#), "{}", p.snapshot());
+        // the new spelling is accepted as well
+        let new = old.replace("amount_scrai", "amount_toku");
+        let q: Pay = serde_json::from_str(&new).unwrap();
+        assert_eq!(q.invoices["i1"].amount_toku, 500_000);
     }
 
     #[test]

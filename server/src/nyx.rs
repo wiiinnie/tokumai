@@ -10,7 +10,7 @@
 // invoice even survives a server restart (the TS watcher could not).
 //
 // WHY A MEMO, NOT A PER-INVOICE ADDRESS: Cosmos has no cheap sub-addresses.
-// One receive address + a unique SCRAI-XXXXXXXX memo is how nym.com correlates
+// One receive address + a unique TOKU-XXXXXXXX memo is how nym.com correlates
 // payments too. The UI shows the memo as prominently as the amount.
 //
 // PRIVACY: the SERVER queries the price feed and the LCD. The buyer's wallet
@@ -358,8 +358,9 @@ fn parse_unym(amount: &str) -> u64 {
         .sum()
 }
 
-/// SCRAIXXXXXXXX — short, unique, human-copyable. Uppercase + digits only
-/// (no 0/O/1/I) so it survives a wallet's memo field without ambiguity, and
+/// TOKUXXXXXXXX — short, unique, human-copyable. Uppercase + digits only
+/// (no 0/O/1/I in the random part) so it survives a wallet's memo field without
+/// ambiguity, and
 /// STRICTLY alphanumeric: the Nym GUI wallet rejects a memo containing a
 /// hyphen ("only alphanumeric characters and white spaces are allowed").
 fn new_memo() -> String {
@@ -368,7 +369,7 @@ fn new_memo() -> String {
     let mut b = [0u8; 8];
     rand::thread_rng().fill_bytes(&mut b);
     let s: String = b.iter().map(|x| ABC[(*x as usize) % ABC.len()] as char).collect();
-    format!("SCRAI{s}")
+    format!("TOKU{s}")
 }
 
 // ---------------------------------------------------------------------------
@@ -445,11 +446,11 @@ mod tests {
     #[test]
     fn memos_are_prefixed_and_unambiguous() {
         let m = new_memo();
-        assert!(m.starts_with("SCRAI"));
-        assert_eq!(m.len(), "SCRAI".len() + 8);
+        assert!(m.starts_with("TOKU"));
+        assert_eq!(m.len(), "TOKU".len() + 8);
         // Strictly alphanumeric — the Nym GUI wallet rejects anything else.
         assert!(m.chars().all(|c| c.is_ascii_alphanumeric()));
-        let suffix = &m["SCRAI".len()..];
+        let suffix = &m["TOKU".len()..];
         assert!(!suffix.contains('0') && !suffix.contains('O') && !suffix.contains('1') && !suffix.contains('I'));
     }
 }

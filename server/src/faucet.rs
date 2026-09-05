@@ -30,12 +30,12 @@ pub fn open_db(path: &Path) -> Result<Connection, String> {
     Ok(conn)
 }
 
-/// `SCRAI-XXXX-XXXX` from an alphabet without look-alikes (no 0/O, 1/I/L).
+/// `TOKU-XXXX-XXXX` from an alphabet without look-alikes (no 0/O, 1/I/L).
 pub fn new_code() -> String {
     use rand::Rng;
     const ALPHA: &[u8] = b"ABCDEFGHJKMNPQRSTUVWXYZ23456789";
     let mut rng = rand::thread_rng();
-    let mut s = String::from("SCRAI");
+    let mut s = String::from("TOKU");
     for _ in 0..2 {
         s.push('-');
         for _ in 0..4 {
@@ -97,9 +97,9 @@ mod tests {
     #[test]
     fn codes_are_unambiguous_and_mint_lists() {
         let c = new_code();
-        assert_eq!(c.len(), 15);
-        assert!(c.starts_with("SCRAI-"));
-        assert!(!c[6..].contains(['0', 'O', '1', 'I', 'L']), "{c}"); // the SCRAI prefix has an I
+        assert_eq!(c.len(), 14); // TOKU-XXXX-XXXX
+        assert!(c.starts_with("TOKU-"));
+        assert!(!c[5..].contains(['0', 'O', '1', 'I', 'L']), "{c}"); // the TOKU prefix has an O
         let dir = std::env::temp_dir().join(format!("scrai-faucet-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let conn = open_db(&dir.join("faucet.db")).unwrap();
