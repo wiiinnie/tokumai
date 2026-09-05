@@ -1,6 +1,6 @@
 name: scrambleai
 options:
-  bundleIdPrefix: com.scrambleai.app
+  bundleIdPrefix: com.tokumai.app
   deploymentTarget:
     iOS: "15.0"
 fileGroups: [../../src]
@@ -11,7 +11,7 @@ settingGroups:
   app:
     base:
       PRODUCT_NAME: tokumai
-      PRODUCT_BUNDLE_IDENTIFIER: com.scrambleai.app
+      PRODUCT_BUNDLE_IDENTIFIER: com.tokumai.app
 targetTemplates:
   app:
     type: application

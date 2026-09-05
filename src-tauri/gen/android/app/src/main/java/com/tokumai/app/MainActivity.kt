@@ -1,4 +1,4 @@
-package com.scrambleai.app
+package com.tokumai.app
 
 import android.os.Bundle
 import android.view.View

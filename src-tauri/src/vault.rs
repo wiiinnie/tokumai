@@ -9,7 +9,7 @@
 // Now every session is one file `<data_dir>/vault/<id>.json` holding an AES-256-GCM
 // envelope (same format as wallet.json) under a key that lives ONLY in the OS keychain
 // (macOS Keychain / Windows Credential Manager / Linux secret service), entry
-// `com.scrambleai.app / vault-encryption-key`. The webview only ever sees plaintext
+// `com.tokumai.app / vault-encryption-key`. The webview only ever sees plaintext
 // sessions over IPC: the key never enters JS, neither on disk nor in memory, so an XSS
 // in the webview can read what the user is looking at but cannot exfiltrate the key.
 //

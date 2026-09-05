@@ -99,7 +99,12 @@ pub fn wallet_path(data_dir: &Path) -> PathBuf {
 // separately recoverable (the user wrote it down); the held ecash was already single-
 // device / not seed-rebuildable, so this stays consistent with the bearer model.
 
-const KEYCHAIN_SERVICE: &str = "com.scrambleai.app";
+const KEYCHAIN_SERVICE: &str = "com.tokumai.app";
+/// Pre-rebrand service name. An installed desktop app has its wallet and its chat vault
+/// encrypted under keys stored here; adopting them on first run is what keeps the account
+/// and the history readable across the rename. The old entries are left in place (a
+/// downgrade to an older build still finds them). Drop this once no 0.4.x is in the wild.
+const KEYCHAIN_SERVICE_LEGACY: &str = "com.scrambleai.app";
 const KEYCHAIN_ACCOUNT: &str = "wallet-encryption-key";
 
 /// The on-disk envelope: a versioned AEAD ciphertext, NOT the wallet in the clear.
@@ -119,17 +124,26 @@ fn wallet_key() -> Result<[u8; 32], String> {
 }
 
 /// Fetch-or-create a random 32-byte data key under `account` in the OS keychain
-/// (service `com.scrambleai.app`). Shared by the wallet and the chat vault — each has
-/// its own entry, so wiping one never affects the other.
+/// (service `com.tokumai.app`). Shared by the wallet and the chat vault — each has
+/// its own entry, so wiping one never affects the other. A key written by a pre-rebrand
+/// build is adopted rather than replaced: generating a fresh one would leave the existing
+/// wallet and vault files undecryptable.
 pub(crate) fn keychain_key(account: &str, what: &str) -> Result<[u8; 32], String> {
     use rand::RngCore;
     let entry = keyring::Entry::new(KEYCHAIN_SERVICE, account).map_err(|e| e.to_string())?;
     match entry.get_password() {
-        Ok(b64) => {
-            let bytes = B64.decode(b64.trim()).map_err(|e| e.to_string())?;
-            bytes.try_into().map_err(|_| format!("{what} key in keychain has the wrong length"))
-        }
+        Ok(b64) => decode_key(&b64, what),
         Err(keyring::Error::NoEntry) => {
+            // Nothing under the new service name: either this is a fresh install, or an
+            // existing one that predates the rebrand. Look before generating.
+            if let Ok(legacy) = keyring::Entry::new(KEYCHAIN_SERVICE_LEGACY, account) {
+                if let Ok(b64) = legacy.get_password() {
+                    let key = decode_key(&b64, what)?;
+                    entry.set_password(&b64).map_err(|e| e.to_string())?;
+                    log::info!("[{what}] adopted the {what} key from the pre-rebrand keychain entry");
+                    return Ok(key);
+                }
+            }
             let mut key = [0u8; 32];
             rand::rngs::OsRng.fill_bytes(&mut key);
             entry.set_password(&B64.encode(key)).map_err(|e| e.to_string())?;
@@ -138,6 +152,11 @@ pub(crate) fn keychain_key(account: &str, what: &str) -> Result<[u8; 32], String
         }
         Err(e) => Err(format!("keychain error: {e}")),
     }
+}
+
+fn decode_key(b64: &str, what: &str) -> Result<[u8; 32], String> {
+    let bytes = B64.decode(b64.trim()).map_err(|e| e.to_string())?;
+    bytes.try_into().map_err(|_| format!("{what} key in keychain has the wrong length"))
 }
 
 /// Whether to encrypt the wallet with an OS-keychain key (H6). On iOS the app's data

@@ -2,7 +2,7 @@
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "tokumai",
   "version": "0.4.6",
-  "identifier": "com.scrambleai.app",
+  "identifier": "com.tokumai.app",
   "build": {
     "frontendDist": "../public",
     "devUrl": "http://127.0.0.1:1421",

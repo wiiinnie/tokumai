@@ -260,6 +260,37 @@ fn data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     app.path().app_data_dir().map_err(|e| e.to_string())
 }
 
+/// The app data directory is NAMED after the bundle identifier, so renaming
+/// com.scrambleai.app → com.tokumai.app would start the app on an empty wallet, an empty
+/// chat vault and no server address, with everything still sitting on disk one directory
+/// over. Move it across once, before anything can create the new one — `diag()` alone
+/// would be enough to make this look like a fresh install and skip the move for good.
+///
+/// Desktop only. On iOS and Android the identifier IS the sandbox: a renamed bundle is a
+/// new app with a new container and no way to reach the old one, which is why the rename
+/// was a deliberate decision (testers hold test credit only) rather than something to
+/// paper over here.
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
+fn migrate_pre_rebrand_data_dir(app: &AppHandle) {
+    const LEGACY_ID: &str = "com.scrambleai.app";
+    let Ok(new) = app.path().app_data_dir() else { return };
+    if new.exists() {
+        return; // already migrated, or a genuinely fresh install that has run once
+    }
+    let Some(old) = new.parent().map(|p| p.join(LEGACY_ID)) else { return };
+    if !old.is_dir() {
+        return;
+    }
+    match std::fs::rename(&old, &new) {
+        Ok(()) => log::info!("[migrate] adopted the pre-rebrand data directory {}", old.display()),
+        // Same volume in every real case; if it ever is not, say so loudly rather than
+        // starting empty and letting the user think the wallet is gone.
+        Err(e) => eprintln!("[migrate] could not move {} to {}: {e}", old.display(), new.display()),
+    }
+}
+#[cfg(any(target_os = "ios", target_os = "android"))]
+fn migrate_pre_rebrand_data_dir(_app: &AppHandle) {}
+
 // ---- chat vault (vault.rs): sessions live in Rust-managed files, key in the OS keychain.
 // The webview sees plaintext sessions over IPC only — never the key.
 async fn vault_blocking<T: Send + 'static>(
@@ -2705,6 +2736,9 @@ pub fn run() {
         .manage(Arc::new(Transport::new()))
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            // FIRST: nothing may touch the data directory before this — the first
+            // create_dir_all would make the pre-rebrand data unreachable for good.
+            migrate_pre_rebrand_data_dir(&app.handle().clone());
             let _ = APP_VER.set(app.package_info().version.to_string());
             // Android: TLS trust store for the Nym client's directory fetches (needs the Activity,
             // which exists by now — the mobile entry point runs from onCreate).
