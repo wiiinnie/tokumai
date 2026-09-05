@@ -146,7 +146,19 @@ fn env_or(name: &str, default: &str) -> String {
 fn rpc_from_lcd(lcd: Option<&str>) -> String {
     let Some(l) = lcd else { return String::new() };
     let l = l.trim().trim_end_matches('/');
-    l.strip_suffix("/api").unwrap_or(l).to_string()
+    // Sandbox: one host serves both, REST under /api and the RPC at the root.
+    if let Some(root) = l.strip_suffix("/api") {
+        return root.to_string();
+    }
+    // Mainnet: api.nymtech.net is REST ONLY — a Tendermint call there answers
+    // "501 Not Implemented", which is what a claim died on (2026-09-05). The RPC lives on
+    // the sibling rpc.<host>. FAUCET_RPC overrides this in either direction.
+    if let Some((scheme, rest)) = l.split_once("://") {
+        if let Some(host) = rest.strip_prefix("api.") {
+            return format!("{scheme}://rpc.{host}");
+        }
+    }
+    l.to_string()
 }
 
 fn testnet_on() -> bool {
@@ -789,17 +801,42 @@ async fn serve(cfg: Cfg) -> Result<(), String> {
         ));
     }
     let wallet = Wallet::connect(&cfg)?;
-    match (&wallet, testnet_on()) {
+    // Gated on the FAUCET switch, not on TESTNET: the invite rail runs beside real
+    // purchases now, and while this said "testnet OFF — faucet hidden" the boot-time
+    // balance check below never ran — so a wrong RPC or an empty wallet stayed invisible
+    // until a tester pressed the button (2026-09-05).
+    match (&wallet, faucet_on()) {
         (Some(w), true) => {
-            println!("scrai-faucet: TESTNET on · wallet {} · pays to {} · daily max {}", w.address(), cfg.receive, cfg.daily_max);
+            println!(
+                "scrai-faucet: invite credits ON{} · wallet {} · pays to {} · daily max {}",
+                if testnet_on() { " (TESTNET)" } else { "" },
+                w.address(),
+                cfg.receive,
+                cfg.daily_max
+            );
             println!("scrai-faucet: chain RPC {}", cfg.rpc);
             match w.balance_unym().await {
-                Ok(b) => println!("scrai-faucet: wallet balance {:.3} NYM (reserve {:.3})", b as f64 / 1e6, cfg.reserve_unym as f64 / 1e6),
-                Err(e) => eprintln!("scrai-faucet: balance check failed ({e}) — claims will fail until the RPC answers"),
+                Ok(b) if b < cfg.reserve_unym => eprintln!(
+                    "scrai-faucet: wallet holds {:.3} NYM, BELOW the reserve of {:.3} — every claim is refused until it is topped up",
+                    b as f64 / 1e6,
+                    cfg.reserve_unym as f64 / 1e6
+                ),
+                Ok(b) => println!(
+                    "scrai-faucet: wallet balance {:.3} NYM (reserve {:.3}) — good for ~{} claims",
+                    b as f64 / 1e6,
+                    cfg.reserve_unym as f64 / 1e6,
+                    b.saturating_sub(cfg.reserve_unym) / 60_000_000u128.max(1)
+                ),
+                Err(e) => eprintln!(
+                    "scrai-faucet: BALANCE CHECK FAILED ({e}) — every claim will fail. Is {} a Tendermint RPC? \
+                     A REST endpoint answers 501 Not Implemented; on mainnet the RPC is https://rpc.nymtech.net \
+                     (set FAUCET_RPC).",
+                    cfg.rpc
+                ),
             }
         }
-        (None, true) => eprintln!("scrai-faucet: TESTNET on but no faucet wallet configured (see .env.example) — site only, claims refused"),
-        (_, false) => println!("scrai-faucet: testnet OFF (TESTNET unset) — serving downloads only, faucet hidden"),
+        (None, true) => eprintln!("scrai-faucet: no faucet wallet configured (FAUCET_MNEMONIC) — site only, claims refused"),
+        (_, false) => println!("scrai-faucet: faucet disabled (FAUCET_ENABLED=0) — serving the site only"),
     }
     let faucet = Arc::new(Faucet {
         cfg,
@@ -873,10 +910,16 @@ mod tests {
     use super::rpc_from_lcd;
 
     #[test]
-    fn rpc_is_the_lcd_root() {
+    fn rpc_is_derived_from_the_lcd() {
+        // sandbox: one host, REST under /api, RPC at the root
         assert_eq!(rpc_from_lcd(Some("https://validator-sandbox-1.nymtech.net/api")), "https://validator-sandbox-1.nymtech.net");
         assert_eq!(rpc_from_lcd(Some("https://validator-sandbox-1.nymtech.net/api/")), "https://validator-sandbox-1.nymtech.net");
-        assert_eq!(rpc_from_lcd(Some("https://api.nymtech.net")), "https://api.nymtech.net");
+        // mainnet: api.<host> is REST only — the RPC is the rpc.<host> sibling. Sending
+        // Tendermint calls to the REST host answers 501 and every claim fails.
+        assert_eq!(rpc_from_lcd(Some("https://api.nymtech.net")), "https://rpc.nymtech.net");
+        assert_eq!(rpc_from_lcd(Some("https://api.example.org/")), "https://rpc.example.org");
+        // anything else is taken as given (a self-hosted node, FAUCET_RPC overrides anyway)
+        assert_eq!(rpc_from_lcd(Some("https://node.example.org:26657")), "https://node.example.org:26657");
         assert_eq!(rpc_from_lcd(None), "");
     }
 }
