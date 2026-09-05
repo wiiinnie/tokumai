@@ -208,12 +208,19 @@ BEFORE="$BAK/fingerprint-before.txt"
 fingerprint "$OLD" > "$BEFORE"
 echo "recorded what must survive:"
 sed "s/^/     /" "$BEFORE"
-if ! grep -q "^addresses: n" "$BEFORE"; then
+# A Nym address is <identity>.<encryption>@<gateway>, all base58 - so the only shape check
+# that holds is the @. (An earlier version looked for a leading n and rejected every real
+# address on the box, 2026-09-05.)
+ADDRS=$(sed -n "s/^addresses: //p" "$BEFORE")
+case "$ADDRS" in
+  *@*) ;;
+  *)
   echo "FATAL: no mixnet address found in $OLD/data/addresses.txt." >&2
   echo "       Without it the identity cannot be verified after the move. Start the server" >&2
   echo "       once so it writes the file, then run this again." >&2
   exit 1
-fi
+  ;;
+esac
 
 echo "stopping services …"
 for u in $OLD_UNITS; do systemctl stop "$u" >/dev/null 2>&1 || true; done
