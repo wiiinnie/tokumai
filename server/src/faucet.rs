@@ -1,6 +1,7 @@
-//! Shared bits of the testnet faucet ledger (`faucet.db`), used by the `scrai-faucet`
-//! binary (claims) and by `scrai-admin` (minting invite codes, listing them). The ledger
-//! lives next to `state.db`; the server itself never opens it.
+//! Shared bits of the invite/faucet ledger (`faucet.db`), used by the `scrai-faucet`
+//! binary (claims), by `scrai-admin` (minting invite codes, listing them) and — read-only
+//! — by the server, which asks whether a code is worth raising a $1 invoice for. The
+//! ledger lives next to `state.db`.
 
 use rusqlite::{params, Connection};
 use std::path::Path;
@@ -43,6 +44,34 @@ pub fn new_code() -> String {
         }
     }
     s
+}
+
+/// Shape of an invite code as it comes off the wire, before any lookup: uppercase,
+/// digits and hyphens, bounded. Rejects the obvious junk without touching the database.
+pub fn looks_like_code(s: &str) -> bool {
+    (8..=32).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'-')
+}
+
+/// Read-only: does this code exist and have a use left?
+///
+/// The SERVER asks this to decide whether to offer the $1 invite tile and raise the
+/// invoice. It is deliberately NOT the money decision — the faucet binary re-checks and
+/// consumes the use behind its own UNIQUE-insert lock at the moment it pays, so two
+/// invoices raised against one code still buy exactly one claim. Anything unexpected
+/// (missing file, locked database, unknown code) reads as "no": fail closed.
+pub fn code_has_uses_left(faucet_db: &Path, code: &str) -> bool {
+    use rusqlite::OpenFlags;
+    if !looks_like_code(code) {
+        return false;
+    }
+    let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    let Ok(conn) = Connection::open_with_flags(faucet_db, flags) else { return false };
+    let _ = conn.busy_timeout(std::time::Duration::from_millis(250));
+    conn.query_row("SELECT max_uses, uses FROM codes WHERE code = ?1", [code], |r| {
+        Ok((r.get::<_, u32>(0)?, r.get::<_, u32>(1)?))
+    })
+    .map(|(max, used)| used < max)
+    .unwrap_or(false)
 }
 
 /// Mint one invite code good for `uses` purchases; returns the code.

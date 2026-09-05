@@ -58,6 +58,9 @@ const PAGE_PRIVACY: &str = include_str!("../../site/privacy.html");
 /// invoice rides in the URL FRAGMENT, so it never reaches this server — nothing to log,
 /// nothing to store, and this route serves one static file to everyone.
 const PAGE_PAY: &str = include_str!("../../site/pay.html");
+/// Where a tester redeems an invite code. The app links here with the code and the memo
+/// in the URL fragment, so neither reaches this server until the button is pressed.
+const PAGE_CLAIM: &str = include_str!("../../site/claim.html");
 /// The site's screenshots, baked into the binary so a deploy ships them (Caddy only knows
 /// /dl/; nothing else to upload or configure). Served as GET /img/<name>.
 /// Where Mollie's hosted checkout sends the browser afterwards (`MOLLIE_REDIRECT_URL`
@@ -150,6 +153,20 @@ fn testnet_on() -> bool {
     scrai_server::pay::is_testnet_server()
 }
 
+/// Whether the faucet hands out credit at all.
+///
+/// It used to ride on TESTNET: on a testnet server it was the only way to buy, on a
+/// mainnet server it made no sense. Since the invite flow it runs BESIDE real purchases —
+/// testers redeem a code for $1 while everyone else pays — so it has its own switch.
+/// Default on; `FAUCET_ENABLED=0` is the kill switch. A faucet without a funded wallet
+/// refuses every claim on its own anyway.
+fn faucet_on() -> bool {
+    !matches!(
+        scrai_server::cfg("FAUCET_ENABLED").ok().as_deref().map(str::trim),
+        Some("0") | Some("false")
+    )
+}
+
 /// Everything the faucet needs, resolved once at boot. The mnemonic stays inside the
 /// signing client; it is never logged or echoed.
 struct Cfg {
@@ -188,7 +205,7 @@ impl Cfg {
             explorer: scrai_server::cfg("FAUCET_EXPLORER").ok().filter(|u| u.starts_with("https://")),
             prefix: env_or("FAUCET_BECH32_PREFIX", "n"),
             denom: env_or("FAUCET_DENOM", "unym"),
-            dl_dir: PathBuf::from(env_or("SITE_DL_DIR", "/opt/scrai/site/dl")),
+            dl_dir: PathBuf::from(env_or("SITE_DL_DIR", "/opt/tokumai/site/dl")),
         }
     }
     fn state_db(&self) -> PathBuf {
@@ -200,10 +217,10 @@ impl Cfg {
 }
 
 // ---------------------------------------------------------------------------
-// the server's view: testnet invoices from state.db (read-only, fresh per call)
+// the server's view: invite invoices from state.db (read-only, fresh per call)
 // ---------------------------------------------------------------------------
 
-fn server_testnet_invoices(state_db: &Path) -> Result<Vec<TestnetInv>, String> {
+fn server_invite_invoices(state_db: &Path) -> Result<Vec<TestnetInv>, String> {
     let conn = Connection::open_with_flags(state_db, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)
         .map_err(|e| format!("state.db: {e}"))?;
     let blob: String = match conn.query_row("SELECT v FROM kv WHERE k = 'pay'", [], |r| r.get(0)) {
@@ -236,7 +253,10 @@ struct Wallet {
 
 impl Wallet {
     fn connect(cfg: &Cfg) -> Result<Option<Wallet>, String> {
-        let Some(m) = scrai_server::cfg("FAUCET_MNEMONIC").ok().filter(|m| !m.trim().is_empty()) else {
+        // Network-scoped: the sandbox wallet and the mainnet wallet can sit in the same
+        // .env (FAUCET_MNEMONIC_TESTNET / _MAINNET), so flipping the server does not mean
+        // editing a secret by hand. The bare name still resolves.
+        let Some(m) = scrai_server::net_var("FAUCET_MNEMONIC").filter(|m| !m.trim().is_empty()) else {
             return Ok(None);
         };
         if cfg.rpc.is_empty() {
@@ -316,8 +336,8 @@ impl Faucet {
 
     /// The whole claim, start to finish. Every refusal is a plain sentence for the tester.
     async fn claim(&self, code: &str, memo: &str, ip: &str) -> Result<Value, String> {
-        if !testnet_on() {
-            return Err("the faucet is switched off (this server is not in testnet mode)".into());
+        if !faucet_on() {
+            return Err("the faucet is switched off on this server".into());
         }
         let Some(wallet) = &self.wallet else {
             return Err("the faucet wallet is not configured on this server".into());
@@ -346,10 +366,16 @@ impl Faucet {
         }
 
         // the invoice, as the SERVER sees it
-        let invs = server_testnet_invoices(&self.cfg.state_db())?;
+        let invs = server_invite_invoices(&self.cfg.state_db())?;
         let Some(inv) = invs.iter().find(|i| i.memo == memo) else {
-            return Err("no open testnet invoice with that memo — raise one in the app (Buy credit → Testnet purchase) and copy its memo".into());
+            return Err("no open invite invoice with that memo — raise one in the app (Buy credit → enter your invite code) and copy its memo".into());
         };
+        // The invoice remembers the code it was raised with. Without this check a valid
+        // code could fund somebody else's open invoice — same amount, but the claim would
+        // be booked against the wrong tester and their own invoice would still be waiting.
+        if !inv.code.is_empty() && !inv.code.eq_ignore_ascii_case(code) {
+            return Err("that invoice was raised with a different invite code — use the code you entered in the app".into());
+        }
         if inv.status == "paid" {
             return Err("that invoice is already paid — the app should show the credit".into());
         }
@@ -358,7 +384,7 @@ impl Faucet {
             return Err("that invoice has expired — raise a fresh one in the app".into());
         }
         if inv.amount_usd != TESTNET_USD || inv.unym == 0 {
-            return Err("that invoice is not a $1 NYM testnet purchase".into());
+            return Err("that invoice is not a $1 NYM invite credit".into());
         }
 
         // one payment per memo / invoice — the row goes in BEFORE the broadcast
@@ -394,8 +420,12 @@ impl Faucet {
         if bal < self.cfg.reserve_unym + inv.unym as u128 {
             let _ = db.execute("DELETE FROM claims WHERE memo = ?1 AND stage = 'sending'", [memo]);
             eprintln!(
-                "scrai-faucet: WALLET LOW — {:.3} NYM in {}, reserve {:.3} + quote {:.3} needed — top up the faucet wallet (sandbox: https://sandbox-faucet.nymtech.net/) — refused memo {memo}",
-                bal as f64 / 1e6, wallet.address(), self.cfg.reserve_unym as f64 / 1e6, inv.unym as f64 / 1e6
+                "scrai-faucet: WALLET LOW — {:.3} NYM in {}, reserve {:.3} + quote {:.3} needed — top up the faucet wallet{} — refused memo {memo}",
+                bal as f64 / 1e6,
+                wallet.address(),
+                self.cfg.reserve_unym as f64 / 1e6,
+                inv.unym as f64 / 1e6,
+                if testnet_on() { " (sandbox: https://sandbox-faucet.nymtech.net/)" } else { " — this is MAINNET NYM, it costs real money" }
             );
             return Err("the faucet wallet is running low — the operator sees this in the log; try again later".into());
         }
@@ -430,7 +460,7 @@ impl Faucet {
         let claim: Option<(String, String)> = open_faucet_db(&self.cfg.faucet_db())
             .ok()
             .and_then(|db| db.query_row("SELECT tx, stage FROM claims WHERE memo = ?1", [memo], |r| Ok((r.get(0)?, r.get(1)?))).ok());
-        let inv = server_testnet_invoices(&self.cfg.state_db()).ok().and_then(|v| v.into_iter().find(|i| i.memo == memo));
+        let inv = server_invite_invoices(&self.cfg.state_db()).ok().and_then(|v| v.into_iter().find(|i| i.memo == memo));
         let stage = match (&inv, &claim) {
             (Some(i), _) if i.status == "paid" => "credited",
             (Some(i), _) if i.status != "pending" || i.expires_at <= now() * 1000 => "expired",
@@ -707,6 +737,7 @@ async fn handle(f: Arc<Faucet>, mut sock: tokio::net::TcpStream, peer: SocketAdd
         ("GET", "/terms") | ("GET", "/agb") => respond(&mut sock, 200, "text/html; charset=utf-8", PAGE_TERMS.as_bytes()).await,
         ("GET", "/privacy") | ("GET", "/datenschutz") => respond(&mut sock, 200, "text/html; charset=utf-8", PAGE_PRIVACY.as_bytes()).await,
         ("GET", "/pay") => respond(&mut sock, 200, "text/html; charset=utf-8", PAGE_PAY.as_bytes()).await,
+        ("GET", "/claim") | ("GET", "/redeem") => respond(&mut sock, 200, "text/html; charset=utf-8", PAGE_CLAIM.as_bytes()).await,
         // Mollie's redirect target after a card checkout (see PAID_HTML). Any query string
         // is ignored — nothing on this page depends on it.
         ("GET", "/paid") => respond(&mut sock, 200, "text/html; charset=utf-8", PAID_HTML.as_bytes()).await,
@@ -723,7 +754,7 @@ async fn handle(f: Arc<Faucet>, mut sock: tokio::net::TcpStream, peer: SocketAdd
             respond(&mut sock, 200, "application/json", &json(&f.status(&memo))).await
         }
         ("POST", "/api/claim") => {
-            if !testnet_on() {
+            if !faucet_on() {
                 respond(&mut sock, 403, "application/json", &json(&json!({"error": "the faucet is switched off"}))).await;
                 return;
             }

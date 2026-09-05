@@ -79,7 +79,7 @@ pub fn cfg(name: &str) -> Result<String, std::env::VarError> {
 /// Money rails whose configuration is network-scoped (`{base}_MAINNET` / `{base}_TESTNET`).
 /// Getting one of these wrong does not fail loudly — it settles invoices against the wrong
 /// world — so they are checked at boot (`testnet_rails_on_mainnet`).
-pub const MONEY_RAILS: [&str; 7] = [
+pub const MONEY_RAILS: [&str; 8] = [
     "NYX_LCD_URL",
     "NYX_RECEIVE_ADDRESS",
     "BTCPAY_URL",
@@ -89,6 +89,9 @@ pub const MONEY_RAILS: [&str; 7] = [
     // marked paid without money moving, so it must never survive the flip to mainnet.
     "COINGATE_API_KEY",
     "MOLLIE_API_KEY",
+    // The faucet wallet pin. A mainnet server still pinned to the sandbox faucet refuses
+    // every invite credit (fail closed) — visible only as testers whose $1 never lands.
+    "FAUCET_ADDRESS",
 ];
 
 /// Rails that would silently run on TEST infrastructure on a real-money server.

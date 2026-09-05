@@ -526,11 +526,18 @@ async fn main() {
             scrai_server::openai::search_usd_per_call()
         );
     }
-    if pay::is_testnet_server() {
-        match pay::testnet_faucet_address() {
-            Some(a) => println!("scrai-server: TESTNET mode — $1 faucet purchases only, settled only from faucet wallet {a} (TESTNET=1)"),
-            None => eprintln!("scrai-server: TESTNET mode but TESTNET_FAUCET_ADDRESS is unset — every purchase will be refused until the faucet wallet is pinned"),
-        }
+    // The invite ($1, faucet-paid) rail exists in both modes: on a testnet server it is
+    // the ONLY purchase, on a mainnet server it runs beside real ones for testers.
+    match pay::faucet_address() {
+        Some(a) => println!(
+            "scrai-server: invite credits ${} enabled, settled only from faucet wallet {a}{}",
+            pay::TESTNET_USD,
+            if pay::is_testnet_server() { " (TESTNET=1 — no other purchase is accepted)" } else { "" }
+        ),
+        None => eprintln!(
+            "scrai-server: no faucet wallet pinned (FAUCET_ADDRESS) — invite credits are refused{}",
+            if pay::is_testnet_server() { "; TESTNET=1 means EVERY purchase is refused" } else { "" }
+        ),
     }
 
     // Distinct clients with a spawned request in flight; the daily peak lands in the

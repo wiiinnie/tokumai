@@ -35,6 +35,10 @@ const INVOICE_PER_ACCT: usize = 5;
 /// Mollie payment object we cannot claw back once the credit is withdrawn, and card
 /// checkouts are the one rail with a chargeback path.
 const CARD_PER_ACCT: usize = 3;
+/// Invite-code checks per account and window. A code is 12 random characters out of 31,
+/// so guessing is hopeless anyway — this is here so the check cannot be used as a cheap
+/// oracle, and so a stuck client cannot hammer the ledger.
+const CODE_CHECKS_PER_ACCT: usize = 12;
 const INVOICE_ACCT_WINDOW_MS: u64 = 600_000;
 /// H4: hard cap on the burned-nonce store (oldest evicted past this). Large enough that a
 /// legit client never bumps into it, small enough that a signed-nonce flood can't OOM.
@@ -91,6 +95,31 @@ pub fn card_enabled() -> bool {
 /// of truth — never hardcoded in the client). `methods` is what is enabled in the Mollie
 /// dashboard right now, fetched from `GET /v2/methods` and cached for 10 minutes, so
 /// switching PayPal or Wero on there changes the app's label without a build or deploy.
+/// Which rails this server can actually raise an invoice on. Derived from what is
+/// configured, so turning a rail off is deleting its variables — not editing the app and
+/// shipping a build. The app greys out whatever is missing instead of offering a tile
+/// that fails on tap; the authority for what is accepted stays `begin_create`.
+pub fn rails_info() -> Value {
+    json!({
+        "nyx": crate::nyx::Nyx::from_env().is_some(),
+        "btc": btc_enabled(),
+        "card": card_enabled(),
+        "invite": faucet_address().is_some(),
+        "inviteUsd": TESTNET_USD,
+    })
+}
+
+/// A coin processor is configured (BTCPay or CoinGate), or the dev rail stands in.
+fn btc_enabled() -> bool {
+    if fake_payments_enabled() {
+        return true;
+    }
+    coingate_from_env().is_some()
+        || (crate::net_var("BTCPAY_URL").is_some()
+            && crate::net_var("BTCPAY_STORE_ID").is_some()
+            && crate::net_var("BTCPAY_API_KEY").is_some())
+}
+
 pub async fn card_info() -> Value {
     let enabled = card_enabled();
     let methods = if enabled { mollie_methods().await } else { Vec::new() };
@@ -172,21 +201,40 @@ pub fn is_testnet_server() -> bool {
 /// The only amount a testnet (faucet-paid) purchase may have.
 pub const TESTNET_USD: u32 = 1;
 
-/// The faucet wallet — the ONLY address whose NYM settles a testnet invoice. Sandbox NYM is
-/// free (public Nym sandbox faucet), so without this pin anyone could raise $1 testnet
-/// invoices and pay them without an invite code; every such credit is real model spend.
-/// Unset on a testnet server → testnet purchases are refused (fail closed).
-pub fn testnet_faucet_address() -> Option<String> {
-    crate::cfg("TESTNET_FAUCET_ADDRESS").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+/// The faucet wallet — the ONLY address whose NYM settles an invite invoice. Without this
+/// pin anyone could raise $1 invite invoices and fund them from their own wallet; on the
+/// testnet chain the coins are free, and on mainnet the pin is still what keeps the $1
+/// tile tied to the faucet. Every such credit is real model spend either way.
+/// Unset → invite purchases are refused (fail closed).
+///
+/// Network-scoped (`_MAINNET` / `_TESTNET`), and listed in `MONEY_RAILS` so a box that
+/// only carries the testnet wallet refuses to boot as a mainnet server. The pre-rename
+/// `TESTNET_FAUCET_ADDRESS` still resolves, so an existing .env keeps working.
+pub fn faucet_address() -> Option<String> {
+    crate::net_var("FAUCET_ADDRESS")
+        .or_else(|| crate::cfg("TESTNET_FAUCET_ADDRESS").ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
-/// Where testers redeem a testnet invoice (`FAUCET_URL`); shown in the app next to
-/// the memo. Only reported while testnet mode is on.
+/// The invite ledger the faucet owns (`faucet.db`, next to `state.db`). The server only
+/// ever reads it — see `faucet::code_has_uses_left`.
+fn faucet_db_path() -> std::path::PathBuf {
+    std::path::PathBuf::from(crate::cfg("DATA").unwrap_or_else(|_| "./data".into())).join("faucet.db")
+}
+
+/// Where testers redeem an invite invoice (`FAUCET_URL`, e.g. https://faucet.tokumai.com);
+/// the app links to `<that>/claim` with the code and memo in the fragment.
+///
+/// Reported whenever the invite rail is configured — NOT gated on testnet mode any more.
+/// The invite flow runs beside real purchases now, and gating the link on testnet is what
+/// made the faucet vanish the moment the server went to mainnet.
 pub fn faucet_url() -> Option<String> {
-    if !is_testnet_server() {
-        return None;
-    }
-    crate::cfg("FAUCET_URL").ok().filter(|u| u.starts_with("https://"))
+    faucet_address()?;
+    crate::cfg("FAUCET_URL")
+        .ok()
+        .map(|u| u.trim().trim_end_matches('/').to_string())
+        .filter(|u| u.starts_with("https://"))
 }
 
 /// Where our own website lives — the app builds the `/pay` hand-over link from it, so a
@@ -227,10 +275,16 @@ pub struct Inv {
     /// Lives IN the durable record so a pending payment survives restarts.
     #[serde(default)]
     expected_unym: u64,
-    /// Raised as a $1 testnet purchase (faucet-paid). Persisted so scrai-admin and the
-    /// faucet can tell test buys from real ones after a restart.
+    /// Raised as a $1 invite purchase (faucet-paid). Persisted so scrai-admin and the
+    /// faucet can tell invite buys from real ones after a restart. The stored name stays
+    /// `testnet` — a field inside the snapshot is a format, not a label (2026-09-05).
     #[serde(default)]
     testnet: bool,
+    /// The invite code this $1 credit was raised against. The faucet requires the code it
+    /// is handed to match, so one tester's code cannot fund somebody else's invoice.
+    /// Empty for a real purchase, and for invoices from apps that predate the invite flow.
+    #[serde(default)]
+    invite_code: String,
 }
 
 /// Read-only view of a testnet invoice for the faucet (`scrai-faucet`) and scrai-admin.
@@ -239,6 +293,10 @@ pub struct TestnetInv {
     pub id: String,
     /// The Nyx memo the payment must carry (`provider_ref` of a native-NYM invoice).
     pub memo: String,
+    /// The invite code the invoice was raised against — the faucet pays only when the
+    /// code it was handed matches this. Empty on pre-invite invoices.
+    #[serde(default)]
+    pub code: String,
     pub amount_usd: u32,
     /// Exact unym the server quoted — the faucet pays THIS, never a client-supplied amount.
     pub unym: u64,
@@ -278,6 +336,9 @@ pub struct Pay {
     /// card invoices per account in the window (subset of acct_hits, tighter cap)
     #[serde(skip)]
     card_hits: HashMap<String, Vec<u64>>,
+    /// invite-code checks per account in the window
+    #[serde(skip)]
+    code_hits: HashMap<String, Vec<u64>>,
     #[serde(skip)]
     global_hits: Vec<u64>,
     /// last "global invoice cap" log line (ms) — one per minute, not one per refused request
@@ -344,6 +405,45 @@ impl Pay {
         let sig = v.get("sig").and_then(|s| s.as_str())?;
         let account_id = auth::account_owns(pem, purpose, nonce, sig)?;
         self.burn_nonce(&account_id, nonce).then_some(account_id)
+    }
+
+    /// Does this invite code still have a use left? This answer decides whether the app
+    /// shows the $1 tile — it never decides whether money moves. That stays with
+    /// `begin_create` (which re-checks and binds the code into the invoice) and with the
+    /// faucet (which re-checks again and consumes the use as it pays).
+    ///
+    /// Signed like every other account request, so the limit below can be per account.
+    fn invite_check(&mut self, v: &Value, id: &Value) -> Value {
+        let Some(account) = self.account_owns(v, "invite") else {
+            return err(id, "account signature does not check out, or the nonce was reused");
+        };
+        if let Err(e) = self.admit_code_check(&account) {
+            return err(id, &e);
+        }
+        let code = v
+            .get("code")
+            .and_then(|c| c.as_str())
+            .map(|c| c.trim().to_ascii_uppercase())
+            .unwrap_or_default();
+        let valid = crate::faucet::code_has_uses_left(&faucet_db_path(), &code);
+        json!({
+            "kind": "invite.checked", "id": id,
+            "valid": valid,
+            "usd": TESTNET_USD,
+            "enabled": faucet_address().is_some(),
+        })
+    }
+
+    fn admit_code_check(&mut self, account_id: &str) -> Result<(), String> {
+        let now = now_ms();
+        let hits = self.code_hits.entry(account_id.to_string()).or_default();
+        hits.retain(|t| now - t < INVOICE_ACCT_WINDOW_MS);
+        if hits.len() >= CODE_CHECKS_PER_ACCT {
+            let retry = (INVOICE_ACCT_WINDOW_MS - (now - hits[0])).div_ceil(1000).max(1);
+            return Err(format!("too many invite-code checks from this account — retry in ~{retry}s"));
+        }
+        hits.push(now);
+        Ok(())
     }
 
     fn admit_invoice(&mut self, account_id: &str, card: bool) -> Result<(), String> {
@@ -526,6 +626,7 @@ impl Pay {
                 Err(reply) => reply,
             },
             "invoice.cancel" => self.cancel(&v, &id),
+            "invite.check" => self.invite_check(&v, &id),
             // H3: authenticate BEFORE any outbound work, then sweep ONLY this account's
             // still-pending invoices. A bare/unsigned `entitlement` no longer forces N
             // serial 20s gateway calls (which, via the sequential loop, wedged the server).
@@ -544,8 +645,8 @@ impl Pay {
     /// PHASE 3 (loop side, fast): apply what the gateway said and build the reply.
     pub fn finish(&mut self, outcome: PayOutcome, gateway: &Gateway) -> Vec<u8> {
         let reply = match outcome {
-            PayOutcome::Create { id, account, usd, our_id, testnet, result } => {
-                self.finish_create(&id, account, usd, our_id, testnet, result)
+            PayOutcome::Create { id, account, usd, our_id, testnet, code, result } => {
+                self.finish_create(&id, account, usd, our_id, testnet, code, result)
             }
             PayOutcome::Status { id, inv_id, paid } => {
                 if paid {
@@ -582,27 +683,40 @@ impl Pay {
         };
         // Fixed amounts only, so every purchase looks like everyone else's — a
         // free-form amount would be a fingerprint.
-        let testnet = v.get("testnet").and_then(|t| t.as_bool()).unwrap_or(false);
+        // The $1 tile. Two ways in: an invite code (the only way on a mainnet server), or
+        // the bare `testnet` flag of an app that predates the invite field, which a
+        // testnet server still honours so testers are not stranded on the old build.
+        let code = v
+            .get("inviteCode")
+            .and_then(|c| c.as_str())
+            .map(|c| c.trim().to_ascii_uppercase())
+            .filter(|c| !c.is_empty());
+        let testnet = code.is_some() || v.get("testnet").and_then(|t| t.as_bool()).unwrap_or(false);
         // The client picks the rail ("nyx" = native NYM on the Nyx chain); it is
         // deliberately NOT part of the account signature — it only selects HOW to
         // pay, never how much is credited.
         let wanted = v.get("method").and_then(|m| m.as_str()).unwrap_or("btc").to_string();
         if testnet {
-            // A tester's $1, paid by the faucet on this host. Refused outright on a
-            // production server — the flag is the server-side kill switch.
-            if !is_testnet_server() {
-                return Err(err(id, "this server does not accept testnet purchases"));
-            }
+            // A tester's $1, paid by the faucet on this host.
             if usd != TESTNET_USD {
-                return Err(err(id, &format!("a testnet purchase is ${TESTNET_USD} only")));
+                return Err(err(id, &format!("an invite credit is ${TESTNET_USD} only")));
             }
-            // Only the faucet's NYM may settle it (see `testnet_faucet_address`), so the
-            // invoice must be native NYM and the pin must be configured.
+            // Only the faucet's NYM may settle it (see `faucet_address`), so the invoice
+            // must be native NYM and the pin must be configured.
             if wanted != "nyx" {
-                return Err(err(id, "testnet purchases are paid in NYM by the faucet — pick NYM"));
+                return Err(err(id, "invite credits are paid in NYM by the faucet — pick NYM"));
             }
-            if testnet_faucet_address().is_none() {
-                return Err(err(id, "testnet purchases are not enabled on this server (no faucet wallet pinned)"));
+            if faucet_address().is_none() {
+                return Err(err(id, "invite credits are not enabled on this server (no faucet wallet pinned)"));
+            }
+            // THE gate. The client saying "invite" grants nothing: the code is checked
+            // here against the faucet's own ledger, and bound into the invoice below.
+            match code.as_deref() {
+                Some(c) if crate::faucet::code_has_uses_left(&faucet_db_path(), c) => {}
+                Some(_) => return Err(err(id, "that invite code is not valid, or has been used up")),
+                // Pre-invite app on a testnet server: there the whole server is the gate.
+                None if is_testnet_server() => {}
+                None => return Err(err(id, &format!("a ${TESTNET_USD} credit needs an invite code"))),
             }
         } else if is_testnet_server() {
             // A testnet server watches a test chain, where every coin is free: a "real"
@@ -632,7 +746,7 @@ impl Pay {
             return Err(err(id, &e));
         }
         let our_id = rand_hex(16);
-        Ok(PayPending::Create { id: id.clone(), account, usd, our_id, wanted, testnet })
+        Ok(PayPending::Create { id: id.clone(), account, usd, our_id, wanted, testnet, code: code.unwrap_or_default() })
     }
 
     fn finish_create(
@@ -642,6 +756,7 @@ impl Pay {
         usd: u32,
         our_id: String,
         testnet: bool,
+        code: String,
         result: Result<Raised, String>,
     ) -> Value {
         let raised = match result {
@@ -664,6 +779,7 @@ impl Pay {
                 expires_at: raised.raised.expires_at,
                 expected_unym: raised.expected_unym,
                 testnet,
+                invite_code: code,
             },
         );
         self.rev += 1;
@@ -693,6 +809,7 @@ impl Pay {
             .map(|i| TestnetInv {
                 id: i.id.clone(),
                 memo: if i.method == "nyx" { i.provider_ref.clone() } else { String::new() },
+                code: i.invite_code.clone(),
                 amount_usd: i.amount_usd,
                 unym: i.expected_unym,
                 status: i.status.clone(),
@@ -827,14 +944,14 @@ pub enum PayStep {
 /// Outbound gateway work, prepared on the loop (authenticated + throttled) and run
 /// off it by `run_gateway`. Carries everything `finish` needs — no loop state.
 pub enum PayPending {
-    Create { id: Value, account: String, usd: u32, our_id: String, wanted: String, testnet: bool },
+    Create { id: Value, account: String, usd: u32, our_id: String, wanted: String, testnet: bool, code: String },
     Status { id: Value, inv: Inv },
     Sweep { id: Value, account: String, candidates: Vec<Inv> },
 }
 
 /// What the gateway said, to be applied on the loop by `Pay::finish`.
 pub enum PayOutcome {
-    Create { id: Value, account: String, usd: u32, our_id: String, testnet: bool, result: Result<Raised, String> },
+    Create { id: Value, account: String, usd: u32, our_id: String, testnet: bool, code: String, result: Result<Raised, String> },
     Status { id: Value, inv_id: String, paid: bool },
     Sweep { id: Value, account: String, paid: Vec<String> },
 }
@@ -854,9 +971,9 @@ impl PayOutcome {
 /// any number of these can run concurrently while chats keep flowing.
 pub async fn run_gateway(pending: PayPending, gateway: &Gateway) -> PayOutcome {
     match pending {
-        PayPending::Create { id, account, usd, our_id, wanted, testnet } => {
+        PayPending::Create { id, account, usd, our_id, wanted, testnet, code } => {
             let result = gateway.create_invoice(usd, &our_id, &wanted, testnet).await;
-            PayOutcome::Create { id, account, usd, our_id, testnet, result }
+            PayOutcome::Create { id, account, usd, our_id, testnet, code, result }
         }
         PayPending::Status { id, inv } => {
             let paid = matches!(gateway.check_status(&inv).await.as_deref(), Ok("paid"));
@@ -878,12 +995,13 @@ pub async fn run_gateway(pending: PayPending, gateway: &Gateway) -> PayOutcome {
 /// client retries), a status/sweep just reports "nothing new" — the next poll re-checks.
 pub fn gateway_busy(pending: PayPending) -> PayOutcome {
     match pending {
-        PayPending::Create { id, account, usd, our_id, testnet, .. } => PayOutcome::Create {
+        PayPending::Create { id, account, usd, our_id, testnet, code, .. } => PayOutcome::Create {
             id,
             account,
             usd,
             our_id,
             testnet,
+            code,
             result: Err("the payment gateway is busy right now — please try again in a moment".into()),
         },
         PayPending::Status { id, inv } => PayOutcome::Status { id, inv_id: inv.id, paid: false },
@@ -971,7 +1089,7 @@ impl Gateway {
             // Testnet invoice: only the faucet wallet's transfer counts. No pin → never paid
             // (fail closed; `begin_create` refuses such invoices up front anyway).
             let pin = if inv.testnet {
-                Some(testnet_faucet_address().ok_or("testnet invoice but TESTNET_FAUCET_ADDRESS is unset — refusing to settle")?)
+                Some(faucet_address().ok_or("invite invoice but no faucet wallet is pinned (FAUCET_ADDRESS) — refusing to settle")?)
             } else {
                 None
             };
@@ -1685,19 +1803,36 @@ mod tests {
         }
     }
 
-    // Faucet: on a testnet server (TESTNET=1) the ONLY purchase is a $1 `testnet:true`
-    // invoice in native NYM, and only with the faucet wallet pinned; a "real" purchase there
-    // is refused (test chain = free coins). Without the env the flag itself is refused. The
-    // flag survives into the invoice so admin/faucet can see it.
+    // The invite rail: a $1 credit the faucet pays, and the ONLY thing a testnet server
+    // sells. What opens it is a VALID INVITE CODE, checked here against the faucet's own
+    // ledger — a client that merely claims "invite" gets nothing. A testnet server still
+    // honours a code-less `testnet:true` so apps that predate the invite field keep
+    // working. The code is bound into the invoice, so the faucet can refuse to fund one
+    // tester's invoice with another tester's code.
     #[tokio::test]
-    async fn testnet_create_is_one_dollar_and_gated_by_env() {
+    async fn invite_create_is_one_dollar_and_needs_a_valid_code() {
         let _env = ENV_LOCK.write().unwrap_or_else(|e| e.into_inner());
         let (sk, pem, aid) = account();
         let gw = Gateway { rail: Rail::Fake, nyx: None, card: CardRail::None };
+
+        // a real invite ledger with one real code in it
+        let dir = std::env::temp_dir().join(format!("scrai-invite-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let conn = crate::faucet::open_db(&dir.join("faucet.db")).unwrap();
+        let code = crate::faucet::mint(&conn, 1, "tester").unwrap();
+        std::env::set_var("DATA", dir.to_string_lossy().to_string());
+
         // nonces burn on first sight (even for a refused create), so every call gets its own
-        let req = |usd: u32, testnet: bool, method: &str, n: &str| json!({"kind":"invoice.create","id":"r1","publicKey":pem,
-            "usd":usd,"testnet":testnet,"method":method,"nonce":n,
-            "sig":signed(&sk,&aid,&format!("invoice:{usd}"),n)});
+        let req = |usd: u32, testnet: bool, method: &str, n: &str, invite: Option<&str>| {
+            let mut v = json!({"kind":"invoice.create","id":"r1","publicKey":pem,
+                "usd":usd,"testnet":testnet,"method":method,"nonce":n,
+                "sig":signed(&sk,&aid,&format!("invoice:{usd}"),n)});
+            if let Some(c) = invite {
+                v["inviteCode"] = json!(c);
+            }
+            v
+        };
         let refused = |pay: &mut Pay, v: Value, needle: &str| {
             let PayStep::Reply(r) = pay.begin(v.to_string().as_bytes(), &gw) else { panic!("must be refused ({needle})") };
             let r: Value = serde_json::from_slice(&r).unwrap();
@@ -1706,40 +1841,54 @@ mod tests {
 
         std::env::remove_var("TESTNET");
         std::env::remove_var("TESTNET_FAUCET_ADDRESS");
+        std::env::remove_var("FAUCET_ADDRESS");
         let mut pay = Pay::default();
-        refused(&mut pay, req(1, true, "nyx", "n1"), "testnet");
+        // fail closed: no faucet wallet pinned → no invite credit at all
+        refused(&mut pay, req(1, true, "nyx", "n1", Some(&code)), "faucet wallet");
         // $1 is not a normal tier either
-        refused(&mut pay, req(1, false, "nyx", "n2"), "one of");
+        refused(&mut pay, req(1, false, "nyx", "n2", None), "one of");
 
-        std::env::set_var("TESTNET", "1");
-        // a normal purchase on a testnet server is refused outright
-        refused(&mut pay, req(5, false, "nyx", "n3"), "testnet server");
-        refused(&mut pay, req(5, true, "nyx", "n4"), "$1");
-        // NYM only — the faucet cannot pay a BTCPay invoice
-        refused(&mut pay, req(1, true, "btc", "n5"), "NYM");
-        // fail closed: no faucet wallet pinned → no testnet purchase at all
-        refused(&mut pay, req(1, true, "nyx", "n6"), "faucet wallet");
-
-        std::env::set_var("TESTNET_FAUCET_ADDRESS", "n1faucet");
-        let PayStep::Pending(p) = pay.begin(req(1, true, "nyx", "n7").to_string().as_bytes(), &gw) else { panic!("create needs the gateway") };
+        std::env::set_var("FAUCET_ADDRESS", "n1faucet");
+        // a mainnet server sells $1 ONLY against a code — the bare flag buys nothing
+        refused(&mut pay, req(1, true, "nyx", "n3", None), "invite code");
+        refused(&mut pay, req(1, true, "nyx", "n4", Some("TOKU-ZZZZ-ZZZZ")), "not valid");
+        // right code, wrong shape of purchase
+        refused(&mut pay, req(5, true, "nyx", "n5", Some(&code)), "$1");
+        refused(&mut pay, req(1, true, "btc", "n6", Some(&code)), "NYM");
+        // the valid code passes the gate: this test gateway has no NYM rail, and an invite
+        // invoice must never fall back to the processor rail — so it fails THERE, not here
+        let PayStep::Pending(p) = pay.begin(req(1, true, "nyx", "n7", Some(&code)).to_string().as_bytes(), &gw)
+        else {
+            panic!("a valid code must reach the gateway")
+        };
         let r: Value = serde_json::from_slice(&pay.finish(run_gateway(p, &gw).await, &gw)).unwrap();
-        std::env::remove_var("TESTNET");
-        std::env::remove_var("TESTNET_FAUCET_ADDRESS");
-        // the gate passed; this test gateway has no NYM rail, and a testnet invoice must
-        // never fall back to the processor rail — so it is refused there, not raised on BTC
         assert!(r["error"].as_str().unwrap_or("").contains("NYM rail"), "{r}");
         assert!(pay.testnet_invoices().is_empty());
 
-        // the flag rides in the durable record and the faucet view picks exactly those
-        pay.invoices.insert("t1".into(), Inv { id: "t1".into(), provider_ref: "TOKU-MEMO2345".into(), account_id: aid.clone(),
+        // a testnet server: no real purchases at all, and a pre-invite app still works
+        std::env::set_var("TESTNET", "1");
+        refused(&mut pay, req(5, false, "nyx", "n8", None), "testnet server");
+        let PayStep::Pending(_) = pay.begin(req(1, true, "nyx", "n9", None).to_string().as_bytes(), &gw) else {
+            panic!("a testnet server still takes a code-less $1 from an old app")
+        };
+
+        std::env::remove_var("TESTNET");
+        std::env::remove_var("FAUCET_ADDRESS");
+        std::env::remove_var("DATA");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // the flag AND the code ride in the durable record; the faucet view picks exactly those
+        let aid2 = aid.clone();
+        pay.invoices.insert("t1".into(), Inv { id: "t1".into(), provider_ref: "TOKU-MEMO2345".into(), account_id: aid2,
             amount_usd: 1, amount_toku: TOKU_PER_USD, method: "nyx".into(), status: "pending".into(),
-            expires_at: now_ms() + 60_000, expected_unym: 59_000_000, testnet: true });
+            expires_at: now_ms() + 60_000, expected_unym: 59_000_000, testnet: true, invite_code: "TOKU-AAAA-BBBB".into() });
         pay.invoices.insert("r1".into(), Inv { id: "r1".into(), provider_ref: "TOKU-REAL2345".into(), account_id: aid,
             amount_usd: 5, amount_toku: 5 * TOKU_PER_USD, method: "nyx".into(), status: "pending".into(),
-            expires_at: now_ms() + 60_000, expected_unym: 295_000_000, testnet: false });
+            expires_at: now_ms() + 60_000, expected_unym: 295_000_000, testnet: false, invite_code: String::new() });
         let t = pay.testnet_invoices();
         assert_eq!(t.len(), 1);
         assert_eq!((t[0].amount_usd, t[0].memo.as_str(), t[0].unym), (1, "TOKU-MEMO2345", 59_000_000));
+        assert_eq!(t[0].code, "TOKU-AAAA-BBBB");
     }
 
     // H2 (pay): the split API. Two status polls for the same invoice can be in flight at

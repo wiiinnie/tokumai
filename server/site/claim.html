@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>tokumai — redeem your invite</title>
+<meta name="description" content="Redeem a tokumai invite code against an invoice raised in the app.">
+<style>
+  :root{
+    --ink:#141210; --surface:#1C1917; --surface-2:#262220; --line:#332E2A; --bone:#ECE6DC; --muted:#9C938A;
+    --acc:#7A5FFF; --acc2:#B9A3FF; --ok:#3FC98A; --warn:#E4642A;
+    --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+    --body:'Hanken Grotesk',system-ui,-apple-system,sans-serif; --display:Fraunces,Georgia,serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--ink);color:var(--bone);font-family:var(--body);
+       display:flex;justify-content:center;padding:28px 18px 60px}
+  .wrap{width:100%;max-width:560px}
+  .logo{display:flex;align-items:center;gap:10px;font-family:var(--display);font-weight:600;font-size:20px;margin-bottom:26px}
+  .logo b{color:var(--acc);font-weight:600}
+  h1{font-family:var(--display);font-weight:600;font-size:27px;line-height:1.15;margin:0 0 8px}
+  .lead{color:var(--muted);font-size:14.5px;line-height:1.55;margin:0 0 22px}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:20px;margin-bottom:14px}
+  .lbl{font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:16px 0 5px}
+  .lbl:first-child{margin-top:0}
+  .lbl.acc{color:var(--acc)}
+  input{width:100%;font-family:var(--mono);font-size:14px;letter-spacing:.05em;color:var(--bone);
+        background:var(--surface-2);border:1px solid var(--line);border-radius:9px;padding:11px 12px}
+  input:focus{outline:none;border-color:var(--acc)}
+  input.memo{color:var(--acc2);border-color:var(--acc)}
+  .btn{display:block;width:100%;text-align:center;font-family:var(--body);font-size:15px;font-weight:600;
+       padding:14px 18px;border-radius:11px;border:1px solid var(--acc);background:var(--acc);color:#141210;
+       cursor:pointer;margin-top:20px}
+  .btn:hover{filter:brightness(1.08)}
+  .btn[disabled]{opacity:.5;cursor:default;filter:none}
+  .note{font-size:12.5px;line-height:1.55;color:var(--muted);margin-top:14px}
+  .msg{font-size:13.5px;line-height:1.5;margin-top:14px;padding:11px 12px;border-radius:9px;border:1px solid var(--line)}
+  .msg.bad{border-color:var(--warn);color:var(--warn)}
+  .msg.good{border-color:var(--ok);color:var(--ok)}
+  .msg a{color:inherit}
+  .foot{margin-top:26px;font-family:var(--mono);font-size:10.5px;color:var(--muted);text-align:center}
+  .foot a{color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="logo"><span>tokum<b>ai</b></span></div>
+  <h1>Redeem your invite</h1>
+  <p class="lead">Your invite code is worth <b>$1</b> of credit. Raise the invoice in the app first
+    (Buy credit &rarr; enter your code), then hand it over here &mdash; the faucet pays it for you and the
+    credit lands in the app by itself.</p>
+  <div class="card">
+    <div class="lbl">Invite code</div>
+    <input id="code" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="TOKU-XXXX-XXXX">
+    <div class="lbl acc">Invoice memo</div>
+    <input id="memo" class="memo" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="TOKUXXXXXXXX">
+    <button class="btn" id="go" type="button">Fund this invoice</button>
+    <div id="msg"></div>
+    <p class="note">One code, one invoice. Nothing on this page asks who you are; the code and the memo
+      are all we store, so the payment can be matched to the invoice exactly once.</p>
+  </div>
+  <div class="foot">Invite programme &middot; <a href="/">tokumai.com</a></div>
+</div>
+<script>
+(function(){
+  "use strict";
+  // The app hands the code and the memo over in the URL FRAGMENT, never the query string:
+  // a fragment is not sent with the request, so opening this page puts neither into our
+  // logs. Both are POSTed only when the tester actually presses the button — the faucet
+  // needs them server-side to pay, and says so in the privacy notice.
+  //
+  // The fragment is attacker-controlled like any URL: it only ever lands in input VALUES
+  // (never in innerHTML), and is length- and shape-capped before it gets there.
+  var $ = function(id){ return document.getElementById(id); };
+  var code = $("code"), memo = $("memo"), go = $("go"), msg = $("msg");
+
+  var okCode = function(s){ return /^[A-Z0-9-]{8,32}$/.test(s); };
+  var okMemo = function(s){ return /^[A-Za-z0-9-]{4,64}$/.test(s); };
+
+  function say(kind, html){ msg.innerHTML = html ? '<div class="msg ' + kind + '">' + html + '</div>' : ""; }
+  function esc(s){ var d = document.createElement("div"); d.textContent = String(s == null ? "" : s); return d.innerHTML; }
+
+  function decode(frag){
+    var b = frag.replace(/-/g, "+").replace(/_/g, "/");
+    while (b.length % 4) b += "=";
+    var bin = atob(b);
+    var bytes = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return JSON.parse(new TextDecoder().decode(bytes));
+  }
+
+  var frag = (location.hash || "").replace(/^#/, "");
+  if (frag) {
+    var v = null;
+    try { v = decode(frag); } catch (e) { v = null; }
+    if (v && typeof v === "object") {
+      var c = String(v.code || "").slice(0, 32).toUpperCase();
+      var m = String(v.memo || "").slice(0, 64);
+      if (okCode(c)) code.value = c;
+      if (okMemo(m)) memo.value = m;
+    }
+  }
+
+  var polling = null;
+  function stopPolling(){ if (polling) { clearInterval(polling); polling = null; } }
+
+  // After the transfer is broadcast the server still has to see it on chain. Poll the
+  // faucet's own view of the memo rather than telling the tester "done" too early.
+  function watch(m){
+    stopPolling();
+    var tries = 0;
+    polling = setInterval(function(){
+      tries++;
+      if (tries > 40) { stopPolling(); return; }
+      fetch("/api/claim?memo=" + encodeURIComponent(m)).then(function(r){ return r.json(); }).then(function(s){
+        if (s && s.stage === "credited") {
+          stopPolling();
+          say("good", "Credited — the app has your $1. You can close this page.");
+        }
+      }).catch(function(){});
+    }, 4000);
+  }
+
+  go.addEventListener("click", function(){
+    var c = code.value.trim().toUpperCase(), m = memo.value.trim();
+    code.value = c;
+    if (!okCode(c)) { say("bad", "That does not look like an invite code — copy it exactly as you received it."); return; }
+    if (!okMemo(m)) { say("bad", "That does not look like an invoice memo — copy it from the app’s payment screen."); return; }
+    go.disabled = true;
+    say("", "");
+    say("good", "Sending…");
+    fetch("/api/claim", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code: c, memo: m })
+    }).then(function(r){
+      return r.json().then(function(j){ return { ok: r.ok, j: j }; });
+    }).then(function(res){
+      if (!res.ok || !res.j || res.j.error) {
+        go.disabled = false;
+        say("bad", esc((res.j && res.j.error) || "that did not work — try again in a moment"));
+        return;
+      }
+      var tx = res.j.explorer && /^https:\/\//.test(res.j.explorer) ? res.j.explorer : null;
+      say("good", "Sent " + esc(res.j.nym || "") + " NYM — waiting for the chain…" +
+                  (tx ? ' <a href="' + esc(tx) + '" rel="noopener noreferrer" target="_blank">transaction</a>' : ""));
+      watch(m);
+    }).catch(function(){
+      go.disabled = false;
+      say("bad", "The faucet did not answer — try again in a moment.");
+    });
+  });
+})();
+</script>
+</body>
+</html>
