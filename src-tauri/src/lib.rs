@@ -1149,6 +1149,7 @@ async fn invoice(
     usd: u32,
     method: Option<String>,
     testnet: Option<bool>,
+    invite_code: Option<String>,
 ) -> Result<Value, String> {
     let w = wallet::load(&data_dir(&app)?);
     let srv = server_addr(&w)?;
@@ -1164,10 +1165,14 @@ async fn invoice(
     };
     let sig = a.sign(&format!("invoice:{}", usd), &nonce);
     let mut req = json!({"v":PROTO,"kind":"invoice.create","id":rand_hex(16),"publicKey":a.public_key_pem,"usd":usd,"method":method,"nonce":nonce,"sig":sig});
-    // Tester's $1 paid by the server's faucet. The server refuses it unless it runs
-    // with TESTNET=1 — the client only ever offers the toggle when it does.
+    // Tester's $1, paid by the server's faucet. The invite code is what opens that tile;
+    // the server re-checks it against the faucet ledger and binds it into the invoice, so
+    // sending one here claims nothing on its own.
     if testnet == Some(true) {
         req["testnet"] = json!(true);
+    }
+    if let Some(c) = invite_code.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
+        req["inviteCode"] = json!(c.to_ascii_uppercase());
     }
     let resp = transport.round_trip(&srv, &req, SURBS_SMALL, TIMEOUT_MS).await?;
 
@@ -1354,6 +1359,32 @@ async fn smart_detect(
         Err(e) => log::warn!("[detect] semantic scan failed: {e}"),
     }
     res
+}
+/// Is this invite code still good for a $1 credit? Answered by the server against the
+/// faucet's ledger. UX only — it decides whether the app offers the $1 tile, never
+/// whether money moves.
+#[tauri::command]
+async fn invite_check(
+    app: AppHandle,
+    transport: State<'_, Arc<Transport>>,
+    code: String,
+) -> Result<Value, String> {
+    let w = wallet::load(&data_dir(&app)?);
+    let srv = server_addr(&w)?;
+    let m = w.mnemonic.ok_or("no account — create one first")?;
+    let a = account::from_mnemonic(&m)?;
+    let nonce = rand_hex(16);
+    let sig = a.sign("invite", &nonce);
+    let req = json!({"v":PROTO,"kind":"invite.check","id":rand_hex(16),"publicKey":a.public_key_pem,
+                     "code":code.trim().to_ascii_uppercase(),"nonce":nonce,"sig":sig});
+    let resp = transport.round_trip(&srv, &req, SURBS_SMALL, TIMEOUT_MS).await?;
+    if let Some(e) = resp.get("error").and_then(|e| e.as_str()) {
+        return Err(e.to_string());
+    }
+    Ok(json!({
+        "valid": resp.get("valid").and_then(|v| v.as_bool()).unwrap_or(false),
+        "usd": resp.get("usd").and_then(|v| v.as_u64()).unwrap_or(1),
+    }))
 }
 
 #[tauri::command]
@@ -2774,7 +2805,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             state, local_state, set_server, account_new, account_reveal, account_restore, account_delete, account_migrate_qr,
-            invoice, invoice_status, invoice_cancel, ocr_scan, pdf_text, pdf_ocr, pdf_pages, collect, redeem, chat,
+            invoice, invoice_status, invoice_cancel, invite_check, ocr_scan, pdf_text, pdf_ocr, pdf_pages, collect, redeem, chat,
             smart_available, smart_detect, coconut_redeem,
             mixnet_route, mixnet_ping, cancel_chat, app_resumed, app_hidden, resume_stats, list_entry_gateways, set_entry_gateway, set_mixnet_perf, open_external, save_image,
             share_text, upload_begin, upload_chunk, upload_pipeline, pick_image, open_account_security,

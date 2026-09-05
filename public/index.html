@@ -242,8 +242,17 @@
   .pm.sel .pmtag{color:var(--signal)}
   .pm.soon{opacity:.5;cursor:not-allowed}
   .pm.dis,.tiletier.dis{opacity:.32;pointer-events:none;filter:saturate(.4)}
-  /* Testnet purchase: the toggle card above the amounts + the memo note on the invoice */
+  /* Invite code: the card above the amounts + the memo note on the invoice */
   #testnetRow{margin:0 0 12px;border-color:var(--gold-dim,var(--line))}
+  .inviteline{display:flex;gap:8px;margin-top:8px}
+  .inviteline input{flex:1;min-width:0;font:500 13px var(--mono);letter-spacing:.05em;color:var(--bone);
+    background:var(--surface-2,var(--panel));border:1px solid var(--line);border-radius:9px;padding:9px 10px;text-transform:uppercase}
+  .inviteline input:focus{outline:none;border-color:var(--gold)}
+  .inviteline .ibtn{flex:none;font:600 12px var(--body);color:var(--bone);background:transparent;
+    border:1px solid var(--line);border-radius:9px;padding:0 14px;cursor:pointer}
+  .inviteline .ibtn:hover{border-color:var(--gold)}
+  #inviteMsg{display:block;margin-top:7px;font-size:11.5px;line-height:1.4}
+  #inviteMsg.good{color:var(--gold)} #inviteMsg.bad{color:var(--warn,#E4642A)}
   #testnetRow b .tpill{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:999px;font:600 9.5px var(--mono);letter-spacing:.04em;color:var(--gold);border:1px solid var(--gold);vertical-align:2px}
   .tnote{border:1px solid var(--gold);border-radius:12px;padding:10px 12px;margin:0 0 12px;font-size:13px;line-height:1.45;background:color-mix(in srgb,var(--gold) 8%,transparent)}
   .tnote b{color:var(--gold)}
@@ -1047,7 +1056,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     <div class="mb">
       <p class="balline" id="buyBal"></p>
       <div id="iosTopup" style="display:none"></div>
-      <label class="setrow" id="testnetRow" style="display:none;cursor:default"><input type="checkbox" id="testnetChk" style="display:none"><span><b>Testnet purchase<span class="tpill">TESTER</span></b><small>This server is in testnet mode: every purchase is a <b>$1</b> credit paid for you by the tokumai faucet against your invite code — no real money moves. Raise the invoice, then paste its memo on the faucet page.</small></span></label>
+      <label class="setrow" id="testnetRow" style="display:none;cursor:default"><span><b>Invite code<span class="tpill">TESTER</span></b><small>If you have an invite code, enter it here — otherwise leave it empty and buy as usual. A valid code buys a <b>$1</b> credit that the tokumai faucet pays for you.</small><span class="inviteline"><input id="inviteInput" type="text" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" maxlength="32" placeholder="TOKU-XXXX-XXXX"><button type="button" class="ibtn" data-click="checkInvite">Check</button></span><small id="inviteMsg"></small></span></label>
       <div class="grouplbl" id="amountLbl" style="margin-top:2px">Amount</div>
       <div id="tierRow" class="tiles"></div>
 
@@ -1475,8 +1484,17 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   let storefront = null;                 // iOS: App Store storefront (ISO alpha-3, "USA"/"DEU"/…) or null → strictest top-up variant
   let faucetUrl = null;                  // where testers redeem the memo (server-provided, https only)
   let siteUrl = null;                    // tokumai.com — the /pay hand-over page lives there
-  let testnetBuy = false;                // the toggle in the Buy dialog (only meaningful when serverTestnet)
+  let testnetBuy = false;                // buy sheet is in invite mode ($1, faucet-paid)
   const TESTNET_USD = 1;
+  // The invite code, once the SERVER said it is good for a $1 credit. Nothing here grants
+  // anything: the server re-checks it when the invoice is raised, and the faucet checks it
+  // again when it pays. This only decides which tiles the sheet shows.
+  let inviteCode = "";
+  let inviteOk = false;
+  // Which rails the server can actually raise an invoice on. Everything absent is greyed
+  // out rather than offered and refused on tap. Defaults are permissive so an older
+  // server (no `rails` in its catalog) behaves exactly as before.
+  let rails = { nyx:true, btc:true, card:false, invite:false };
   let cardInfo = { enabled:false, minUsd:10, methods:[] };   // server's card rail: {enabled, minUsd, methods:[{id,label}]} — absent → no card row
   // Labels come from what is enabled in the Mollie dashboard (server fetches /v2/methods),
   // so switching PayPal or Wero on there relabels the row without a build.
@@ -1563,14 +1581,21 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         if(/^\d+\.\d+\.\d+/.test(av)){ APP_VERSION = versionLabel(av); const v=$("appVer"); if(v) v.textContent="v"+APP_VERSION; } }
       serverTestnet = s.testnet === true;          // the server's kill switch: absent/false → no toggle
       storefront = /^[A-Z]{3}$/.test(String(s.storefront||"")) ? String(s.storefront) : null;
+      // Rails: coerce every field — the catalog is untrusted server data.
+      { const r = s.rails && typeof s.rails === "object" ? s.rails : null;
+        rails = r ? { nyx:r.nyx!==false, btc:r.btc===true, card:r.card===true, invite:r.invite===true }
+                  : { nyx:true, btc:true, card:(s.card&&s.card.enabled)===true, invite:serverTestnet }; }
       { const ok = u => /^https:\/\/[\w.-]+(\/[^\s]*)?$/.test(u);
         const fu = String(s.faucetUrl||"");
-        faucetUrl = serverTestnet && ok(fu) ? fu : null;
+        // No longer testnet-gated: the invite rail runs beside real purchases, and the
+        // server only sends this URL when it has a faucet wallet pinned.
+        faucetUrl = ok(fu) ? fu.replace(/\/+$/,"") : null;
         // The payment page is NOT testnet-gated — it matters most on mainnet — so it has
         // its own field. Older servers send only faucetUrl; fall back to it.
         const su = String(s.siteUrl||"") || fu;
         siteUrl = ok(su) ? su : null; }
-      if(!serverTestnet) testnetBuy = false;
+      if(!rails.invite){ inviteOk = false; inviteCode = ""; }
+      if(!serverTestnet && !inviteOk) testnetBuy = false;
       // Card rail: coerce both fields — the reply is untrusted server data.
       { const c=s.card||{}; cardInfo={ enabled:c.enabled===true, minUsd:Math.max(1, Math.floor(Number(c.minUsd)||10)), methods:Array.isArray(c.methods)?c.methods.filter(m=>m&&typeof m==="object"):[] }; }
       server = s.server || null;
@@ -3510,7 +3535,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         stopMixPhase();
         dlProg=null;
         ai.streaming=false; busy=false;
-        if(ai.dismissed){ ai.collapsed=true; if(evt.usage&&typeof evt.(usage.priceToku ?? usage.priceScrai)==="number") ai.paidToku=evt.(usage.priceToku ?? usage.priceScrai); }
+        if(ai.dismissed){ ai.collapsed=true; const paid = evt.usage && (evt.usage.priceToku ?? evt.usage.priceScrai); if(typeof paid==="number") ai.paidToku=paid; }
         if(!tFirst) tFirst=performance.now();                       // image reply: no deltas
         if(typeof evt.balance==="number"){ balance=evt.balance; if(typeof evt.held==="number") held=evt.held; renderBal(); }
         if(Array.isArray(evt.images) && evt.images.length){ ai.images=evt.images; }
@@ -3747,7 +3772,13 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       b.classList.toggle("sel", b.dataset.themeOpt===curTheme);
       b.onclick = ()=>{ applyTheme(b.dataset.themeOpt); $("setStatus").textContent = "theme saved"; };
     });
-    const tchk=$("testnetChk"); if(tchk) tchk.onchange = ()=> setTestnetBuy(tchk.checked);
+    // Enter in the invite field = pressing Check; typing invalidates a previous answer,
+    // so the $1 tile can never belong to a code other than the one on screen.
+    { const inp=$("inviteInput");
+      if(inp){
+        inp.onkeydown = e => { if(e.key==="Enter"){ e.preventDefault(); checkInvite(); } };
+        inp.oninput = () => { if(inviteOk){ inviteOk=false; inviteCode=""; setInviteMsg("",""); syncBuyMode(); renderTiers(); renderContinue(); } };
+      } }
     $("tutChk").checked = tutorialEnabled();
     $("tutChk").onchange = ()=>{ try{ localStorage.setItem(TUT_KEY, $("tutChk").checked?"1":"0"); }catch(_){}; $("setStatus").textContent = "tutorial "+($("tutChk").checked?"on":"off"); };
     $("inpAssist").checked = inputAssistOn();
@@ -4847,6 +4878,15 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     const base = payPageUrl();
     return base ? base + "#" + b64url(JSON.stringify(payload)) : "";
   }
+  // faucet.tokumai.com/claim with the code and the memo in the FRAGMENT — a fragment is
+  // not sent with the request, so opening the page leaves neither in the faucet's logs;
+  // they travel only when the tester presses the button there.
+  function claimUrl(inv){
+    if(!faucetUrl || !inviteCode || !inv) return "";
+    const memo = ((inv.options||[]).find(o=>o && o.memo)||{}).memo || "";
+    if(!memo) return "";
+    return faucetUrl + "/claim#" + b64url(JSON.stringify({ v:1, code:inviteCode, memo }));
+  }
   function payOnWeb(){
     const u = webPayUrl(activeInvoice);
     if(!u) return;
@@ -4889,27 +4929,81 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       // Card: the server sells the larger tiles only (fee + chargeback exposure) — grey the rest.
       const small = selectedMethod==="card" && n<cardInfo.minUsd;
       const dis = (testnetBuy && n!==TESTNET_USD) || small;
-      return `<div class="tiletier${selectedTier===n?' sel':''}${dis?' dis':''}" data-click="selectTier" data-args="${n}"><div class="a">$${n}</div><div class="s">${testnetBuy&&n!==TESTNET_USD?'real':small?'coins only':sub}</div></div>`;
+      const sublbl = testnetBuy&&n!==TESTNET_USD ? 'real' : small ? 'coins only' : (testnetBuy&&n===TESTNET_USD ? 'invite' : sub);
+      return `<div class="tiletier${selectedTier===n?' sel':''}${dis?' dis':''}" data-click="selectTier" data-args="${n}"><div class="a">$${n}</div><div class="s">${sublbl}</div></div>`;
     }).join("");
+    // Greyed, not hidden: a rail the server cannot raise an invoice on (no BTCPay/CoinGate
+    // configured) stays visible so the choice is legible — it just cannot be picked.
     const btc = document.querySelector('#chooser .pm[data-method="btc"]');
-    if(btc) btc.classList.toggle("dis", testnetBuy);   // the faucet pays NYM only
+    if(btc) btc.classList.toggle("dis", testnetBuy || !rails.btc);   // the faucet pays NYM only
+    const nym = document.querySelector('#chooser .pm[data-method="nyx"]');
+    if(nym) nym.classList.toggle("dis", !rails.nyx && !testnetBuy);
     { const pm=document.querySelector('#chooser .paymethods'), lbl=document.querySelector('#chooser .grouplbl');
       if(pm) pm.style.display = testnetBuy ? "none" : ""; if(lbl) lbl.style.display = testnetBuy ? "none" : ""; }
     syncCardRow();                                      // card row: same rule, greyed in testnet
   }
-  function syncTestnetRow(){
-    const row=$("testnetRow"), chk=$("testnetChk"); if(!row||!chk) return;
-    row.style.display = serverTestnet ? "" : "none";
-    chk.checked = testnetBuy;
+  function setInviteMsg(kind, text){
+    const el=$("inviteMsg"); if(!el) return;
+    el.className = kind || "";
+    el.textContent = text || "";
   }
-  // A testnet server sells $1 faucet-funded credits and nothing else (it refuses
-  // everything else), so the row is information, not a switch: on = serverTestnet.
-  function setTestnetBuy(on){
-    testnetBuy = serverTestnet;
+  // The whole buy sheet in one place: invite mode ($1, NYM, faucet-paid) versus a normal
+  // purchase, and on iOS the web top-up instead of the in-app chooser. Called on open and
+  // whenever a code is checked, so the sheet cannot end up half in one mode.
+  function syncBuyMode(){
+    // A testnet server sells nothing else, so it is permanently in invite mode; on a
+    // mainnet server a VALIDATED code is what opens it.
+    testnetBuy = inviteOk || serverTestnet;
+    if(testnetBuy){ selectedTier=TESTNET_USD; selectMethodQuiet("nyx"); }
+    else if(selectedTier===TESTNET_USD){ selectedTier=null; }
+    const row=$("testnetRow");
+    if(row) row.style.display = (rails.invite || serverTestnet) ? "" : "none";
+    // iOS: web top-up on top; the in-app amount/method chooser stays only for the invite
+    // flow, which is not a purchase (nothing is charged — the faucet pays).
+    const iosWeb = isIOSNative();
+    $("iosTopup").style.display = iosWeb ? "" : "none";
+    if(iosWeb) renderIosTopup();
+    const legacy = !iosWeb || testnetBuy;
+    $("amountLbl").style.display = legacy ? "" : "none";
+    $("tierRow").style.display   = legacy ? "" : "none";
+    $("chooser").style.display   = legacy ? "" : "none";
+    syncCardRow();
+  }
+  // Ask the SERVER whether the code is good. It answers from the faucet's own ledger; an
+  // answer of "valid" only decides which tiles we show — the code is checked again when
+  // the invoice is raised, and once more by the faucet as it pays.
+  async function checkInvite(){
+    const el=$("inviteInput"); if(!el) return;
+    const code=(el.value||"").trim().toUpperCase();
+    el.value=code;
     abandonInvoice();
-    if(testnetBuy){ selectedTier=TESTNET_USD; selectMethodQuiet("nyx"); } else if(selectedTier===TESTNET_USD){ selectedTier=null; }
-    syncTestnetRow(); renderTiers(); renderContinue();
-    const s=$("buyStatus"); if(s) s.textContent = testnetBuy ? "Testnet purchase — $1, paid by the faucet. Continue to raise the invoice." : "Pick an amount and a coin.";
+    if(!code){
+      inviteOk=false; inviteCode=""; setInviteMsg("","");
+      syncBuyMode(); renderTiers(); renderContinue();
+      const st=$("buyStatus"); if(st && !serverTestnet) st.textContent="Pick an amount and a coin.";
+      return;
+    }
+    if(!/^[A-Z0-9-]{8,32}$/.test(code)){
+      inviteOk=false; inviteCode=""; setInviteMsg("bad","that does not look like an invite code");
+      syncBuyMode(); renderTiers(); renderContinue(); return;
+    }
+    setInviteMsg("","checking…");
+    try{
+      const r=await Backend.inviteCheck(code);
+      inviteOk = !!(r && r.valid===true);
+      inviteCode = inviteOk ? code : "";
+      setInviteMsg(inviteOk?"good":"bad",
+        inviteOk ? `valid — $${TESTNET_USD} credit, paid by the faucet`
+                 : "that code is not valid, or it has been used up");
+    }catch(e){
+      inviteOk=false; inviteCode="";
+      setInviteMsg("bad", e && e.message ? e.message : String(e));
+    }
+    syncBuyMode(); renderTiers(); renderContinue();
+    const st=$("buyStatus");
+    if(st) st.textContent = inviteOk
+      ? `Invite credit — $${TESTNET_USD}, paid by the faucet. Continue to raise the invoice.`
+      : "Pick an amount and a coin.";
   }
   function renderBuyBal(){ const el=$("buyBal"); if(el) el.innerHTML = `Balance <b>${esc(tokuLine(balance))}</b> · fixed amounts only — everyone buys the same, so a purchase reveals no per-user fingerprint.`; }
   // Changing amount or coin abandons any in-flight invoice (its QR would be stale) and
@@ -4920,7 +5014,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     const el=$("continueRow"); if(!el) return;
     const coin = selectedMethod==="nyx" ? "NYM" : selectedMethod==="btc" ? "Bitcoin" : selectedMethod==="card" ? "card" : "Monero";
     el.innerHTML = selectedTier
-      ? `<button class="btn primary" style="width:100%" data-click="startPurchase">${testnetBuy?'Continue — raise the $1 testnet invoice →':`Continue — $${selectedTier} ${selectedMethod==="card"?"by card ↗":"with "+coin+" →"}`}</button>`
+      ? `<button class="btn primary" style="width:100%" data-click="startPurchase">${testnetBuy?`Continue — raise the $${TESTNET_USD} invite invoice →`:`Continue — $${selectedTier} ${selectedMethod==="card"?"by card ↗":"with "+coin+" →"}`}</button>`
       : `<button class="btn" style="width:100%;opacity:.5;cursor:not-allowed" disabled>Pick an amount above</button>`;
   }
   function startPurchase(){ if(selectedTier!=null) buyOrInvoice(selectedTier); }
@@ -5005,25 +5099,16 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   function openBuy(){
     if(!account){ openAccount(); return; }
     stopPoll(); stopCountdown(); activeInvoice=null; selectedTier=null;
-    // On a testnet server every purchase is a testnet purchase (the server refuses the
-    // rest); on a production server the row never renders.
-    testnetBuy = serverTestnet;
-    if(testnetBuy){ selectedTier=TESTNET_USD; selectMethodQuiet("nyx"); }
-    syncTestnetRow(); syncCardRow();
-    // iOS: web top-up on top; the legacy amount/method chooser stays only for the
-    // testnet faucet flow (a production iOS build hides in-app purchasing entirely).
-    const iosWeb = isIOSNative();
-    $("iosTopup").style.display = iosWeb ? "" : "none";
-    if(iosWeb) renderIosTopup();
-    const legacy = !iosWeb || testnetBuy;
-    $("amountLbl").style.display = legacy ? "" : "none";
-    $("tierRow").style.display   = legacy ? "" : "none";
-    $("chooser").style.display   = legacy ? "" : "none";
+    // A fresh sheet starts without a code — a validated one should not survive a close,
+    // or a tester who already spent it sees a $1 tile the server will refuse.
+    inviteOk = false; inviteCode = "";
+    { const i=$("inviteInput"); if(i) i.value=""; setInviteMsg("",""); }
+    syncBuyMode();
     renderBuyBal(); showChooser(true); renderTiers(); renderContinue(); renderPending();
     $("payPanel").innerHTML="";
     $("buyStatus").textContent = fakePayments
       ? "dev mode — settles instantly, no real money moves."
-      : testnetBuy ? "Testnet purchase — $1, paid by the faucet. Continue to raise the invoice."
+      : testnetBuy ? `Invite credit — $${TESTNET_USD}, paid by the faucet. Continue to raise the invoice.`
       : "Pick an amount and a coin.";
     stopPendRefresh(); pendRefreshTimer=setInterval(tickPending, 1000);
     openScrim("buyScrim");
@@ -5076,7 +5161,8 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     document.querySelectorAll('.pm[data-method]').forEach(el=>el.classList.toggle('sel', el.dataset.method===m));
   }
   function selectMethod(m){
-    if(testnetBuy && m!=="nyx"){ const s=$("buyStatus"); if(s) s.textContent="Testnet purchases are paid in NYM by the faucet."; return; }
+    if(testnetBuy && m!=="nyx"){ const s=$("buyStatus"); if(s) s.textContent="Invite credits are paid in NYM by the faucet."; return; }
+    if(m==="btc" && !rails.btc){ const s=$("buyStatus"); if(s) s.textContent="Bitcoin is not available on this server right now — pay with NYM."; return; }
     if(m==="card" && !cardAvailable()) return;
     selectMethodQuiet(m);
     abandonInvoice();
@@ -5128,10 +5214,15 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     // gateway call): gold, not muted — same for NYM, Bitcoin and, later, Monero.
     $("buyStatus").className="hint busy"; $("buyStatus").textContent="raising invoice… (a mixnet round trip plus the payment gateway — usually a few seconds)";
     let inv;
-    try{ inv=await Backend.invoice(usd, method, testnetBuy && usd===TESTNET_USD); }catch(e){ $("buyStatus").className="hint"; $("buyStatus").textContent=e.message||String(e); return; }
+    const invite = testnetBuy && usd===TESTNET_USD;
+    try{ inv=await Backend.invoice(usd, method, invite, invite ? inviteCode : ""); }catch(e){ $("buyStatus").className="hint"; $("buyStatus").textContent=e.message||String(e); return; }
     $("buyStatus").className="hint";
     addPending(inv);
     openPayment(inv);
+    // Invite credit: hand the code and the memo straight to the faucet page, so the tester
+    // only has to press one button there. Not a purchase — nothing is charged, the faucet
+    // pays — so this opens the browser directly, iOS included (no disclosure sheet).
+    if(invite){ const u=claimUrl(inv); if(u) openLink(u); }
   }
   // Show a raised invoice's payment view and poll it to settlement. The status poll
   // also carries the live chain-watch health (NYM) back for the indicator.
@@ -5244,8 +5335,13 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     const isNymInv = onchain.some(o=>/nym/i.test(o.method||""));
     // Testnet purchase: the faucet note. `faucetUrl` is the server's https URL (validated on
     // state load) — esc()/escAttr()-wrapped here anyway; inv.testnet only picks the branch.
+    // Invite credit: the faucet note. The link carries the code and the memo in its
+    // fragment, so the tester lands on a page that is already filled in; the plain faucet
+    // URL is the fallback when there is no code to hand over (a pre-invite testnet build).
+    const claim = claimUrl(inv);
+    const flink = claim || faucetUrl;
     const tnote = inv.testnet
-      ? `<div class="tnote"><b>Testnet purchase</b> — don’t pay this yourself. Copy the <b>memo</b> below and paste it on the faucet page; the faucet sends the NYM with that memo and your credit lands here within a minute.${faucetUrl?`<a class="fl" href="${escAttr(faucetUrl)}" data-click="openLink" data-click-pass="href" data-prevent="1">${esc(faucetUrl)}</a>`:""}</div>`
+      ? `<div class="tnote"><b>Invite credit</b> — don’t pay this yourself. ${claim?`Open the faucet page below — your code and this memo are already filled in`:`Copy the <b>memo</b> below and paste it on the faucet page`}; the faucet sends the NYM with that memo and your credit lands here within a minute.${flink?`<a class="fl" href="${escAttr(flink)}" data-click="openLink" data-click-pass="href" data-prevent="1">${esc(claim?"Open the faucet page →":flink)}</a>`:""}</div>`
       : "";
     // nosemgrep: scrai-taint-untrusted-to-html -- reviewed 2026-08-28: destination/memo/amount are esc()-wrapped in `blocks`, tnote's URL is escAttr()/esc()-wrapped; o.qr is an SVG the app renders locally (qrcode crate), the server only sends address + memo
     $("payPanel").innerHTML = `<div class="paypanel">
@@ -5273,7 +5369,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   Object.assign(window,{ pickModel, copyPhrase, newChat, openSession, deleteSession, exportSession, toggleMenu, selectModelIdx,
     autogrow, onKey, sendMsg, retryMsg, showHandover, downloadHandover, closeHandover, pickImport, importHandover,
     cancelMsg, resendMsg, showDismissed, retrieveMsg, openConnSheet, closeConnSheet, rebuildRoute, rebuildRouteFromSheet, copyResumeLog, routeDismiss, useOfficialServer, iterateImg,
-    openBuy, closeBuy, buyTier, buyOrInvoice, copyUri, copyTopupId, openTopupSheet, closeTopupSheet, confirmTopup, openAccount, closeAccount, doAccountNew, doAccountReveal, doAccountRestore, doAccountDelete, doMigrate, doRedeem, redeemSliderChanged, startQrScan, stopQrScan,
+    openBuy, closeBuy, buyTier, buyOrInvoice, checkInvite, copyUri, copyTopupId, openTopupSheet, closeTopupSheet, confirmTopup, openAccount, closeAccount, doAccountNew, doAccountReveal, doAccountRestore, doAccountDelete, doMigrate, doRedeem, redeemSliderChanged, startQrScan, stopQrScan,
     showRestore, askNew, cancelAcctView, saveServer, srvSelected, qNav, scrollToBottom, reopenGuard, checkCredit,
     openEntryPicker, showExitInfo, chooseGateway, closeGw, filterGw, toggleGwOpt,
     acceptTerms, declineTerms, termsAgreeToggle, chooseModel, openLink, toggleImgOvl, saveImgTap, liveNudgeUse, liveNudgeSkip, reconnectMix, runMixPing, resetMixPerf,
