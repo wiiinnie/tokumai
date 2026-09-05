@@ -11,7 +11,10 @@
 #   scrai-faucet.service         → tokumai-faucet.service
 #   scrai-faucet-tokumai.service → tokumai-faucet-preview.service
 #
-# Caddy is NOT touched: the ports stay 8790/8791.
+# Caddy IS touched, in one place: both vhosts serve /dl/* straight out of the site
+# directory being moved (`root * /opt/scrai/site/dl`). Left alone, every download link 404s
+# the moment the tree changes name. The Caddyfile is backed up, edited, validated and
+# reloaded; the ports (8790/8791) do not change.
 #
 # WHY THIS IS A SCRIPT AND NOT A LIST OF COMMANDS
 # /opt/scrai/data holds the Nym identity (data/.nym-server). Lose it and the server comes
@@ -156,6 +159,9 @@ if [ "$MODE" = inspect ]; then
   units_state
   echo "what must survive:"
   fingerprint "$OLD" | sed "s/^/     /"
+  echo "other things pointing at $OLD (these break unless they are updated too):"
+  grep -rl "/opt/scrai" /etc 2>/dev/null | grep -v "^/etc/systemd/system/scrai" | sed "s/^/     /" || true
+  say "(nothing else)"
   exit 0
 fi
 
@@ -171,6 +177,11 @@ if [ "$MODE" = rollback ]; then
   mv "$NEW/bin/tokumai-faucet-preview" "$NEW/bin/scrai-faucet-tokumai" 2>/dev/null || true
   mv "$NEW" "$OLD"
   cp -a "$BAK"/*.service /etc/systemd/system/ 2>/dev/null || true
+  if [ -f "$BAK/Caddyfile.backup" ]; then
+    cp -a "$BAK/Caddyfile.backup" /etc/caddy/Caddyfile
+    systemctl reload caddy || true
+  fi
+  [ -f "$BAK/deploy-apply.sh.stale" ] && mv "$BAK/deploy-apply.sh.stale" "$OLD/bin/deploy-apply.sh" || true
   systemctl daemon-reload
   systemctl enable --now scrai >/dev/null 2>&1 || true
   systemctl restart scrai || true
@@ -214,6 +225,30 @@ echo "renaming binaries …"
 [ -f "$NEW/bin/scrai-admin" ] && mv "$NEW/bin/scrai-admin" "$NEW/bin/tokumai-admin"
 [ -f "$NEW/bin/scrai-faucet" ] && mv "$NEW/bin/scrai-faucet" "$NEW/bin/tokumai-faucet"
 [ -f "$NEW/bin/scrai-faucet-tokumai" ] && mv "$NEW/bin/scrai-faucet-tokumai" "$NEW/bin/tokumai-faucet-preview"
+
+# Caddy serves /dl/* straight out of the site directory that is being moved, in BOTH
+# vhosts. Left alone, every download link 404s the moment the tree changes name.
+CADDY=/etc/caddy/Caddyfile
+if [ -f "$CADDY" ] && grep -q "/opt/scrai" "$CADDY"; then
+  echo "updating Caddy (it serves /dl from the moved tree) …"
+  cp -a "$CADDY" "$BAK/Caddyfile.backup"
+  sed -i "s|/opt/scrai|/opt/tokumai|g" "$CADDY"
+  if command -v caddy >/dev/null 2>&1 && ! caddy validate --config "$CADDY" >/dev/null 2>&1; then
+    echo "FATAL: the edited Caddyfile does not validate - restoring it" >&2
+    cp -a "$BAK/Caddyfile.backup" "$CADDY"
+    exit 1
+  fi
+  systemctl reload caddy || systemctl restart caddy || true
+  say "Caddy updated and reloaded (backup in $BAK/Caddyfile.backup)"
+fi
+
+# The root-owned apply script still points at /opt/scrai. Remove it rather than leave a
+# stale one: deploy.sh then falls back to its own inline body, which carries the guard.
+# Otherwise a deploy run before --install-apply would quietly recreate /opt/scrai.
+if [ -f "$NEW/bin/deploy-apply.sh" ]; then
+  mv "$NEW/bin/deploy-apply.sh" "$BAK/deploy-apply.sh.stale"
+  say "stale deploy-apply.sh moved to $BAK (deploy.sh will use its inline body until --install-apply)"
+fi
 
 echo "installing units …"
 write_units
