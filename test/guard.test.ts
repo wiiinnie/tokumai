@@ -51,4 +51,32 @@ assert.ok(scanText("4152 9912 3456 7890", { ocr: true }).some((f) => f.type === 
 assert.ok(scanText("VCNLDJOJA<<JOYCE<<<<<<<<<<<<<<<<", { ocr: true }).some((f) => f.type === "mrz"), "passport MRZ detected");
 assert.ok(scanText("SCHENGEN VISA · NUMBER OF PASSPORT", { ocr: true }).some((f) => f.type === "doc"), "visa/passport wording detected");
 
-console.log("all guard checks passed (card, iban, email, ssn, ip, apikey, password, mnemonic, phone, address, ocr-mode, mrz, card-not-phone; no false positives)");
+// ---- postal addresses ----------------------------------------------------
+// The case that started this: a photographed letter. The old rule wanted the house
+// number FIRST ("5 Musterstraße"), so no German address was ever detected — and the
+// per-line OCR scan never saw name, street and city together anyway.
+assert.ok(has("Musterstraße 5, 10115 Berlin", "addressblock"), "German address, number last");
+assert.ok(has("Anna Schmidt\nMusterstraße 5\n10115 Berlin", "addressblock"), "letterhead across three lines");
+assert.ok(has("Herr Max Müller\nHauptstr. 12\n80331 München", "addressblock"), "with an honorific");
+assert.ok(has("Jane Doe\n221 Baker Street\nLondon NW1 6XE", "addressblock"), "UK postcode");
+assert.ok(has("Acme GmbH\nAm Hindenburgring 3\n45127 Essen", "addressblock"), "street type -ring");
+// A name line above the street upgrades the wording — position identifies the person,
+// no name list involved.
+assert.ok(
+  scanText("Anna Schmidt\nMusterstraße 5\n10115 Berlin").some((f) => /name/.test(f.label)),
+  "the addressee line is recognised as a name",
+);
+assert.ok(
+  !scanText("Musterstr. 5a\n10115 Berlin").some((f) => /name/.test(f.label)),
+  "no name claimed when there is no name line",
+);
+// A street on its own stays the weak finding it always was.
+assert.ok(has("ship to 221 Baker Street", "address"), "street alone is the weak signal");
+assert.ok(!has("ship to 221 Baker Street", "addressblock"), "…and not the strong one");
+// Postcode + town must NEVER fire alone: "2019 Bericht" has the same shape as
+// "10115 Berlin", and a guard that cries wolf gets switched off.
+assert.deepEqual(types("10115 Berlin"), [], "a postcode and a town alone say nothing");
+assert.deepEqual(types("Im Jahr 2019 Bericht über Wachstum"), [], "a year and a capitalised word are not an address");
+assert.deepEqual(types("Rechnung Nr. 4711 vom 15.08.2026 über 250 Euro"), [], "an invoice line is not an address");
+
+console.log("all guard checks passed (card, iban, email, ssn, ip, apikey, password, mnemonic, phone, address, ocr-mode, mrz, card-not-phone, address-block; no false positives)");

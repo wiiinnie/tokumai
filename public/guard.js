@@ -115,11 +115,94 @@ export function scanText(text, opts = {}) {
       }
     } else run = 0;
   }
-  // Weak postal-address heuristic (number + street suffix). Low confidence.
-  if (
-    /\b\d{1,5}\s+([A-Za-zäöüß.\-]+\s){0,3}(street|st\.?|avenue|ave\.?|road|rd\.?|lane|ln\.?|boulevard|blvd\.?|stra(?:ß|ss)e|str\.?|weg|platz|gasse|allee)\b/i.test(t)
-  )
-    add("address", "a postal address");
+  // Postal address — see the address section below. A street line on its own is a weak
+  // signal; a street line WITH a postcode/city line near it is a person's address.
+  const addr = scanAddress(t);
+  if (addr.block)
+    add("addressblock", addr.name
+      ? "a name and full postal address (someone is identifiable)"
+      : "a full postal address (street and city together)");
+  else if (addr.street) add("address", "a postal address");
 
   return [...found.values()];
+}
+
+// ---------------------------------------------------------------------------
+// Addresses. Split out from the detectors above because this is the one finding
+// that needs LAYOUT: on a letter the name, the street and the city sit on three
+// separate lines, and only together do they identify a person. Feed this the whole
+// document with its line breaks intact (see `docText` in index.html) — a per-line
+// scan can never see the combination, which is exactly how an address label was
+// missed on a photographed letter (2026-09-06).
+// ---------------------------------------------------------------------------
+
+// German glues the street type onto the name and puts the number LAST — the old
+// single rule wanted "5 Musterstraße" and therefore matched no German address at all.
+const DE_SUFFIX = "(?:stra(?:ß|ss)e|str\\.|weg|platz|gasse|allee|ring|damm|ufer|chaussee|steig)";
+const RE_STREET_DE = new RegExp("\\p{Lu}[\\p{L}.\\-]*" + DE_SUFFIX + "\\s+\\d{1,4}\\s?[a-zA-Z]?\\b", "iu");
+// English-speaking countries put the number first and the type last.
+const RE_STREET_EN =
+  /\b\d{1,5}\s+(?:[\p{L}.\-]+\s){0,3}(?:street|st\.|avenue|ave\.?|road|rd\.?|lane|ln\.?|boulevard|blvd\.?|drive|dr\.|court|ct\.|way|place|pl\.)\b/iu;
+// Romance/Dutch/Polish: the type leads, the number sits on either side.
+const RE_STREET_INTL =
+  /(?:\d{1,4}[,\s]+)?\b(?:rue|avenue|boulevard|impasse|chemin|via|viale|corso|piazza|calle|avenida|plaza|straat|laan|plein|ulica)\b[\s.,]+\p{L}[\p{L}.\-]{2,}(?:[\s,]+\d{1,4})?/iu;
+
+// Postcode + town. DELIBERATELY never a finding on its own: "2019 Bericht" has the same
+// shape as "10115 Berlin", and a guard that cries wolf gets switched off. It only ever
+// counts as the second half of an address.
+const RE_POST_DACH = /(?:^|[^\d])(\d{4,5})\s+\p{Lu}[\p{L}.\-]{2,}(?:[ -]\p{Lu}[\p{L}.\-]+){0,2}(?![\d])/u;
+const RE_POST_NL = /\b\d{4}\s?[A-Z]{2}\b[\s,]+\p{Lu}/u;
+const RE_POST_UK = /\b[A-Z]{1,2}\d[A-Z\d]?\s?\d[A-Z]{2}\b/;
+const RE_POST_US = /\b\p{Lu}[\p{L}.\-]+,\s*[A-Z]{2}\s+\d{5}(?:-\d{4})?\b/u;
+
+const hasStreet = (line) =>
+  RE_STREET_DE.test(line) || RE_STREET_EN.test(line) || RE_STREET_INTL.test(line);
+const hasPostCity = (line) =>
+  RE_POST_DACH.test(line) || RE_POST_NL.test(line) || RE_POST_UK.test(line) || RE_POST_US.test(line);
+
+// Two or three capitalised words, no digits, no street type: on the line above an
+// address that is a person's name — position says so, no name list required.
+const RE_NAMELINE = /^\s*(?:(?:Herr|Frau|Mr|Mrs|Ms|Dr|Prof)\.?\s+)?\p{Lu}[\p{L}'\-]+(?:\s+\p{Lu}[\p{L}'\-]+){1,2}\s*$/u;
+
+/**
+ * `{ street, postcity, block, name }` for a piece of text.
+ * `block` = a street line and a postcode/city line close enough to be one address.
+ * Works on lines when the text has them, and falls back to character distance for
+ * text that arrived as one run (a PDF text layer, a chat message).
+ */
+export function scanAddress(text) {
+  const t = String(text ?? "");
+  const lines = t.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
+  const out = { street: false, postcity: false, block: false, name: false };
+
+  if (lines.length > 1) {
+    const flags = lines.map((l) => ({ s: hasStreet(l), p: hasPostCity(l), n: RE_NAMELINE.test(l) }));
+    out.street = flags.some((f) => f.s);
+    out.postcity = flags.some((f) => f.p);
+    for (let i = 0; i < flags.length; i++) {
+      if (!flags[i].s) continue;
+      // A letterhead is compact: the city follows the street within a line or two.
+      for (let j = Math.max(0, i - 2); j <= Math.min(flags.length - 1, i + 2); j++) {
+        if (j !== i && flags[j].p) {
+          out.block = true;
+          // …and the line just above the street is the addressee.
+          if (i > 0 && flags[i - 1].n && !flags[i - 1].s && !flags[i - 1].p) out.name = true;
+        }
+      }
+    }
+    return out;
+  }
+
+  // One run of text: no layout to read, so fall back to proximity.
+  out.street = hasStreet(t);
+  out.postcity = hasPostCity(t);
+  if (out.street && out.postcity) {
+    const si = t.search(RE_STREET_DE) >= 0 ? t.search(RE_STREET_DE)
+      : t.search(RE_STREET_EN) >= 0 ? t.search(RE_STREET_EN) : t.search(RE_STREET_INTL);
+    const pi = t.search(RE_POST_DACH) >= 0 ? t.search(RE_POST_DACH)
+      : t.search(RE_POST_NL) >= 0 ? t.search(RE_POST_NL)
+      : t.search(RE_POST_UK) >= 0 ? t.search(RE_POST_UK) : t.search(RE_POST_US);
+    out.block = si >= 0 && pi >= 0 && Math.abs(si - pi) < 120;
+  }
+  return out;
 }

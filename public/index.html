@@ -4395,6 +4395,14 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
             if(smart && smart[i] && smart[i].length){ smart[i].forEach(x=>{ if(!found.has(x.type)) found.set(x.type,x); }); hit=true; }
             if(hit) flagged.push({x:b.x,y:b.y,w:b.w,h:b.h});
           }
+          // …and once over the WHOLE page. Vision returns one box per line, and scanning
+          // each box on its own can only ever see a fragment: "Anna Schmidt", then
+          // "Musterstraße 5", then "10115 Berlin" — never the address they form together.
+          // Reassembled into reading order, the same detectors see the letterhead.
+          // (No highlight rectangle for these: the finding belongs to a group of lines,
+          // not to one box. The per-box hits above still draw theirs.)
+          for(const x of scanText(boxesToText(res), {ocr:true}))
+            if(!found.has(x.type)) found.set(x.type, x);
           console.log("[guard] native OCR:", res.length, "lines,", flagged.length, "flagged", smart?"(+semantic)":"");
           return { findings:[...found.values()], chars, ok:true, engine: smart?"native+smart":"native", boxes:flagged };
         }
@@ -4410,6 +4418,26 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       console.log("[guard] WASM OCR read",text.length,"chars");
       return { findings: scanText(text, {ocr:true}), chars:text.length, ok:true, engine:"tesseract", boxes:[] };
     }catch(e){ console.warn("[guard] OCR unavailable:", e); return { findings:[], chars:0, ok:false, engine:"none", error:(e&&e.message)||String(e) }; }
+  }
+
+  // Vision hands back one box per text run. Put them back into reading order — sort by
+  // vertical position, group runs that share a line, then left to right — so the guard
+  // gets a page instead of confetti. Boxes from the rotated recognition passes are
+  // already mapped into this same frame (see ocr.rs), so a sideways address label lands
+  // where it belongs.
+  function boxesToText(boxes){
+    const bs=(boxes||[]).filter(b=>b&&b.text&&b.text.trim());
+    if(!bs.length) return "";
+    const sorted=bs.slice().sort((a,b)=> (a.y+a.h/2)-(b.y+b.h/2) || a.x-b.x);
+    const lines=[]; let cur=[sorted[0]];
+    for(let i=1;i<sorted.length;i++){
+      const p=cur[cur.length-1], b=sorted[i];
+      const pc=p.y+p.h/2, bc=b.y+b.h/2;
+      // Same line when the centres sit within half a line height of each other.
+      if(Math.abs(bc-pc) <= Math.max(p.h,b.h)*0.6) cur.push(b); else { lines.push(cur); cur=[b]; }
+    }
+    lines.push(cur);
+    return lines.map(l=>l.sort((a,b)=>a.x-b.x).map(b=>b.text.trim()).join(" ")).join("\n");
   }
 
   // OCR a canvas (used for rendered PDF pages): native first, WASM fallback.
@@ -4514,7 +4542,16 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         if(stop()){ try{loadingTask.destroy();}catch(_){}; return { findings:[...found.values()], chars, ok:false, engine:"cancelled" }; }
         const page=await doc.getPage(i);
         const tc=await page.getTextContent();
-        const text=tc.items.map(it=>it.str||"").join(" ");
+        // Keep the line breaks: joining every item with a space turned a letter into one
+        // endless line, and an address block is only recognisable as a block.
+        // pdf.js gives each item its own transform; transform[5] is the baseline y.
+        let lastY=null, text="";
+        for(const it of tc.items){
+          const y = it.transform && it.transform[5];
+          if(lastY!==null && typeof y==="number" && Math.abs(y-lastY)>2) text+="\n"; else if(text) text+=" ";
+          text += (it.str||"");
+          if(typeof y==="number") lastY=y;
+        }
         chars+=text.length;
         addAll(scanText(text));                          // clean text layer → strict rules
         // Only OCR pages that have (almost) no extractable text, and cap it — a
