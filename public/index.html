@@ -710,6 +710,23 @@
   .idcard .bal{font-family:var(--display);font-weight:700;font-size:25px;margin-top:11px;line-height:1}
   .idcard .bal .u{font-size:13px;color:var(--muted);font-family:var(--mono);font-weight:400}
   .idcard .held{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:4px}
+  /* "Check for credit" and the held-coins block: the account card carries the whole credit
+     state now, so the menu row that used to hold both actions is gone. */
+  .checkline{display:inline-flex;align-items:center;gap:7px;margin-top:8px;font-family:var(--mono);font-size:10.5px;color:var(--mix);cursor:pointer}
+  .checkline:hover{color:var(--signal)} .checkline .dim{color:var(--muted)}
+  .heldbox{margin-top:12px;border-top:1px solid var(--line);padding-top:11px}
+  .heldbox .hh{display:flex;align-items:baseline;gap:7px;flex-wrap:wrap}
+  .heldbox .amt{font-family:var(--mono);font-size:12.5px;font-weight:700;color:var(--rust)}
+  .heldbox .where{font-family:var(--mono);font-size:10.5px;color:var(--rust);opacity:.9}
+  .heldbox p{margin:5px 0 0;font-size:11.5px;line-height:1.5;color:var(--muted)}
+  .heldbox p b{color:var(--bone);font-weight:600}
+  .heldbox .act{margin-top:10px;display:flex;align-items:center;gap:11px;flex-wrap:wrap}
+  .heldbox .rbtn{font-family:var(--body);font-size:12.5px;font-weight:600;padding:7px 13px;border-radius:9px;border:1px solid var(--mix);background:var(--mix);color:#fff;cursor:pointer}
+  .heldbox .rlink{font-family:var(--mono);font-size:10.5px;color:var(--mix);cursor:pointer}
+  .heldbox .rlink:hover{color:var(--signal)}
+  .heldbox .rslider{margin-top:11px}
+  .heldbox .rslider .mpticks{display:flex;justify-content:space-between;font-family:var(--mono);font-size:9.5px;color:var(--muted);margin-top:5px}
+  .heldbox .rslider #redeemLabel{color:var(--bone)}
   .dangergroup{color:var(--rust)}
   .btn{font-family:var(--body);font-weight:600;font-size:13px;padding:9px 16px;border-radius:9px;cursor:pointer;border:1px solid var(--line);background:var(--surface-2);color:var(--bone)}
   .btn:hover{border-color:var(--mix)}
@@ -1633,6 +1650,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     await refreshLocal();
     try{
       const s = await Backend.state();
+      lastCredCheck = Date.now();   // the balance below is what the server just said
       // Right after a reconnect (e.g. an entry-gateway switch) the model fetch can
       // come back empty for a moment. Don't wipe a good list on a transient empty —
       // keep what we had and let the retry below reload it.
@@ -4617,7 +4635,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   function acctBack(){ acctPage=null; acctView=null; acctPhrase=null; renderAccount(); const mb=$("acctScrim").querySelector(".mb"); if(mb) mb.scrollTop=0; }
   // M-fe-2: don't leave the revealed mnemonic (or a captured restore phrase) sitting in
   // a JS variable after the modal is dismissed.
-  function closeAccount(){ acctPhrase=null; pendingRestorePhrase=null; acctView=null; acctPage=null; $("acctScrim").classList.remove("open"); }
+  function closeAccount(){ acctPhrase=null; pendingRestorePhrase=null; acctView=null; acctPage=null; redeemPick=false; redeemDollars=null; $("acctScrim").classList.remove("open"); }
   function acctStatus(m){ const s=$("acctStatus"); if(s) s.textContent=m||""; }
   // TEMPORARY hard-coded default operator(s). REMOVE when the signed federation directory
   // ships (see docs/federation-shared-ledger.md — this list becomes that signed, multi-
@@ -4796,11 +4814,33 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     const setNav = (title)=>{ if(!modal) return; if(title){ modal.classList.add("subopen"); const t=modal.querySelector(".mnav-ttl"); if(t) t.textContent=title; } else modal.classList.remove("subopen"); };
     const ICONS = {"🌐":ACCT_ICON.globe,"🔑":ACCT_ICON.key,"📥":ACCT_ICON.down,"📲":ACCT_ICON.phone,"↻":ACCT_ICON.refresh,"⚠":ACCT_ICON.alert};
     const row = (page,ic,emoji,ttl,sub,tail)=>`<div class="catrow" data-click="acctNav" data-click-pass="this" data-page="${page}"><span class="ic ${ic}">${ICONS[emoji]||emoji}</span><span class="tx"><b>${ttl}</b><small>${sub}</small></span>${tail||`<span class="chev">›</span>`}</div>`;
+    // The card is the whole credit story now: what you have, when it was last checked, and
+    // — when coins sit on this device — what that means and the one tap that fixes it.
+    // "Credit" used to be a menu row holding two unrelated actions; a state is not a page.
+    const maxD = Math.max(1, Math.floor(held/100000));
+    const pickD = Math.min(redeemDollars!=null?redeemDollars:maxD, maxD);
+    const pickToku = pickD>=maxD ? held : pickD*100000;
+    const heldBox = held>0 ? `<div class="heldbox">
+        <div class="hh"><span class="amt">${esc(formatToku(held))} TOKU</span><span class="where">on this device only</span></div>
+        <p>Coins are held here, not on your account. A <b>recovery phrase does not bring them back</b>
+           — redeeming moves them onto your balance, where it does.</p>
+        ${redeemPick&&maxD>1?`<div class="rslider">
+          <input type="range" id="redeemSlider" min="1" max="${maxD}" value="${pickD}" step="1"
+                 data-input="redeemSliderChanged" data-input-pass="value" class="mpslider flat">
+          <div class="mpticks"><span>$1</span><span id="redeemLabel">${esc(formatToku(pickToku))} TOKU ($${pickD}${pickD>=maxD?" · all":""})</span><span>$${maxD} · all</span></div>
+        </div>`:``}
+        <div class="act">
+          <button class="rbtn" data-click="doRedeem">Redeem ${redeemPick&&maxD>1?`$${pickD}`:`now`}</button>
+          ${maxD>1?`<span class="rlink" data-click="toggleRedeemPick">${redeemPick?"all of it":"choose amount"}</span>`:``}
+        </div>
+      </div>` : ``;
     const idcard = `<div class="idcard">
       <div class="fp">${esc(account.fingerprint)}</div>
       <div class="ses">session #${account.sessionIndex} · fingerprint</div>
       <div class="bal">${esc(tokuLine(balance))}</div>
-      ${held>0?`<div class="held">${esc(formatToku(held))} held · ${esc(formatToku(Math.max(0,balance-held)))} in session</div>`:``}
+      <div class="held">${esc(formatToku(Math.max(0,balance-held)))} in session${held>0?``:` · nothing held on this device`}</div>
+      <div class="checkline" data-click="checkCredit">↻ Check for credit <span class="dim">· ${esc(checkedAgo())}</span></div>
+      ${heldBox}
     </div>`;
 
     // ---- landing ----
@@ -4813,11 +4853,10 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         + row("phrase","c-key","🔑","Recovery phrase","show &amp; copy the 24 words")
         + row("restore","c-restore","📥","Restore account","from phrase or QR")
         + row("migrate","c-migrate","📲","Move to another device","redeem &amp; hand over")
-        + `<div class="grouplbl">Credit</div>`
-        + row("credit","c-redeem","↻","Credit","check for credit · redeem device-held coins")
         + `<div class="grouplbl dangergroup">Danger zone</div>`
         + row("danger","c-danger","⚠","New account / Delete","abandons this balance")
         + `<p class="hint" id="acctStatus" style="margin-top:12px"></p>`;
+      paintFlat($("redeemSlider"));
       focusRestore();
       return;
     }
@@ -4879,7 +4918,6 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       phrase:  { t:"Recovery phrase",         h:phraseBlock },
       restore: { t:"Restore account",         h:restorePage },
       migrate: { t:"Move to another device",  h:migratePage },
-      credit:  { t:"Credit",                  h:`<p class="pagelead">Recover credit paid to this account, and turn coins held on this device into recoverable balance.</p><div class="btnrow"><button class="btn" data-click="checkCredit">Check for credit</button></div>${redeemSection()}` },
       danger:  { t:"Danger zone",             h:dangerPage },
     };
     const pg = pages[acctPage] || pages.server;
@@ -4899,41 +4937,27 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   };
   // Redeem-amount chooser: $1 (100k) minimum, all held maximum. Redeeming always uses
   // uniform $1 chunks over the mixnet — a larger amount just loops more of them.
-  function redeemSection(){
-    const why = (body)=>`<details class="why"><summary><span class="chev">›</span> What this does</summary><div class="body">${body}</div></details>`;
-    if(held<=0){
-      // Always show the control (greyed out) so people learn it exists before they need it.
-      return `<div class="grouplbl">Held on this device</div>
-      <div class="mprow off">
-        <div class="mptop"><b>Redeem</b><span class="mpheld">nothing held</span></div>
-        <input type="range" min="1" max="1" value="1" step="1" class="mpslider flat" disabled>
-        <div class="mpticks"><span>$1</span><span></span><span>$1</span></div>
-        <div class="mpout">no coins on this device — everything is in your balance</div>
-        <div class="btnrow center" style="margin-top:12px"><button class="btn primary" disabled>Redeem</button></div>
-        ${why(`After a purchase, coins arrive here as blind-signed <b>cash on this device</b> and are redeemed into your recoverable balance in $1 steps as you chat — or all at once with this slider. Redeem everything before deleting the app or moving to another device.`)}
-      </div>`;
-    }
-    const maxD = Math.max(1, Math.floor(held/100000));
-    const d = Math.min(redeemDollars!=null?redeemDollars:maxD, maxD);
-    const scrai = d>=maxD ? held : d*100000;   // at max, drain the remainder too
-    return `<div class="grouplbl">Held on this device</div>
-    <div class="mprow">
-      <div class="mptop"><b>Redeem</b><span class="mpheld">${esc(formatToku(held))} TOKU held</span></div>
-      <input type="range" id="redeemSlider" min="1" max="${maxD}" value="${d}" step="1"
-        data-input="redeemSliderChanged" data-input-pass="value" class="mpslider flat">
-      <div class="mpticks"><span>$1</span><span>${maxD>2?"$"+Math.ceil(maxD/2):""}</span><span>$${maxD} · all held</span></div>
-      <div class="mpout" id="redeemLabel">${esc(formatToku(scrai))} TOKU ($${d}${d>=maxD?" · all held":""})</div>
-      <div class="btnrow center" style="margin-top:12px"><button class="btn primary" data-click="doRedeem">Redeem</button></div>
-      ${why(`These coins are blind-signed <b>cash on this device</b>: not linked to your account, not restorable from your recovery phrase. Redeeming moves them into your recoverable balance in $1 steps — it also happens by itself as you chat. <b>Redeem everything before deleting the app or moving to another device</b> (“Move to another device” does that for you).`)}
-    </div>`;
+  // "choose amount" is closed by default: the normal case is one tap that redeems
+  // everything, and a slider that offers a choice of $1 out of $1 is noise.
+  let redeemPick = false;
+  function toggleRedeemPick(){ redeemPick = !redeemPick; if(!redeemPick) redeemDollars = null; renderAccount(); }
+  // When the balance was last confirmed with the server. The server settles on its own now
+  // (a chain watch every 15 s), so this line mostly exists to say "yes, it looked".
+  let lastCredCheck = 0;
+  function checkedAgo(){
+    if(!lastCredCheck) return "not checked yet";
+    const m = Math.floor((Date.now()-lastCredCheck)/60000);
+    return m<1 ? "checked just now" : m===1 ? "checked a minute ago" : `checked ${m} min ago`;
   }
+
   function redeemSliderChanged(v){
     paintFlat($("redeemSlider"));
     redeemDollars = parseInt(v,10)||1;
     const maxD = Math.max(1, Math.floor(held/100000));
     const d = Math.min(redeemDollars, maxD);
     const scrai = d>=maxD ? held : d*100000;
-    const lbl = $("redeemLabel"); if(lbl) lbl.textContent = `${formatToku(scrai)} TOKU ($${d}${d>=maxD?" · all held":""})`;
+    const lbl = $("redeemLabel"); if(lbl) lbl.textContent = `${formatToku(scrai)} TOKU ($${d}${d>=maxD?" · all":""})`;
+    const btn = document.querySelector('.heldbox .rbtn'); if(btn) btn.textContent = `Redeem $${d}`;
   }
   function showRestore(){ acctView="restore"; acctPhrase=null; renderAccount(); }
   function askNew(){ acctView="confirmNew"; acctPhrase=null; renderAccount(); }
@@ -5073,7 +5097,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // Sweep any settled-but-uncollected payment (entitlement) into held credit.
   async function checkCredit(){
     acctStatus("checking the mixnet for settled payments…");
-    try{ const r=await Backend.collect(); await refreshState(); renderAccount();
+    try{ const r=await Backend.collect(); lastCredCheck = Date.now(); await refreshState(); renderAccount();
       acctStatus(r&&r.collected>0?`+${formatToku(r.collected)} TOKU collected — held, funds your next message.`:"no outstanding credit");
     }catch(e){ acctStatus("failed: "+(e.message||e)); }
   }
@@ -5763,7 +5787,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   Object.assign(window,{ pickModel, copyPhrase, newChat, openSession, deleteSession, exportSession, toggleMenu, selectModelIdx,
     autogrow, onKey, sendMsg, retryMsg, showHandover, downloadHandover, closeHandover, pickImport, importHandover,
     cancelMsg, resendMsg, showDismissed, retrieveMsg, openConnSheet, closeConnSheet, rebuildRoute, rebuildRouteFromSheet, copyResumeLog, routeDismiss, useOfficialServer, iterateImg,
-    openBuy, closeBuy, buyTier, buyOrInvoice, checkInvite, selectCoin, pickVariant, copyUri, copyTopupId, openTopupSheet, closeTopupSheet, confirmTopup, openAccount, closeAccount, doAccountNew, doAccountReveal, doAccountRestore, doAccountDelete, doMigrate, doRedeem, redeemSliderChanged, startQrScan, stopQrScan,
+    openBuy, closeBuy, buyTier, buyOrInvoice, checkInvite, selectCoin, pickVariant, copyUri, copyTopupId, openTopupSheet, closeTopupSheet, confirmTopup, openAccount, closeAccount, doAccountNew, doAccountReveal, doAccountRestore, doAccountDelete, doMigrate, doRedeem, redeemSliderChanged, toggleRedeemPick, startQrScan, stopQrScan,
     showRestore, askNew, redeemThen, cancelAcctView, saveServer, srvSelected, qNav, scrollToBottom, reopenGuard, checkCredit,
     openEntryPicker, showExitInfo, chooseGateway, closeGw, filterGw, toggleGwOpt,
     acceptTerms, declineTerms, termsAgreeToggle, chooseModel, openLink, toggleImgOvl, saveImgTap, liveNudgeUse, liveNudgeSkip, reconnectMix, runMixPing, resetMixPerf,
