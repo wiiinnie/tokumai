@@ -128,8 +128,6 @@ const IMAGES: &[(&str, &[u8])] = &[
     ("hero-imagegen-light.jpg", SHOT_HERO),
     ("how-mac-chat-dark.jpg", include_bytes!("../../site/img/how-mac-chat-dark.jpg")),
     ("how-mac-chat-light.jpg", include_bytes!("../../site/img/how-mac-chat-light.jpg")),
-    ("how-mac-image-dark.jpg", include_bytes!("../../site/img/how-mac-image-dark.jpg")),
-    ("how-mac-image-light.jpg", include_bytes!("../../site/img/how-mac-image-light.jpg")),
     ("how-phone-chat-dark.jpg", include_bytes!("../../site/img/how-phone-chat-dark.jpg")),
     ("how-phone-chat-light.jpg", include_bytes!("../../site/img/how-phone-chat-light.jpg")),
     ("how-phone-image-dark.jpg", SHOT_PH_IMAGE),
