@@ -194,6 +194,25 @@
   .mi .n{font-size:14px;font-weight:600;color:var(--bone);line-height:1.15}
   .mi .l2{font-family:var(--mono);font-size:11px;color:var(--muted);line-height:1.3;overflow-wrap:anywhere}
   .mi .l3{font-family:var(--mono);font-size:11px;color:color-mix(in srgb,var(--bone) 45%,var(--muted));line-height:1.3;overflow-wrap:anywhere}
+  /* Model picker, plain-language edition: one segmented control for what you are making,
+     then the models grouped by who made them, priced in cents rather than TOKU per 1k. */
+  .kseg{display:flex;gap:4px;background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:3px;margin:0 0 8px}
+  .kseg button{flex:1;font:600 12.5px var(--body);color:var(--muted);background:none;border:none;padding:7px 6px;border-radius:8px;cursor:pointer}
+  .kseg button.on{background:var(--panel,var(--surface));color:var(--bone);box-shadow:0 1px 2px rgba(0,0,0,.3)}
+  .pgrp{display:flex;align-items:center;gap:8px;margin:12px 2px 6px}
+  .pgrp .pm2{width:18px;height:18px;flex:none;object-fit:contain}
+  .pgrp .pn{font-size:12px;font-weight:600;color:var(--bone);letter-spacing:.01em}
+  .pgrp .pr2{flex:1;height:1px;background:var(--line)}
+  .mi .row{display:flex;align-items:center;gap:10px;width:100%}
+  .mi .row .col{min-width:0;flex:1}
+  .mi .blurb{font-size:11.5px;color:var(--muted);line-height:1.35}
+  .mi .cost{font-family:var(--mono);font-size:11px;color:var(--bone);text-align:right;white-space:nowrap}
+  .mi .cost s{display:block;font-size:9px;color:var(--muted);text-decoration:none}
+  .mi .def{font-family:var(--mono);font-size:8.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--gold);
+    border:1px solid var(--gold);border-radius:999px;padding:1px 6px;margin-left:6px}
+  .mall{display:block;width:100%;text-align:center;font-family:var(--mono);font-size:10.5px;color:var(--muted);
+    background:none;border:none;padding:10px 0 4px;cursor:pointer}
+  .mall:hover{color:var(--bone)}
   .mi .l3 .u{color:var(--muted)}
   .mi .soon{font-family:var(--mono);font-size:9.5px;color:var(--muted);border:1px solid var(--line);padding:2px 6px;border-radius:4px}
   /* Windows (WebView2): classic scrollbars render as chunky opaque boxes inside panels
@@ -345,6 +364,20 @@
   .empty .mark{font-family:var(--display);font-weight:600;font-size:44px;letter-spacing:.005em}
   .empty .mark{font-weight:600}.empty .mark b{color:var(--mix);font-weight:600}
   .empty p{color:var(--muted);max-width:420px;line-height:1.55;font-size:14px;margin:0}
+  /* Start screen: what the app is, then what it can do. The two tiles set the mode AND the
+     model, so nobody has to know the word "model" to get an answer. */
+  .starttiles{display:grid;grid-template-columns:1fr 1fr;gap:12px;width:100%;max-width:560px;margin-top:4px}
+  .stile{border:1px solid var(--line);border-radius:16px;background:var(--surface-2);padding:16px 15px;
+    display:flex;flex-direction:column;gap:7px;min-height:128px;text-align:left;cursor:pointer;
+    transition:border-color .15s,background .15s}
+  .stile:hover,.stile:focus-visible{border-color:var(--mix);outline:none;background:color-mix(in srgb,var(--mix) 8%,var(--surface-2))}
+  .stile.on{border-color:var(--mix);background:color-mix(in srgb,var(--mix) 12%,var(--surface-2))}
+  .stile.dis{opacity:.4;pointer-events:none}
+  .stile svg{width:28px;height:28px;color:var(--acc2,var(--mix));stroke:currentColor;fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+  .stile b{font-size:15px;font-weight:600;color:var(--bone);text-wrap:balance}
+  .stile span{font-size:12.5px;color:var(--muted);line-height:1.4;margin-top:auto}
+  .stile{min-width:0}
+  @media (max-width:520px){ .starttiles{grid-template-columns:1fr} .stile{min-height:0} }
   .empty .note{font-family:var(--mono);font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:8px;padding:9px 13px;display:flex;gap:8px;align-items:center}
   .empty .note .d{width:6px;height:6px;border-radius:50%;background:var(--mix);flex:0 0 auto}
   /* mixnet connecting screen: typed line + blinking cursor (same green as the
@@ -1703,10 +1736,8 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     const per1k = v => (v/1000<1 ? (v/1000).toFixed(2) : Math.round(v/1000).toLocaleString());
     return `${per1k(rate.in)} / ${per1k(rate.out)} <span class="u">TOKU / 1k</span>`;
   }
-  let menuKind = "all";        // "all" | "text" | "image"
+  let menuKind = "text";       // "text" | "image" — which segment of the picker is open
   let menuLatestOnly = true;   // collapse to the newest version of each family
-  let menuVendors = new Set(); // additive vendor filter; empty = all vendors
-  let menuVendorList = [];     // vendors present in the current catalog (chip order)
   // Split a model id into a family key + numeric version, so "gemini-3.6-flash"
   // and "gemini-3.5-flash" collapse to one family (newest wins). "…-latest"
   // aliases sort highest so they always survive.
@@ -1727,46 +1758,99 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   }
   function setMenuKind(k){ menuKind=k; renderMenu(); }
   function toggleLatest(){ menuLatestOnly=!menuLatestOnly; renderMenu(); }
-  function toggleVendorIdx(i){
-    const v=menuVendorList[i]; if(v===undefined) return;
-    menuVendors.has(v)?menuVendors.delete(v):menuVendors.add(v);
-    renderMenu();
-  }
   function renderMenu(){
-    // Left group: exclusive kind (All/Chatbot/Image gen). Right group: additive
-    // toggles — every model is billed per request, so "Latest" (collapse to the
-    // newest version of each family) is the only toggle here.
-    const TOGGLES={
-      latest:{on:()=>menuLatestOnly, act:'toggleLatest'},
-    };
-    const chip=(k,label,extra)=>{
-      const t=TOGGLES[k];
-      const act = t ? t.act : 'setMenuKind';
-      // args are code literals (kind key or tier name) — no user data, no escaping.
-      const arg = t ? (t.arg!==undefined ? `data-args="&quot;${t.arg}&quot;"` : '') : `data-args="&quot;${k}&quot;"`;
-      return `<button class="mchip ${extra||''} ${(t?t.on():menuKind===k)?'on':''}" data-click="${act}" ${arg} data-stop="1">${label}</button>`;
-    };
-    // Second row: one chip per vendor in the live catalog (additive multi-select,
-    // none selected = all). The list is dynamic — vendors appear as the server
-    // offers them and stale selections are dropped when a vendor vanishes.
-    menuVendorList=[...new Set(models.map(m=>m.vendor||'?'))].sort();
-    for(const v of [...menuVendors]) if(!menuVendorList.includes(v)) menuVendors.delete(v);
-    const vrow = !menuVendorList.length ? '' :
-      `<div class="mfilter vrow">${menuVendorList.map((v,i)=>
-        `<button class="mchip ven ${menuVendors.has(v)?'on':''}" data-click="toggleVendorIdx" data-args="${i}" data-stop="1">${esc(v)}</button>`).join('')}</div>`;
-    const chips=`<div class="mhead"><div class="mfilter">${chip('all','All')}${chip('text','Chatbot','txt')}${chip('image','Image gen','img')}<span class="mfsp"></span>${chip('latest','Latest','lat')}</div>${vrow}</div>`;
-    let list = models.map((m,i)=>({m,i}));
-    if(menuKind!=='all') list=list.filter(x=>(x.m.kind||'text')===menuKind);
-    if(menuVendors.size) list=list.filter(x=>menuVendors.has(x.m.vendor||'?'));
+    // Two questions instead of a filter bar: what are you making (the segmented control),
+    // and which of these models does it (grouped by who made them). The old chip row —
+    // All / Chatbot / Image gen / Latest / one chip per vendor — asked people to know the
+    // vocabulary before they could choose. Grouped by who made the model, priced in cents. 100,000 TOKU = $1, so 1,000 TOKU is a
+    // cent — "29 / 173 TOKU per 1k" is the truth but not an answer to "what will this cost me".
+    let list = models.map((m,i)=>({m,i})).filter(x=>((x.m.kind||'text')==='image') === (menuKind==='image'));
     if(menuLatestOnly) list=latestPerFamily(list);
-    list.sort((a,b)=> (a.m.vendor||'').localeCompare(b.m.vendor||'') || a.m.model.localeCompare(b.m.model));
-    const rows = list.map(({m,i})=>`
-      <div class="mi ${m.model===currentModel?'on':''}" data-click="pickModel" data-args="${i}">
-        <div class="l1"><span class="n">${esc(m.label||m.model)}</span><span class="badge kind ${m.kind==='image'?'img':'txt'}">${m.kind==='image'?'Image gen':'Chatbot'}</span></div>
-        <div class="l2">${esc(m.vendor)}${m.label&&m.label!==m.model?(' · '+esc(m.model)):''}</div>
-        ${m.rate&&rateLineHtml(m.rate)?`<div class="l3">${rateLineHtml(m.rate)}</div>`:''}
-      </div>`).join("");
-    $("menu").innerHTML = chips + (rows || `<div class="mi" style="cursor:default;color:var(--muted)">no models match this filter</div>`);
+    list.sort((a,b)=> answerCost(a.m) - answerCost(b.m));
+    const groups=[];
+    for(const x of list){
+      const key=provKey(x.m.vendor);
+      const g=groups.find(g=>g.key===key);
+      if(g) g.items.push(x); else groups.push({key, label:provLabel(x.m.vendor), items:[x]});
+    }
+    const def = defaultModel();
+    const body = groups.map(g=>`
+      <div class="pgrp">${provMarkHTML(g.key)}<span class="pn">${esc(g.label)}</span><span class="pr2"></span></div>
+      ${g.items.map(({m,i})=>`
+        <div class="mi ${m.model===currentModel?'on':''}" data-click="pickModel" data-args="${i}">
+          <div class="row">
+            <div class="col">
+              <div class="l1"><span class="n">${esc(m.label||m.model)}</span>${def&&def.model===m.model?'<span class="def">default</span>':''}</div>
+              <div class="blurb">${esc(modelBlurb(m, g.items))}</div>
+            </div>
+            <div class="cost">${esc(costLabel(m))}<s>${menuKind==='image'?'a picture':'an answer'}</s></div>
+          </div>
+        </div>`).join('')}`).join('');
+    const seg = `<div class="kseg">
+      <button type="button" class="${menuKind!=='image'?'on':''}" data-click="setMenuKind" data-args="&quot;text&quot;" data-stop="1">Answers</button>
+      <button type="button" class="${menuKind==='image'?'on':''}" data-click="setMenuKind" data-args="&quot;image&quot;" data-stop="1">Images</button>
+    </div>`;
+    const all = `<button type="button" class="mall" data-click="toggleLatest" data-stop="1">${menuLatestOnly?'show older versions':'show newest only'}</button>`;
+    $("menu").innerHTML = `<div class="mhead" style="padding:8px 6px 2px">${seg}</div>` +
+      (body || `<div class="mi" style="cursor:default;color:var(--muted)">no models of this kind on this server</div>`) + all;
+  }
+  // ---- how much a model costs, in the unit people think in ----------------------
+  // A typical question is ~2,000 tokens in and ~800 out; an image is priced per picture.
+  // `rate.in` / `rate.out` are TOKU per MILLION tokens, as the catalog sends them.
+  function answerCost(m){
+    const r=m&&m.rate; if(!r) return Infinity;
+    if((m.kind||'text')==='image') return Number(r.image)||Number(r.out)||Infinity;
+    return (Number(r.in)||0)/500 + (Number(r.out)||0)/1250;
+  }
+  function costLabel(m){
+    const toku=answerCost(m);
+    if(!isFinite(toku)||toku<=0) return '—';
+    const cents=toku/1000;
+    // Two significant digits at most: 0.16¢ and 0.2¢ must stay apart, 0.52¢ reads as 0.5¢.
+    const txt = cents<0.3 ? cents.toFixed(2) : cents<10 ? cents.toFixed(1) : Math.round(cents)+'';
+    return '~'+txt.replace(/\.0$/,'').replace(/(\.\d)0$/,'$1')+'¢';
+  }
+  // Derived, never a hand-written table: the sentence follows the model's own price rank and
+  // what the catalog says it can do, so a new model on the server describes itself correctly.
+  // Ranked WITHIN the provider: "cheapest" next to a Gemini model means cheapest Gemini,
+  // which is what someone comparing that group is actually asking.
+  function modelBlurb(m, group){
+    const kind=(m.kind||'text')==='image' ? 'image' : 'text';
+    const costs=group.map(x=>answerCost(x.m)).filter(c=>isFinite(c)).sort((a,b)=>a-b);
+    const mine=answerCost(m);
+    const cheapest = costs.length && mine<=costs[0];
+    const dearest = costs.length && mine>=costs[costs.length-1];
+    if(kind==='image'){
+      if(cheapest && costs.length>1) return 'Quick pictures, plenty for most uses.';
+      if(dearest && costs.length>1) return 'Sharper detail, better with text in the picture.';
+      return 'Makes pictures from a description.';
+    }
+    let base = costs.length<2 ? 'Answers questions, writes and translates.'
+      : cheapest ? 'Fast and cheapest. Good for most questions.'
+      : dearest  ? 'The strongest model on this server.'
+      : 'A middle option — steadier than the cheapest.';
+    if(m.acceptsImages) base += ' Reads images you attach.';
+    return base;
+  }
+  // NOTE: `vendorKey` further down means something else (which provider's terms were
+  // accepted). These three are only about drawing the group header.
+  function provKey(v){
+    const s=String(v||'').toLowerCase();
+    if(/google|gemini/.test(s)) return 'google';
+    if(/openai|gpt/.test(s)) return 'openai';
+    return s.replace(/[^a-z0-9]+/g,'') || 'other';
+  }
+  function provLabel(v){
+    const k=provKey(v);
+    return k==='google' ? 'Google Gemini' : k==='openai' ? 'OpenAI' : String(v||'Other');
+  }
+  // The marks are third-party trademarks kept in public/img/brand (see the README there).
+  // Every one of them is optional: if a file is missing the row still reads correctly with
+  // the provider's name in text, so nothing here blocks on a permission question.
+  function provMarkHTML(key){
+    const src = key==='google' ? 'img/brand/gemini-color-96.png'
+              : key==='openai' ? 'img/brand/openai-blossom-white.svg' : '';
+    return src ? `<img class="pm2" src="${src}" alt="" onerror="this.remove()">` : '';
   }
   function selectModelIdx(i){ if(models[i]) chooseModel(models[i]); }
   // Preferred startup/fallback model: gemini-flash-lite (cheap, generous credit allowance
@@ -2287,7 +2371,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // "Mr Nice". The fallback string is rewritten by scripts/bump-version.sh.
   const APP_CODENAMES = { "0.2": "kash", "0.3": "peroni", "0.4": "ichnusa", "0.5": "moretti" };
   const versionLabel = v => { const m = /^(\d+\.\d+)\.\d+/.exec(v); const c = m && APP_CODENAMES[m[1]]; return c ? v + " (" + c + ")" : v; };
-  let APP_VERSION = versionLabel("0.5.1");   // bump-version.sh: fallback
+  let APP_VERSION = versionLabel("0.5.2");   // bump-version.sh: fallback
   let devCost = false;
   // DEV upload readout: real file size ÷ pure transfer time (excludes chunk-split +
   // uploadBegin setup). Shown under a sent image only when the dev cost-audit is on.
@@ -2441,8 +2525,36 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // Brand mark — the app icon: four redacted lines, readable start in bone, unreadable end in the accent
   // right), theme-aware via CSS classes. This IS the app icon, minus its background.
   const LOGO_SVG = `<svg class="lmark blogo" viewBox="0 0 100 100" aria-hidden="true"><rect class="bl" x="19" y="28" width="27" height="9" rx="4.5"/><rect class="ba" x="49" y="28" width="31" height="9" rx="4.5"/><rect class="bl" x="25" y="40" width="17" height="9" rx="4.5"/><rect class="ba" x="45" y="40" width="30" height="9" rx="4.5"/><rect class="bl" x="19" y="52" width="36" height="9" rx="4.5"/><rect class="ba" x="58" y="52" width="20" height="9" rx="4.5"/><rect class="bl" x="28" y="64" width="22" height="9" rx="4.5"/><rect class="ba" x="54" y="64" width="26" height="9" rx="4.5"/></svg>`;
+  // The start screen: the mark, the promise, and the only question a new user has. The two
+  // tiles set the MODE and the model, so "chatbot" and "imagegen" never have to be learned.
+  // The mixnet line used to sit at the bottom; that strip is spoken for once the app is in
+  // use (route rebuilds, what the last answer cost), and the title bar already shows the
+  // connection as a live status.
+  const START_ICON = {
+    text: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a8 8 0 0 1-8 8H5l-2 2V12a8 8 0 0 1 8-8h2a8 8 0 0 1 8 8z"></path><path d="M8.5 11h7M8.5 14.5h4"></path></svg>`,
+    image: `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4.5" width="18" height="15" rx="2.5"></rect><circle cx="8.5" cy="10" r="1.6"></circle><path d="M3.5 17l5-5 4.5 4.5L16 14l4.5 4.5"></path></svg>`,
+  };
   function emptyLogoHTML(){
-    return `<div class="empty"><div class="logo">${LOGO_SVG}</div><div class="mark fadein">tokum<b>ai</b></div><p class="fadein">Ask anything. Nobody can tie the question to you.</p><div class="note fadein"><span class="d"></span>connected through the Nym mixnet · no IP, no identity, no profile</div></div>`;
+    const hasImage = models.some(m=>(m.kind||"text")==="image");
+    const tiles = `<div class="starttiles fadein">
+      <button type="button" class="stile${modelKind!=="image"?" on":""}" data-click="startMode" data-args="&quot;text&quot;">
+        ${START_ICON.text}<b>Ask a question</b><span>Writing, code, translation, thinking out loud.</span></button>
+      <button type="button" class="stile${modelKind==="image"?" on":""}${hasImage?"":" dis"}" data-click="startMode" data-args="&quot;image&quot;">
+        ${START_ICON.image}<b>Create an image</b><span>${hasImage?"From a description, in seconds.":"No image model on this server."}</span></button>
+    </div>`;
+    return `<div class="empty"><div class="logo">${LOGO_SVG}</div><div class="mark fadein">tokum<b>ai</b></div><p class="fadein">Ask anything. Nobody can tie the question to you.</p>${tiles}</div>`;
+  }
+  // A tile picks the cheapest model of that kind — the same default the app already starts
+  // with — and puts the caret in the composer. Nothing is sent yet.
+  function startMode(kind){
+    const want = m => ((m.kind||"text")==="image") === (kind==="image");
+    const pool = models.filter(want);
+    if(!pool.length){ return; }
+    const cheapest = pool.slice().sort((a,b)=> answerCost(a) - answerCost(b))[0];
+    const pick = (kind==="image") ? cheapest : (defaultModel() && want(defaultModel()) ? defaultModel() : cheapest);
+    if(pick && pick.model!==currentModel) chooseModel(pick);
+    const t=$("thread"); if(t) t.innerHTML=emptyLogoHTML();
+    const el=$("input"); if(el) el.focus();
   }
 
   function emptyConnectingHTML(){
@@ -5607,7 +5719,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     showRestore, askNew, redeemThen, cancelAcctView, saveServer, srvSelected, qNav, scrollToBottom, reopenGuard, checkCredit,
     openEntryPicker, showExitInfo, chooseGateway, closeGw, filterGw, toggleGwOpt,
     acceptTerms, declineTerms, termsAgreeToggle, chooseModel, openLink, toggleImgOvl, saveImgTap, liveNudgeUse, liveNudgeSkip, reconnectMix, runMixPing, resetMixPerf,
-    pickImage, attachTap, pickNative, pickFile, closeAttachMenu, onImagePicked, clearImage, setMenuKind, toggleLatest, toggleVendorIdx, imgSettled,
+    pickImage, attachTap, pickNative, pickFile, closeAttachMenu, onImagePicked, clearImage, setMenuKind, toggleLatest, startMode, imgSettled,
     closeImport, decryptImport, selectMethod, copyMemo, openSettings, closeSettings,
     navPage, navBack, acctNav, acctBack, backFromRestore,
     resumePayment, backToChooser, selectTier, startPurchase, cancelPending, payOnWeb,
