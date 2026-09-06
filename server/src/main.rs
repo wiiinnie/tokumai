@@ -484,8 +484,9 @@ async fn main() {
     // Same shape for the paywall: begin() on the loop, gateway HTTP spawned, finish() here.
     struct PayDone {
         outcome: pay::PayOutcome,
-        to: ReplyTo,
-        _guard: inflight::Guard<ReplyTo>,
+        /// None for the background chain watcher: nobody asked, so nobody is answered.
+        to: Option<ReplyTo>,
+        _guard: Option<inflight::Guard<ReplyTo>>,
     }
     let (pay_tx, mut pay_rx) = tokio::sync::mpsc::channel::<PayDone>(64);
     // Same shape for the two BLS-heavy money ops: a coconut Withdraw issues 500
@@ -527,6 +528,11 @@ async fn main() {
     let gateway_slots = Arc::new(Semaphore::new(max_gateway));
     let crypto_slots = Arc::new(Semaphore::new(max_crypto));
     const QUEUE_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+/// How often the server asks the chain about open invoices, and how many it asks about
+/// at once. Small on purpose: this runs forever, and a credit that lands within half a
+/// minute is indistinguishable from instant to the person waiting.
+const WATCH_TICK_SECS: u64 = 15;
+const WATCH_PER_TICK: usize = 5;
     println!("scrai-server: concurrency caps — chats {max_chats} (openai {max_openai}), gateway calls {max_gateway}, coconut crypto {max_crypto}");
     if scrai_server::cfg("OPENAI_API_KEY").is_ok_and(|k| !k.trim().is_empty()) {
         println!(
@@ -564,8 +570,32 @@ async fn main() {
     // Every address this server answers on — advertised in the catalog reply so the app
     // can fall back to another front door of the SAME server when one gateway is out.
     let identities = Arc::new(all_addresses.clone());
+    // The chain watcher. Nothing here used to look at a payment unless a client asked:
+    // an invoice went to "paid" only on `invoice.status` or an entitlement sweep. So a
+    // faucet-funded invite sat unsettled for as long as the tester left the app closed,
+    // while the claim page said "waiting for the chain" and waited for something only the
+    // app could cause (2026-09-06). Now the server checks a few open invoices itself.
+    let mut watch_tick = tokio::time::interval(std::time::Duration::from_secs(WATCH_TICK_SECS));
+    watch_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tokio::select! {
+            // Ask the chain about a few open invoices, off the loop like every other
+            // gateway call. Bounded on both sides: at most WATCH_PER_TICK invoices per
+            // tick, and each invoice at most once every 25 s (pay.rs WATCH_EVERY_MS).
+            _ = watch_tick.tick() => {
+                let candidates = paywall.watch_candidates(WATCH_PER_TICK);
+                if !candidates.is_empty() {
+                    let (tx, gw, slots) = (pay_tx.clone(), gateway.clone(), gateway_slots.clone());
+                    tokio::spawn(async move {
+                        let pending = pay::PayPending::Watch { candidates };
+                        let outcome = match tokio::time::timeout(QUEUE_WAIT, slots.acquire_owned()).await {
+                            Ok(Ok(_permit)) => pay::run_gateway(pending, &gw).await,
+                            _ => pay::gateway_busy(pending),
+                        };
+                        let _ = tx.send(PayDone { outcome, to: None, _guard: None }).await;
+                    });
+                }
+            }
             _ = tokio::signal::ctrl_c() => {
                 println!("scrai-server: Ctrl+C — shutting down");
                 break;
@@ -672,8 +702,10 @@ async fn main() {
                     db.bump_daily(&today_utc(), 0, 0, 0, 1, delta);
                 }
                 persist_changed(&mut db, &sessions, &quorum, &paywall, &mut saved);
-                if let Err(e) = senders[done.to.idx].read().await.send_reply(done.to.tag, response).await {
-                    eprintln!("scrai-server: pay reply failed: {e}");
+                if let Some(to) = done.to {
+                    if let Err(e) = senders[to.idx].read().await.send_reply(to.tag, response).await {
+                        eprintln!("scrai-server: pay reply failed: {e}");
+                    }
                 }
             }
             inbound = in_rx.recv() => {
@@ -832,7 +864,7 @@ async fn main() {
                                 Ok(Ok(_permit)) => pay::run_gateway(pending, &gw).await,
                                 _ => pay::gateway_busy(pending),
                             };
-                            let _ = tx.send(PayDone { outcome, to, _guard: guard }).await;
+                            let _ = tx.send(PayDone { outcome, to: Some(to), _guard: Some(guard) }).await;
                         });
                         continue;
                     }

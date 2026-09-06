@@ -112,12 +112,25 @@
 
   // After the transfer is broadcast the server still has to see it on chain. Poll the
   // faucet's own view of the memo rather than telling the tester "done" too early.
+  //
+  // The server watches the chain itself now (a tick every 15 s), so this usually flips
+  // within a minute. It did not always: settlement used to need the APP to ask, so this
+  // page could poll its whole window while nothing anywhere was looking — and then go
+  // quiet with "waiting for the chain" still on screen. If the window does run out now,
+  // something is actually wrong, and the page says what to do about it.
+  var MAX_TRIES = 75; // 5 minutes at 4s
   function watch(m){
     stopPolling();
     var tries = 0;
     polling = setInterval(function(){
       tries++;
-      if (tries > 40) { stopPolling(); return; }
+      if (tries > MAX_TRIES) {
+        stopPolling();
+        say("bad", "The transfer went out, but the credit has not been booked after five minutes. " +
+                   "Open tokumai and tap <b>Credit → check for credit</b>. If it stays empty, keep this memo — " +
+                   esc(m) + " — and get in touch.");
+        return;
+      }
       fetch("/api/claim?memo=" + encodeURIComponent(m)).then(function(r){ return r.json(); }).then(function(s){
         if (s && s.stage === "credited") {
           stopPolling();

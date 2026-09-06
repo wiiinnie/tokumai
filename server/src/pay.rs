@@ -39,6 +39,12 @@ const CARD_PER_ACCT: usize = 3;
 /// so guessing is hopeless anyway — this is here so the check cannot be used as a cheap
 /// oracle, and so a stuck client cannot hammer the ledger.
 const CODE_CHECKS_PER_ACCT: usize = 12;
+/// The chain watcher keeps checking a little past expiry, for the same reason `settle`
+/// honours a late payment: the money is on chain either way.
+const WATCH_GRACE_MS: u64 = 48 * 3_600_000;
+/// How often ONE invoice may be asked about. The tick is faster than this; the cap is
+/// per invoice, so ten open invoices do not mean ten times the chain queries.
+const WATCH_EVERY_MS: u64 = 25_000;
 const INVOICE_ACCT_WINDOW_MS: u64 = 600_000;
 /// H4: hard cap on the burned-nonce store (oldest evicted past this). Large enough that a
 /// legit client never bumps into it, small enough that a signed-nonce flood can't OOM.
@@ -356,6 +362,12 @@ pub struct Pay {
     /// last "global invoice cap" log line (ms) — one per minute, not one per refused request
     #[serde(skip)]
     global_cap_logged_at: u64,
+    /// When the chain watcher last asked about each invoice. In memory only — after a
+    /// restart every open invoice is simply checked once more, which is harmless and
+    /// keeps this out of the persisted snapshot (renaming a stored field took the box
+    /// down once already).
+    #[serde(skip)]
+    last_check: HashMap<String, u64>,
 }
 
 /// One withdrawal the paywall has charged for (M-cl-2). `fed` is the cached
@@ -444,6 +456,31 @@ impl Pay {
             "usd": TESTNET_USD,
             "enabled": faucet_address().is_some(),
         })
+    }
+
+    /// Open invoices the server should ask the chain about ON ITS OWN, oldest-checked
+    /// first, at most `max` per tick.
+    ///
+    /// Until now nothing here ever looked at the chain unprompted: an invoice moved to
+    /// "paid" only when a CLIENT polled `invoice.status` or swept for credit. For a
+    /// faucet-funded invite that means the money is on chain within seconds and the
+    /// server does not notice for as long as the tester leaves the app alone — while the
+    /// claim page sits there saying "waiting for the chain", waiting for something only
+    /// the app could trigger (2026-09-06).
+    pub fn watch_candidates(&mut self, max: usize) -> Vec<Inv> {
+        let now = now_ms();
+        let mut due: Vec<&Inv> = self
+            .invoices
+            .values()
+            .filter(|i| i.status == "pending" && now < i.expires_at + WATCH_GRACE_MS)
+            .filter(|i| now.saturating_sub(self.last_check.get(&i.id).copied().unwrap_or(0)) >= WATCH_EVERY_MS)
+            .collect();
+        due.sort_by_key(|i| self.last_check.get(&i.id).copied().unwrap_or(0));
+        let picked: Vec<Inv> = due.into_iter().take(max).cloned().collect();
+        for i in &picked {
+            self.last_check.insert(i.id.clone(), now);
+        }
+        picked
     }
 
     fn admit_code_check(&mut self, account_id: &str) -> Result<(), String> {
@@ -675,6 +712,15 @@ impl Pay {
                     self.settle(inv_id);
                 }
                 json!({ "id": id, "entitlement": self.entitlement(&account) })
+            }
+            // The watcher has no client to answer — it just credits what the chain shows,
+            // so the app finds the money already there and the claim page stops waiting.
+            PayOutcome::Watch { paid } => {
+                for inv_id in &paid {
+                    self.settle(inv_id);
+                    println!("scrai-server: chain watch settled invoice {inv_id}");
+                }
+                return Vec::new();
             }
         };
         serde_json::to_vec(&reply).unwrap_or_default()
@@ -988,6 +1034,8 @@ pub enum PayPending {
     Create { id: Value, account: String, usd: u32, our_id: String, wanted: String, testnet: bool, code: String },
     Status { id: Value, inv: Inv },
     Sweep { id: Value, account: String, candidates: Vec<Inv> },
+    /// The background chain watcher: nobody is waiting for a reply.
+    Watch { candidates: Vec<Inv> },
 }
 
 /// What the gateway said, to be applied on the loop by `Pay::finish`.
@@ -995,6 +1043,7 @@ pub enum PayOutcome {
     Create { id: Value, account: String, usd: u32, our_id: String, testnet: bool, code: String, result: Result<Raised, String> },
     Status { id: Value, inv_id: String, paid: bool },
     Sweep { id: Value, account: String, paid: Vec<String> },
+    Watch { paid: Vec<String> },
 }
 
 impl PayOutcome {
@@ -1004,6 +1053,7 @@ impl PayOutcome {
             PayOutcome::Create { .. } => "invoice.create",
             PayOutcome::Status { .. } => "invoice.status",
             PayOutcome::Sweep { .. } => "entitlement",
+            PayOutcome::Watch { .. } => "invoice.watch",
         }
     }
 }
@@ -1029,6 +1079,15 @@ pub async fn run_gateway(pending: PayPending, gateway: &Gateway) -> PayOutcome {
             }
             PayOutcome::Sweep { id, account, paid }
         }
+        PayPending::Watch { candidates } => {
+            let mut paid = Vec::new();
+            for inv in candidates {
+                if let Ok("paid") = gateway.check_status(&inv).await.as_deref() {
+                    paid.push(inv.id);
+                }
+            }
+            PayOutcome::Watch { paid }
+        }
     }
 }
 
@@ -1047,6 +1106,7 @@ pub fn gateway_busy(pending: PayPending) -> PayOutcome {
         },
         PayPending::Status { id, inv } => PayOutcome::Status { id, inv_id: inv.id, paid: false },
         PayPending::Sweep { id, account, .. } => PayOutcome::Sweep { id, account, paid: Vec::new() },
+        PayPending::Watch { .. } => PayOutcome::Watch { paid: Vec::new() },
     }
 }
 
@@ -2490,4 +2550,42 @@ mod card_tests {
         std::env::remove_var("CARD_MIN_USD");
         assert_eq!(card_min_usd(), 10);
     }
+    /// The chain watcher picks up open invoices on its own — that is the whole point —
+    /// but must not re-ask about the same one every tick, and must leave settled ones
+    /// alone. Without the cooldown, five open invoices would mean a chain query every
+    /// few seconds, forever.
+    #[test]
+    fn watch_picks_open_invoices_once_per_cooldown() {
+        let mut pay = Pay::default();
+        let inv = |id: &str, status: &str| Inv {
+            id: id.into(), provider_ref: format!("TOKU-{id}"), account_id: "acct".into(),
+            amount_usd: 1, amount_toku: TOKU_PER_USD, method: "nyx".into(), status: status.into(),
+            expires_at: now_ms() + 60_000, expected_unym: 59_000_000, testnet: false,
+            invite_code: String::new(),
+        };
+        pay.invoices.insert("open1".into(), inv("open1", "pending"));
+        pay.invoices.insert("open2".into(), inv("open2", "pending"));
+        pay.invoices.insert("done".into(), inv("done", "paid"));
+
+        let first = pay.watch_candidates(5);
+        let mut ids: Vec<&str> = first.iter().map(|i| i.id.as_str()).collect();
+        ids.sort();
+        assert_eq!(ids, vec!["open1", "open2"], "both open invoices, never the settled one");
+
+        assert!(pay.watch_candidates(5).is_empty(), "not asked again within the cooldown");
+
+        // Wind the clock back past the cooldown: they come up again.
+        for v in pay.last_check.values_mut() {
+            *v = now_ms().saturating_sub(WATCH_EVERY_MS + 1_000);
+        }
+        assert_eq!(pay.watch_candidates(5).len(), 2, "due again after the cooldown");
+
+        // An invoice long past its window stops being asked about.
+        pay.invoices.get_mut("open1").unwrap().expires_at = now_ms().saturating_sub(WATCH_GRACE_MS + 1_000);
+        pay.last_check.clear();
+        let after = pay.watch_candidates(5);
+        assert_eq!(after.len(), 1, "the expired one is dropped");
+        assert_eq!(after[0].id, "open2");
+    }
+
 }
