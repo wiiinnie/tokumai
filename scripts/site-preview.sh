@@ -13,6 +13,12 @@ mkdir -p "$OUT"
 cp -R "$ROOT/server/site/." "$OUT/"
 # Drop folders for third-party brand assets are not part of the site.
 rm -rf "$OUT/temp_delete"
+# The 2026-09-06 device captures exist only in the app's dark theme, and scrai-faucet serves
+# the same bytes under the -light name (see IMAGES in scrai-faucet.rs). A plain file server
+# has no such alias, so mirror it here — otherwise light mode 404s on exactly those shots.
+for f in "$OUT"/img/*-dark.jpg; do
+  l="${f%-dark.jpg}-light.jpg"; [ -f "$l" ] || cp "$f" "$l"
+done
 # Fill the placeholders scrai-faucet substitutes at runtime, so the page looks real.
 python3 "$HERE/site-preview-fill.py" "$OUT/index.html"
 # scrai-faucet routes /imprint, /terms, /privacy and /pay to these files; a plain static

@@ -2187,7 +2187,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     const prevTop = t.scrollTop;
     t.innerHTML=`<div class="wrap">`+messages.map((m,mi)=>`
       <div class="msg ${m.role}">
-        <div class="who">${m.role==='you'?'you':(m.role==='err'?'error':'scrai')}${m.role==='ai'&&m.model?`<span class="viamodel">${esc(m.model)}</span>`:''}</div>
+        <div class="who">${m.role==='you'?'you':(m.role==='err'?'error':'tokumai')}${m.role==='ai'&&m.model?`<span class="viamodel">${esc(m.model)}</span>`:''}</div>
         <div class="body">${bodyHtml(m,mi)}${(m.role==='you'&&m.editRef)?`<div class="editref">✎ edits the selected picture</div>`:''}${(m.role==='ai'&&m.note)?`<div class="sizenote${m.noteKind?' '+m.noteKind:''}">${esc(m.note)}</div>`:''}${(devCost&&m.role==='ai'&&m.audit)?auditDiv(m.audit):''}${(devCost&&m.role==='you'&&m.xfer)?xferDiv(m.xfer):''}${(m.role==='err'&&m.retry)?`<button class="retrybtn" data-click="retryMsg" data-args="${mi}">↻ Retry</button>`:''}${(m.role==='ai'&&m.streaming&&!m.dismissed)?`<div class="msgacts"><button class="msgact rust" data-click="cancelMsg" data-args="${mi}">✕ Dismiss</button>${m.img?'<span class="billhint">billing has started — this only stops the wait</span>':''}</div>`:''}${(m.role==='ai'&&!m.streaming&&m.canResend)?`<div class="msgacts"><button class="msgact" data-click="resendMsg" data-args="${mi}" title="Send the same question again with the currently selected model">↻ Resend</button></div>`:''}</div>
       </div>`).join("")+`</div>`;
     if(pinQuestion){ pinLastQuestion(t); }

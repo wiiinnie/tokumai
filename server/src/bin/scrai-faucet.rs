@@ -106,28 +106,38 @@ const PAID_HTML: &str = r##"<!doctype html>
 </html>
 "##;
 
+// The five real device captures (2026-09-06) exist in ONE theme — the app's dark one.
+// Rather than ship a copy of each under a second name, the light entry points at the same
+// bytes: the page asks for `<name>-light.jpg` in light mode and gets the dark screenshot,
+// which is what a product shot of a dark app looks like anyway. Drop the alias and add a
+// real file the day someone captures the light theme.
+const SHOT_HERO: &[u8] = include_bytes!("../../site/img/hero-imagegen-dark.jpg");
+const SHOT_PH_IMAGE: &[u8] = include_bytes!("../../site/img/how-phone-image-dark.jpg");
+const SHOT_PH_NETWORK: &[u8] = include_bytes!("../../site/img/how-phone-network-dark.jpg");
+const SHOT_PH_START: &[u8] = include_bytes!("../../site/img/how-phone-start-dark.jpg");
+const SHOT_FLOW_READY: &[u8] = include_bytes!("../../site/img/flow-ready-dark.jpg");
+
 const IMAGES: &[(&str, &[u8])] = &[
     ("flow-account-dark.jpg", include_bytes!("../../site/img/flow-account-dark.jpg")),
     ("flow-account-light.jpg", include_bytes!("../../site/img/flow-account-light.jpg")),
-    ("flow-ready-dark.jpg", include_bytes!("../../site/img/flow-ready-dark.jpg")),
-    ("flow-ready-light.jpg", include_bytes!("../../site/img/flow-ready-light.jpg")),
+    ("flow-ready-dark.jpg", SHOT_FLOW_READY),
+    ("flow-ready-light.jpg", SHOT_FLOW_READY),
     ("flow-topup-dark.jpg", include_bytes!("../../site/img/flow-topup-dark.jpg")),
     ("flow-topup-light.jpg", include_bytes!("../../site/img/flow-topup-light.jpg")),
-    ("hero-imagegen-dark.jpg", include_bytes!("../../site/img/hero-imagegen-dark.jpg")),
-    ("hero-imagegen-light.jpg", include_bytes!("../../site/img/hero-imagegen-light.jpg")),
+    ("hero-imagegen-dark.jpg", SHOT_HERO),
+    ("hero-imagegen-light.jpg", SHOT_HERO),
     ("how-mac-chat-dark.jpg", include_bytes!("../../site/img/how-mac-chat-dark.jpg")),
     ("how-mac-chat-light.jpg", include_bytes!("../../site/img/how-mac-chat-light.jpg")),
     ("how-mac-image-dark.jpg", include_bytes!("../../site/img/how-mac-image-dark.jpg")),
     ("how-mac-image-light.jpg", include_bytes!("../../site/img/how-mac-image-light.jpg")),
-    // PLACEHOLDERS until the real captures land — see the comment in site/index.html.
-    ("how-phone-buy-dark.jpg", include_bytes!("../../site/img/how-phone-buy-dark.jpg")),
-    ("how-phone-buy-light.jpg", include_bytes!("../../site/img/how-phone-buy-light.jpg")),
-    ("how-phone-menu-dark.jpg", include_bytes!("../../site/img/how-phone-menu-dark.jpg")),
-    ("how-phone-menu-light.jpg", include_bytes!("../../site/img/how-phone-menu-light.jpg")),
     ("how-phone-chat-dark.jpg", include_bytes!("../../site/img/how-phone-chat-dark.jpg")),
     ("how-phone-chat-light.jpg", include_bytes!("../../site/img/how-phone-chat-light.jpg")),
-    ("how-phone-image-dark.jpg", include_bytes!("../../site/img/how-phone-image-dark.jpg")),
-    ("how-phone-image-light.jpg", include_bytes!("../../site/img/how-phone-image-light.jpg")),
+    ("how-phone-image-dark.jpg", SHOT_PH_IMAGE),
+    ("how-phone-image-light.jpg", SHOT_PH_IMAGE),
+    ("how-phone-network-dark.jpg", SHOT_PH_NETWORK),
+    ("how-phone-network-light.jpg", SHOT_PH_NETWORK),
+    ("how-phone-start-dark.jpg", SHOT_PH_START),
+    ("how-phone-start-light.jpg", SHOT_PH_START),
 ]; // screenshots for the homepage, dark + light of each (the page shows one per theme)
 const MAX_HEAD: usize = 16 * 1024;
 const MAX_BODY: usize = 4 * 1024;
