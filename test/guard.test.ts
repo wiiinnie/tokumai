@@ -79,4 +79,51 @@ assert.deepEqual(types("10115 Berlin"), [], "a postcode and a town alone say not
 assert.deepEqual(types("Im Jahr 2019 Bericht über Wachstum"), [], "a year and a capitalised word are not an address");
 assert.deepEqual(types("Rechnung Nr. 4711 vom 15.08.2026 über 250 Euro"), [], "an invoice line is not an address");
 
-console.log("all guard checks passed (card, iban, email, ssn, ip, apikey, password, mnemonic, phone, address, ocr-mode, mrz, card-not-phone, address-block; no false positives)");
+// ---- national ID and account numbers -------------------------------------
+// Each of these is a published test vector. The check digit is what makes the rule
+// usable at all: without it, "eleven digits" matches every order number in the world.
+assert.ok(has("Meine Steuer-ID ist 86095742719", "taxid"), "German Steuer-ID (BZSt example)");
+assert.ok(has("86095742719", "taxid"), "…and its check digit stands on its own, no label needed");
+assert.ok(!has("12345678901", "taxid"), "eleven digits with a wrong check digit are nothing");
+assert.ok(has("BSN 111222333", "socialid"), "Dutch BSN (elfproef)");
+assert.ok(has("NHS 943 476 5919", "healthid"), "UK NHS number");
+assert.ok(has("DNI 12345678Z", "nationalid"), "Spanish DNI letter");
+assert.ok(!has("DNI 12345678A", "nationalid"), "…wrong letter, no finding");
+assert.ok(has("PESEL 44051401359", "socialid"), "Polish PESEL");
+assert.ok(has("CPF 111.444.777-35", "nationalid"), "Brazilian CPF");
+assert.ok(has("routing number 021000021", "bankaccount"), "US ABA routing");
+assert.ok(has("AHV 756.1234.5678.97", "socialid"), "Swiss AHV (EAN-13)");
+assert.ok(has("SSN 123-45-6789 on file", "ssn"), "US SSN structure");
+assert.ok(!has("SSN 666-45-6789", "ssn"), "…impossible area number is not an SSN");
+
+// Where no checksum is implemented, a label word has to be next to the number — a wrong
+// checksum would REJECT real numbers, which is worse than not checking.
+assert.ok(has("SV-Nummer 12 190770 M 123", "socialid"), "German SV-Nummer with its label");
+assert.deepEqual(types("12 190770 M 123"), [], "the same digits without a label say nothing");
+assert.ok(has("Kontonummer 1234567890", "bankaccount"), "account number with its label");
+assert.deepEqual(types("Die Bestellnummer 1234567890 ist erledigt"), [], "an order number is not an account");
+
+// An ID number claims its digits, so it is not ALSO reported as a phone number.
+for (const [t, type] of [["NHS 943 476 5919", "healthid"], ["AHV 756.1234.5678.97", "socialid"], ["SSN 123-45-6789", "ssn"]] as const) {
+  const f = scanText(t).map((x) => x.type);
+  assert.ok(f.includes(type), `${type} detected`);
+  assert.ok(!f.includes("phone"), `${type} not also called a phone number`);
+}
+assert.ok(has("call +49 30 1234 5678 tomorrow", "phone"), "a real phone still is one");
+
+// ---- who you are: phrasing, and the combination --------------------------
+// No name list involved: the phrase says the next words are a name.
+assert.ok(has("ich heiße Max Müller", "name"), "self-disclosed name");
+assert.ok(has("Ich heiße Max Müller", "name"), "…also at the start of a sentence");
+assert.ok(has("Mit freundlichen Grüßen\nMax Müller", "name"), "a sign-off followed by a name");
+assert.ok(has("geboren am 14.03.1987", "dob"), "a labelled birth date");
+assert.deepEqual(types("Der Vertrag läuft bis 14.03.1987"), [], "an unlabelled date is just a date");
+
+// A name alone must stay silent — half the questions people ask contain one, and a guard
+// that cries wolf gets switched off. The COMBINATION is what identifies someone.
+assert.deepEqual(types("Erklär mir bitte, wie Angela Merkel Kanzlerin wurde"), [], "a public figure is not a leak");
+assert.ok(has("Ich heiße Max Müller und wohne Musterstraße 5, 10115 Berlin", "identity"), "name plus address identifies a person");
+assert.ok(has("Anna Schmidt\nMusterstraße 5\n10115 Berlin\nTel. 030 1234567", "identity"), "a letterhead identifies a person");
+assert.ok(!has("ich heiße Max Müller", "identity"), "a name on its own is not yet an identity");
+
+console.log("all guard checks passed (card, iban, email, ssn, ip, apikey, password, mnemonic, phone, address, ocr-mode, mrz, card-not-phone, address-block, national-ids, identity-combination; no false positives)");

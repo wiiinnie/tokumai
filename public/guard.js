@@ -48,6 +48,160 @@ function ibanValid(raw) {
  * Scan text for sensitive categories. Returns a de-duplicated list of
  * { type, label } — one entry per category found. Empty = looks clean.
  */
+// ---------------------------------------------------------------------------
+// National ID and account numbers.
+//
+// The precision lever here is NOT a better pattern — it is the check digit almost all
+// of these carry. "Eleven digits" is a false-positive machine; "eleven digits whose
+// MOD 11,10 check digit is right" is a German tax ID and essentially nothing else.
+//
+// Where a checksum is implemented below, it decides on its own. Where it is NOT — the
+// German and French social-security numbers among them — the rule needs a label word
+// nearby ("SV-Nummer:", "n° de sécu"), because a wrong checksum implementation would
+// REJECT real numbers, which is worse than not checking. Those are marked `words`-only.
+// ---------------------------------------------------------------------------
+
+const digits = (s) => s.replace(/\D/g, "");
+
+/** ISO 7064 MOD 11,10 — German Steuer-ID. */
+function mod11_10(num) {
+  let p = 10;
+  for (let i = 0; i < num.length - 1; i++) {
+    let m = (Number(num[i]) + p) % 10 || 10;
+    p = (2 * m) % 11;
+  }
+  const check = (11 - p) % 10;
+  return check === Number(num[num.length - 1]);
+}
+/** Steuer-ID also has a digit-frequency rule: in the first ten, exactly one digit repeats. */
+function deTaxId(n) {
+  if (n.length !== 11 || /^0/.test(n)) return false;
+  const c = {};
+  for (const d of n.slice(0, 10)) c[d] = (c[d] || 0) + 1;
+  const reps = Object.values(c).filter((v) => v > 1);
+  if (reps.length !== 1 || reps[0] > 3 || Object.keys(c).length > 9) return false;
+  return mod11_10(n);
+}
+/** Dutch BSN — the "elfproef". */
+function nlBsn(n) {
+  if (n.length !== 9) return false;
+  let sum = 0;
+  for (let i = 0; i < 8; i++) sum += Number(n[i]) * (9 - i);
+  sum -= Number(n[8]);
+  return sum % 11 === 0;
+}
+/** UK NHS number — mod 11, weights 10..2. */
+function ukNhs(n) {
+  if (n.length !== 10) return false;
+  let sum = 0;
+  for (let i = 0; i < 9; i++) sum += Number(n[i]) * (10 - i);
+  const c = 11 - (sum % 11);
+  const check = c === 11 ? 0 : c;
+  return check !== 10 && check === Number(n[9]);
+}
+/** Spanish DNI / NIE — the letter is the number mod 23. */
+function esDni(raw) {
+  const m = /^([XYZ]?)(\d{7,8})([A-Z])$/.exec(raw.toUpperCase().replace(/[\s-]/g, ""));
+  if (!m) return false;
+  const pre = { X: "0", Y: "1", Z: "2" }[m[1]] ?? "";
+  const num = Number(pre + m[2]);
+  return "TRWAGMYFPDXBNJZSQVHLCKE"[num % 23] === m[3];
+}
+/** Polish PESEL. */
+function plPesel(n) {
+  if (n.length !== 11) return false;
+  const w = [1, 3, 7, 9, 1, 3, 7, 9, 1, 3];
+  let sum = 0;
+  for (let i = 0; i < 10; i++) sum += Number(n[i]) * w[i];
+  return (10 - (sum % 10)) % 10 === Number(n[10]);
+}
+/** Brazilian CPF — two check digits. */
+function brCpf(n) {
+  if (n.length !== 11 || /^(\d)\1{10}$/.test(n)) return false;
+  const cd = (upto) => {
+    let sum = 0;
+    for (let i = 0; i < upto; i++) sum += Number(n[i]) * (upto + 1 - i);
+    const r = (sum * 10) % 11;
+    return r === 10 ? 0 : r;
+  };
+  return cd(9) === Number(n[9]) && cd(10) === Number(n[10]);
+}
+/** US ABA routing number. */
+function usAba(n) {
+  if (n.length !== 9) return false;
+  const d = [...n].map(Number);
+  return (3 * (d[0] + d[3] + d[6]) + 7 * (d[1] + d[4] + d[7]) + (d[2] + d[5] + d[8])) % 10 === 0;
+}
+/** Swiss AHV / social insurance — EAN-13 over 13 digits starting 756. */
+function chAhv(n) {
+  if (n.length !== 13 || !n.startsWith("756")) return false;
+  let sum = 0;
+  for (let i = 0; i < 12; i++) sum += Number(n[i]) * (i % 2 ? 3 : 1);
+  return (10 - (sum % 10)) % 10 === Number(n[12]);
+}
+/** A US SSN has no checksum, but plenty of impossible values. */
+function usSsn(n) {
+  if (n.length !== 9) return false;
+  const a = n.slice(0, 3), g = n.slice(3, 5), s = n.slice(5);
+  return a !== "000" && a !== "666" && Number(a) < 900 && g !== "00" && s !== "0000";
+}
+/** A plausible DDMMYY inside a social-security number. */
+function ddmmyy(s) {
+  const d = Number(s.slice(0, 2)), m = Number(s.slice(2, 4));
+  return d >= 1 && d <= 31 && m >= 1 && m <= 12;
+}
+
+const NUMBER_RULES = [
+  { type: "taxid", label: "a German tax ID (Steuer-ID)",
+    re: /\b\d{11}\b/g, check: (m) => deTaxId(digits(m)),
+    words: /steuer-?(?:id|identifikationsnummer)|\bidnr\b/i },
+  { type: "socialid", label: "a social-security number",
+    re: /\b\d{9}\b/g, check: (m) => nlBsn(digits(m)),
+    words: /\bbsn\b|burgerservicenummer/i },
+  { type: "healthid", label: "a health-service number (NHS)",
+    re: /\b\d{3}[ -]?\d{3}[ -]?\d{4}\b/g, check: (m) => ukNhs(digits(m)),
+    words: /\bnhs\b/i },
+  { type: "nationalid", label: "a national ID number (DNI / NIE)",
+    re: /\b[XYZ]?\d{7,8}[ -]?[A-Z]\b/g, check: (m) => esDni(m),
+    words: /\bdni\b|\bnie\b|documento nacional/i },
+  { type: "socialid", label: "a national ID number (PESEL)",
+    re: /\b\d{11}\b/g, check: (m) => plPesel(digits(m)),
+    words: /\bpesel\b/i },
+  { type: "nationalid", label: "a taxpayer number (CPF)",
+    re: /\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b/g, check: (m) => brCpf(digits(m)),
+    words: /\bcpf\b/i },
+  { type: "bankaccount", label: "a bank routing number",
+    re: /\b\d{9}\b/g, check: (m) => usAba(digits(m)),
+    words: /routing|\baba\b|sort ?code|bankleitzahl|\bblz\b/i },
+  { type: "socialid", label: "a social-insurance number (AHV)",
+    re: /\b756[.\s]?\d{4}[.\s]?\d{4}[.\s]?\d{2}\b/g, check: (m) => chAhv(digits(m)),
+    words: /\bahv\b|\bavs\b|sozialversicherung/i },
+  { type: "ssn", label: "a social-security / national-ID number",
+    re: /\b\d{3}-\d{2}-\d{4}\b/g, check: (m) => usSsn(digits(m)),
+    words: /\bssn\b|social security/i },
+  // ---- label required: no checksum implemented (see the header) ----
+  { type: "socialid", label: "a German social-insurance number (SV-Nummer)",
+    re: /\b\d{2}\s?\d{6}\s?[A-Z]\s?\d{3}\b/g,
+    check: (m) => ddmmyy(digits(m).slice(2, 8)), wordsRequired: true,
+    words: /sv-?(?:nummer|nr)|sozialversicherungsnummer|rentenversicherungsnummer|versicherungsnummer/i },
+  { type: "socialid", label: "a French social-security number (NIR)",
+    re: /\b[12]\s?\d{2}\s?\d{2}\s?\d{2,3}\s?\d{2,3}\s?\d{3}\s?\d{2}\b/g,
+    check: () => true, wordsRequired: true,
+    words: /s[ée]curit[ée] sociale|num[ée]ro de s[ée]cu|\bnir\b|carte vitale/i },
+  { type: "nationalid", label: "an Italian tax code (codice fiscale)",
+    re: /\b[A-Z]{6}\d{2}[A-EHLMPRST]\d{2}[A-Z]\d{3}[A-Z]\b/gi,
+    check: () => true, wordsRequired: true,
+    words: /codice fiscale|\bcf\b/i },
+  { type: "bankaccount", label: "a bank account number",
+    re: /\b\d{6,17}\b/g, check: () => true, wordsRequired: true,
+    words: /konto-?(?:nummer|nr)|account (?:number|no)|kontonr|compte|cuenta/i },
+];
+
+/** Is one of `re`'s label words within ~48 characters before the match? */
+function labelledNear(text, index, words) {
+  return words.test(text.slice(Math.max(0, index - 48), index));
+}
+
 export function scanText(text, opts = {}) {
   const t = String(text ?? "");
   const found = new Map();
@@ -79,12 +233,36 @@ export function scanText(text, opts = {}) {
     if (ibanValid(m[0])) add("iban", "an IBAN / bank account");
   }
   if (/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/.test(t)) add("email", "an email address");
-  if (/\b\d{3}-\d{2}-\d{4}\b/.test(t)) add("ssn", "a social-security / national-ID number");
   if (/\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b/.test(t))
     add("ip", "an IP address");
-  // Phone: a + prefix or clear grouping, 7–15 digits. Mask card-length digit runs
-  // first, so a 16-digit card number can't be mis-read as a phone via a substring.
-  const noCards = t.replace(/(?:\d[ \-\n]?){13,19}/g, " ");
+  // National ID / account numbers: a check digit decides on its own, otherwise a label
+  // word has to sit next to the number. See NUMBER_RULES above for why. Runs BEFORE the
+  // phone rule and CLAIMS the digits it matched: an NHS number and a Swiss AHV number are
+  // grouped just like phone numbers, and reporting both is noise on the same finding.
+  const claimed = [];
+  for (const rule of NUMBER_RULES) {
+    rule.re.lastIndex = 0;
+    for (const m of t.matchAll(rule.re)) {
+      const near = labelledNear(t, m.index ?? 0, rule.words);
+      if (rule.wordsRequired && !near) continue;
+      let ok = false;
+      try { ok = rule.check(m[0]); } catch { ok = false; }
+      if (ok && (near || !rule.wordsRequired)) {
+        add(rule.type, rule.label);
+        claimed.push([m.index ?? 0, (m.index ?? 0) + m[0].length]);
+      }
+    }
+  }
+
+  // Phone: a + prefix or clear grouping, 7–15 digits. Mask card-length digit runs and
+  // anything an ID rule already claimed, so neither is mis-read as a phone.
+  let masked = t.replace(/(?:\d[ \-\n]?){13,19}/g, " ");
+  if (claimed.length) {
+    const chars = [...masked];
+    for (const [a, b] of claimed) for (let i = a; i < b && i < chars.length; i++) chars[i] = " ";
+    masked = chars.join("");
+  }
+  const noCards = masked;
   for (const m of noCards.matchAll(/(?:\+\d{1,3}[\s.-]?)?(?:\(?\d{2,4}\)?[\s.-]){2,}\d{2,4}/g)) {
     const raw = m[0].trim();
     // A bare date (ISO 2026-08-15 or 15.08.2026 / 15/08/26) is three short groups
@@ -115,6 +293,13 @@ export function scanText(text, opts = {}) {
       }
     } else run = 0;
   }
+  // Someone telling the model who they are. The phrasing is the detector — after
+  // "ich heiße" the next capitalised words are a name, and no name list is involved.
+  const nameM = RE_SELF_NAME.exec(t) || RE_SIGNOFF.exec(t);
+  if (nameM) add("name", "your name");
+  // A date only counts when it is labelled as a birth date — every invoice has dates.
+  if (RE_DOB.test(t)) add("dob", "a date of birth");
+
   // Postal address — see the address section below. A street line on its own is a weak
   // signal; a street line WITH a postcode/city line near it is a person's address.
   const addr = scanAddress(t);
@@ -123,6 +308,14 @@ export function scanText(text, opts = {}) {
       ? "a name and full postal address (someone is identifiable)"
       : "a full postal address (street and city together)");
   else if (addr.street) add("address", "a postal address");
+
+  // The combination is the danger. A name on its own says nothing — half the questions
+  // people ask contain one — and a lone street could be anybody's. Together they point
+  // at one person, and THAT is worth interrupting for.
+  const has = (k) => found.has(k);
+  if ((has("name") || addr.name) &&
+      (has("address") || has("addressblock") || has("phone") || has("email") || has("dob")))
+    add("identity", "enough to identify one specific person (name plus their address or contact details)");
 
   return [...found.values()];
 }
@@ -159,6 +352,17 @@ const hasStreet = (line) =>
   RE_STREET_DE.test(line) || RE_STREET_EN.test(line) || RE_STREET_INTL.test(line);
 const hasPostCity = (line) =>
   RE_POST_DACH.test(line) || RE_POST_NL.test(line) || RE_POST_UK.test(line) || RE_POST_US.test(line);
+
+// "ich heiße Max Müller" — the phrase identifies the next words as a name, which is why
+// this works with no name list at all and the same on every platform.
+const RE_SELF_NAME =
+  /\b(?:[Ii]ch hei(?:ß|ss)e|[Mm]ein [Nn]ame ist|[Mm]y name is|[Ii](?:'m| am) called|[Jj]e m'appelle|[Mm]i llamo|[Mm]i chiamo|[Ii]k heet)\s+(\p{Lu}[\p{L}'\-]+(?:\s+\p{Lu}[\p{L}'\-]+){0,2})/u;
+// A sign-off followed by a name on the next line.
+const RE_SIGNOFF =
+  /\b(?:mit freundlichen gr(?:ü|ue)(?:ß|ss)en|viele gr(?:ü|ue)(?:ß|ss)e|beste gr(?:ü|ue)(?:ß|ss)e|kind regards|best regards|sincerely|cordialement)\b[,\s]*\n\s*(\p{Lu}[\p{L}'\-]+(?:\s+\p{Lu}[\p{L}'\-]+){0,2})\s*$/imu;
+// A date is only a birth date when it says so.
+const RE_DOB =
+  /\b(?:geb(?:oren)?\.?(?:\s*am)?|geburtsdatum|date of birth|\bdob\b|born on|n[ée]e? le|fecha de nacimiento)\b\s*:?\s*(?:\d{1,2}[.\/-]\d{1,2}[.\/-]\d{2,4}|\d{4}-\d{2}-\d{2})/i;
 
 // Two or three capitalised words, no digits, no street type: on the line above an
 // address that is a person's name — position says so, no name list required.
