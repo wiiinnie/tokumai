@@ -424,10 +424,11 @@ impl Faucet {
         let day_start = ts - ts % 86_400;
         if claims_since(&db, day_start) > self.cfg.daily_max {
             let _ = db.execute("DELETE FROM claims WHERE memo = ?1 AND stage = 'sending'", [memo]);
-            // Operator signal: the cap is FAUCET_DAILY_MAX in /opt/scrai/.env (restart
-            // scrai-faucet after raising it). scrai-admin shows the same count in red.
+            // Operator signal: the cap is FAUCET_DAILY_MAX in /opt/tokumai/.env (restart
+            // tokumai-faucet after raising it — the faucet reads its config once, at boot).
+            // tokumai-admin shows the same count in red.
             eprintln!(
-                "scrai-faucet: DAILY LIMIT reached — {} claims today, max {} (FAUCET_DAILY_MAX in .env; restart scrai-faucet after raising) — refused memo {memo} code {code}",
+                "scrai-faucet: DAILY LIMIT reached — {} claims today, max {} (raise FAUCET_DAILY_MAX in /opt/tokumai/.env, then: systemctl restart tokumai-faucet) — refused memo {memo} code {code}",
                 self.cfg.daily_max, self.cfg.daily_max
             );
             return Err("the faucet's daily limit is reached — try again tomorrow (the operator sees this and can raise it)".into());

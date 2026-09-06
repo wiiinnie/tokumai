@@ -9,7 +9,7 @@ it is a testnet server**.
 
 ## The kill switch
 
-Two lines in `/opt/scrai/.env`:
+Two lines in `/opt/tokumai/.env`:
 
 ```
 TESTNET=1
@@ -43,7 +43,7 @@ handover export on Android (the rest — chat, buy, guard, image generation — 
 
 | limit | value | set where | when hit |
 |---|---|---|---|
-| faucet claims per UTC day | 20 | `FAUCET_DAILY_MAX` in `/opt/scrai/.env`, then `systemctl restart scrai-faucet` | tester sees "daily limit is reached — try again tomorrow"; **log** `scrai-faucet: DAILY LIMIT reached …`; **scrai-admin** FAUCET panel `today N / max` turns red + ECONOMY line says `DAILY LIMIT` |
+| faucet claims per UTC day | 20 | `FAUCET_DAILY_MAX` in `/opt/tokumai/.env`, then `systemctl restart tokumai-faucet` | tester sees "daily limit is reached — try again tomorrow"; **log** `scrai-faucet: DAILY LIMIT reached …`; **scrai-admin** FAUCET panel `today N / max` turns red + ECONOMY line says `DAILY LIMIT` |
 | faucet wallet floor | 5 NYM | `FAUCET_RESERVE_UNYM` | tester sees "wallet is running low"; **log** `scrai-faucet: WALLET LOW — … top up …` |
 | invoices per account | 5 per 10 min | `INVOICE_PER_ACCT` / `INVOICE_ACCT_WINDOW_MS` in `server/src/pay.rs` (compiled in) | app shows "too many invoices from this account — retry in ~Ns"; **log** `scrai-server: INVOICE LIMIT — account …` |
 | invoices server-wide | 30 per minute | `INVOICE_GLOBAL_PER_MIN` in `server/src/pay.rs` (compiled in) | app shows "issuing too many invoices right now"; **log** `scrai-server: INVOICE LIMIT — 30 invoices/min …` (once a minute) |
@@ -53,7 +53,7 @@ Logs: `journalctl -u scrai-faucet -f` and `journalctl -u scrai -f` on the VPS.
 
 ## Release gate — forcing testers onto a new build
 
-Two lines in `/opt/scrai/.env`, set **after** the new bundles are on the download site:
+Two lines in `/opt/tokumai/.env`, set **after** the new bundles are on the download site:
 
 ```
 MIN_APP=0.3.0
@@ -85,7 +85,7 @@ No client update is needed — the client has no switch of its own.
 - **app**: Buy dialog toggle card → `Backend.invoice(usd, method, testnet)` → Rust
   `invoice(.., testnet)` → `"testnet": true` on `invoice.create`. Invoice view shows a
   faucet note with the memo instructions and the faucet URL.
-- **`scrai-faucet`** (`server/src/bin/scrai-faucet.rs`, unit `scrai-faucet.service`):
+- **`tokumai-faucet`** (`server/src/bin/scrai-faucet.rs`, unit `scrai-faucet.service`):
   serves the distribution site (`server/site/index.html`) + a three-call API on
   `127.0.0.1:8790`. Reads `state.db` read-only (kv `pay` snapshot), keeps its own
   `faucet.db` (invite codes, claims).
@@ -132,7 +132,7 @@ account — in the test a purchase is linkable to a tester. The site says so.
    }
    ```
    `sudo systemctl reload caddy`. Caddy fetches the certificate itself.
-4. Invite codes: `sudo -u scrai DATA=/opt/scrai/data /opt/scrai/bin/scrai-faucet code new 3 "alice"`.
+4. Invite codes: `sudo -u scrai /opt/tokumai/bin/tokumai-faucet code new 3 "alice"`.
 5. Check: `curl -s https://faucet.tokumai.com/api/status` →
    `{"testnet":true,"wallet":true,"claimsToday":0,"dailyMax":20}`.
 
@@ -154,7 +154,7 @@ next spend; server-side entitlement is unaffected).
 `npm run tauri:build`) and any `dist/downloads/*.exe|*.AppImage|*.deb` (Windows/Linux come
 from the GitHub Actions workflows `build-windows.yml` / `build-linux.yml`, ~35 min each:
 `gh workflow run build-<os>.yml --ref main`, then `gh run download <id> -D dist/downloads`
-and flatten) to `/opt/scrai/site/dl`
+and flatten) to `/opt/tokumai/site/dl`
 (Caddy `handle_path /dl/*` → `file_server`) plus a `manifest.json` with version, file
 names, sha256 and sizes. The site reads the manifest on every page view, so the buttons,
 the checksum lines and the "Testnet build 0.2.x" label always match what is downloadable
