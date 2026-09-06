@@ -2596,13 +2596,13 @@ async fn pick_image(source: String) -> Result<Option<serde_json::Value>, String>
 mod ios_secure {
     use block2::RcBlock;
     use objc2::rc::Retained;
-    use objc2::runtime::Bool;
+    use objc2::runtime::{AnyObject, Bool};
     use objc2::{msg_send, AnyThread, MainThreadMarker};
-    use objc2_foundation::{NSError, NSString};
+    use objc2_foundation::{NSArray, NSDate, NSDictionary, NSError, NSNumber, NSString};
     use objc2_local_authentication::{LAContext, LAPolicy};
     use objc2_ui_kit::{
         UIAlertAction, UIAlertActionStyle, UIAlertController, UIAlertControllerStyle, UIApplication,
-        UIViewController,
+        UIPasteboard, UIPasteboardOptionExpirationDate, UIPasteboardOptionLocalOnly, UIViewController,
     };
     use std::path::PathBuf;
     use tauri::AppHandle;
@@ -2635,6 +2635,66 @@ mod ios_secure {
         present(mtm, &a);
     }
 
+    /// How long the copied phrase stays on the pasteboard. Long enough to switch to a
+    /// password manager and paste, short enough that it is not still there tomorrow.
+    const PASTEBOARD_SECS: f64 = 60.0;
+
+    /// Put the phrase on the pasteboard from NATIVE code: the words go from the Rust wallet
+    /// to UIPasteboard without ever entering the webview, so the H1 boundary holds while the
+    /// user still gets to paste into 1Password. Two options make that copy less dangerous
+    /// than a plain one:
+    ///   · localOnly      — no Universal Clipboard, so the seed does not hop to the Mac or iPad
+    ///   · expirationDate — iOS clears it after a minute, without us having to
+    fn copy_phrase(text: &str) {
+        let value = NSString::from_str(text);
+        let utf8 = NSString::from_str("public.utf8-plain-text");
+        let v: &AnyObject = &value;
+        let item = NSDictionary::<NSString, AnyObject>::from_slices(&[&*utf8], &[v]);
+        let items = NSArray::from_retained_slice(&[item]);
+
+        let local = NSNumber::numberWithBool(true);
+        let until = NSDate::dateWithTimeIntervalSinceNow(PASTEBOARD_SECS);
+        let (l, u): (&AnyObject, &AnyObject) = (&local, &until);
+        let opts = unsafe {
+            NSDictionary::<NSString, AnyObject>::from_slices(
+                &[UIPasteboardOptionLocalOnly, UIPasteboardOptionExpirationDate],
+                &[l, u],
+            )
+        };
+        let pb = unsafe { UIPasteboard::generalPasteboard() };
+        unsafe { pb.setItems_options(&items, &opts) };
+    }
+
+    // The phrase alert, which unlike `alert` carries a Copy button. The 24 words are not
+    // selectable in a UIAlertController — a tester pointed out that reading them off the
+    // screen and typing them into a password manager is the whole interaction (2026-09-06)
+    // — and the answer is a native copy, not moving the phrase back into the webview.
+    fn alert_phrase(mtm: MainThreadMarker, title: &str, phrase: &str) {
+        let a = UIAlertController::alertControllerWithTitle_message_preferredStyle(
+            Some(&NSString::from_str(title)),
+            Some(&NSString::from_str(phrase)),
+            UIAlertControllerStyle::Alert,
+            mtm,
+        );
+        let text = phrase.to_string();
+        let handler = RcBlock::new(move |_a: core::ptr::NonNull<UIAlertAction>| copy_phrase(&text));
+        let copy = UIAlertAction::actionWithTitle_style_handler(
+            Some(&NSString::from_str("Copy")),
+            UIAlertActionStyle::Default,
+            Some(&handler),
+            mtm,
+        );
+        let done = UIAlertAction::actionWithTitle_style_handler(
+            Some(&NSString::from_str("Done")),
+            UIAlertActionStyle::Cancel,
+            None,
+            mtm,
+        );
+        a.addAction(&copy);
+        a.addAction(&done);
+        present(mtm, &a);
+    }
+
     // Biometric-gate (Face ID / Touch ID / passcode), then show the phrase natively. Must be
     // called on the main thread. The LAContext reply lands on a private thread, so we hop
     // back to main (via the AppHandle) to touch UIKit + read the wallet.
@@ -2651,7 +2711,7 @@ mod ios_secure {
                     return;
                 }
                 match crate::wallet::load(&dir).mnemonic {
-                    Some(m) => alert(mtm, title, &m),
+                    Some(m) => alert_phrase(mtm, title, &m),
                     None => alert(mtm, "No account", "No recovery phrase on this device."),
                 }
             });

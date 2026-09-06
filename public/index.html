@@ -2371,7 +2371,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // "Mr Nice". The fallback string is rewritten by scripts/bump-version.sh.
   const APP_CODENAMES = { "0.2": "kash", "0.3": "peroni", "0.4": "ichnusa", "0.5": "moretti" };
   const versionLabel = v => { const m = /^(\d+\.\d+)\.\d+/.exec(v); const c = m && APP_CODENAMES[m[1]]; return c ? v + " (" + c + ")" : v; };
-  let APP_VERSION = versionLabel("0.5.3");   // bump-version.sh: fallback
+  let APP_VERSION = versionLabel("0.5.4");   // bump-version.sh: fallback
   let devCost = false;
   // DEV upload readout: real file size ÷ pure transfer time (excludes chunk-split +
   // uploadBegin setup). Shown under a sent image only when the dev cost-audit is on.
@@ -4957,7 +4957,11 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     try{
       await Backend.accountRestore(phrase, !!confirmed);
       pendingRestorePhrase=null;
-      await refreshState(); acctView=null; acctPhrase=null; renderAccount(); acctStatus("restored ✓");
+      // Back to the account landing, not just out of the confirm view: the drill-in page
+      // this ran from has nothing left to do, and staying on "Restore account" with the
+      // empty textarea still in front of you reads as "nothing happened", status line or
+      // not (tester, 2026-09-06). Same for delete below.
+      await refreshState(); acctBack(); acctStatus("Account restored ✓");
     }catch(e){
       const msg=e&&e.message?e.message:String(e);
       if(msg.indexOf("HELD_CREDIT")===0){
@@ -5000,7 +5004,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   async function doAccountDelete(confirmed){
     if(!confirmed){ askDelete(); return; }
     // confirmed → authorise discarding held ecash along with the phrase.
-    try{ await Backend.accountDelete(true); await refreshState(); acctView=null; acctPhrase=null; renderAccount(); acctStatus("account deleted"); }
+    try{ await Backend.accountDelete(true); await refreshState(); acctBack(); acctStatus("Account deleted"); }
     catch(e){ acctStatus("Delete failed: "+heldMsg(e)); }
   }
   // Migrate to another device: redeem ALL held credit onto the seed-recoverable session
