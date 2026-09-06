@@ -4648,19 +4648,29 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
 
     const dangerPage = acctView==="confirmNew"
       ? `<p class="hint" style="color:var(--rust)">A new account ABANDONS any balance on the current one. Sure?</p>
-         <div class="btnrow"><button class="btn primary" data-click="doAccountNew" data-args="true">Yes, overwrite</button>
+         ${held>0?`<p class="hint">This device still holds <b>${formatToku(held)} TOKU</b> as coins. Redeeming moves them to your recoverable balance first — they are gone otherwise.</p>
+         <div class="btnrow"><button class="btn primary" data-click="redeemThen" data-args="&quot;new&quot;">Redeem ${formatToku(held)}, then create</button></div>
+         <div class="btnrow"><button class="btn danger" data-click="doAccountNew" data-args="true">Discard and create</button>
            <button class="btn" data-click="cancelAcctView">Cancel</button></div>`
+         :`<div class="btnrow"><button class="btn primary" data-click="doAccountNew" data-args="true">Yes, overwrite</button>
+           <button class="btn" data-click="cancelAcctView">Cancel</button></div>`}`
       : acctView==="confirmDelete"
-      ? `<p class="hint" style="color:var(--rust)">Deleting wipes the recovery phrase AND any coins still held on this device (bearer money — not recoverable). Redeem them first, or use “Move to another device”. Sure?</p>
-         <div class="btnrow"><button class="btn primary" data-click="doAccountDelete" data-args="true">Yes, delete</button>
+      ? `<p class="hint" style="color:var(--rust)">Deleting wipes the recovery phrase AND any coins still held on this device (bearer money — not recoverable). Sure?</p>
+         ${held>0?`<p class="hint">Held here: <b>${formatToku(held)} TOKU</b>. Redeeming moves it to your recoverable balance first, where the phrase can bring it back.</p>
+         <div class="btnrow"><button class="btn primary" data-click="redeemThen" data-args="&quot;delete&quot;">Redeem ${formatToku(held)}, then delete</button></div>
+         <div class="btnrow"><button class="btn danger" data-click="doAccountDelete" data-args="true">Discard and delete</button>
            <button class="btn" data-click="cancelAcctView">Cancel</button></div>`
+         :`<div class="btnrow"><button class="btn primary" data-click="doAccountDelete" data-args="true">Yes, delete</button>
+           <button class="btn" data-click="cancelAcctView">Cancel</button></div>`}`
       : `<p class="pagelead">These abandon or wipe this account. Your balance is only recoverable via the 24-word phrase — keep it before you do either.</p>
          <div class="btnrow"><button class="btn" data-click="askNew">Create new account</button>
            <button class="btn danger" data-click="doAccountDelete">Delete account</button></div>`;
 
     const restorePage = acctView==="confirmRestore"
-      ? `<p class="hint" style="color:var(--rust)">This device still holds un-redeemed ecash (bearer money — not recoverable from a seed). Restoring another account discards it. Redeem it first, or confirm to discard.</p>
-         <div class="btnrow"><button class="btn primary" data-click="doAccountRestore" data-args="true">Discard held & restore</button>
+      ? `<p class="hint" style="color:var(--rust)">This device holds <b>${formatToku(held)} TOKU</b> as un-redeemed coins. They are bearer money: a recovery phrase cannot bring them back, and restoring another account here discards them.</p>
+         <p class="hint">Redeeming first moves them onto this account’s recoverable balance — then the restore costs you nothing.</p>
+         <div class="btnrow"><button class="btn primary" data-click="redeemThen" data-args="&quot;restore&quot;">Redeem ${formatToku(held)}, then restore</button></div>
+         <div class="btnrow"><button class="btn danger" data-click="doAccountRestore" data-args="true">Discard and restore</button>
            <button class="btn" data-click="cancelAcctView">Cancel</button></div>`
       : `<p class="pagelead">Enter or scan a 24-word recovery phrase to restore that account on this device.</p>${restoreForm()}`;
 
@@ -4735,8 +4745,30 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   async function doAccountNew(confirmed){
     if(account && !confirmed){ askNew(); return; }
     // confirmed === user passed the overwrite confirm → authorise discarding held ecash.
-    try{ const r=await Backend.accountNew(!!confirmed); await refreshState(); acctView=null; acctPhrase=r.mnemonic; renderAccount(); }
+    try{
+      const r=await Backend.accountNew(!!confirmed);
+      await refreshState();
+      acctView=null; acctPhrase=r.mnemonic;
+      // The new phrase renders on the "phrase" page only — leaving the view on the danger
+      // page created the account and showed the words to nobody, which is a lost account
+      // the moment the sheet closes (2026-09-06).
+      acctPage="phrase";
+      renderAccount();
+      acctStatus("New account created — write these words down now. They are the only way back to it.");
+    }
     catch(e){ acctStatus("Could not create account: "+heldMsg(e)); }
+  }
+
+  // "Redeem it first" has to be an ACTION, not advice. Held coins are bearer money and the
+  // three destructive paths (new / delete / restore) each offered only "discard" — the app
+  // named the safe way out and then did not offer it (2026-09-06).
+  async function redeemThen(what){
+    redeemDollars = null;                 // everything, not whatever the slider last held
+    await doRedeem();
+    if(held > 0) return;                  // doRedeem reported why; nothing was discarded
+    if(what === "restore") return doAccountRestore(true);
+    if(what === "new")     return doAccountNew(true);
+    if(what === "delete")  return doAccountDelete(true);
   }
   async function doAccountReveal(){
     try{
@@ -5406,7 +5438,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     autogrow, onKey, sendMsg, retryMsg, showHandover, downloadHandover, closeHandover, pickImport, importHandover,
     cancelMsg, resendMsg, showDismissed, retrieveMsg, openConnSheet, closeConnSheet, rebuildRoute, rebuildRouteFromSheet, copyResumeLog, routeDismiss, useOfficialServer, iterateImg,
     openBuy, closeBuy, buyTier, buyOrInvoice, checkInvite, copyUri, copyTopupId, openTopupSheet, closeTopupSheet, confirmTopup, openAccount, closeAccount, doAccountNew, doAccountReveal, doAccountRestore, doAccountDelete, doMigrate, doRedeem, redeemSliderChanged, startQrScan, stopQrScan,
-    showRestore, askNew, cancelAcctView, saveServer, srvSelected, qNav, scrollToBottom, reopenGuard, checkCredit,
+    showRestore, askNew, redeemThen, cancelAcctView, saveServer, srvSelected, qNav, scrollToBottom, reopenGuard, checkCredit,
     openEntryPicker, showExitInfo, chooseGateway, closeGw, filterGw, toggleGwOpt,
     acceptTerms, declineTerms, termsAgreeToggle, chooseModel, openLink, toggleImgOvl, saveImgTap, liveNudgeUse, liveNudgeSkip, reconnectMix, runMixPing, resetMixPerf,
     pickImage, attachTap, pickNative, pickFile, closeAttachMenu, onImagePicked, clearImage, setMenuKind, toggleLatest, toggleVendorIdx, imgSettled,
