@@ -714,6 +714,9 @@
      state now, so the menu row that used to hold both actions is gone. */
   .checkline{display:inline-flex;align-items:center;gap:7px;margin-top:8px;font-family:var(--mono);font-size:10.5px;color:var(--mix);cursor:pointer}
   .checkline:hover{color:var(--signal)} .checkline .dim{color:var(--muted)}
+  .checkline.busy{color:var(--muted);cursor:default}
+  .checkline .dots{display:inline-block;width:1.1em;text-align:left}
+  .checkline .dots::after{content:"";animation:reddots 1.2s steps(4,end) infinite}
   .heldbox{margin-top:12px;border-top:1px solid var(--line);padding-top:11px}
   .heldbox .hh{display:flex;align-items:baseline;gap:7px;flex-wrap:wrap}
   .heldbox .amt{font-family:var(--mono);font-size:12.5px;font-weight:700;color:var(--rust)}
@@ -4645,7 +4648,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   function acctBack(){ acctPage=null; acctView=null; acctPhrase=null; renderAccount(); const mb=$("acctScrim").querySelector(".mb"); if(mb) mb.scrollTop=0; }
   // M-fe-2: don't leave the revealed mnemonic (or a captured restore phrase) sitting in
   // a JS variable after the modal is dismissed.
-  function closeAccount(){ acctPhrase=null; pendingRestorePhrase=null; acctView=null; acctPage=null; redeemPick=false; redeemDollars=null; redeemPartial=false; $("acctScrim").classList.remove("open"); }
+  function closeAccount(){ acctPhrase=null; pendingRestorePhrase=null; acctView=null; acctPage=null; redeemPick=false; redeemDollars=null; redeemPartial=false; credResult=""; $("acctScrim").classList.remove("open"); }
   function acctStatus(m){ const s=$("acctStatus"); if(s) s.textContent=m||""; }
   // TEMPORARY hard-coded default operator(s). REMOVE when the signed federation directory
   // ships (see docs/federation-shared-ledger.md — this list becomes that signed, multi-
@@ -4854,7 +4857,9 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       <div class="ses">session #${account.sessionIndex} · fingerprint</div>
       <div class="bal">${esc(tokuLine(balance))}</div>
       <div class="held">${esc(formatToku(Math.max(0,balance-held)))} in session${held>0?``:` · nothing held on this device`}</div>
-      <div class="checkline" data-click="checkCredit">↻ Check for credit <span class="dim">· ${esc(checkedAgo())}</span></div>
+      ${checking
+        ? `<div class="checkline busy">↻ Checking<span class="dots"></span> <span class="dim">· over the mixnet</span></div>`
+        : `<div class="checkline" data-click="checkCredit">↻ Check for credit <span class="dim">· ${esc(credResult||checkedAgo())}</span></div>`}
       ${heldBox}
     </div>`;
 
@@ -4959,6 +4964,10 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // the hint line at the BOTTOM of the sheet, often off screen on a phone: you tapped a
   // button that then did nothing visible for ten seconds (tester, 2026-09-07).
   let redeemStep = "", redeemPct = 0, redeemPartial = false;
+  // Same story as the redeem button: checkCredit reported to acctStatus, the hint line at
+  // the BOTTOM of the sheet, while the thing you clicked sits at the top. The line carries
+  // its own state now, and keeps the answer until the next check (tester, 2026-09-07).
+  let checking = false, credResult = "";
   function toggleRedeemPick(){ redeemPick = !redeemPick; if(!redeemPick) redeemDollars = null; renderAccount(); }
   // When the balance was last confirmed with the server. The server settles on its own now
   // (a chain watch every 15 s), so this line mostly exists to say "yes, it looked".
@@ -5130,10 +5139,20 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   }
   // Sweep any settled-but-uncollected payment (entitlement) into held credit.
   async function checkCredit(){
+    if(checking) return;
+    checking = true; credResult = ""; renderAccount();
     acctStatus("checking the mixnet for settled payments…");
-    try{ const r=await Backend.collect(); lastCredCheck = Date.now(); await refreshState(); renderAccount();
+    try{
+      const r=await Backend.collect(); lastCredCheck = Date.now();
+      await refreshState();
+      credResult = r&&r.collected>0 ? `+${formatToku(r.collected)} TOKU collected` : "nothing outstanding";
+      checking = false; renderAccount();
       acctStatus(r&&r.collected>0?`+${formatToku(r.collected)} TOKU collected — held, funds your next message.`:"no outstanding credit");
-    }catch(e){ acctStatus("failed: "+(e.message||e)); }
+    }catch(e){
+      credResult = "could not reach the server";
+      checking = false; renderAccount();
+      acctStatus("failed: "+(e.message||e));
+    }
   }
 
   // ---------- buy credit ----------
