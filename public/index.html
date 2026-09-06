@@ -246,6 +246,25 @@
   .cardmarks{display:flex;align-items:center;gap:3px;flex:0 1 auto;flex-wrap:nowrap;min-width:0;overflow:hidden}
   .cardmarks svg{border-radius:3px;display:block;flex:none}
   .pm.dis,.tiletier.dis{opacity:.32;pointer-events:none;filter:saturate(.4)}
+  /* Chain picker: the chain belongs to the coin, so it hangs off the tile row rather than
+     becoming a fifth tile. */
+  .caret{font-size:9px;color:var(--acc2);margin-left:3px}
+  .vmenu{border:1px solid var(--acc);border-radius:12px;background:var(--panel,var(--surface-2));padding:6px;margin:8px 0 0}
+  .vrow{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:9px;cursor:pointer}
+  .vrow:hover{background:color-mix(in srgb,var(--acc) 8%,transparent)}
+  .vrow.on{background:color-mix(in srgb,var(--acc) 14%,transparent)}
+  .vrow.off{opacity:.4;cursor:not-allowed}
+  .vdot{width:14px;height:14px;border-radius:50%;border:1px solid var(--muted);flex:none}
+  .vrow.on .vdot{border-color:var(--acc2);background:radial-gradient(circle,var(--acc2) 45%,transparent 47%)}
+  .vname{font-size:13px;font-weight:600;color:var(--bone)}
+  .vnote{font-family:var(--mono);font-size:9.5px;color:var(--muted);margin-left:auto;text-align:right}
+  .vrow.on .vnote{color:var(--acc2)}
+  /* Payment screen: which network this address lives on. For USDC it is the whole risk. */
+  .netbar{display:flex;align-items:center;gap:10px;border:1px solid var(--acc);border-radius:11px;
+    padding:9px 11px;margin:0 0 12px;background:color-mix(in srgb,var(--acc) 10%,transparent)}
+  .netbar .nl{font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);display:block}
+  .netbar .nv{font-size:13px;font-weight:600;color:var(--bone)}
+  .netbar .nw{font-family:var(--mono);font-size:9.5px;color:var(--acc2);margin-left:auto;text-align:right;line-height:1.4}
   /* Invite code: the card above the amounts + the memo note on the invoice */
   #testnetRow{margin:0 0 12px;border-color:var(--gold-dim,var(--line))}
   .inviteline{display:flex;gap:8px;margin-top:8px}
@@ -1073,11 +1092,10 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
           <span class="pmname">NYM</span>
           <span class="pmtag">native · Nyx</span>
         </div>
-        <div class="pm" data-method="btc" title="Bitcoin on-chain or Lightning (testnet)" data-click="selectMethod" data-args="&quot;btc&quot;">
-          <span class="pmlogo"><svg viewBox="0 0 32 32" width="26" height="26"><circle cx="16" cy="16" r="16" fill="#F7931A"/><path fill="#fff" d="M23 14.1c.3-2-1.3-3-3.4-3.8l.7-2.7-1.7-.4-.7 2.6c-.4-.1-.9-.2-1.3-.3l.7-2.7-1.6-.4-.7 2.7-1.1-.3-2.3-.6-.4 1.8s1.2.3 1.2.3c.7.2.8.6.8.9l-.8 3.1v.2l-1.2 4.6c-.1.2-.3.5-.7.4 0 0-1.2-.3-1.2-.3l-.8 1.9 2.1.6 1.2.3-.7 2.7 1.6.4.7-2.7c.5.1.9.2 1.4.3l-.7 2.7 1.7.4.7-2.7c2.8.5 4.9.3 5.8-2.2.7-2 0-3.2-1.5-3.9 1.1-.3 1.9-1 2.1-2.5zm-3.7 5.2c-.5 2-3.9.9-5 .6l.9-3.6c1.2.3 4.7.8 4.1 3zm.5-5.2c-.5 1.8-3.3.9-4.2.6l.8-3.3c.9.2 3.9.7 3.4 2.7z"/></svg></span>
-          <span class="pmname">Bitcoin</span>
-          <span class="pmtag">on-chain · LN</span>
-        </div>
+        <!-- Coin tiles come from the catalog: one per coin, its chains behind a picker.
+             With no coin list (BTCPay, or an older server) this renders the plain
+             Bitcoin tile it always had. See renderCoinTiles(). -->
+        <div id="coinTiles" style="display:contents"></div>
         <div class="pm soon" title="Monero — coming soon">
           <span class="pmlogo"><svg viewBox="0 0 32 32" width="26" height="26"><circle cx="16" cy="16" r="16" fill="#FF6600"/><path fill="none" stroke="#fff" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" d="M9.5 23V10l6.5 6.5L22.5 10v13"/></svg></span>
           <span class="pmname">Monero</span>
@@ -1094,6 +1112,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
           <span class="pmtag less">less private</span>
         </div>
       </div>
+      <div id="coinMenu"></div>
       <div id="continueRow" style="margin-top:14px"></div>
       <p class="hint" id="buyStatus" style="margin:10px 0 0"></p>
       <div id="payPanel" style="display:none"></div>
@@ -1503,6 +1522,15 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // out rather than offered and refused on tap. Defaults are permissive so an older
   // server (no `rails` in its catalog) behaves exactly as before.
   let rails = { nyx:true, btc:true, card:false, invite:false };
+  // Coins on sale, grouped by the server: [{group,label,variants:[{id,label,note,minUsd}]}].
+  // Empty = an older server or a processor rail that picks for itself → one plain Bitcoin tile.
+  let coinGroups = [];
+  let coinPick = {};          // group → chosen variant id
+  let coinMenu = null;        // group whose variant picker is open
+  const COIN_MARK = {
+    btc: `<svg viewBox="0 0 32 32" width="26" height="26"><circle cx="16" cy="16" r="16" fill="#F7931A"/><path fill="#fff" d="M23 14.1c.3-2-1.3-3-3.4-3.8l.7-2.7-1.7-.4-.7 2.6c-.4-.1-.9-.2-1.3-.3l.7-2.7-1.6-.4-.7 2.7-1.1-.3-2.3-.6-.4 1.8s1.2.3 1.2.3c.7.2.8.6.8.9l-.8 3.1v.2l-1.2 4.6c-.1.2-.3.5-.7.4 0 0-1.2-.3-1.2-.3l-.8 1.9 2.1.6 1.2.3-.7 2.7 1.6.4.7-2.7c.5.1.9.2 1.4.3l-.7 2.7 1.7.4.7-2.7c2.8.5 4.9.3 5.8-2.2.7-2 0-3.2-1.5-3.9 1.1-.3 1.9-1 2.1-2.5zm-3.7 5.2c-.5 2-3.9.9-5 .6l.9-3.6c1.2.3 4.7.8 4.1 3zm.5-5.2c-.5 1.8-3.3.9-4.2.6l.8-3.3c.9.2 3.9.7 3.4 2.7z"/></svg>`,
+    usdc: `<svg viewBox="0 0 32 32" width="26" height="26"><circle cx="16" cy="16" r="15" fill="#2775CA"/><path fill="#fff" d="M17 7h-2v1.6c-2.2.3-3.7 1.6-3.7 3.5 0 2.2 1.7 3 4 3.6 1.9.5 2.6.9 2.6 1.8 0 .9-.9 1.5-2.3 1.5-1.6 0-2.6-.7-2.8-1.9h-2.4c.2 2.1 1.7 3.4 4.1 3.7V23h2v-1.7c2.4-.3 3.9-1.7 3.9-3.7 0-2.3-1.8-3.1-4.2-3.7-1.8-.5-2.5-.9-2.5-1.7 0-.8.8-1.4 2.1-1.4 1.4 0 2.3.6 2.5 1.7h2.3c-.2-1.9-1.5-3.1-3.6-3.5V7z"/></svg>`,
+  };
   let cardInfo = { enabled:false, minUsd:10, methods:[] };   // server's card rail: {enabled, minUsd, methods:[{id,label}]} — absent → no card row
   // Labels come from what is enabled in the Mollie dashboard (server fetches /v2/methods),
   // so switching PayPal or Wero on there relabels the row without a build.
@@ -1590,6 +1618,29 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       serverTestnet = s.testnet === true;          // the server's kill switch: absent/false → no toggle
       storefront = /^[A-Z]{3}$/.test(String(s.storefront||"")) ? String(s.storefront) : null;
       // Rails: coerce every field — the catalog is untrusted server data.
+      // Coins: coerce every field — the catalog is untrusted server data, and these strings
+      // end up in the DOM and in an invoice request.
+      { const raw = Array.isArray(s.coins) ? s.coins : [];
+        const clean = v => String(v==null?"":v).slice(0,32);
+        coinGroups = raw.map(g=>({
+          group: clean(g && g.group),
+          label: clean(g && g.label),
+          variants: (Array.isArray(g && g.variants)?g.variants:[]).map(v=>({
+            id: clean(v && v.id), label: clean(v && v.label),
+            note: String((v && v.note)||"").slice(0,64),
+            minUsd: Math.max(0, Math.floor(Number(v && v.minUsd)||0)),
+          })).filter(v=>/^[a-z0-9-]{1,24}$/.test(v.id)),
+        })).filter(g=>g.group && g.variants.length);
+        // Keep a valid pick per group across refreshes.
+        const next={}; for(const g of coinGroups){
+          const had=coinPick[g.group];
+          next[g.group] = g.variants.some(v=>v.id===had) ? had : g.variants[0].id;
+        }
+        coinPick = next;
+        if(!coinGroups.some(g=>g.variants.some(v=>v.id===selectedMethod)) && selectedMethod!=="nyx" && selectedMethod!=="card"){
+          selectedMethod = coinGroups.length ? coinPick[coinGroups[0].group] : "btc";
+        }
+      }
       { const r = s.rails && typeof s.rails === "object" ? s.rails : null;
         rails = r ? { nyx:r.nyx!==false, btc:r.btc===true, card:r.card===true, invite:r.invite===true }
                   : { nyx:true, btc:true, card:(s.card&&s.card.enabled)===true, invite:serverTestnet }; }
@@ -4925,7 +4976,6 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     const card = isCardInv(inv);
     const checkout = card ? cardCheckoutOf(inv) : "";
     const opts = (inv.options||[])
-      .filter(o=>!/ln|lightning/i.test(o.method||""))
       .map(o=>({ method:o.method||"", destination:o.destination||"", amount:o.amount||"", currency:o.currency||"", memo:o.memo||"" }));
     if(card ? checkout==="#" : !opts.length) return "";
     const payload = { v:1, id:String(inv.invoiceId||""), usd:Number(inv.amountUsd||0), toku:Number((inv.amountToku ?? inv.amountScrai)||0),
@@ -4994,13 +5044,12 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       const sublbl = testnetBuy&&n!==TESTNET_USD ? 'real' : small ? 'coins only' : (testnetBuy&&n===TESTNET_USD ? 'invite' : sub);
       return `<div class="tiletier${selectedTier===n?' sel':''}${dis?' dis':''}" data-click="selectTier" data-args="${n}"><div class="a">$${n}</div><div class="s">${sublbl}</div></div>`;
     }).join("");
-    // Greyed, not hidden: a rail the server cannot raise an invoice on (no BTCPay/CoinGate
-    // configured) stays visible so the choice is legible — it just cannot be picked.
-    const btc = document.querySelector('#chooser .pm[data-method="btc"]');
-    if(btc) btc.classList.toggle("dis", testnetBuy || !rails.btc);   // the faucet pays NYM only
-    // A rail that just went away must not stay selected, or Continue offers a purchase the
-    // server will refuse ("no payment gateway configured").
-    if(selectedMethod === "btc" && !rails.btc) selectMethodQuiet("nyx");
+    // Greyed, not hidden: a rail the server cannot raise an invoice on stays visible so the
+    // choice is legible — it just cannot be picked. renderCoinTiles applies that to the coins.
+    if(!rails.btc && selectedMethod!=="nyx" && selectedMethod!=="card"){
+      coinMenu=null; selectMethodQuiet("nyx");
+    }
+    renderCoinTiles();
     const nym = document.querySelector('#chooser .pm[data-method="nyx"]');
     if(nym) nym.classList.toggle("dis", !rails.nyx && !testnetBuy);
     { const pm=document.querySelector('#chooser .paymethods'), lbl=document.querySelector('#chooser .grouplbl');
@@ -5077,7 +5126,11 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   function selectTier(t){ selectedTier=t; abandonInvoice(); renderTiers(); renderContinue(); }
   function renderContinue(){
     const el=$("continueRow"); if(!el) return;
-    const coin = selectedMethod==="nyx" ? "NYM" : selectedMethod==="btc" ? "Bitcoin" : selectedMethod==="card" ? "card" : "Monero";
+    const found = coinOfId(selectedMethod);
+    const coin = selectedMethod==="nyx" ? "NYM"
+               : selectedMethod==="card" ? "card"
+               : found ? `${found.g.label} over ${found.v.label}`
+               : selectedMethod==="btc" ? "Bitcoin" : "Monero";
     el.innerHTML = selectedTier
       ? `<button class="btn primary" style="width:100%" data-click="startPurchase">${testnetBuy?`Continue — raise the $${TESTNET_USD} invite invoice →`:`Continue — $${selectedTier} ${selectedMethod==="card"?"by card ↗":"with "+coin+" →"}`}</button>`
       : `<button class="btn" style="width:100%;opacity:.5;cursor:not-allowed" disabled>Pick an amount above</button>`;
@@ -5227,10 +5280,98 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   function selectMethodQuiet(m){
     selectedMethod = m;
     document.querySelectorAll('.pm[data-method]').forEach(el=>el.classList.toggle('sel', el.dataset.method===m));
+    renderCoinTiles();
+  }
+
+  // ---- coins ------------------------------------------------------------------
+  // One tile per coin, its chains behind a picker. The chain is a property of the coin, not
+  // a payment method of its own — and for USDC it is the one mistake nobody can undo, so it
+  // is named on the tile, in the picker, on the button and again on the payment screen.
+  function coinOfId(id){
+    for(const g of coinGroups){ const v=g.variants.find(v=>v.id===id); if(v) return { g, v }; }
+    return null;
+  }
+  function coinAffordable(v){ return !selectedTier || v.minUsd<=selectedTier; }
+  // Keep the pick payable for the chosen amount: on-chain Bitcoin starts at $20, and a
+  // silently refused invoice after the tap is worse than a switch with a reason.
+  function fixCoinPick(){
+    for(const g of coinGroups){
+      const cur=g.variants.find(v=>v.id===coinPick[g.group]);
+      if(cur && !coinAffordable(cur)){
+        const alt=g.variants.find(coinAffordable);
+        if(alt){
+          coinPick[g.group]=alt.id;
+          if(selectedMethod===cur.id){
+            selectedMethod=alt.id;
+            const st=$("buyStatus");
+            if(st) st.textContent=`${g.label} ${cur.label} starts at $${cur.minUsd} — switched to ${alt.label}.`;
+          }
+        }
+      }
+    }
+  }
+  function renderCoinTiles(){
+    const host=$("coinTiles"); if(!host) return;
+    fixCoinPick();
+    if(!coinGroups.length){
+      // Older server, or a processor rail that picks the coin itself.
+      host.innerHTML = `<div class="pm${selectedMethod==="btc"?" sel":""}${(testnetBuy||!rails.btc)?" dis":""}" data-method="btc"
+        title="Bitcoin" data-click="selectMethod" data-args="&quot;btc&quot;">
+        <span class="pmlogo">${COIN_MARK.btc}</span><span class="pmname">Bitcoin</span>
+        <span class="pmtag">on-chain · LN</span></div>`;
+      renderCoinMenu();
+      return;
+    }
+    host.innerHTML = coinGroups.map(g=>{
+      const pick=g.variants.find(v=>v.id===coinPick[g.group]) || g.variants[0];
+      const sel=selectedMethod===pick.id;
+      const dis=testnetBuy || !rails.btc;
+      const caret=g.variants.length>1 ? `<span class="caret">${sel&&coinMenu===g.group?"▴":"▾"}</span>` : "";
+      return `<div class="pm${sel?" sel":""}${dis?" dis":""}" data-click="selectCoin" data-args="&quot;${escAttr(g.group)}&quot;"
+        title="${escAttr(g.label+" · "+pick.label)}">
+        <span class="pmlogo">${COIN_MARK[g.group]||COIN_MARK.btc}</span>
+        <span class="pmname">${esc(g.label)}${caret}</span>
+        <span class="pmtag">${esc(pick.label)}</span></div>`;
+    }).join("");
+    renderCoinMenu();
+  }
+  function renderCoinMenu(){
+    const host=$("coinMenu"); if(!host) return;
+    const g=coinGroups.find(g=>g.group===coinMenu);
+    const open = g && g.variants.length>1 && g.variants.some(v=>v.id===selectedMethod);
+    if(!open){ host.innerHTML=""; return; }
+    host.innerHTML = `<div class="vmenu">${g.variants.map(v=>{
+      const on=v.id===selectedMethod, off=!coinAffordable(v);
+      const note = off ? `from $${v.minUsd}` : v.note;
+      return `<div class="vrow${on?" on":""}${off?" off":""}"${off?"":` data-click="pickVariant" data-args="&quot;${escAttr(v.id)}&quot;"`}>
+        <span class="vdot"></span><span class="vname">${esc(v.label)}</span>
+        <span class="vnote">${esc(note)}</span></div>`;
+    }).join("")}</div>`;
+  }
+  function selectCoin(group){
+    if(testnetBuy){ const s=$("buyStatus"); if(s) s.textContent="Invite credits are paid in NYM by the faucet."; return; }
+    if(!rails.btc){ const s=$("buyStatus"); if(s) s.textContent="Coin payments are not available on this server right now — pay with NYM."; return; }
+    const g=coinGroups.find(g=>g.group===group); if(!g) return;
+    const pick=g.variants.find(v=>v.id===coinPick[g.group]) || g.variants[0];
+    // Already on this coin → the tap is about the chain. Otherwise select it first.
+    if(selectedMethod===pick.id) coinMenu = coinMenu===group ? null : group;
+    else { coinMenu=null; abandonInvoice(); selectMethodQuiet(pick.id); }
+    renderTiers(); renderContinue();
+    const st=$("buyStatus");
+    if(st && coinMenu!==group) st.textContent=`${g.label} over ${pick.label}. ${pick.note}`;
+  }
+  function pickVariant(id){
+    const found=coinOfId(id); if(!found) return;
+    if(!coinAffordable(found.v)){ const s=$("buyStatus"); if(s) s.textContent=`${found.g.label} ${found.v.label} starts at $${found.v.minUsd}.`; return; }
+    coinPick[found.g.group]=id; coinMenu=null;
+    abandonInvoice(); selectMethodQuiet(id);
+    renderTiers(); renderContinue();
+    const st=$("buyStatus"); if(st) st.textContent=`${found.g.label} over ${found.v.label}. ${found.v.note}`;
   }
   function selectMethod(m){
     if(testnetBuy && m!=="nyx"){ const s=$("buyStatus"); if(s) s.textContent="Invite credits are paid in NYM by the faucet."; return; }
     if(m==="btc" && !rails.btc){ const s=$("buyStatus"); if(s) s.textContent="Bitcoin is not available on this server right now — pay with NYM."; return; }
+    if(m!=="card") coinMenu=null;
     if(m==="card" && !cardAvailable()) return;
     selectMethodQuiet(m);
     abandonInvoice();
@@ -5371,13 +5512,35 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       </div>`;
       return;
     }
-    // On-chain only in the UI. Lightning still comes from the backend.
-    const onchain = (inv.options||[]).filter(o=>!/ln|lightning/i.test(o.method));
-    payDests = onchain.map(o=>o.destination);   // the BARE address — for pasting into a wallet
-    payMemos = onchain.map(o=>o.memo||"");       // the Nyx memo, where the coin needs one
-    const blocks = onchain.map((o,i)=>{
+    // Every option the server raised, Lightning included. It used to be filtered out here
+    // and in the /pay hand-over — the invoice was created and its address shown nowhere,
+    // which is why the server warned when the Lightning platform was configured (fixed 0.5.1).
+    const opts = (inv.options||[]);
+    payDests = opts.map(o=>o.destination);   // the BARE address/invoice — for pasting into a wallet
+    payMemos = opts.map(o=>o.memo||"");      // the Nyx memo, where the coin needs one
+    // Which chain this invoice lives on, in the words the picker used.
+    const coinInfo = coinOfId(inv.method||"");
+    const blocks = opts.map((o,i)=>{
       const isNym = /nym/i.test(o.method||"");
+      const isLn = /ln|lightning/i.test(o.method||"");
       const qr = o.qr?`<div class="qrbox">${o.qr}</div>`:"";
+      // The network bar: for USDC it is the whole risk — the same token exists on several
+      // chains, the addresses look alike, and a transfer on the wrong one is unrecoverable.
+      const netbar = coinInfo ? `<div class="netbar">
+          <span><span class="nl">${isLn?"Network":"Send on"}</span><span class="nv">${esc(coinInfo.g.label)} · ${esc(coinInfo.v.label)}</span></span>
+          <span class="nw">${isLn?"an invoice, not an address<br>pay it once":"another chain and<br>the money is gone"}</span>
+        </div>` : "";
+      if(isLn){
+        return `<div class="payopt">
+          <div class="poh">${esc(o.amount||"")} ${esc(o.currency||"BTC")} over Lightning</div>
+          ${netbar}
+          ${qr}
+          <div class="pol">Lightning invoice</div>
+          <div class="poval">${esc(o.destination)}</div>
+          <button class="btn" id="copyBtn${i}" style="margin-top:10px" data-click="copyUri" data-args="${i}">Copy invoice</button>
+          <div class="memowarn">Scan with any Lightning wallet, or copy the invoice. The amount is fixed inside it, so you cannot pay the wrong number — but it expires with the countdown above.</div>
+        </div>`;
+      }
       if(isNym){
         // The memo is as important as the amount — a NYM transfer without it can't
         // be matched to this invoice. So it gets its own emphasised field + warning.
@@ -5393,14 +5556,17 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
           <div class="memowarn">⚠ Send exactly this amount <b>and include the memo</b>. A transfer without the memo cannot be credited automatically.</div>
         </div>`;
       }
+      const coinName = coinInfo ? coinInfo.g.label : "Bitcoin";
       return `<div class="payopt">
-        <div class="poh">Bitcoin${o.amount?` · ${esc(o.amount)} ${esc(o.currency)}`:""}</div>
+        <div class="poh">${esc(coinName)}${o.amount?` · ${esc(o.amount)} ${esc(o.currency)}`:""}</div>
+        ${netbar}
         ${qr}
         <div class="poval">${esc(o.destination)}</div>
         <button class="btn" id="copyBtn${i}" style="margin-top:10px" data-click="copyUri" data-args="${i}">Copy address</button>
+        ${coinInfo&&coinInfo.g.group!=="btc"?`<div class="memowarn">Send <b>${esc(coinInfo.g.label)} on ${esc(coinInfo.v.label)}</b> only. The same token exists on other chains and the addresses look alike; a transfer on the wrong one cannot be recovered.</div>`:""}
       </div>`;
     }).join("") || '<div class="hint">No payment method returned — is this coin’s gateway configured on the server?</div>';
-    const isNymInv = onchain.some(o=>/nym/i.test(o.method||""));
+    const isNymInv = opts.some(o=>/nym/i.test(o.method||""));
     // Testnet purchase: the faucet note. `faucetUrl` is the server's https URL (validated on
     // state load) — esc()/escAttr()-wrapped here anyway; inv.testnet only picks the branch.
     // Invite credit: the faucet note. The link carries the code and the memo in its
@@ -5437,7 +5603,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   Object.assign(window,{ pickModel, copyPhrase, newChat, openSession, deleteSession, exportSession, toggleMenu, selectModelIdx,
     autogrow, onKey, sendMsg, retryMsg, showHandover, downloadHandover, closeHandover, pickImport, importHandover,
     cancelMsg, resendMsg, showDismissed, retrieveMsg, openConnSheet, closeConnSheet, rebuildRoute, rebuildRouteFromSheet, copyResumeLog, routeDismiss, useOfficialServer, iterateImg,
-    openBuy, closeBuy, buyTier, buyOrInvoice, checkInvite, copyUri, copyTopupId, openTopupSheet, closeTopupSheet, confirmTopup, openAccount, closeAccount, doAccountNew, doAccountReveal, doAccountRestore, doAccountDelete, doMigrate, doRedeem, redeemSliderChanged, startQrScan, stopQrScan,
+    openBuy, closeBuy, buyTier, buyOrInvoice, checkInvite, selectCoin, pickVariant, copyUri, copyTopupId, openTopupSheet, closeTopupSheet, confirmTopup, openAccount, closeAccount, doAccountNew, doAccountReveal, doAccountRestore, doAccountDelete, doMigrate, doRedeem, redeemSliderChanged, startQrScan, stopQrScan,
     showRestore, askNew, redeemThen, cancelAcctView, saveServer, srvSelected, qNav, scrollToBottom, reopenGuard, checkCredit,
     openEntryPicker, showExitInfo, chooseGateway, closeGw, filterGw, toggleGwOpt,
     acceptTerms, declineTerms, termsAgreeToggle, chooseModel, openLink, toggleImgOvl, saveImgTap, liveNudgeUse, liveNudgeSkip, reconnectMix, runMixPing, resetMixPerf,

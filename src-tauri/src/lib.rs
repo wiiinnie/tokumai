@@ -36,6 +36,9 @@ static SERVER_CARD: std::sync::Mutex<Option<Value>> = std::sync::Mutex::new(None
 /// models, like the rest — and it MUST be forwarded into the state object below, or the
 /// webview falls back to its defaults and the invite field never appears (2026-09-05).
 static SERVER_RAILS: std::sync::Mutex<Option<Value>> = std::sync::Mutex::new(None);
+/// The coins on sale, grouped for the buy sheet (`coins` on the catalog reply): one entry
+/// per tile, its chains as variants. Empty or absent → the app keeps its plain Bitcoin tile.
+static SERVER_COINS: std::sync::Mutex<Option<Value>> = std::sync::Mutex::new(None);
 /// The server's own version (`serverVersion` on the catalog reply; older servers send
 /// none) — shown under Settings next to the app version.
 static SERVER_VERSION: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
@@ -933,6 +936,10 @@ async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<V
                         *r = resp.get("rails").filter(|r| r.is_object()).cloned();
                     }
                     {
+                        let mut c = SERVER_COINS.lock().unwrap_or_else(|e| e.into_inner());
+                        *c = resp.get("coins").filter(|c| c.is_array()).cloned();
+                    }
+                    {
                         let mut v = SERVER_VERSION.lock().unwrap_or_else(|e| e.into_inner());
                         *v = resp.get("serverVersion").and_then(|s| s.as_str()).map(|s| s.chars().take(32).collect());
                     }
@@ -961,6 +968,7 @@ async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<V
     let update = SERVER_UPDATE.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let card = SERVER_CARD.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let rails = SERVER_RAILS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let coins = SERVER_COINS.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let server_version = SERVER_VERSION.lock().unwrap_or_else(|e| e.into_inner()).clone();
 
     let out = json!({
@@ -982,6 +990,7 @@ async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<V
         "siteUrl": SERVER_SITE.lock().unwrap_or_else(|e| e.into_inner()).clone(),
         "card": card,
         "rails": rails,
+        "coins": coins,
         "models": models,
         "server": server,
         "serverAlternates": w.server_alternates,
@@ -1016,6 +1025,7 @@ async fn set_server(app: AppHandle, transport: State<'_, Arc<Transport>>, addres
     *SERVER_SITE.lock().unwrap_or_else(|e| e.into_inner()) = None;
     *SERVER_CARD.lock().unwrap_or_else(|e| e.into_inner()) = None;
     *SERVER_RAILS.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    *SERVER_COINS.lock().unwrap_or_else(|e| e.into_inner()) = None;
     *SERVER_VERSION.lock().unwrap_or_else(|e| e.into_inner()) = None;
     *SERVER_UPDATE.lock().unwrap_or_else(|e| e.into_inner()) = None;
     // Check the NEW address right away: over the live route it's a single ping, and a
@@ -1171,10 +1181,14 @@ async fn invoice(
     let nonce = rand_hex(16);
     // The method is not part of the signature — it only selects the payment rail,
     // it grants no authority — so the server accepts the same account signature.
+    // The method is the rail ("nyx", "card") or a COIN id from the catalog ("btc-ln",
+    // "usdc-sol"). Pass ids through unchanged — flattening them to "btc" here is what would
+    // silently raise an on-chain invoice for someone who picked Lightning. Shape-checked
+    // only; the server decides what it actually sells.
     let method = match method.as_deref() {
-        Some("nyx") => "nyx",
-        Some("card") => "card",
-        _ => "btc",
+        Some(m) if m.len() <= 24 && !m.is_empty()
+            && m.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') => m.to_string(),
+        _ => "btc".to_string(),
     };
     let sig = a.sign(&format!("invoice:{}", usd), &nonce);
     let mut req = json!({"v":PROTO,"kind":"invoice.create","id":rand_hex(16),"publicKey":a.public_key_pem,"usd":usd,"method":method,"nonce":nonce,"sig":sig});
