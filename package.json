@@ -1,6 +1,6 @@
 {
   "name": "tokumai",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "private": true,
   "description": "Anonymer AI-Chat übers Nym-Mixnet — stateless Adapter-Server + Web-Client (murmur)",
   "type": "module",
