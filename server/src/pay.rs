@@ -741,6 +741,31 @@ impl Pay {
                 let list = tiers.iter().map(|t| format!("${t}")).collect::<Vec<_>>().join(", ");
                 return Err(err(id, &format!("purchases must be one of: {list}")));
             }
+            // A coin id ("btc-ln", "usdc-sol") must be one this server actually sells, and
+            // big enough for it: on-chain Bitcoin starts at $20 because the miner fee eats a
+            // visible share of anything smaller. Fail closed — an id we do not know is not a
+            // coin we quietly substitute.
+            let coins = offered_coins();
+            // An empty list means no per-coin rail is configured (BTCPay or the dev rail
+            // decides for itself) — then there is nothing to validate against and "btc" keeps
+            // meaning "whatever the processor takes".
+            if wanted != "nyx" && wanted != "card" && !coins.is_empty() {
+                match coins.iter().find(|c| c.id == wanted) {
+                    Some(c) if usd < c.min_usd => {
+                        return Err(err(id, &format!(
+                            "{} {} starts at ${} — the network fee would eat a smaller purchase",
+                            c.group_label, c.label, c.min_usd
+                        )));
+                    }
+                    Some(_) => {}
+                    // Older apps send the bare rail name; accept it as on-chain Bitcoin only
+                    // while that coin is on sale.
+                    None if wanted == "btc" && coins.iter().any(|c| c.id == "btc") => {}
+                    None => {
+                        return Err(err(id, "that coin is not offered on this server"));
+                    }
+                }
+            }
             if wanted == "card" {
                 // The card rail sells the larger tiles only (fee + chargeback exposure, see
                 // `card_min_usd`). The app greys smaller tiles; this is the authority.
@@ -1089,8 +1114,12 @@ impl Gateway {
             // never the processor-rail fallback: a testnet invoice is NYM from the faucet or nothing
             return Err("testnet purchases need the native NYM rail, which is not configured here".into());
         }
-        let raised = self.rail.create_invoice(usd, reference).await?;
-        Ok(Raised { raised, method: "btc".into(), expected_unym: 0 })
+        let raised = self.rail.create_invoice(usd, reference, wanted).await?;
+        // The method is the COIN, so status checks, the pay screen and scrai-admin all know
+        // which chain an invoice belongs to. "btc" stays the id of on-chain Bitcoin, so an
+        // invoice raised by an older app reads the same as it always did.
+        let method = if offered_coins().iter().any(|c| c.id == wanted) { wanted.to_string() } else { "btc".to_string() };
+        Ok(Raised { raised, method, expected_unym: 0 })
     }
 
     async fn check_status(&self, inv: &Inv) -> Result<String, String> {
@@ -1133,8 +1162,6 @@ pub enum Rail {
     CoinGate {
         base_url: String,
         api_key: String,
-        pay_currency: String,
-        platform_id: u64,
         /// What CoinGate pays out in — `None` leaves it to the account's own setting.
         receive_currency: Option<String>,
     },
@@ -1168,26 +1195,21 @@ impl Rail {
             if crate::net_var("BTCPAY_URL").is_some() {
                 eprintln!("scrai-server: a CoinGate app and a BTCPay store are both configured — raising invoices on CoinGate, ignoring BTCPay.");
             }
-            let pay_currency = crate::cfg("COINGATE_PAY_CURRENCY")
-                .ok()
-                .map(|c| c.trim().to_uppercase())
-                .filter(|c| !c.is_empty())
-                .unwrap_or_else(|| "BTC".to_string());
-            let platform_id = crate::cfg("COINGATE_PLATFORM_ID")
-                .ok()
-                .and_then(|p| p.trim().parse::<u64>().ok())
-                .unwrap_or(COINGATE_PLATFORM_BITCOIN);
             let receive_currency = crate::cfg("COINGATE_RECEIVE_CURRENCY")
                 .ok()
                 .map(|c| c.trim().to_string())
                 .filter(|c| !c.is_empty());
-            if platform_id == COINGATE_PLATFORM_LIGHTNING_BTC {
-                // The pay screen filters options whose method reads as Lightning, so a
-                // Lightning-only rail would raise a perfectly good invoice that the app
-                // then refuses to show. Loud, because the symptom is an empty pay panel.
-                eprintln!("scrai-server: CoinGate is locked to the Lightning platform (43), which today's app hides on the pay screen — the address will not be displayed. Use 5 (on-chain) until the client shows Lightning.");
+            // The coins themselves come from COINGATE_COINS, per invoice — see `offered_coins`.
+            let coins = offered_coins();
+            if coins.is_empty() {
+                eprintln!("scrai-server: CoinGate is configured but COINGATE_COINS lists nothing usable — the coin tiles stay greyed out.");
+            } else {
+                println!(
+                    "scrai-server: coins on sale — {}",
+                    coins.iter().map(|c| format!("{} ({} platform {})", c.id, c.currency, c.platform)).collect::<Vec<_>>().join(", ")
+                );
             }
-            return Rail::CoinGate { base_url, api_key, pay_currency, platform_id, receive_currency };
+            return Rail::CoinGate { base_url, api_key, receive_currency };
         }
         // Network-scoped (BTCPAY_URL_MAINNET / _TESTNET, legacy BTCPAY_URL fallback).
         match (
@@ -1211,7 +1233,9 @@ impl Rail {
         }
     }
 
-    async fn create_invoice(&self, usd: u32, reference: &str) -> Result<RaisedInvoice, String> {
+    /// `wanted` is the coin id the buyer picked ("btc-ln", "usdc-sol"). It only means
+    /// something to the CoinGate rail; BTCPay and the dev rail ignore it.
+    async fn create_invoice(&self, usd: u32, reference: &str, wanted: &str) -> Result<RaisedInvoice, String> {
         match self {
             Rail::None => Err("this server cannot sell TOKU — no payment gateway configured".into()),
             Rail::Fake => Ok(RaisedInvoice {
@@ -1293,7 +1317,17 @@ impl Rail {
                     expires_at,
                 })
             }
-            Rail::CoinGate { base_url, api_key, pay_currency, platform_id, receive_currency } => {
+            Rail::CoinGate { base_url, api_key, receive_currency } => {
+                // `wanted` IS the coin id ("btc-ln", "usdc-sol"). begin_create already
+                // checked it is on sale; falling back to the first offered coin covers an
+                // older app that still sends the bare rail name.
+                let coins = offered_coins();
+                let coin = coins
+                    .iter()
+                    .find(|c| c.id == wanted)
+                    .or_else(|| coins.first())
+                    .ok_or("no coin is configured on this server")?;
+                let (pay_currency, platform_id) = (&coin.currency, &coin.platform);
                 // 1. the order, priced in fiat. `order_id` is our own reference, so a
                 //    support question can be traced back without CoinGate learning
                 //    anything about the account.
@@ -1468,6 +1502,157 @@ async fn btcpay(api_key: &str, req: reqwest::RequestBuilder) -> Result<Value, St
 // exists to avoid — so we take the white-label `/checkout` call, which hands back
 // the bare address, and the app renders the QR itself exactly as on every other rail.
 // ---------------------------------------------------------------------------
+
+/// One sellable coin: a CoinGate (currency, platform) pair plus the words the app shows.
+///
+/// The chain is a property of the coin, not a payment method of its own — the app draws one
+/// tile per `group` and puts the variants behind a picker, so "USDC" is one choice and
+/// "which chain" is the next one. Sending USDC on the wrong chain is the only mistake in
+/// this flow nobody can undo, which is why the network is named in the list, on the button
+/// and again on the payment screen.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Coin {
+    pub id: String,
+    pub group: String,
+    pub group_label: String,
+    pub label: String,
+    pub note: String,
+    pub currency: String,
+    pub platform: u64,
+    /// Smallest purchase this coin is offered for. On-chain Bitcoin starts at $20: below
+    /// that the miner fee eats a visible share of what the buyer gets.
+    pub min_usd: u32,
+}
+
+/// Platform ids are CoinGate's own (GET /v2/currencies lists them). Ethereum mainnet is
+/// deliberately absent from the known set: at $5 the gas defeats the purchase.
+const KNOWN_COINS: &[(&str, &str, &str, &str, &str, &str, u64, u32)] = &[
+    // id, group, group label, variant label, note, currency, platform, min usd
+    ("btc-ln", "btc", "Bitcoin", "Lightning", "instant · fee under 1¢", "BTC", 43, 0),
+    ("btc", "btc", "Bitcoin", "On-chain", "10–60 min · miner fee applies", "BTC", 5, 20),
+    ("usdc-sol", "usdc", "USDC", "Solana", "SPL · ~$0.001 network fee", "USDC", 20, 0),
+    ("usdc-base", "usdc", "USDC", "Base", "ERC-20 · ~$0.01 network fee", "USDC", 42, 0),
+    ("usdc-pol", "usdc", "USDC", "Polygon", "ERC-20 · ~$0.01 network fee", "USDC", 39, 0),
+    ("usdc-bsc", "usdc", "USDC", "BNB Chain", "BEP-20 · ~$0.05 network fee", "USDC", 3, 0),
+    ("usdc-arb", "usdc", "USDC", "Arbitrum", "ERC-20 · ~$0.02 network fee", "USDC", 40, 0),
+    ("usdc-op", "usdc", "USDC", "Optimism", "ERC-20 · ~$0.02 network fee", "USDC", 44, 0),
+];
+
+fn known_coin(id: &str) -> Option<Coin> {
+    KNOWN_COINS.iter().find(|c| c.0 == id).map(|c| Coin {
+        id: c.0.into(),
+        group: c.1.into(),
+        group_label: c.2.into(),
+        label: c.3.into(),
+        note: c.4.into(),
+        currency: c.5.into(),
+        platform: c.6,
+        min_usd: c.7,
+    })
+}
+
+/// What this server sells, in the order the app shows it.
+///
+/// `COINGATE_COINS` lists ids from the table above — `btc-ln,btc,usdc-sol`. An entry may
+/// also spell out a coin the table does not know, `id:CURRENCY:PLATFORM[:MIN_USD]`, so a new
+/// chain is one line in .env rather than a release. Unknown bare ids are skipped with a
+/// warning: a typo must not silently sell something else.
+///
+/// Unset, it falls back to the single coin the older `COINGATE_PAY_CURRENCY` /
+/// `COINGATE_PLATFORM_ID` pair described, so an existing .env keeps working.
+pub fn offered_coins() -> Vec<Coin> {
+    // Only CoinGate sells per-coin. With BTCPay (or the dev rail) the processor decides what
+    // it accepts, so there is no list to offer and nothing to gate on — an empty list means
+    // "the app keeps its plain Bitcoin tile", which is what every build before 0.5.1 did.
+    if coingate_from_env().is_none() {
+        return Vec::new();
+    }
+    let spec = crate::cfg("COINGATE_COINS").unwrap_or_default();
+    let spec = spec.trim();
+    if spec.is_empty() {
+        let currency = crate::cfg("COINGATE_PAY_CURRENCY").unwrap_or_else(|_| "BTC".into());
+        let platform = crate::cfg("COINGATE_PLATFORM_ID")
+            .ok()
+            .and_then(|p| p.trim().parse().ok())
+            .unwrap_or(COINGATE_PLATFORM_BITCOIN);
+        // Name it after the table entry that matches, so the app still says "Lightning".
+        if let Some(c) = KNOWN_COINS
+            .iter()
+            .find(|c| c.5.eq_ignore_ascii_case(&currency) && c.6 == platform)
+            .and_then(|c| known_coin(c.0))
+        {
+            return vec![c];
+        }
+        return vec![Coin {
+            id: currency.to_lowercase(),
+            group: currency.to_lowercase(),
+            group_label: currency.to_uppercase(),
+            label: currency.to_uppercase(),
+            note: String::new(),
+            currency: currency.to_uppercase(),
+            platform,
+            min_usd: 0,
+        }];
+    }
+    let mut out = Vec::new();
+    for raw in spec.split(',') {
+        let raw = raw.trim();
+        if raw.is_empty() {
+            continue;
+        }
+        let parts: Vec<&str> = raw.split(':').collect();
+        match parts.as_slice() {
+            [id] => match known_coin(id) {
+                Some(c) => out.push(c),
+                None => eprintln!("scrai-server: COINGATE_COINS: unknown coin {id} — skipped (spell it out as id:CURRENCY:PLATFORM to add one)"),
+            },
+            [id, cur, plat, rest @ ..] => {
+                let Ok(platform) = plat.trim().parse::<u64>() else {
+                    eprintln!("scrai-server: COINGATE_COINS: {id} has a non-numeric platform — skipped");
+                    continue;
+                };
+                let min_usd = rest.first().and_then(|m| m.trim().parse().ok()).unwrap_or(0);
+                let cur = cur.trim().to_uppercase();
+                out.push(Coin {
+                    id: (*id).into(),
+                    group: id.split('-').next().unwrap_or(id).into(),
+                    group_label: cur.clone(),
+                    label: id.split_once('-').map(|(_, v)| v.to_uppercase()).unwrap_or_else(|| cur.clone()),
+                    note: String::new(),
+                    currency: cur,
+                    platform,
+                    min_usd,
+                });
+            }
+            _ => eprintln!("scrai-server: COINGATE_COINS: cannot read {raw} — skipped"),
+        }
+    }
+    out
+}
+
+/// The offered coins grouped for the catalog: one entry per tile, variants in order, the
+/// first one the default. `minUsd` travels with each variant so the app can grey a variant
+/// out for a small amount instead of letting the server refuse it after the tap.
+pub fn coins_info() -> Value {
+    let coins = offered_coins();
+    let mut groups: Vec<Value> = Vec::new();
+    for c in &coins {
+        if let Some(g) = groups.iter_mut().find(|g| g["group"] == json!(c.group)) {
+            g["variants"].as_array_mut().unwrap().push(variant_json(c)); // nosemgrep: scrai-unwrap-in-server-hot-path -- built as an array one line above
+            continue;
+        }
+        groups.push(json!({
+            "group": c.group,
+            "label": c.group_label,
+            "variants": [variant_json(c)],
+        }));
+    }
+    json!(groups)
+}
+
+fn variant_json(c: &Coin) -> Value {
+    json!({ "id": c.id, "label": c.label, "note": c.note, "minUsd": c.min_usd })
+}
 
 const COINGATE_API: &str = "https://api.coingate.com/api/v2";
 /// The sandbox is a separate host with SEPARATE credentials — a coingate.com key does
@@ -2108,6 +2293,35 @@ mod tests {
         assert!(back.issuance(&req_key).is_some());
         back.abort_issuance(&req_key);
         assert!(back.issuance(&req_key).is_none());
+    }
+
+    /// The coin list is what the app draws its tiles from, so a typo in COINGATE_COINS must
+    /// not turn into a silently different coin, and a coin nobody offers must not be
+    /// sellable. Pure — reads the spec through a closure, so it touches no global env.
+    #[test]
+    fn the_coin_spec_reads_ids_and_refuses_what_it_does_not_know() {
+        // known ids carry their own copy; an unknown one is dropped, not guessed
+        let known: Vec<Coin> = "btc-ln, btc ,usdc-sol,nope"
+            .split(',')
+            .filter_map(|id| known_coin(id.trim()))
+            .collect();
+        assert_eq!(known.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), ["btc-ln", "btc", "usdc-sol"]);
+        assert_eq!(known[0].platform, 43);          // Lightning
+        assert_eq!(known[1].min_usd, 20);           // on-chain starts at $20
+        assert_eq!(known[2].currency, "USDC");
+        assert!(known_coin("usdc-eth").is_none(), "Ethereum mainnet is deliberately not in the table");
+
+        // grouping: one tile per group, variants in the order given
+        let coins = vec![known_coin("btc-ln").unwrap(), known_coin("btc").unwrap(), known_coin("usdc-sol").unwrap()];
+        let mut groups: Vec<(String, Vec<String>)> = Vec::new();
+        for c in &coins {
+            match groups.iter_mut().find(|g| g.0 == c.group) {
+                Some(g) => g.1.push(c.id.clone()),
+                None => groups.push((c.group.clone(), vec![c.id.clone()])),
+            }
+        }
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].1, ["btc-ln", "btc"]);
     }
 
     /// Every kind the dispatch loop routes to the paywall must actually be answered by
