@@ -721,7 +721,17 @@
   .heldbox p{margin:5px 0 0;font-size:11.5px;line-height:1.5;color:var(--muted)}
   .heldbox p b{color:var(--bone);font-weight:600}
   .heldbox .act{margin-top:10px;display:flex;align-items:center;gap:11px;flex-wrap:wrap}
-  .heldbox .rbtn{font-family:var(--body);font-size:12.5px;font-weight:600;padding:7px 13px;border-radius:9px;border:1px solid var(--mix);background:var(--mix);color:#fff;cursor:pointer}
+  /* One width for both labels so pressing it does not resize the button, and the animated
+     dots sit in a fixed-width slot so the word itself does not shuffle. */
+  .heldbox .rbtn{font-family:var(--body);font-size:12.5px;font-weight:600;padding:7px 13px;border-radius:9px;border:1px solid var(--mix);background:var(--mix);color:#fff;cursor:pointer;min-width:124px;text-align:center}
+  .heldbox .rbtn.busy{background:transparent;border-color:var(--line);color:var(--muted);cursor:default}
+  .heldbox .rbtn .dots{display:inline-block;width:1.1em;text-align:left}
+  .heldbox .rbtn .dots::after{content:"";animation:reddots 1.2s steps(4,end) infinite}
+  @keyframes reddots{0%{content:""}25%{content:"."}50%{content:".."}75%{content:"..."}}
+  @media (prefers-reduced-motion:reduce){ .heldbox .rbtn .dots::after{content:"…";animation:none} }
+  .heldbox .rsmall{font-family:var(--mono);font-size:10px;color:var(--muted)}
+  .heldbox .prog{margin-top:9px;height:4px;border-radius:999px;background:var(--line);overflow:hidden}
+  .heldbox .prog i{display:block;height:100%;background:var(--mix);border-radius:999px;transition:width .3s}
   .heldbox .rlink{font-family:var(--mono);font-size:10.5px;color:var(--mix);cursor:pointer}
   .heldbox .rlink:hover{color:var(--signal)}
   .heldbox .rslider{margin-top:11px}
@@ -4635,7 +4645,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   function acctBack(){ acctPage=null; acctView=null; acctPhrase=null; renderAccount(); const mb=$("acctScrim").querySelector(".mb"); if(mb) mb.scrollTop=0; }
   // M-fe-2: don't leave the revealed mnemonic (or a captured restore phrase) sitting in
   // a JS variable after the modal is dismissed.
-  function closeAccount(){ acctPhrase=null; pendingRestorePhrase=null; acctView=null; acctPage=null; redeemPick=false; redeemDollars=null; $("acctScrim").classList.remove("open"); }
+  function closeAccount(){ acctPhrase=null; pendingRestorePhrase=null; acctView=null; acctPage=null; redeemPick=false; redeemDollars=null; redeemPartial=false; $("acctScrim").classList.remove("open"); }
   function acctStatus(m){ const s=$("acctStatus"); if(s) s.textContent=m||""; }
   // TEMPORARY hard-coded default operator(s). REMOVE when the signed federation directory
   // ships (see docs/federation-shared-ledger.md — this list becomes that signed, multi-
@@ -4829,10 +4839,15 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
                  data-input="redeemSliderChanged" data-input-pass="value" class="mpslider flat">
           <div class="mpticks"><span>$1</span><span id="redeemLabel">${esc(formatToku(pickToku))} TOKU ($${pickD}${pickD>=maxD?" · all":""})</span><span>$${maxD} · all</span></div>
         </div>`:``}
-        <div class="act">
-          <button class="rbtn" data-click="doRedeem">Redeem ${redeemPick&&maxD>1?`$${pickD}`:`now`}</button>
-          ${maxD>1?`<span class="rlink" data-click="toggleRedeemPick">${redeemPick?"all of it":"choose amount"}</span>`:``}
+        ${redeeming ? `<div class="act">
+          <button class="rbtn busy" disabled>Redeeming<span class="dots"></span></button>
+          <span class="rsmall">${esc(redeemStep)}</span>
         </div>
+        <div class="prog"><i style="width:${redeemPct}%"></i></div>`
+        : `<div class="act">
+          <button class="rbtn" data-click="doRedeem">${redeemPartial?"Redeem the rest":`Redeem ${redeemPick&&maxD>1?`$${pickD}`:`now`}`}</button>
+          ${maxD>1&&!redeemPartial?`<span class="rlink" data-click="toggleRedeemPick">${redeemPick?"all of it":"choose amount"}</span>`:``}
+        </div>`}
       </div>` : ``;
     const idcard = `<div class="idcard">
       <div class="fp">${esc(account.fingerprint)}</div>
@@ -4940,6 +4955,10 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // "choose amount" is closed by default: the normal case is one tap that redeems
   // everything, and a slider that offers a choice of $1 out of $1 is noise.
   let redeemPick = false;
+  // What the button says while it works. The old code reported progress to acctStatus —
+  // the hint line at the BOTTOM of the sheet, often off screen on a phone: you tapped a
+  // button that then did nothing visible for ten seconds (tester, 2026-09-07).
+  let redeemStep = "", redeemPct = 0, redeemPartial = false;
   function toggleRedeemPick(){ redeemPick = !redeemPick; if(!redeemPick) redeemDollars = null; renderAccount(); }
   // When the balance was last confirmed with the server. The server settles on its own now
   // (a chain watch every 15 s), so this line mostly exists to say "yes, it looked".
@@ -5043,23 +5062,38 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     const target = d>=maxD ? held : d*100000;   // TOKU to move onto the session layer
     const startHeld = held;
     const totalChunks = Math.max(1, Math.ceil(target/100000));
+    redeemPartial = false;
     try{
-      // Always in uniform $1 chunks (anonymity + small proofs) — just loop for more.
+      // Always in uniform $1 chunks (anonymity + small proofs) — just loop for more. Each
+      // chunk is its own mixnet round trip, so the count is the honest progress: re-render
+      // the card between chunks and the held/session figures move with it, which is the
+      // real proof that something is happening.
       while(held>0 && (startHeld-held)<target){
-        acctStatus(`redeeming $${Math.floor((startHeld-held)/100000)+1} of $${totalChunks} over the mixnet…`);
+        const done = Math.floor((startHeld-held)/100000);
+        redeemStep = totalChunks>1 ? `$${done+1} of $${totalChunks}` : "redeeming over the mixnet";
+        redeemPct = Math.round((done/totalChunks)*100) + Math.round(100/totalChunks/3);
+        acctStatus(`redeeming $${done+1} of $${totalChunks} over the mixnet…`);
+        renderAccount();
         const r=await Backend.redeem();
         balance=r.balance; if(typeof r.held==="number") held=r.held;
         renderBal();
       }
-      redeemDollars=null;
+      redeemDollars=null; redeemPick=false; redeeming=false;
       renderAccount();
       acctStatus(`✓ redeemed ${formatToku(startHeld-held)} into your session balance`);
     }catch(e){
       // A stale credential discarded mid-loop (or any error) stops here; refresh + report.
+      // Whatever already went through is ON the session — say so, or people read a failure
+      // as a loss. The button then offers the REST, because that is what is left to do.
       try{ await refreshState(); }catch(_){}
-      redeemDollars=null; renderBal(); renderAccount();
-      acctStatus(""+(e.message||e));
-    }finally{ redeeming = false; }
+      const moved = Math.max(0, startHeld-held);
+      redeemDollars=null; redeemPick=false; redeeming=false;
+      redeemPartial = moved>0 && held>0;
+      renderBal(); renderAccount();
+      acctStatus(moved>0
+        ? `stopped after ${formatToku(moved)} — that part is on your session balance, the rest is still held. ${e.message||e}`
+        : ""+(e.message||e));
+    }finally{ redeeming = false; redeemStep = ""; redeemPct = 0; }
   }
   function askDelete(){ acctView="confirmDelete"; acctPhrase=null; renderAccount(); }
   async function doAccountDelete(confirmed){
