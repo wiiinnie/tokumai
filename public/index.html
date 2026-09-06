@@ -2148,7 +2148,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     const m = messages[mi]; const im = m && m.images && m.images[ii];
     if(!im) return;
     const ext = IMG_MIME[im.mimeType]||"jpg";
-    const name = `scrai-image-${ii+1}.${ext}`;
+    const name = `tokumai-image-${ii+1}.${ext}`;
     const ovl = fig.querySelector(".sovl"), tx = fig.querySelector(".stx"), ic = fig.querySelector(".sic");
     try{
       const r = await Backend.saveImage(im.data, name, im.mimeType);
@@ -2990,7 +2990,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   }
 
   // ---------- mixnet route (entry/exit gateways + flags) ----------
-  // entry = this client's gateway (selectable); exit = the scrai-server's
+  // entry = this client's gateway (selectable); exit = the tokumai server's
   // gateway (fixed). The two middle mix hops are re-randomised per packet by the
   // Rust core, so they are deliberately not shown as fixed nodes.
   let routeCache = { entry:null, exit:null, chosen:null };
@@ -3141,7 +3141,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     const e = routeCache.exit;
     $("gwTitle").innerHTML = "Exit <b>gateway</b>";
     openScrim("gwScrim");
-    $("gwBody").innerHTML = `<p>The <b>exit</b> hop is the gateway the scrai-server itself is attached to —
+    $("gwBody").innerHTML = `<p>The <b>exit</b> hop is the gateway the tokumai server itself is attached to —
       it is read from the server's Nym address, not chosen by this app. To change it,
       the server operator would move the server to a different gateway.</p>
       ${e&&e.id?`<div class="gwrow sel" style="cursor:default">
@@ -4641,7 +4641,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     // switching away from a known server it starts empty (nothing to delete first).
     const prefill = knownIdx>=0 ? "" : cur;
     return `<select id="srvSelect" data-change="srvSelected" style="${SRV_STYLE}">${opts}</select>
-      ${custom?`<input id="srvInput" placeholder="id.enc@gateway — from your scrai-server" value="${escAttr(prefill)}"
+      ${custom?`<input id="srvInput" placeholder="id.enc@gateway — from your tokumai server" value="${escAttr(prefill)}"
           autocorrect="off" autocapitalize="off" autocomplete="off" spellcheck="false" style="${SRV_STYLE}">
         <div class="btnrow"><button class="btn" data-click="saveServer">Save server</button></div>`:``}`;
   }
@@ -4682,7 +4682,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   function serverBlock(){
     if(!isTauri()) return "";
     return `<div style="margin:6px 0 14px">
-      <div class="hint">scrai-server ${server?`· <span class="k">set</span>`:`· <span style="color:var(--rust)">not set</span>`}</div>
+      <div class="hint">tokumai server ${server?`· <span class="k">set</span>`:`· <span style="color:var(--rust)">not set</span>`}</div>
       ${serverControls()}
     </div>`;
   }
@@ -4808,7 +4808,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       setNav(null);
       b.innerHTML = idcard
         + `<div class="grouplbl">Setup</div>`
-        + row("server","c-net","🌐","Server","scrai-server rendezvous", server?`<span class="pill ok">set</span>`:`<span class="pill warn">not set</span>`)
+        + row("server","c-net","🌐","Server","tokumai server rendezvous", server?`<span class="pill ok">set</span>`:`<span class="pill warn">not set</span>`)
         + `<div class="grouplbl">Keys &amp; devices</div>`
         + row("phrase","c-key","🔑","Recovery phrase","show &amp; copy the 24 words")
         + row("restore","c-restore","📥","Restore account","from phrase or QR")
@@ -4875,7 +4875,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       : `<p class="pagelead">Enter or scan a 24-word recovery phrase to restore that account on this device.</p>${restoreForm()}`;
 
     const pages = {
-      server:  { t:"Server",                 h:`<p class="pagelead">Pick the official server, or paste one from your scrai-server.</p>${serverControls()}` },
+      server:  { t:"Server",                 h:`<p class="pagelead">Pick the official server, or paste one from your own tokumai server.</p>${serverControls()}` },
       phrase:  { t:"Recovery phrase",         h:phraseBlock },
       restore: { t:"Restore account",         h:restorePage },
       migrate: { t:"Move to another device",  h:migratePage },
@@ -5830,7 +5830,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     { t:"Welcome to tokumai", x:"Private AI over the <b>Nym mixnet</b> — your prompts are mixed through relays, so the server never learns who you are. No login, no tracking. Four quick steps and you're set." },
     { t:"Create your account",   x:"Open <b>Account &amp; recovery</b> and create one. You get a <b>recovery phrase</b> — that phrase <i>is</i> your account and your funds. Write it down; no one can restore it for you." },
     { t:"Choose a server",       x:"Pick the <b>official tokumai server</b> from the route dropdown, or paste a custom Nym address if you run your own. It's the exit the mixnet routes your chats to." },
-    { t:"Buy some credit",       x:"Tap <b>Buy credit</b> and top up with crypto. It becomes <b>scrai</b> — anonymous, unlinkable spending tokens, so paying never reveals what you asked." },
+    { t:"Buy some credit",       x:"Tap <b>Buy credit</b> and top up with crypto. It becomes <b>TOKU</b> — anonymous, unlinkable spending tokens, so paying never reveals what you asked." },
     { t:"Start chatting",        x:"That's it — ask anything. The <b>privacy guard</b> warns before you send sensitive data, and <b>smart pruning</b> trims each request so it costs less. All on this device." },
   ];
   // Screenshot-style step images (stand-ins; swap real PNGs later). ts- classes are
@@ -5840,7 +5840,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     `<div class="tutshot"><div class="ts-bar"><i></i><i></i><i></i><span class="ts-t">tokum<b>ai</b></span></div><div class="ts-b"><div class="ts-sw"><div class="ts-logo">tokum<b>ai</b></div><div class="ts-tag">Ask anything. Nobody can tie the question to you.</div><div class="ts-pill"><span class="ts-d"></span>routing through the mixnet · 5 hops</div></div></div></div>`,
     `<div class="tutshot"><div class="ts-bar"><i></i><i></i><i></i><span class="ts-t">Account &amp; recovery</span></div><div class="ts-b"><div class="ts-mt">Your <b>account</b></div><div class="ts-phrase">${_tutWords.map((w,i)=>'<span><b>'+(i+1)+'</b>'+w+'</span>').join("")}</div><div class="ts-pbtn">Create account</div></div></div>`,
     `<div class="tutshot"><div class="ts-bar"><i></i><i></i><i></i><span class="ts-t">Route · server</span></div><div class="ts-b"><div class="ts-mt">Choose a <b>server</b></div><div class="ts-drop"><div class="ts-opt ts-on">tokumai (official)<span class="ts-c">✓</span></div><div class="ts-opt">Custom Nym address…</div></div><div class="ts-addr">4LjM…@38zcSsvjX…</div></div></div>`,
-    `<div class="tutshot"><div class="ts-bar"><i></i><i></i><i></i><span class="ts-t">Buy credit</span></div><div class="ts-b"><div class="ts-mt">Buy <b>credit</b></div><div class="ts-tiers"><div class="ts-ti">€5<b>50k scrai</b></div><div class="ts-ti ts-on">€10<b>110k scrai</b></div><div class="ts-ti">€25<b>290k scrai</b></div></div><div class="ts-meth"><span class="ts-on">NYM</span><span>BTC</span></div></div></div>`,
+    `<div class="tutshot"><div class="ts-bar"><i></i><i></i><i></i><span class="ts-t">Buy credit</span></div><div class="ts-b"><div class="ts-mt">Buy <b>credit</b></div><div class="ts-tiers"><div class="ts-ti">$5<b>500k TOKU</b></div><div class="ts-ti ts-on">$10<b>1.0M TOKU</b></div><div class="ts-ti">$20<b>2.0M TOKU</b></div></div><div class="ts-meth"><span class="ts-on">NYM</span><span>BTC</span></div></div></div>`,
     `<div class="tutshot"><div class="ts-bar"><i></i><i></i><i></i><span class="ts-t">tokum<b>ai</b></span></div><div class="ts-b"><div class="ts-bub ts-u">Explain zero-knowledge proofs simply.</div><div class="ts-bub ts-a">You prove you know a secret without revealing it — like proving you know a password without ever typing it.</div><div class="ts-comp"><span>Message tokumai…</span><span class="ts-s">↑</span></div></div></div>`,
   ];
   let tutI = 0, tutW = 0, tutWired = false;
