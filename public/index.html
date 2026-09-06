@@ -710,6 +710,18 @@
   .idcard .bal{font-family:var(--display);font-weight:700;font-size:25px;margin-top:11px;line-height:1}
   .idcard .bal .u{font-size:13px;color:var(--muted);font-family:var(--mono);font-weight:400}
   .idcard .held{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:4px}
+  .acctstatus{margin:0;padding:0 20px;font-size:12px;color:var(--muted);max-height:0;overflow:hidden;transition:max-height .18s,padding .18s}
+  .acctstatus.on{max-height:80px;padding:9px 20px;border-bottom:1px solid var(--line)}
+  .acctstatus.bad{color:var(--rust)}
+  /* Cancelling an invoice is not the reason you are on this screen: a quiet line under
+     everything, which only turns rust when you reach for it. */
+  .cancelrow{margin-top:13px;padding-top:11px;border-top:1px solid var(--line);text-align:center}
+  .cancellink{font-family:var(--mono);font-size:11px;color:var(--muted);cursor:pointer}
+  .cancellink:hover{color:var(--rust)}
+  .cancelconfirm{margin-top:13px;padding-top:12px;border-top:1px solid var(--line)}
+  .cancelconfirm p{margin:0 0 9px;font-size:12px;line-height:1.55;color:var(--muted)}
+  .cancelconfirm p b{color:var(--bone)}
+  .watchrow.off .wd{background:var(--muted)} .watchrow.off{color:var(--muted)}
   /* "Check for credit" and the held-coins block: the account card carries the whole credit
      state now, so the menu row that used to hold both actions is gone. */
   .checkline{display:inline-flex;align-items:center;gap:7px;margin-top:8px;font-family:var(--mono);font-size:10.5px;color:var(--mix);cursor:pointer}
@@ -1205,6 +1217,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       <span class="mh-root"><span class="ttl">Your <b>account</b></span><span class="x" data-click="closeAccount">✕</span></span>
       <span class="mh-nav"><span class="mback" data-click="acctBack">‹ Account</span><span class="mnav-ttl"></span></span>
     </div>
+    <p class="acctstatus" id="acctStatus"></p>
     <div class="mb" id="acctBody"></div>
   </div>
 </div>
@@ -4649,7 +4662,17 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // M-fe-2: don't leave the revealed mnemonic (or a captured restore phrase) sitting in
   // a JS variable after the modal is dismissed.
   function closeAccount(){ acctPhrase=null; pendingRestorePhrase=null; acctView=null; acctPage=null; redeemPick=false; redeemDollars=null; redeemPartial=false; credResult=""; $("acctScrim").classList.remove("open"); }
-  function acctStatus(m){ const s=$("acctStatus"); if(s) s.textContent=m||""; }
+  // ONE status line for the whole sheet, and it lives in the header — outside the body
+  // that scrolls. It used to be appended to the bottom of every page, which on a phone put
+  // it below the fold: "Delete failed" and "Enter a phrase first" were being written to a
+  // place nobody could see (tester, 2026-09-07). Progress for redeem and check-for-credit
+  // no longer comes through here at all; those two report on the control you pressed.
+  function acctStatus(m, kind){
+    const s=$("acctStatus"); if(!s) return;
+    s.textContent = m||"";
+    s.classList.toggle("bad", kind==="bad");
+    s.classList.toggle("on", !!m);
+  }
   // TEMPORARY hard-coded default operator(s). REMOVE when the signed federation directory
   // ships (see docs/federation-shared-ledger.md — this list becomes that signed, multi-
   // server directory). Not a secret: a Nym address is public (it's how clients reach the
@@ -4794,7 +4817,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         // Browser dev: no server step, just the account.
         b.innerHTML=`<p>You need an account to buy credit and chat. It is a 24-word recovery phrase —
           the only thing you must keep: it is the only way back to your balance.</p>
-          ${acctButtons}<p class="hint" id="acctStatus"></p>`;
+          ${acctButtons}`;
         focusRestore();
         return;
       }
@@ -4819,7 +4842,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
             ${s1done?``:`<div class="hint" style="color:var(--rust);margin-top:6px">↑ set your server first</div>`}
           </div>
         </div>
-        <p class="hint" id="acctStatus" style="margin-top:14px"></p>`;
+`;
       focusRestore();
       return;
     }
@@ -4875,7 +4898,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         + row("migrate","c-migrate","📲","Move to another device","redeem &amp; hand over")
         + `<div class="grouplbl dangergroup">Danger zone</div>`
         + row("danger","c-danger","⚠","New account / Delete","abandons this balance")
-        + `<p class="hint" id="acctStatus" style="margin-top:12px"></p>`;
+       ;
       paintFlat($("redeemSlider"));
       focusRestore();
       return;
@@ -4942,7 +4965,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     };
     const pg = pages[acctPage] || pages.server;
     setNav(pg.t);
-    b.innerHTML = pg.h + `<p class="hint" id="acctStatus" style="margin-top:12px"></p>`;
+    b.innerHTML = pg.h;
     paintFlat($("redeemSlider"));
     focusRestore();
   }
@@ -5015,7 +5038,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       renderAccount();
       acctStatus("New account created — write these words down now. They are the only way back to it.");
     }
-    catch(e){ acctStatus("Could not create account: "+heldMsg(e)); }
+    catch(e){ acctStatus("Could not create account: "+heldMsg(e), "bad"); }
   }
 
   // "Redeem it first" has to be an ACTION, not advice. Held coins are bearer money and the
@@ -5042,7 +5065,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   async function doAccountRestore(confirmed){
     // In the confirm step the textarea is gone — fall back to the captured phrase.
     const t=$("restorePhrase"); const phrase=(t?t.value.trim():"") || pendingRestorePhrase || "";
-    if(!phrase){ acctStatus("Enter a phrase first."); return; }
+    if(!phrase){ acctStatus("Enter a phrase first.", "bad"); return; }
     try{
       await Backend.accountRestore(phrase, !!confirmed);
       pendingRestorePhrase=null;
@@ -5058,7 +5081,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         pendingRestorePhrase=phrase; acctView="confirmRestore"; renderAccount();
         return;
       }
-      acctStatus("Restore failed: "+msg);
+      acctStatus("Restore failed: "+msg, "bad");
     }
   }
   // Strip the machine prefix off a HELD_CREDIT error for display.
@@ -5081,7 +5104,6 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         const done = Math.floor((startHeld-held)/100000);
         redeemStep = totalChunks>1 ? `$${done+1} of $${totalChunks}` : "redeeming over the mixnet";
         redeemPct = Math.round((done/totalChunks)*100) + Math.round(100/totalChunks/3);
-        acctStatus(`redeeming $${done+1} of $${totalChunks} over the mixnet…`);
         renderAccount();
         const r=await Backend.redeem();
         balance=r.balance; if(typeof r.held==="number") held=r.held;
@@ -5089,7 +5111,6 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       }
       redeemDollars=null; redeemPick=false; redeeming=false;
       renderAccount();
-      acctStatus(`✓ redeemed ${formatToku(startHeld-held)} into your session balance`);
     }catch(e){
       // A stale credential discarded mid-loop (or any error) stops here; refresh + report.
       // Whatever already went through is ON the session — say so, or people read a failure
@@ -5109,7 +5130,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     if(!confirmed){ askDelete(); return; }
     // confirmed → authorise discarding held ecash along with the phrase.
     try{ await Backend.accountDelete(true); await refreshState(); acctBack(); acctStatus("Account deleted"); }
-    catch(e){ acctStatus("Delete failed: "+heldMsg(e)); }
+    catch(e){ acctStatus("Delete failed: "+heldMsg(e), "bad"); }
   }
   // Migrate to another device: redeem ALL held credit onto the seed-recoverable session
   // layer FIRST (so nothing device-local is left behind and there is no double-spend
@@ -5134,20 +5155,18 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     }catch(e){
       try{ await refreshState(); }catch(_){}
       renderBal(); renderAccount();
-      acctStatus("Migration prep failed: "+(e.message||e));
+      acctStatus("Migration prep failed: "+(e.message||e), "bad");
     }finally{ redeeming=false; }
   }
   // Sweep any settled-but-uncollected payment (entitlement) into held credit.
   async function checkCredit(){
     if(checking) return;
     checking = true; credResult = ""; renderAccount();
-    acctStatus("checking the mixnet for settled payments…");
     try{
       const r=await Backend.collect(); lastCredCheck = Date.now();
       await refreshState();
       credResult = r&&r.collected>0 ? `+${formatToku(r.collected)} TOKU collected` : "nothing outstanding";
       checking = false; renderAccount();
-      acctStatus(r&&r.collected>0?`+${formatToku(r.collected)} TOKU collected — held, funds your next message.`:"no outstanding credit");
     }catch(e){
       credResult = "could not reach the server";
       checking = false; renderAccount();
@@ -5502,7 +5521,30 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     }
     if(expired) renderPending();   // rebuild once, only when something dropped off
   }
-  function resumePayment(id){ const inv=pendingList.find(p=>p.invoiceId===id); if(inv) openPayment(inv); }
+  // Cancelling was only reachable from the pending list — you had to leave the very window
+  // you were standing in. The list keeps its ✕; this is the second way in (2026-09-07).
+  let payCancelAsk = false;
+  function askCancelInvoice(){
+    if(!activeInvoice) return;
+    payCancelAsk = true;
+    stopPoll();                       // stop watching while the question is open
+    renderPay(activeInvoice);
+    const w=$("watchState"); if(w){ w.textContent="paused while you decide"; w.className="watchrow off"; }
+  }
+  function dismissCancelAsk(){
+    const inv = activeInvoice; if(!inv) return;
+    payCancelAsk = false;
+    openPayment(inv);                 // the only path that starts the watch again
+  }
+  function confirmCancelInvoice(){
+    const inv = activeInvoice; if(!inv) return;
+    payCancelAsk = false;
+    cancelPending(inv.invoiceId);     // drops it locally + tells the server, best effort
+    backToChooser();
+    $("buyStatus").textContent = "Invoice cancelled. Nothing was charged.";
+  }
+
+  function resumePayment(id){ payCancelAsk=false; const inv=pendingList.find(p=>p.invoiceId===id); if(inv) openPayment(inv); }
   // Cancel a pending payment: gone from the UI at once, and told the server to stop
   // watching it (best-effort — it would expire on its own regardless).
   function cancelPending(id){
@@ -5510,7 +5552,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     removePending(id); renderPending();
     Promise.resolve(Backend.invoiceCancel(id)).catch(()=>{});
   }
-  function backToChooser(){ stopPoll(); stopCountdown(); activeInvoice=null; showChooser(true); renderTiers(); renderContinue(); renderPending(); $("buyStatus").textContent="Pick an amount and a coin."; }
+  function backToChooser(){ payCancelAsk=false; stopPoll(); stopCountdown(); activeInvoice=null; showChooser(true); renderTiers(); renderContinue(); renderPending(); $("buyStatus").textContent="Pick an amount and a coin."; }
   // Which coin the tier buttons will raise an invoice for. NYM is the default —
   // it leads the row. Bitcoin stays available; Monero is not selectable yet.
   let selectedMethod = "nyx";
@@ -5822,6 +5864,15 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       ${isNymInv?`<div id="watchState" class="watchrow"><span class="wd"></span> connecting to the Nyx chain…</div>`:""}
       ${webPayUrl(inv)?`<button class="btn" style="display:block;width:100%;margin-top:10px" data-click="payOnWeb">Open these details on tokumai.com ↗</button>`:""}
       ${inv.checkout?`<a class="btn" style="display:inline-block;margin:2px 0 4px" href="${escAttr(safeHttpUrl(inv.checkout))}" data-click="openLink" data-click-pass="href" data-prevent="1">Open BTCPay checkout (dev shortcut)</a>`:""}
+      ${payCancelAsk
+        ? `<div class="cancelconfirm">
+             <p><b>Cancel this invoice?</b> Nothing is charged, and it disappears from your pending list.</p>
+             <p>If you have already sent the transfer, <b>the credit still arrives</b> — it just is not
+                watched for you any more. Pick it up with <b>Check for credit</b> in your account.</p>
+             <div class="btnrow"><button class="btn danger" data-click="confirmCancelInvoice">Cancel invoice</button>
+               <button class="btn" data-click="dismissCancelAsk">Keep waiting</button></div>
+           </div>`
+        : `<div class="cancelrow"><span class="cancellink" data-click="askCancelInvoice">Cancel this invoice</span></div>`}
     </div>`;
   }
   function copyText(text, btn){
@@ -5840,7 +5891,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   Object.assign(window,{ pickModel, copyPhrase, newChat, openSession, deleteSession, exportSession, toggleMenu, selectModelIdx,
     autogrow, onKey, sendMsg, retryMsg, showHandover, downloadHandover, closeHandover, pickImport, importHandover,
     cancelMsg, resendMsg, showDismissed, retrieveMsg, openConnSheet, closeConnSheet, rebuildRoute, rebuildRouteFromSheet, copyResumeLog, routeDismiss, useOfficialServer, iterateImg,
-    openBuy, closeBuy, buyTier, buyOrInvoice, checkInvite, selectCoin, pickVariant, copyUri, copyTopupId, openTopupSheet, closeTopupSheet, confirmTopup, openAccount, closeAccount, doAccountNew, doAccountReveal, doAccountRestore, doAccountDelete, doMigrate, doRedeem, redeemSliderChanged, toggleRedeemPick, startQrScan, stopQrScan,
+    openBuy, closeBuy, buyTier, buyOrInvoice, checkInvite, selectCoin, pickVariant, copyUri, copyTopupId, openTopupSheet, closeTopupSheet, confirmTopup, openAccount, closeAccount, doAccountNew, doAccountReveal, doAccountRestore, doAccountDelete, doMigrate, doRedeem, redeemSliderChanged, toggleRedeemPick, askCancelInvoice, dismissCancelAsk, confirmCancelInvoice, startQrScan, stopQrScan,
     showRestore, askNew, redeemThen, cancelAcctView, saveServer, srvSelected, qNav, scrollToBottom, reopenGuard, checkCredit,
     openEntryPicker, showExitInfo, chooseGateway, closeGw, filterGw, toggleGwOpt,
     acceptTerms, declineTerms, termsAgreeToggle, chooseModel, openLink, toggleImgOvl, saveImgTap, liveNudgeUse, liveNudgeSkip, reconnectMix, runMixPing, resetMixPerf,
