@@ -46,11 +46,22 @@ def main(path: str) -> int:
         s = s.replace("{{FILE_%s}}" % k, v)
     for k, v in META.items():
         s = s.replace("{{META_%s}}" % k, v)
-    # Download buttons: everything downloadable except iOS, which waits on TestFlight.
-    for k in ("MACOS", "WINDOWS", "DEB", "APPIMAGE", "ANDROID"):
-        s = s.replace("{{DL_%s}}" % k, '<a class="btn primary" href="#">Download</a>')
-    s = s.replace("{{DL_IOS}}", '<span class="btn off">TestFlight pending</span>')
-    s = s.replace("{{DL_IOS_GUIDE}}", '<span class="btn off">Sideload guide for testers</span>')
+    # Download buttons: the SAME labels and primary/secondary split scrai-faucet renders,
+    # or the preview shows two identical "Download" buttons on the Linux card and you end
+    # up reviewing a layout the site never has.
+    for k, label, primary in (
+        ("MACOS", "Download .dmg", True),
+        ("WINDOWS", "Download installer (.exe)", True),
+        ("DEB", "Download .deb", True),
+        ("APPIMAGE", "AppImage", False),
+        ("ANDROID", "Download .apk", True),
+    ):
+        cls = "btn primary" if primary else "btn"
+        s = s.replace("{{DL_%s}}" % k, '<a class="%s" href="#">%s</a>' % (cls, label))
+    # No TestFlight link yet: an off button for the join link, and NOTHING for the optional
+    # guide — same as the server, which renders an empty string when DL_IOS_GUIDE is unset.
+    s = s.replace("{{DL_IOS}}", '<span class="btn off">Join on TestFlight · not published yet</span>')
+    s = s.replace("{{DL_IOS_GUIDE}}", "")
     for k in ("MACOS", "WINDOWS", "LINUX", "ANDROID"):
         s = s.replace("{{CLS_%s}}" % k, " has")
     s = s.replace("{{CLS_IOS}}", " soon")

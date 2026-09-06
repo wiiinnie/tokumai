@@ -573,7 +573,10 @@ fn site_html(dl_dir: &Path) -> String {
         // stays offered but experimental (bundled libs clash with newer stacks, see the
         // 2026-08-31 Kali report: grey window from a gvfs/EGL collision).
         ("{{DL_DEB}}", "deb", "Download .deb", true),
-        ("{{DL_APPIMAGE}}", "appimage", "AppImage (experimental)", false),
+        // Label kept short so both Linux buttons sit on ONE line — the card grid gives every
+        // card in a row the same button row, so a wrapped second button would make all of them
+        // taller. "experimental" moved into the card text and the notes overlay.
+        ("{{DL_APPIMAGE}}", "appimage", "AppImage", false),
         ("{{DL_ANDROID}}", "android", "Download .apk", true),
     ] {
         let cls = if primary { "btn primary" } else { "btn" };
@@ -591,6 +594,10 @@ fn site_html(dl_dir: &Path) -> String {
         let cls = if primary { "btn primary" } else { "btn" };
         let html = match env_link(var) {
             Some(u) => format!(r#"<a class="{cls}" href="{u}">{label}</a>"#),
+            // The guide is optional: with no link there is nothing to say, and a dead
+            // "not published yet" button would wrap the mobile row onto a second line —
+            // which the card grid then charges to every card beside it.
+            None if !primary => String::new(),
             None => off(label),
         };
         s = s.replace(ph, &html);
