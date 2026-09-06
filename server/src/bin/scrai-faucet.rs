@@ -682,7 +682,12 @@ async fn read_request(sock: &mut tokio::net::TcpStream, peer: SocketAddr) -> Opt
             if k == "content-length" {
                 len = v.parse().unwrap_or(0);
             } else if k == "x-forwarded-for" {
-                fwd = v.split(',').next().map(|s| s.trim().to_string());
+                // The LAST element, not the first. Caddy APPENDS the peer it saw to
+                // whatever the client sent, so `X-Forwarded-For: 9.9.9.9` arrives as
+                // "9.9.9.9, <real ip>" — reading the first entry let any caller pick
+                // its own rate-limit bucket and hand itself unlimited /api/claim
+                // attempts (audit 2026-09-06). The last entry is the one OUR proxy wrote.
+                fwd = v.rsplit(',').next().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
             }
         }
     }

@@ -4911,6 +4911,13 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     try{
       const r=await Backend.accountNew(!!confirmed);
       await refreshState();
+      // iOS (H1): the phrase is not returned to the webview — it is shown on the native,
+      // biometric-gated screen instead, exactly as "Reveal recovery phrase" does.
+      if(r && r.native){
+        acctView=null; acctPhrase=null; acctPage=null; renderAccount();
+        acctStatus("New account created — the recovery phrase is on the screen in front of you. Write it down now: it is the only way back to this account.");
+        return;
+      }
       acctView=null; acctPhrase=r.mnemonic;
       // The new phrase renders on the "phrase" page only — leaving the view on the danger
       // page created the account and showed the words to nobody, which is a lost account

@@ -62,7 +62,12 @@
   // exactly the check the app and the server already make. Without that this page would
   // be a redirector on our own domain, which is a phishing primitive.
   var out = document.getElementById("out");
-  var esc = function(s){ var d = document.createElement("div"); d.textContent = String(s == null ? "" : s); return d.innerHTML; };
+  // Escapes for BOTH contexts, text and attribute. The old textContent/innerHTML trick
+  // escapes & < > but NOT quotes, and this page interpolates fragment-controlled values
+  // into data-copy="..." and href="..." — a value carrying a double quote broke out of
+  // the attribute and ran script on our own payment domain (audit 2026-09-06).
+  var ESCMAP = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;", "`": "&#96;" };
+  var esc = function(s){ return String(s == null ? "" : s).replace(/[&<>"'`]/g, function(c){ return ESCMAP[c]; }); };
   var MAX = 200;
   var clean = function(s){ return typeof s === "string" ? s.slice(0, MAX) : ""; };
   var isMollie = function(u){

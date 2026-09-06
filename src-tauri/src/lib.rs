@@ -1064,9 +1064,10 @@ fn has_held_value(w: &wallet::Wallet) -> bool {
 /// credit" and turn it into an explicit confirm instead of a generic failure.
 const HELD_CREDIT_ERR: &str = "HELD_CREDIT: switching accounts here discards un-redeemed held ecash (bearer money, not recoverable from the seed). Redeem it into your session balance first, or confirm to discard it.";
 
-#[tauri::command]
-fn account_new(app: AppHandle, force: Option<bool>) -> Result<Value, String> {
-    let dir = data_dir(&app)?;
+/// Create + persist a fresh account, refusing to silently discard held bearer ecash
+/// unless the UI has confirmed the loss (M-cl-1). Returns (data dir, mnemonic, fingerprint).
+fn account_new_inner(app: &AppHandle, force: Option<bool>) -> Result<(PathBuf, String, String), String> {
+    let dir = data_dir(app)?;
     let prev = wallet::load(&dir);
     // Backstop against silently discarding held bearer purses — refuse unless the UI
     // has explicitly confirmed the loss (M-cl-1). Independent of any CSP/XSS mitigation.
@@ -1076,7 +1077,30 @@ fn account_new(app: AppHandle, force: Option<bool>) -> Result<Value, String> {
     let a = account::create_account();
     let w = wallet::Wallet { mnemonic: Some(a.mnemonic.clone()), server: prev.server, entry_gateway: prev.entry_gateway, ..Default::default() };
     wallet::save(&dir, &w)?;
-    Ok(json!({ "mnemonic": a.mnemonic, "fingerprint": account::fingerprint(&a.account_id) }))
+    let fp = account::fingerprint(&a.account_id);
+    Ok((dir, a.mnemonic, fp))
+}
+
+#[cfg(not(target_os = "ios"))]
+#[tauri::command]
+fn account_new(app: AppHandle, force: Option<bool>) -> Result<Value, String> {
+    let (_dir, mnemonic, fingerprint) = account_new_inner(&app, force)?;
+    Ok(json!({ "mnemonic": mnemonic, "fingerprint": fingerprint }))
+}
+
+/// iOS (H1): the seed never crosses the IPC boundary. `account_reveal` and
+/// `account_migrate_qr` both show it on the native, biometric-gated screen — and a freshly
+/// minted phrase is the same secret as a revealed one. Returning it here put the 24 words
+/// in the DOM the moment 0.5.2 started rendering the new phrase, which is exactly the reach
+/// an XSS in the webview would need (audit 2026-09-06). Returns no secret.
+#[cfg(target_os = "ios")]
+#[tauri::command]
+fn account_new(app: AppHandle, force: Option<bool>) -> Result<Value, String> {
+    let (dir, _mnemonic, fingerprint) = account_new_inner(&app, force)?;
+    let app2 = app.clone();
+    app.run_on_main_thread(move || ios_secure::reveal_phrase(app2, dir, "Recovery phrase"))
+        .map_err(|e| e.to_string())?;
+    Ok(json!({ "native": true, "fingerprint": fingerprint }))
 }
 
 /// Wipe the on-device account (mnemonic + held credentials + pending), keeping the

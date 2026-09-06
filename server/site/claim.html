@@ -79,7 +79,12 @@
   var okMemo = function(s){ return /^[A-Za-z0-9-]{4,64}$/.test(s); };
 
   function say(kind, html){ msg.innerHTML = html ? '<div class="msg ' + kind + '">' + html + '</div>' : ""; }
-  function esc(s){ var d = document.createElement("div"); d.textContent = String(s == null ? "" : s); return d.innerHTML; }
+  // Escapes for BOTH contexts, text and attribute. The old textContent/innerHTML trick
+  // escapes & < > but NOT quotes, and this page interpolates fragment-controlled values
+  // into data-copy="..." and href="..." — a value carrying a double quote broke out of
+  // the attribute and ran script on our own payment domain (audit 2026-09-06).
+  var ESCMAP = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;", "`": "&#96;" };
+  var esc = function(s){ return String(s == null ? "" : s).replace(/[&<>"'`]/g, function(c){ return ESCMAP[c]; }); };
 
   function decode(frag){
     var b = frag.replace(/-/g, "+").replace(/_/g, "/");

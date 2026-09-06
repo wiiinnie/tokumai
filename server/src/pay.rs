@@ -455,6 +455,10 @@ impl Pay {
             return Err(format!("too many invite-code checks from this account — retry in ~{retry}s"));
         }
         hits.push(now);
+        // Same opportunistic prune `admit_invoice` does for its two maps — without it every
+        // throwaway account that ever typed a code leaves a permanent entry, and account ids
+        // are free to mint (audit 2026-09-06).
+        self.code_hits.retain(|_, v| v.iter().any(|t| now - t < INVOICE_ACCT_WINDOW_MS));
         Ok(())
     }
 
