@@ -3,9 +3,9 @@
 #
 # Uploads every release artefact found locally (macOS .dmg from `npm run tauri:build`,
 # Windows .exe and Linux .AppImage/.deb from the CI workflows, dropped into dist/downloads/) to the VPS and installs them into
-# /opt/scrai/site/dl, which Caddy serves as https://<site>/dl/<file>. Prints the sha256
-# of each file and the DL_* lines to paste into /opt/scrai/.env (the site shows a
-# download button only for links present there; `systemctl restart scrai-faucet` after).
+# /opt/tokumai/site/dl, which Caddy serves as https://<site>/dl/<file>. Prints the sha256
+# of each file and the DL_* lines to paste into /opt/tokumai/.env (the site shows a
+# download button only for links present there; `systemctl restart tokumai-faucet` after).
 #
 # Usage:  scripts/publish-downloads.sh <admin_user>@<vps-host> [https://site-host] [--force]
 #         (target falls back to DEPLOY_TARGET; site host defaults to
@@ -49,7 +49,7 @@ echo "→ version $ver · local files:"
 for f in "${files[@]}"; do printf '   %s  (%s)\n' "$(basename "$f")" "$(du -h "$f" | cut -f1)"; done
 
 echo "→ reading the server's manifest"
-REMOTE=$(ssh "${SSH_OPTS[@]}" "$TARGET" 'cat /opt/scrai/site/dl/manifest.json 2>/dev/null || echo "{}"')
+REMOTE=$(ssh "${SSH_OPTS[@]}" "$TARGET" 'cat /opt/tokumai/site/dl/manifest.json 2>/dev/null || echo "{}"')
 
 # Decide what to upload and build the merged manifest (python: JSON without extra tools).
 MANIFEST="$SRC/target/manifest.json"
@@ -102,12 +102,12 @@ echo "→ upload → $TARGET:~/scrai-stage/dl/  (${#files[@]} file(s) incl. mani
 ssh "${SSH_OPTS[@]}" "$TARGET" 'rm -rf ~/scrai-stage/dl && mkdir -p ~/scrai-stage/dl'
 rsync -a --info=progress2 -e "ssh ${SSH_OPTS[*]}" "${files[@]}" "$TARGET:~/scrai-stage/dl/"
 
-echo "→ install into /opt/scrai/site/dl (sudo once)"
+echo "→ install into /opt/tokumai/site/dl (sudo once)"
 ssh -t "${SSH_OPTS[@]}" "$TARGET" '
   set -e
-  sudo install -d -o scrai -g scrai -m 755 /opt/scrai/site/dl
-  sudo install -o scrai -g scrai -m 644 ~/scrai-stage/dl/* /opt/scrai/site/dl/
-  ls -la /opt/scrai/site/dl/
+  sudo install -d -o scrai -g scrai -m 755 /opt/tokumai/site/dl
+  sudo install -o scrai -g scrai -m 644 ~/scrai-stage/dl/* /opt/tokumai/site/dl/
+  ls -la /opt/tokumai/site/dl/
 '
 
 echo
