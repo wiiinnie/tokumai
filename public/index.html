@@ -262,8 +262,8 @@
   .pm.soon{opacity:.5;cursor:not-allowed}
   /* Between the name and the tag, in one row. They live OUTSIDE the 26px square logo box
      the other tiles use — inside it they had no width to spread into and stacked. */
-  .cardmarks{display:flex;align-items:center;gap:3px;flex:0 1 auto;flex-wrap:nowrap;min-width:0;overflow:hidden}
-  .cardmarks svg{border-radius:3px;display:block;flex:none}
+  .cardmarks{display:flex;align-items:center;gap:5px;flex:0 1 auto;flex-wrap:nowrap;min-width:0;overflow:hidden}
+  .cardmarks svg{border-radius:4px;display:block;flex:none;height:26px;width:auto}
   .pm.dis,.tiletier.dis{opacity:.32;pointer-events:none;filter:saturate(.4)}
   /* Chain picker: the chain belongs to the coin, so it hangs off the tile row rather than
      becoming a fifth tile. */
@@ -304,7 +304,7 @@
   /* Twice the height of a plain row — the card rail carries as much weight as a coin and
      read as an afterthought at 11px padding. Still shorter than the stacked coin tiles. */
   .pm.row{flex:1 1 100%;flex-direction:row;justify-content:flex-start;gap:12px;padding:24px 14px;min-width:0}
-  .pm.row .pmname{flex:none;white-space:nowrap}
+  .pm.row .pmname{flex:none;white-space:nowrap;font-size:15px}
   .pm.row .pmtag{margin-left:auto;flex:none}
   /* What the chosen rail tells the outside world. Sits under the tiles, where the choice
      is made — the payment panel's version comes too late to inform it. */
@@ -942,6 +942,12 @@
       color:var(--bone);font-family:var(--body);font-weight:600;font-size:13px;cursor:pointer}
     .swipeexp{left:0;background:var(--mix)}    /* revealed by a RIGHT swipe */
     .swipedel{right:0;background:var(--rust)}  /* revealed by a LEFT swipe */
+    /* Five card marks at desktop size do not fit a phone's width, and .cardmarks clips
+       with overflow:hidden — so Google Pay would silently vanish rather than shrink. */
+    .pm.row{padding:18px 12px}
+    .pm.row .pmname{font-size:13.5px}
+    .cardmarks{gap:4px}
+    .cardmarks svg{height:21px}
   }
   /* Appearance theme picker (Settings) */
   .themepick{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:0 0 6px}
@@ -5454,7 +5460,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     // and the server stores that version with the invoice.
     el.innerHTML = `<div class="consent">
       <p class="legalline">Sold under our ${legalLink("terms","Terms")}. Please read the
-        ${legalLink("terms","right of withdrawal")} and the ${legalLink("privacy","privacy notice")} first.</p>
+        ${legalLink("terms#withdrawal","right of withdrawal")} and the ${legalLink("privacy","privacy notice")} first.</p>
       <div class="ck${consentImmediate?" on":""}" data-click="toggleConsent" data-args="&quot;start&quot;">
         <span class="box">✓</span><span class="cktx">I ask you to <b>start delivering the credit immediately</b>,
           before the 14-day withdrawal period ends.</span></div>
@@ -5462,7 +5468,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         <span class="box">✓</span><span class="cktx">I understand that I <b>lose my right of withdrawal</b>
           once the credit has been delivered in full.</span></div>
       <button class="btn primary" style="width:100%"${ready?` data-click="startPurchase"`:` disabled`}>Buy now — $${selectedTier} ${rail}</button>
-      <p class="btnhint">${ready?"binding order · payment due on confirmation":"tick both boxes to continue"}</p>
+      ${ready?"":`<p class="btnhint">tick both boxes to continue</p>`}
     </div>`;
   }
   // Our own legal pages live on the site the server names. With no site configured the
