@@ -13,17 +13,28 @@ val tauriProperties = Properties().apply {
     }
 }
 
-// Release signing: the keystore lives OUTSIDE the repo (~/.scrai-android/, created once with
-// keytool). Without the properties file the release APK is built unsigned (not installable) —
-// the build says so instead of failing, so CI/checks still run.
+// Release signing: the keystore lives OUTSIDE the repo (~/.tokumai-android/, created once
+// with keytool). Without the properties file the release APK is built unsigned (not
+// installable) — the build says so instead of failing, so CI/checks still run.
+//
+// The pre-rebrand location is still read as a fallback, so a machine that has not moved
+// its keystore keeps building. Note that the two keystores are DIFFERENT app identities:
+// an APK signed with one cannot update an install of the other. That break was accepted
+// deliberately (2026-09-07) while distribution is still a handful of sideloaded APKs —
+// after Play publication the key can never change again.
 val keystoreProperties = Properties().apply {
-    val path = System.getenv("SCRAI_ANDROID_KEYSTORE_PROPS")
-        ?: (System.getProperty("user.home") + "/.scrai-android/keystore.properties")
+    val home = System.getProperty("user.home")
+    val path = System.getenv("TOKUMAI_ANDROID_KEYSTORE_PROPS")
+        ?: System.getenv("SCRAI_ANDROID_KEYSTORE_PROPS")
+        ?: listOf("$home/.tokumai-android/keystore.properties", "$home/.scrai-android/keystore.properties")
+            .firstOrNull { file(it).exists() }
+        ?: "$home/.tokumai-android/keystore.properties"
     val propFile = file(path)
     if (propFile.exists()) {
         propFile.inputStream().use { load(it) }
+        logger.lifecycle("tokumai: signing with the keystore named in $path")
     } else {
-        logger.warn("scrai: no keystore.properties at $path — release APK will be UNSIGNED")
+        logger.warn("tokumai: no keystore.properties at $path — release APK will be UNSIGNED")
     }
 }
 
@@ -41,10 +52,15 @@ android {
     signingConfigs {
         create("release") {
             if (keystoreProperties.containsKey("storeFile")) {
-                storeFile = file(keystoreProperties["storeFile"] as String)
-                storePassword = keystoreProperties["storePassword"] as String
-                keyAlias = keystoreProperties["keyAlias"] as String
-                keyPassword = keystoreProperties["keyPassword"] as String
+                // Trailing whitespace in a .properties value survives Properties.load (only
+                // LEADING space is stripped), and the failure it produces names a path that
+                // looks perfectly correct — the spaces are invisible in the message. Trim
+                // everything rather than make anyone find that twice.
+                fun prop(k: String) = (keystoreProperties[k] as String).trim()
+                storeFile = file(prop("storeFile"))
+                storePassword = prop("storePassword")
+                keyAlias = prop("keyAlias")
+                keyPassword = prop("keyPassword")
             }
         }
     }

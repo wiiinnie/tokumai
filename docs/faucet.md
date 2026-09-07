@@ -34,7 +34,7 @@ Built locally (no CI yet): `npm run tauri android build -- --apk --target aarch6
 `JAVA_HOME=/opt/homebrew/opt/openjdk@17`, `ANDROID_HOME=~/Library/Android/sdk`,
 `NDK_HOME=$ANDROID_HOME/ndk/27.3.13750724`. Output
 `src-tauri/gen/android/app/build/outputs/apk/…/release/*.apk`, signed with the release
-keystore in `~/.scrai-android/` (properties file next to it; never in the repo). Copy the
+keystore in `~/.tokumai-android/` (properties file next to it; never in the repo). Copy the
 APK into `dist/downloads/` and run `publish-downloads.sh` — manifest key `android`, the site
 shows the card and the Termux checksum line. First-build limits: no picture save/share, no
 handover export on Android (the rest — chat, buy, guard, image generation — is the same core).

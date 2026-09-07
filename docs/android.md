@@ -8,12 +8,51 @@ cmdline-tools;latest, emulator + `system-images;android-34;google_apis;arm64-v8a
 ```
 export JAVA_HOME=/opt/homebrew/opt/openjdk@17 ANDROID_HOME=$HOME/Library/Android/sdk \
        NDK_HOME=$ANDROID_HOME/ndk/27.3.13750724 PATH=/opt/homebrew/opt/openjdk@17/bin:$ANDROID_HOME/platform-tools:$PATH
-npm run tauri android build -- --apk --target aarch64        # release, signed with ~/.scrai-android/
+npm run tauri android build -- --apk --target aarch64        # release, signed with ~/.tokumai-android/
 ```
 
-Signing: `~/.scrai-android/scrai-release.jks` + `keystore.properties` (never in the repo); without the
-properties file the release APK is built unsigned. Debug APKs are ~1.3 GB (unoptimised nym-sdk) —
-use release APKs for emulator tests.
+## Signing
+
+`~/.tokumai-android/tokumai-release.jks` + `keystore.properties` (never in the repo); without the
+properties file the release APK is built unsigned. The build prints which properties file it used.
+`~/.scrai-android/` is still read as a fallback, and `TOKUMAI_ANDROID_KEYSTORE_PROPS` overrides both.
+
+Create it once (the password is yours — it must not end up in a shell history you share):
+
+```
+# keytool lives in the JDK, which is not on PATH on this Mac (nor is apksigner's runtime)
+mkdir -p ~/.tokumai-android && cd ~/.tokumai-android
+/opt/homebrew/opt/openjdk@17/bin/keytool -genkeypair -v \
+        -keystore tokumai-release.jks -alias tokumai \
+        -keyalg RSA -keysize 4096 -validity 10000 \
+        -dname "CN=tokumai, O=Hermes Blockchain Ventures, C=DE"
+```
+
+then write `~/.tokumai-android/keystore.properties` (mode 600):
+
+```
+storeFile=/Users/<you>/.tokumai-android/tokumai-release.jks
+storePassword=…
+keyAlias=tokumai
+keyPassword=…
+```
+
+**The keystore IS the app's identity.** An APK signed with a different key cannot update an
+existing install — the user has to uninstall first, losing the app's data (the account phrase
+must be exported beforehand). The key was changed once, on 2026-09-07, from `CN=ScrambleAI` to
+`CN=tokumai`, deliberately and while distribution was still a handful of sideloaded APKs. After
+publication on Play it can never change again: Play pins the signing identity for the lifetime of
+the listing. Back the file up somewhere you will still have in ten years; losing it means losing
+the ability to ship an update at all.
+
+Check what an APK is actually signed with (same missing-runtime trap):
+
+```
+JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=$JAVA_HOME/bin:$PATH \
+  $ANDROID_HOME/build-tools/36.0.0/apksigner verify --print-certs <apk>
+```
+
+Debug APKs are ~1.3 GB (unoptimised nym-sdk) — use release APKs for emulator tests.
 
 ## TLS on Android — the two things that were missing (2026-08-30)
 
