@@ -5839,6 +5839,10 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         "Because you asked for delivery to begin at once and confirmed that you",
         "thereby lose it, your 14-day right of withdrawal has expired with full",
         "delivery (§ 356 (5) BGB / Art. 16 (m) Consumer Rights Directive).",
+        "",
+        "This does not touch your statutory rights for digital products",
+        "(§§ 327 ff. BGB). If this payment went through and no credit arrived,",
+        "quote the receipt number above and we will credit you.",
       ],
       consent: [
         "1. I ask you to start delivering the credit immediately, before the",
@@ -6001,7 +6005,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         <div class="paylead">Pay $${Number(inv.amountUsd||0).toFixed(2)} · ${formatToku((inv.amountToku ?? inv.amountScrai)||0)} TOKU by card · expires <span id="payExpiry">…</span></div>
         <div class="cardwait"><b>Checkout opened in your browser.</b> Finish the payment there — your credit is picked up here automatically, you don’t need to come back to any page.</div>
         ${btn}${webBtn}
-        <div class="cardpriv">Mollie (EU) sees your name, card and IP address — never your tokumai account or what you use it for. Once collected, the credit is unlinkable, exactly like a coin purchase. No refunds after checkout.</div>
+        <div class="cardpriv">Mollie (EU) sees your name, card and IP address — never your tokumai account or what you use it for. Once collected, the credit is unlinkable, exactly like a coin purchase. If a payment goes through and no credit arrives, we credit you — see the Terms.</div>
         ${payCancelAsk
           ? `<div class="cancelconfirm">
                <p><b>Cancel this invoice?</b> Nothing is charged, and it disappears from your pending list.</p>

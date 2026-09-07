@@ -99,7 +99,7 @@ const PAID_HTML: &str = r##"<!doctype html>
     <h1>You can close this tab</h1>
     <p><b>The app takes it from here.</b> If the payment went through, it is picked up on its own and your credit is collected — usually within a few seconds, no further steps.</p>
     <p>If you cancelled, or the payment failed, nothing was charged; pick an amount in the app again.</p>
-    <div class="fine">This page holds no order details and sets no cookie. Once collected, the credit is unlinkable to this payment. No refunds after checkout.</div>
+    <div class="fine">This page holds no order details and sets no cookie. Once collected, the credit is unlinkable to this payment. If a payment went through and no credit arrived, quote your receipt number and we will credit you.</div>
   </div>
 </div>
 </body>
