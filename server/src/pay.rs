@@ -1201,7 +1201,7 @@ impl Gateway {
             return nyx.check_paid(&inv.provider_ref, inv.expected_unym, pin.as_deref()).await;
         }
         if inv.method == "card" {
-            return self.card.check_status(&inv.provider_ref).await;
+            return self.card.check_status(inv).await;
         }
         self.rail.check_status(&inv.provider_ref).await
     }
@@ -1859,12 +1859,9 @@ impl CardRail {
         let CardRail::Mollie { api_key, redirect_url } = self else {
             return Err("card payments are not configured on this server".into());
         };
-        // Test mode is EUR-only at Mollie, so the test rail charges the tile's number in
-        // EUR 1:1 — a placeholder amount, nothing is converted. Live charges the USD tile
-        // (the TOKU price is fixed per USD; Mollie converts to the payout currency).
-        let currency = if api_key.starts_with("test_") { "EUR" } else { "USD" };
+        let (currency, value) = quoted_amount(api_key, usd);
         let body = json!({
-            "amount": { "currency": currency, "value": format!("{usd}.00") },
+            "amount": { "currency": currency, "value": value },
             "description": "tokumai credit",
             "redirectUrl": redirect_url,
             // No `method`: the hosted checkout offers every method enabled in the Mollie
@@ -1916,10 +1913,14 @@ impl CardRail {
     /// "paid" | "pending" | "expired". Only Mollie's `paid` settles — `authorized` is the
     /// capture flow we do not use. A 429 (rate limit) is "nothing new yet": the next
     /// 10 s poll re-asks, and our volume is nowhere near the limit anyway.
-    async fn check_status(&self, provider_ref: &str) -> Result<String, String> {
+    ///
+    /// Takes the whole invoice, not just the reference: `paid` alone never settles, the
+    /// payment must also be OUR payment for OUR amount (see `settlement_matches`).
+    async fn check_status(&self, inv: &Inv) -> Result<String, String> {
         let CardRail::Mollie { api_key, .. } = self else {
             return Err("card payments are not configured on this server".into());
         };
+        let provider_ref = inv.provider_ref.as_str();
         if !provider_ref.starts_with("tr_") || !provider_ref.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
             return Err("not a Mollie payment reference".into());
         }
@@ -1928,12 +1929,25 @@ impl CardRail {
             Err(MollieErr::RateLimited(_)) => return Ok("pending".into()),
             Err(MollieErr::Other(e)) => return Err(e),
         };
-        Ok(match v.get("status").and_then(|s| s.as_str()).unwrap_or("") {
-            "paid" => "paid",
-            "canceled" | "expired" | "failed" => "expired",
-            _ => "pending",
+        let status = v.get("status").and_then(|s| s.as_str()).unwrap_or("");
+        if status != "paid" {
+            return Ok(match status {
+                "canceled" | "expired" | "failed" => "expired",
+                _ => "pending",
+            }
+            .into());
         }
-        .into())
+        // Settlement is the one place where being wrong costs real money, so the reply has
+        // to agree with the invoice we raised — not merely say "paid". There is no known
+        // path to a mismatch today (the server creates the payment and looks it up by its
+        // own id), which is exactly why a mismatch means something we do not understand
+        // happened: fail closed, leave the invoice pending, and say so in the log.
+        let (currency, value) = quoted_amount(api_key, inv.amount_usd);
+        if let Err(why) = settlement_matches(&v, &inv.id, currency, &value) {
+            eprintln!("scrai-server: REFUSING to settle Mollie {provider_ref} for invoice {}: {why}", inv.id);
+            return Err("this card payment does not match the invoice — it was not credited; contact support".into());
+        }
+        Ok("paid".into())
     }
 }
 
@@ -1943,6 +1957,31 @@ fn is_mollie_url(u: &str) -> bool {
     let Some(rest) = u.strip_prefix("https://") else { return false };
     let host = rest.split('/').next().unwrap_or("");
     host == "mollie.com" || host.ends_with(".mollie.com")
+}
+
+/// The amount we ask Mollie to charge for a `usd` tile. Test mode is EUR-only at Mollie,
+/// so the test rail charges the tile's number in EUR 1:1 — a placeholder, nothing is
+/// converted; live charges the USD tile (the TOKU price is fixed per USD, Mollie converts
+/// to the payout currency). One function, so the settlement check cannot drift away from
+/// what the create asked for.
+fn quoted_amount(api_key: &str, usd: u32) -> (&'static str, String) {
+    let currency = if api_key.starts_with("test_") { "EUR" } else { "USD" };
+    (currency, format!("{usd}.00"))
+}
+
+/// Does this `paid` Mollie payment belong to `expect_ref` and carry the amount we quoted?
+/// Pure, so the rule is testable without the network.
+fn settlement_matches(v: &Value, expect_ref: &str, currency: &str, value: &str) -> Result<(), String> {
+    let order = v.pointer("/metadata/orderId").and_then(|o| o.as_str()).unwrap_or("");
+    if order != expect_ref {
+        return Err(format!("metadata.orderId is {order:?}, expected {expect_ref:?}"));
+    }
+    let got_cur = v.pointer("/amount/currency").and_then(|c| c.as_str()).unwrap_or("");
+    let got_val = v.pointer("/amount/value").and_then(|c| c.as_str()).unwrap_or("");
+    if got_cur != currency || got_val != value {
+        return Err(format!("amount is {got_val} {got_cur}, expected {value} {currency}"));
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -2588,4 +2627,34 @@ mod card_tests {
         assert_eq!(after[0].id, "open2");
     }
 
+    // ---- Mollie settlement (audit M2): `paid` alone must never credit -----------------
+
+    fn mollie_paid(order: &str, value: &str, currency: &str) -> Value {
+        json!({
+            "id": "tr_abc", "status": "paid",
+            "amount": { "currency": currency, "value": value },
+            "metadata": { "orderId": order },
+        })
+    }
+
+    #[test]
+    fn quoted_amount_follows_the_key_mode() {
+        assert_eq!(quoted_amount("test_x", 5), ("EUR", "5.00".to_string()));
+        assert_eq!(quoted_amount("live_x", 25), ("USD", "25.00".to_string()));
+    }
+
+    #[test]
+    fn settlement_needs_our_reference_and_our_amount() {
+        let ok = mollie_paid("inv7", "10.00", "USD");
+        assert!(settlement_matches(&ok, "inv7", "USD", "10.00").is_ok());
+
+        // someone else's payment that happens to be paid
+        assert!(settlement_matches(&mollie_paid("inv8", "10.00", "USD"), "inv7", "USD", "10.00").is_err());
+        // the tile we sold is not the amount that was charged
+        assert!(settlement_matches(&mollie_paid("inv7", "1.00", "USD"), "inv7", "USD", "10.00").is_err());
+        // right number, wrong money (the test/live currency mix-up M2 names)
+        assert!(settlement_matches(&mollie_paid("inv7", "10.00", "EUR"), "inv7", "USD", "10.00").is_err());
+        // a reply without metadata at all settles nothing
+        assert!(settlement_matches(&json!({ "status": "paid" }), "inv7", "USD", "10.00").is_err());
+    }
 }
