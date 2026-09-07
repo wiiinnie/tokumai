@@ -1197,6 +1197,7 @@ async fn invoice(
     method: Option<String>,
     testnet: Option<bool>,
     invite_code: Option<String>,
+    consent: Option<Value>,
 ) -> Result<Value, String> {
     let w = wallet::load(&data_dir(&app)?);
     let srv = server_addr(&w)?;
@@ -1224,6 +1225,24 @@ async fn invoice(
     }
     if let Some(c) = invite_code.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
         req["inviteCode"] = json!(c.to_ascii_uppercase());
+    }
+    // § 356 (5) BGB: a paid purchase carries BOTH consents or it is not raised. The buy
+    // sheet disables the button without them; this is the second of the three gates (the
+    // server holds the third). The invite tile costs the buyer nothing and is exempt.
+    if testnet != Some(true) {
+        let c = consent.unwrap_or(Value::Null);
+        let ok = |k: &str| c.get(k).and_then(|b| b.as_bool()).unwrap_or(false);
+        let version = c
+            .get("version")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|v| !v.is_empty() && v.len() <= 32 && v.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.'))
+            .unwrap_or_default()
+            .to_string();
+        if version.is_empty() || !ok("immediateStart") || !ok("waiverAck") {
+            return Err("this purchase needs both confirmations above — tick them to continue".into());
+        }
+        req["consent"] = json!({ "version": version, "immediateStart": true, "waiverAck": true });
     }
     let resp = transport.round_trip(&srv, &req, SURBS_SMALL, TIMEOUT_MS).await?;
 

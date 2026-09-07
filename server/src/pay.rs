@@ -216,6 +216,37 @@ pub const PAY_KINDS: [&str; 5] = [
     "invite.check",
 ];
 
+/// The version string of the consent wording the buyer confirmed, or "" when the request
+/// carries no (or an incomplete) consent. Both flags must be true — a request that ticks
+/// one box is no better than one that ticks none.
+fn consent_version(v: &Value) -> String {
+    let c = match v.get("consent") {
+        Some(c) => c,
+        None => return String::new(),
+    };
+    let ok = |k: &str| c.get(k).and_then(|b| b.as_bool()).unwrap_or(false);
+    if !ok("immediateStart") || !ok("waiverAck") {
+        return String::new();
+    }
+    c.get("version")
+        .and_then(|s| s.as_str())
+        .map(str::trim)
+        .filter(|s| {
+            !s.is_empty()
+                && s.len() <= 32
+                && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.')
+        })
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// Refuse a purchase whose consent is missing, rather than only recording it. Off by
+/// default: turn it on together with the MIN_APP bump that retires the apps which cannot
+/// send one, otherwise every installed build stops being able to buy.
+fn require_consent() -> bool {
+    crate::cfg("REQUIRE_CONSENT").map(|v| v == "1").unwrap_or(false)
+}
+
 /// The only amount a testnet (faucet-paid) purchase may have.
 pub const TESTNET_USD: u32 = 1;
 
@@ -293,6 +324,14 @@ pub struct Inv {
     /// Lives IN the durable record so a pending payment survives restarts.
     #[serde(default)]
     expected_unym: u64,
+    /// Which wording of the two purchase consents (§ 356 (5) BGB) the buyer agreed to, and
+    /// when this server recorded it. The TEXT itself is versioned in the app and in
+    /// docs/consent/, so a later rewording can never be mistaken for what this buyer saw.
+    /// Empty on an invite invoice (nothing is sold) and on an app that predates consent.
+    #[serde(default)]
+    consent_version: String,
+    #[serde(default)]
+    consent_at: u64,
     /// Raised as a $1 invite purchase (faucet-paid). Persisted so scrai-admin and the
     /// faucet can tell invite buys from real ones after a restart. The stored name stays
     /// `testnet` — a field inside the snapshot is a format, not a label (2026-09-05).
@@ -698,8 +737,8 @@ impl Pay {
     /// PHASE 3 (loop side, fast): apply what the gateway said and build the reply.
     pub fn finish(&mut self, outcome: PayOutcome, gateway: &Gateway) -> Vec<u8> {
         let reply = match outcome {
-            PayOutcome::Create { id, account, usd, our_id, testnet, code, result } => {
-                self.finish_create(&id, account, usd, our_id, testnet, code, result)
+            PayOutcome::Create { id, account, usd, our_id, testnet, code, consent, result } => {
+                self.finish_create(&id, account, usd, our_id, testnet, code, consent, result)
             }
             PayOutcome::Status { id, inv_id, paid } => {
                 if paid {
@@ -758,6 +797,14 @@ impl Pay {
         // deliberately NOT part of the account signature — it only selects HOW to
         // pay, never how much is credited.
         let wanted = v.get("method").and_then(|m| m.as_str()).unwrap_or("btc").to_string();
+        // The third gate on the two purchase consents (the app disables the button, the
+        // Tauri command refuses to send). Recorded whenever it arrives; REQUIRED only once
+        // REQUIRE_CONSENT is set — apps older than 0.5.8 send none, and refusing them here
+        // would break every already-installed build before MIN_APP can rule them out.
+        let consent = consent_version(v);
+        if !testnet && consent.is_empty() && require_consent() {
+            return Err(err(id, "this app is too old to record the purchase confirmations — please update"));
+        }
         if testnet {
             // A tester's $1, paid by the faucet on this host.
             if usd != TESTNET_USD {
@@ -833,7 +880,7 @@ impl Pay {
             return Err(err(id, &e));
         }
         let our_id = rand_hex(16);
-        Ok(PayPending::Create { id: id.clone(), account, usd, our_id, wanted, testnet, code: code.unwrap_or_default() })
+        Ok(PayPending::Create { id: id.clone(), account, usd, our_id, wanted, testnet, code: code.unwrap_or_default(), consent })
     }
 
     fn finish_create(
@@ -844,6 +891,7 @@ impl Pay {
         our_id: String,
         testnet: bool,
         code: String,
+        consent: String,
         result: Result<Raised, String>,
     ) -> Value {
         let raised = match result {
@@ -865,6 +913,8 @@ impl Pay {
                 status: "pending".into(),
                 expires_at: raised.raised.expires_at,
                 expected_unym: raised.expected_unym,
+                consent_at: if consent.is_empty() { 0 } else { now_ms() },
+                consent_version: consent,
                 testnet,
                 invite_code: code,
             },
@@ -1031,7 +1081,7 @@ pub enum PayStep {
 /// Outbound gateway work, prepared on the loop (authenticated + throttled) and run
 /// off it by `run_gateway`. Carries everything `finish` needs — no loop state.
 pub enum PayPending {
-    Create { id: Value, account: String, usd: u32, our_id: String, wanted: String, testnet: bool, code: String },
+    Create { id: Value, account: String, usd: u32, our_id: String, wanted: String, testnet: bool, code: String, consent: String },
     Status { id: Value, inv: Inv },
     Sweep { id: Value, account: String, candidates: Vec<Inv> },
     /// The background chain watcher: nobody is waiting for a reply.
@@ -1040,7 +1090,7 @@ pub enum PayPending {
 
 /// What the gateway said, to be applied on the loop by `Pay::finish`.
 pub enum PayOutcome {
-    Create { id: Value, account: String, usd: u32, our_id: String, testnet: bool, code: String, result: Result<Raised, String> },
+    Create { id: Value, account: String, usd: u32, our_id: String, testnet: bool, code: String, consent: String, result: Result<Raised, String> },
     Status { id: Value, inv_id: String, paid: bool },
     Sweep { id: Value, account: String, paid: Vec<String> },
     Watch { paid: Vec<String> },
@@ -1062,9 +1112,9 @@ impl PayOutcome {
 /// any number of these can run concurrently while chats keep flowing.
 pub async fn run_gateway(pending: PayPending, gateway: &Gateway) -> PayOutcome {
     match pending {
-        PayPending::Create { id, account, usd, our_id, wanted, testnet, code } => {
+        PayPending::Create { id, account, usd, our_id, wanted, testnet, code, consent } => {
             let result = gateway.create_invoice(usd, &our_id, &wanted, testnet).await;
-            PayOutcome::Create { id, account, usd, our_id, testnet, code, result }
+            PayOutcome::Create { id, account, usd, our_id, testnet, code, consent, result }
         }
         PayPending::Status { id, inv } => {
             let paid = matches!(gateway.check_status(&inv).await.as_deref(), Ok("paid"));
@@ -1095,13 +1145,14 @@ pub async fn run_gateway(pending: PayPending, gateway: &Gateway) -> PayOutcome {
 /// client retries), a status/sweep just reports "nothing new" — the next poll re-checks.
 pub fn gateway_busy(pending: PayPending) -> PayOutcome {
     match pending {
-        PayPending::Create { id, account, usd, our_id, testnet, code, .. } => PayOutcome::Create {
+        PayPending::Create { id, account, usd, our_id, testnet, code, consent, .. } => PayOutcome::Create {
             id,
             account,
             usd,
             our_id,
             testnet,
             code,
+            consent,
             result: Err("the payment gateway is busy right now — please try again in a moment".into()),
         },
         PayPending::Status { id, inv } => PayOutcome::Status { id, inv_id: inv.id, paid: false },
@@ -2181,10 +2232,10 @@ mod tests {
         let aid2 = aid.clone();
         pay.invoices.insert("t1".into(), Inv { id: "t1".into(), provider_ref: "TOKU-MEMO2345".into(), account_id: aid2,
             amount_usd: 1, amount_toku: TOKU_PER_USD, method: "nyx".into(), status: "pending".into(),
-            expires_at: now_ms() + 60_000, expected_unym: 59_000_000, testnet: true, invite_code: "TOKU-AAAA-BBBB".into() });
+            expires_at: now_ms() + 60_000, expected_unym: 59_000_000, consent_version: String::new(), consent_at: 0, testnet: true, invite_code: "TOKU-AAAA-BBBB".into() });
         pay.invoices.insert("r1".into(), Inv { id: "r1".into(), provider_ref: "TOKU-REAL2345".into(), account_id: aid,
             amount_usd: 5, amount_toku: 5 * TOKU_PER_USD, method: "nyx".into(), status: "pending".into(),
-            expires_at: now_ms() + 60_000, expected_unym: 295_000_000, testnet: false, invite_code: String::new() });
+            expires_at: now_ms() + 60_000, expected_unym: 295_000_000, consent_version: "2026-09-07".into(), consent_at: now_ms(), testnet: false, invite_code: String::new() });
         let t = pay.testnet_invoices();
         assert_eq!(t.len(), 1);
         assert_eq!((t[0].amount_usd, t[0].memo.as_str(), t[0].unym), (1, "TOKU-MEMO2345", 59_000_000));
@@ -2600,7 +2651,7 @@ mod card_tests {
             id: id.into(), provider_ref: format!("TOKU-{id}"), account_id: "acct".into(),
             amount_usd: 1, amount_toku: TOKU_PER_USD, method: "nyx".into(), status: status.into(),
             expires_at: now_ms() + 60_000, expected_unym: 59_000_000, testnet: false,
-            invite_code: String::new(),
+            consent_version: "2026-09-07".into(), consent_at: now_ms(), invite_code: String::new(),
         };
         pay.invoices.insert("open1".into(), inv("open1", "pending"));
         pay.invoices.insert("open2".into(), inv("open2", "pending"));
@@ -2656,5 +2707,24 @@ mod card_tests {
         assert!(settlement_matches(&mollie_paid("inv7", "10.00", "EUR"), "inv7", "USD", "10.00").is_err());
         // a reply without metadata at all settles nothing
         assert!(settlement_matches(&json!({ "status": "paid" }), "inv7", "USD", "10.00").is_err());
+    }
+
+    // ---- purchase consent (§ 356 (5) BGB) --------------------------------------------
+
+    #[test]
+    fn consent_needs_both_boxes_and_a_sane_version() {
+        let good = json!({ "consent": { "version": "2026-09-07", "immediateStart": true, "waiverAck": true } });
+        assert_eq!(consent_version(&good), "2026-09-07");
+
+        // one box is no better than none — the request must carry BOTH
+        let one = json!({ "consent": { "version": "2026-09-07", "immediateStart": true, "waiverAck": false } });
+        assert_eq!(consent_version(&one), "");
+        // an app that predates consent sends nothing at all
+        assert_eq!(consent_version(&json!({ "usd": 10 })), "");
+        // a version we would have to store must be a plain token, not free text
+        let junk = json!({ "consent": { "version": "<script>", "immediateStart": true, "waiverAck": true } });
+        assert_eq!(consent_version(&junk), "");
+        let empty = json!({ "consent": { "version": "  ", "immediateStart": true, "waiverAck": true } });
+        assert_eq!(consent_version(&empty), "");
     }
 }
