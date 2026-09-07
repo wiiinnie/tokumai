@@ -62,7 +62,7 @@ pub fn provider_of_model(model: &str) -> &'static str {
 /// the SAME one before anything is reserved or sent. That symmetry is the point: until
 /// 2026-09-04 the only server-side guard on a chat was "does pricing.json price this
 /// model", so every rule that lived in the catalog was a client-side suggestion. A
-/// hand-written request naming `gpt-5.4` was served on a TESTNET server — where the
+/// hand-written request naming the full model was served on a TESTNET server — where the
 /// catalog offers nano only, precisely because testers pay in faucet dollars while
 /// OpenAI bills us real ones — and likewise reached any provider the operator had
 /// switched off with PROVIDERS while its key was still in the env.
@@ -201,8 +201,15 @@ fn image_models(pricing: &PricingTable, margin: f64) -> Vec<Value> {
 
 /// OpenAI text/reasoning models we offer. No live listing (`/v1/models` mixes in
 /// embeddings, TTS, fine-tunes): an explicit allowlist, each only when pricing.json prices
-/// it (an unpriced model is never offered). Verified ids/prices: 2026-09-03.
-const OPENAI_MODELS: [&str; 3] = ["gpt-5.4-nano", "gpt-5.4-mini", "gpt-5.4"];
+/// it (an unpriced model is never offered). Verified ids/prices: 2026-09-07.
+///
+/// The 5.4 trio was replaced by the 5.6 pair on 2026-09-07: luna costs what 5.4-nano cost
+/// and terra costs LESS than 5.4 did, both with a 1.05M context and image input, so the
+/// generation moved forward without moving the price. 5.4-mini's tier disappeared with it —
+/// three stops between $0.20 and $2.00 was one choice too many. gpt-6-astra is deliberately
+/// left out until its reasoning behaviour is understood: at $50 per 1M output tokens a
+/// thinking budget costs real money.
+const OPENAI_MODELS: [&str; 2] = ["gpt-5.6-luna", "gpt-5.6-terra"];
 
 /// The ids actually offered: OPENAI_MODELS (comma list) overrides; otherwise the
 /// full allowlist — except on a TESTNET server, where testers pay with faucet dollars
@@ -215,7 +222,7 @@ fn openai_model_ids() -> Vec<String> {
         }
     }
     if crate::pay::is_testnet_server() {
-        return vec!["gpt-5.4-nano".to_string()];
+        return vec!["gpt-5.6-luna".to_string()];
     }
     OPENAI_MODELS.iter().map(|s| s.to_string()).collect()
 }
@@ -366,30 +373,30 @@ mod admission_tests {
     /// touches process-global env (which the chat/pay tests in this crate read).
     #[test]
     fn offered_follows_the_provider_allowlist_and_the_openai_id_list() {
-        let all = ids(&["gpt-5.4-nano", "gpt-5.4-mini", "gpt-5.4"]);
+        let all = ids(&["gpt-5.6-luna", "gpt-5.6-terra"]);
         // routing matches chat::chat's dispatch order
         assert_eq!(provider_of_model("gemini-3.5-flash"), "gemini");
-        assert_eq!(provider_of_model("gpt-5.4"), "openai");
+        assert_eq!(provider_of_model("gpt-5.6-terra"), "openai");
         assert_eq!(provider_of_model("llama-3.3-70b-versatile"), "unknown");
         assert_eq!(provider_of_model("pollinations-512"), "unknown");
 
         // no allowlist → everything priced is offered
         assert!(offered_with("gemini-3.5-flash", "", &all));
-        assert!(offered_with("gpt-5.4", "", &all));
+        assert!(offered_with("gpt-5.6-terra", "", &all));
         // a provider we no longer route is never offered, allowlist or not
         assert!(!offered_with("pollinations-512", "", &all));
         assert!(!offered_with("llama-3.3-70b-versatile", "", &all));
-        assert!(offered_with("gpt-5.4", "all", &all));
+        assert!(offered_with("gpt-5.6-terra", "all", &all));
 
         // a provider the operator switched off is refused even when named directly …
         assert!(offered_with("gemini-3.5-flash", "gemini", &all));
-        assert!(!offered_with("gpt-5.4-nano", "gemini", &all), "openai is off");
+        assert!(!offered_with("gpt-5.6-luna", "gemini", &all), "openai is off");
 
         // the OpenAI id list is an allowlist, not a hint — this is the testnet rule
         // (nano only, because testers pay in faucet dollars and OpenAI bills us real ones)
-        let nano = ids(&["gpt-5.4-nano"]);
-        assert!(offered_with("gpt-5.4-nano", "", &nano));
-        assert!(!offered_with("gpt-5.4", "", &nano), "an id outside the list must not be served");
+        let nano = ids(&["gpt-5.6-luna"]);
+        assert!(offered_with("gpt-5.6-luna", "", &nano));
+        assert!(!offered_with("gpt-5.6-terra", "", &nano), "an id outside the list must not be served");
         assert!(!offered_with("gpt-5.4-mini", "", &nano));
     }
 }

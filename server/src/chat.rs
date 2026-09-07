@@ -1472,12 +1472,12 @@ mod tests {
         let mut uploads = crate::uploads::UploadStore::default();
         let mut replies: std::collections::HashMap<String, (u64, Vec<u8>)> = std::collections::HashMap::new();
         let pricing = PricingTable::parse(
-            r#"{"version":"t","default":{"in":1.0,"out":4.0,"fallback":true},"models":{"gpt-5.4-nano":{"in":0.2,"out":1.25}}}"#,
+            r#"{"version":"t","default":{"in":1.0,"out":4.0,"fallback":true},"models":{"gpt-5.6-luna":{"in":0.2,"out":1.20}}}"#,
         )
         .unwrap();
         sessions.credit(&sid, 1_000_000);
         // 4,990 Gemini queries still free this month — must not leak into OpenAI billing
-        let Reserved::Proceed(p) = reserve(&signed_chat(&sk, &pem, &sid, 1, "gpt-5.4-nano"), &mut sessions, &mut uploads, &pricing, 1.4, &mut replies, 4_990)
+        let Reserved::Proceed(p) = reserve(&signed_chat(&sk, &pem, &sid, 1, "gpt-5.6-luna"), &mut sessions, &mut uploads, &pricing, 1.4, &mut replies, 4_990)
         else {
             panic!("should reserve");
         };
