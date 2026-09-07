@@ -324,6 +324,13 @@ pub struct Inv {
     /// Lives IN the durable record so a pending payment survives restarts.
     #[serde(default)]
     expected_unym: u64,
+    /// ISO-3166 country the money came from, as the payment rail reports it (Mollie's
+    /// `countryCode`; CoinGate when that rail is on). NOT asked of the buyer and not
+    /// derivable for a direct coin transfer, where it stays empty. Its only job is to show
+    /// how close cross-border EU B2C turnover is to the threshold that would force OSS
+    /// registration — it never changes what is charged.
+    #[serde(default)]
+    country: String,
     /// Which wording of the two purchase consents (§ 356 (5) BGB) the buyer agreed to, and
     /// when this server recorded it. The TEXT itself is versioned in the app and in
     /// docs/consent/, so a later rewording can never be mistaken for what this buyer saw.
@@ -654,10 +661,13 @@ impl Pay {
     /// entitlement exactly once. Deliberately also settles a locally "expired"
     /// invoice — BTCPay keeps watching past our window, and if IT says Settled,
     /// money moved and must be credited regardless of our timer.
-    fn settle(&mut self, invoice_id: &str) {
+    fn settle(&mut self, invoice_id: &str, country: Option<String>) {
         if let Some(inv) = self.invoices.get_mut(invoice_id) {
             if inv.status != "paid" {
                 inv.status = "paid".into();
+                if let Some(c) = country.filter(|c| c.len() == 2 && c.bytes().all(|b| b.is_ascii_alphabetic())) {
+                    inv.country = c.to_ascii_uppercase();
+                }
                 let scrai = inv.amount_toku;
                 let account = inv.account_id.clone();
                 *self.entitlements.entry(account).or_default() += scrai;
@@ -740,23 +750,23 @@ impl Pay {
             PayOutcome::Create { id, account, usd, our_id, testnet, code, consent, result } => {
                 self.finish_create(&id, account, usd, our_id, testnet, code, consent, result)
             }
-            PayOutcome::Status { id, inv_id, paid } => {
+            PayOutcome::Status { id, inv_id, paid, country } => {
                 if paid {
-                    self.settle(&inv_id);
+                    self.settle(&inv_id, country);
                 }
                 self.status_reply(&id, &inv_id, gateway)
             }
             PayOutcome::Sweep { id, account, paid } => {
-                for inv_id in &paid {
-                    self.settle(inv_id);
+                for (inv_id, country) in paid {
+                    self.settle(&inv_id, country);
                 }
                 json!({ "id": id, "entitlement": self.entitlement(&account) })
             }
             // The watcher has no client to answer — it just credits what the chain shows,
             // so the app finds the money already there and the claim page stops waiting.
             PayOutcome::Watch { paid } => {
-                for inv_id in &paid {
-                    self.settle(inv_id);
+                for (inv_id, country) in paid {
+                    self.settle(&inv_id, country);
                     println!("scrai-server: chain watch settled invoice {inv_id}");
                 }
                 return Vec::new();
@@ -913,6 +923,7 @@ impl Pay {
                 status: "pending".into(),
                 expires_at: raised.raised.expires_at,
                 expected_unym: raised.expected_unym,
+                country: String::new(),   // filled in at settlement, from the rail's own answer
                 consent_at: if consent.is_empty() { 0 } else { now_ms() },
                 consent_version: consent,
                 testnet,
@@ -1091,9 +1102,11 @@ pub enum PayPending {
 /// What the gateway said, to be applied on the loop by `Pay::finish`.
 pub enum PayOutcome {
     Create { id: Value, account: String, usd: u32, our_id: String, testnet: bool, code: String, consent: String, result: Result<Raised, String> },
-    Status { id: Value, inv_id: String, paid: bool },
-    Sweep { id: Value, account: String, paid: Vec<String> },
-    Watch { paid: Vec<String> },
+    Status { id: Value, inv_id: String, paid: bool, country: Option<String> },
+    /// (invoice id, country the rail reported) — the country is stored with the invoice at
+    /// settlement and never leaves the payment side of the database.
+    Sweep { id: Value, account: String, paid: Vec<(String, Option<String>)> },
+    Watch { paid: Vec<(String, Option<String>)> },
 }
 
 impl PayOutcome {
@@ -1117,14 +1130,18 @@ pub async fn run_gateway(pending: PayPending, gateway: &Gateway) -> PayOutcome {
             PayOutcome::Create { id, account, usd, our_id, testnet, code, consent, result }
         }
         PayPending::Status { id, inv } => {
-            let paid = matches!(gateway.check_status(&inv).await.as_deref(), Ok("paid"));
-            PayOutcome::Status { id, inv_id: inv.id, paid }
+            let seen = gateway.check_status(&inv).await.ok();
+            let paid = seen.as_ref().is_some_and(|p| p.is_paid());
+            let country = seen.and_then(|p| p.country);
+            PayOutcome::Status { id, inv_id: inv.id, paid, country }
         }
         PayPending::Sweep { id, account, candidates } => {
             let mut paid = Vec::new();
             for inv in candidates {
-                if let Ok("paid") = gateway.check_status(&inv).await.as_deref() {
-                    paid.push(inv.id);
+                if let Ok(p) = gateway.check_status(&inv).await {
+                    if p.is_paid() {
+                        paid.push((inv.id, p.country));
+                    }
                 }
             }
             PayOutcome::Sweep { id, account, paid }
@@ -1132,8 +1149,10 @@ pub async fn run_gateway(pending: PayPending, gateway: &Gateway) -> PayOutcome {
         PayPending::Watch { candidates } => {
             let mut paid = Vec::new();
             for inv in candidates {
-                if let Ok("paid") = gateway.check_status(&inv).await.as_deref() {
-                    paid.push(inv.id);
+                if let Ok(p) = gateway.check_status(&inv).await {
+                    if p.is_paid() {
+                        paid.push((inv.id, p.country));
+                    }
                 }
             }
             PayOutcome::Watch { paid }
@@ -1155,7 +1174,7 @@ pub fn gateway_busy(pending: PayPending) -> PayOutcome {
             consent,
             result: Err("the payment gateway is busy right now — please try again in a moment".into()),
         },
-        PayPending::Status { id, inv } => PayOutcome::Status { id, inv_id: inv.id, paid: false },
+        PayPending::Status { id, inv } => PayOutcome::Status { id, inv_id: inv.id, paid: false, country: None },
         PayPending::Sweep { id, account, .. } => PayOutcome::Sweep { id, account, paid: Vec::new() },
         PayPending::Watch { .. } => PayOutcome::Watch { paid: Vec::new() },
     }
@@ -1172,6 +1191,21 @@ pub struct RaisedInvoice {
 /// A raised invoice plus what the paywall must remember about it: which rail
 /// actually served it (the client's wish is a wish, not a guarantee) and the
 /// exact unym quoted when that rail was native NYM.
+/// What a rail says about one invoice: the state, plus where the money came from when the
+/// rail knows (card processors do; a chain does not).
+pub struct Paid {
+    pub state: String,
+    pub country: Option<String>,
+}
+impl Paid {
+    fn plain(state: String) -> Paid {
+        Paid { state, country: None }
+    }
+    fn is_paid(&self) -> bool {
+        self.state == "paid"
+    }
+}
+
 pub struct Raised {
     pub raised: RaisedInvoice,
     pub method: String,
@@ -1237,7 +1271,7 @@ impl Gateway {
         Ok(Raised { raised, method, expected_unym: 0 })
     }
 
-    async fn check_status(&self, inv: &Inv) -> Result<String, String> {
+    async fn check_status(&self, inv: &Inv) -> Result<Paid, String> {
         if inv.method == "nyx" {
             let Some(nyx) = &self.nyx else {
                 return Err("this invoice is native-NYM but no Nyx rail is configured".into());
@@ -1249,12 +1283,13 @@ impl Gateway {
             } else {
                 None
             };
-            return nyx.check_paid(&inv.provider_ref, inv.expected_unym, pin.as_deref()).await;
+            // A chain transfer carries no country, and we do not ask for one.
+            return nyx.check_paid(&inv.provider_ref, inv.expected_unym, pin.as_deref()).await.map(Paid::plain);
         }
         if inv.method == "card" {
             return self.card.check_status(inv).await;
         }
-        self.rail.check_status(&inv.provider_ref).await
+        self.rail.check_status(&inv.provider_ref).await.map(Paid::plain)
     }
 
     /// Chain-watch health for the pay screen — only native NYM has one.
@@ -1967,7 +2002,7 @@ impl CardRail {
     ///
     /// Takes the whole invoice, not just the reference: `paid` alone never settles, the
     /// payment must also be OUR payment for OUR amount (see `settlement_matches`).
-    async fn check_status(&self, inv: &Inv) -> Result<String, String> {
+    async fn check_status(&self, inv: &Inv) -> Result<Paid, String> {
         let CardRail::Mollie { api_key, .. } = self else {
             return Err("card payments are not configured on this server".into());
         };
@@ -1977,16 +2012,18 @@ impl CardRail {
         }
         let v = match mollie(api_key, crate::http::client().get(format!("{MOLLIE_API}/payments/{provider_ref}"))).await {
             Ok(v) => v,
-            Err(MollieErr::RateLimited(_)) => return Ok("pending".into()),
+            Err(MollieErr::RateLimited(_)) => return Ok(Paid::plain("pending".into())),
             Err(MollieErr::Other(e)) => return Err(e),
         };
         let status = v.get("status").and_then(|s| s.as_str()).unwrap_or("");
         if status != "paid" {
-            return Ok(match status {
-                "canceled" | "expired" | "failed" => "expired",
-                _ => "pending",
-            }
-            .into());
+            return Ok(Paid::plain(
+                match status {
+                    "canceled" | "expired" | "failed" => "expired",
+                    _ => "pending",
+                }
+                .into(),
+            ));
         }
         // Settlement is the one place where being wrong costs real money, so the reply has
         // to agree with the invoice we raised — not merely say "paid". There is no known
@@ -1998,7 +2035,14 @@ impl CardRail {
             eprintln!("scrai-server: REFUSING to settle Mollie {provider_ref} for invoice {}: {why}", inv.id);
             return Err("this card payment does not match the invoice — it was not credited; contact support".into());
         }
-        Ok("paid".into())
+        // Where the money came from, out of the reply we already have — the buyer is never
+        // asked. `countryCode` is Mollie's own; a card also carries the issuer's country.
+        let country = v
+            .get("countryCode")
+            .and_then(|c| c.as_str())
+            .or_else(|| v.pointer("/details/cardCountryCode").and_then(|c| c.as_str()))
+            .map(|c| c.to_string());
+        Ok(Paid { state: "paid".into(), country })
     }
 }
 
@@ -2232,10 +2276,10 @@ mod tests {
         let aid2 = aid.clone();
         pay.invoices.insert("t1".into(), Inv { id: "t1".into(), provider_ref: "TOKU-MEMO2345".into(), account_id: aid2,
             amount_usd: 1, amount_toku: TOKU_PER_USD, method: "nyx".into(), status: "pending".into(),
-            expires_at: now_ms() + 60_000, expected_unym: 59_000_000, consent_version: String::new(), consent_at: 0, testnet: true, invite_code: "TOKU-AAAA-BBBB".into() });
+            expires_at: now_ms() + 60_000, expected_unym: 59_000_000, consent_version: String::new(), consent_at: 0, country: String::new(), testnet: true, invite_code: "TOKU-AAAA-BBBB".into() });
         pay.invoices.insert("r1".into(), Inv { id: "r1".into(), provider_ref: "TOKU-REAL2345".into(), account_id: aid,
             amount_usd: 5, amount_toku: 5 * TOKU_PER_USD, method: "nyx".into(), status: "pending".into(),
-            expires_at: now_ms() + 60_000, expected_unym: 295_000_000, consent_version: "2026-09-07".into(), consent_at: now_ms(), testnet: false, invite_code: String::new() });
+            expires_at: now_ms() + 60_000, expected_unym: 295_000_000, consent_version: "2026-09-07".into(), consent_at: now_ms(), country: "DE".into(), testnet: false, invite_code: String::new() });
         let t = pay.testnet_invoices();
         assert_eq!(t.len(), 1);
         assert_eq!((t[0].amount_usd, t[0].memo.as_str(), t[0].unym), (1, "TOKU-MEMO2345", 59_000_000));
@@ -2651,7 +2695,7 @@ mod card_tests {
             id: id.into(), provider_ref: format!("TOKU-{id}"), account_id: "acct".into(),
             amount_usd: 1, amount_toku: TOKU_PER_USD, method: "nyx".into(), status: status.into(),
             expires_at: now_ms() + 60_000, expected_unym: 59_000_000, testnet: false,
-            consent_version: "2026-09-07".into(), consent_at: now_ms(), invite_code: String::new(),
+            consent_version: "2026-09-07".into(), consent_at: now_ms(), country: String::new(), invite_code: String::new(),
         };
         pay.invoices.insert("open1".into(), inv("open1", "pending"));
         pay.invoices.insert("open2".into(), inv("open2", "pending"));
@@ -2727,5 +2771,31 @@ mod card_tests {
         assert_eq!(consent_version(&junk), "");
         let empty = json!({ "consent": { "version": "  ", "immediateStart": true, "waiverAck": true } });
         assert_eq!(consent_version(&empty), "");
+    }
+
+    #[test]
+    fn settlement_stores_only_a_plausible_country() {
+        let mut pay = Pay::default();
+        let mk = |id: &str| Inv {
+            id: id.into(), provider_ref: format!("tr_{id}"), account_id: "acct".into(),
+            amount_usd: 10, amount_toku: 10 * TOKU_PER_USD, method: "card".into(),
+            status: "pending".into(), expires_at: now_ms() + 60_000, expected_unym: 0,
+            consent_version: "2026-09-07".into(), consent_at: now_ms(), country: String::new(),
+            testnet: false, invite_code: String::new(),
+        };
+        for id in ["a", "b", "c", "d"] {
+            pay.invoices.insert(id.into(), mk(id));
+        }
+        pay.settle("a", Some("it".into()));
+        pay.settle("b", Some("Germany".into()));   // not ISO-3166 alpha-2
+        pay.settle("c", Some("D1".into()));        // digits are not a country
+        pay.settle("d", None);                     // a chain reports none
+
+        assert_eq!(pay.invoices["a"].country, "IT", "normalised to upper case");
+        assert_eq!(pay.invoices["b"].country, "", "junk is dropped, not stored");
+        assert_eq!(pay.invoices["c"].country, "");
+        assert_eq!(pay.invoices["d"].country, "");
+        // the money still lands whatever the country said
+        assert_eq!(pay.entitlement("acct"), 4 * 10 * TOKU_PER_USD);
     }
 }

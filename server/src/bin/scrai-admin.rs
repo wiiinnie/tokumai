@@ -58,6 +58,10 @@ struct Inv {
     /// rail that served it: "btc" | "nyx" | "card" (Mollie) — absent on pre-card records
     #[serde(default)]
     method: String,
+    /// ISO-3166 country the payment rail reported. Empty for coin transfers (a chain has
+    /// no country) and for everything raised before 2026-09-07.
+    #[serde(default)]
+    country: String,
 }
 #[derive(Deserialize, Default)]
 struct QuorumBlob {
@@ -178,6 +182,12 @@ struct Metrics {
     card_paid: usize,
     card_pending: usize,
     card_usd: u64,
+    // Where the money came from. The one that matters is `eu_usd`: cross-border B2C sales
+    // inside the EU are what a registration threshold counts — German customers do not.
+    eu_usd: u64,
+    de_usd: u64,
+    row_usd: u64,
+    unknown_usd: u64,
     entitlement_out: u64,
     withdrawn_toku: u64,
     // usage
@@ -260,6 +270,14 @@ fn month_utc() -> String {
 // The ONLY thing scrai-admin writes. state.db stays strictly read-only. Each managed var
 // has a `_MAINNET` and a `_TESTNET` line; exactly one is uncommented. Toggling flips them
 // and the operator restarts scrai. `net_var()` in the server reads whichever is active.
+/// EU member states, for the cross-border B2C figure above. Germany is deliberately NOT in
+/// this list: domestic sales do not count towards the threshold that forces registration
+/// in the customer's country.
+const EU: [&str; 26] = [
+    "AT", "BE", "BG", "CY", "CZ", "DK", "EE", "ES", "FI", "FR", "GR", "HR", "HU", "IE", "IT", "LT",
+    "LU", "LV", "MT", "NL", "PL", "PT", "RO", "SE", "SI", "SK",
+];
+
 const NET_VARS: &[&str] = &[
     "GEMINI_API_KEY",
     "BTCPAY_URL",
@@ -417,6 +435,13 @@ fn read_metrics(path: &PathBuf) -> Metrics {
                 if inv.method == "card" {
                     m.card_paid += 1;
                     m.card_usd += inv.amount_usd as u64;
+                }
+                let usd = inv.amount_usd as u64;
+                match inv.country.as_str() {
+                    "" => m.unknown_usd += usd,
+                    "DE" => m.de_usd += usd,
+                    c if EU.contains(&c) => m.eu_usd += usd,
+                    _ => m.row_usd += usd,
                 }
             }
             "expired" => m.inv_expired += 1,
@@ -672,6 +697,20 @@ fn ui(f: &mut Frame, m: &Metrics, view: &View, path: &str, clock: &str, network:
         kv("paying accounts", grp(m.paying_accounts as u64), SAGE),
         kv("invoices", format!("{} paid · {} pending · {} exp", m.inv_paid, m.inv_pending, m.inv_expired), BONE),
         kv("purchased", format!("{}  ({} scrai)", usd(m.purchased_toku), grp(m.purchased_toku)), GOLD),
+        // Where the money came from. Only the first figure counts towards a cross-border
+        // EU threshold; the rest is context. "unknown" is every coin payment — a chain
+        // reports no country and we deliberately do not ask the buyer for one.
+        kv(
+            "-> by origin",
+            format!(
+                "EU ${} · DE ${} · other ${} · unknown ${}",
+                grp(m.eu_usd),
+                grp(m.de_usd),
+                grp(m.row_usd),
+                grp(m.unknown_usd)
+            ),
+            if m.eu_usd > 0 { GOLD } else { DIM },
+        ),
         // cards (Mollie): the only rail money can be pulled back from — watch it separately
         kv(
             "-> by card",
