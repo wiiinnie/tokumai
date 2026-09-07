@@ -5788,6 +5788,15 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         <div class="cardwait"><b>Checkout opened in your browser.</b> Finish the payment there — your credit is picked up here automatically, you don’t need to come back to any page.</div>
         ${btn}${webBtn}
         <div class="cardpriv">Mollie (EU) sees your name, card and IP address — never your tokumai account or what you use it for. Once collected, the credit is unlinkable, exactly like a coin purchase. No refunds after checkout.</div>
+        ${payCancelAsk
+          ? `<div class="cancelconfirm">
+               <p><b>Cancel this invoice?</b> Nothing is charged, and it disappears from your pending list.</p>
+               <p>If you have already paid in the browser, <b>the credit still arrives</b> — it just is not
+                  watched for you any more. Pick it up with <b>Check for credit</b> in your account.</p>
+               <div class="btnrow"><button class="btn danger" data-click="confirmCancelInvoice">Cancel invoice</button>
+                 <button class="btn" data-click="dismissCancelAsk">Keep waiting</button></div>
+             </div>`
+          : `<div class="cancelrow"><span class="cancellink" data-click="askCancelInvoice">Cancel this invoice</span></div>`}
       </div>`;
       return;
     }
