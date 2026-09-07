@@ -562,11 +562,17 @@ const WATCH_PER_TICK: usize = 5;
     // rises, so the hot path costs no extra fsync.
     let inflight: inflight::Inflight<ReplyTo> = inflight::Inflight::default();
     let mut peak_written: (String, usize) = (String::new(), 0);
-    // Distinct clients (reply tags) seen in the last 60 s → the day's `peak_1m`. Tags are
-    // never persisted; the map is pruned every few seconds.
-    let mut recent_clients: std::collections::HashMap<AnonymousSenderTag, std::time::Instant> = std::collections::HashMap::new();
-    let mut recent_pruned = std::time::Instant::now();
-    let mut window_written: (String, usize) = (String::new(), 0);
+    // Distinct paying SESSIONS seen in the last hour → the day's `peak_1h`. Keyed by the
+    // same hashed session id `users` counts, so the two are comparable: the busiest hour can
+    // never exceed the day. Never persisted; pruned as it is written.
+    //
+    // This replaced a 60-second window over SURB reply TAGS (2026-09-07). That one counted
+    // neither users nor load: one app is handed several tags over a session, and every
+    // catalog fetch, ping and invoice poll carried one without ever being a user — so it
+    // routinely showed more "clients" than the day had users, which is what made the column
+    // unreadable. Load is what `inflight` (peak_clients) measures, and it stays.
+    let mut recent_sessions: std::collections::HashMap<String, std::time::Instant> = std::collections::HashMap::new();
+    let mut hour_written: (String, usize) = (String::new(), 0);
     // Every address this server answers on — advertised in the catalog reply so the app
     // can fall back to another front door of the SAME server when one gateway is out.
     let identities = Arc::new(all_addresses.clone());
@@ -632,6 +638,17 @@ const WATCH_PER_TICK: usize = 5;
                         db.bump_daily(&today, 1, spent, cost, 0, 0);
                         if let Some(sid) = &session_of_chat {
                             db.note_user(&today, sid); // distinct paying sessions today ("users")
+                            // …and the busiest hour of that same population. Pruned here
+                            // rather than on a timer: this path runs once per paid chat, so
+                            // the map cannot outgrow an hour's worth of sessions.
+                            let now = std::time::Instant::now();
+                            recent_sessions.insert(store::Store::user_key(sid), now);
+                            recent_sessions.retain(|_, t| now.duration_since(*t) < std::time::Duration::from_secs(3600));
+                            let n = recent_sessions.len();
+                            if hour_written.0 != today || n > hour_written.1 {
+                                db.bump_hour_peak(&today, n);
+                                hour_written = (today.clone(), n);
+                            }
                         }
                         // Per-model breakdown for the admin table (the reply names the billed model).
                         let model = rv.pointer("/usage/billing/model").and_then(|m| m.as_str()).unwrap_or("unknown");
@@ -723,20 +740,6 @@ const WATCH_PER_TICK: usize = 5;
                 continue;
             };
             let to = ReplyTo { idx, tag };
-            {
-                let now = std::time::Instant::now();
-                recent_clients.insert(tag, now);
-                if recent_pruned.elapsed() >= std::time::Duration::from_secs(5) {
-                    recent_clients.retain(|_, t| now.duration_since(*t) < std::time::Duration::from_secs(60));
-                    recent_pruned = now;
-                }
-                let n = recent_clients.len();
-                let today = today_utc();
-                if window_written.0 != today || n > window_written.1 {
-                    db.bump_window_peak(&today, n);
-                    window_written = (today, n);
-                }
-            }
             // `chat` + `models` need async HTTP to the provider; everything else is
             // handled synchronously by the shared core.
             let envelope = serde_json::from_slice::<serde_json::Value>(&m.message).unwrap_or(serde_json::Value::Null);

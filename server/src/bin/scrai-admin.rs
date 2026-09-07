@@ -123,7 +123,11 @@ struct DayRow {
     /// most clients served in parallel at one instant that day (chat/catalog/payment in flight)
     peak_clients: u64,
     /// most DIFFERENT clients that sent anything within one 60-second window that day
-    peak_1m: u64,
+    /// Most DIFFERENT paying sessions inside one hour that day — the same population
+    /// `users` counts, so it can never exceed it. (The old `peak_1m` counted SURB reply
+    /// tags: one app has several, and every poll carried one, so it read higher than the
+    /// day's users and meant nothing. Dropped 2026-09-07.)
+    peak_1h: u64,
     /// DIFFERENT paying sessions that chatted that day (`daily_users`; 0 before it existed).
     /// One person = one session unless they bump the session index; free-tier chats
     /// carry no session and are not counted.
@@ -489,10 +493,10 @@ fn read_metrics(path: &PathBuf) -> Metrics {
     // `daily_users` arrived with 0.3.0 — absent on an older db
     let has_users = conn.prepare("SELECT sid FROM daily_users LIMIT 0").is_ok();
     let users_col = if has_users { "(SELECT COUNT(*) FROM daily_users u WHERE u.day = daily.day)" } else { "0" };
-    let has_peak1m = conn.prepare("SELECT peak_1m FROM daily LIMIT 0").is_ok();
-    let peak1m_col = if has_peak1m { "peak_1m" } else { "0" };
+    let has_peak1h = conn.prepare("SELECT peak_1h FROM daily LIMIT 0").is_ok();
+    let peak1h_col = if has_peak1h { "peak_1h" } else { "0" };
     if let Ok(mut stmt) = conn.prepare(&format!(
-        "SELECT day, prompts, spent, purchases, purchased, cost, {peak_col}, {users_col}, {peak1m_col} FROM daily ORDER BY day DESC LIMIT 12"
+        "SELECT day, prompts, spent, purchases, purchased, cost, {peak_col}, {users_col}, {peak1h_col} FROM daily ORDER BY day DESC LIMIT 12"
     )) {
         m.has_daily = true;
         if let Ok(rows) = stmt.query_map([], |r| {
@@ -505,7 +509,7 @@ fn read_metrics(path: &PathBuf) -> Metrics {
                 cost: r.get::<_, i64>(5)? as u64,
                 peak_clients: r.get::<_, i64>(6)? as u64,
                 users: r.get::<_, i64>(7)? as u64,
-                peak_1m: r.get::<_, i64>(8)? as u64,
+                peak_1h: r.get::<_, i64>(8)? as u64,
                 per_model: Default::default(),
                 faucet: 0,
             })
@@ -777,13 +781,21 @@ fn ui(f: &mut Frame, m: &Metrics, view: &View, path: &str, clock: &str, network:
         kv("  since metrics deploy", String::new(), DIM),
         kv(
             "users today",
-            format!("{} different paying sessions chatted", grp(m.daily.first().map(|d| d.users).unwrap_or(0))),
+            format!(
+                "{} different paying sessions chatted · {} in the busiest hour",
+                grp(m.daily.first().map(|d| d.users).unwrap_or(0)),
+                grp(m.daily.first().map(|d| d.peak_1h).unwrap_or(0))
+            ),
             BONE,
         ),
+        // Load, not people: requests being served at one instant. It counts every kind of
+        // request, so it is the number that says whether the Nym client and the provider
+        // slots are getting tight — and it is deliberately NOT next to the user counts,
+        // because reading it as "how many people" is exactly the mistake it invites.
         kv(
-            "max simultaneous clients",
+            "inflight (load)",
             format!(
-                "{} today · {} all-time",
+                "{} at once today · {} all-time",
                 grp(m.daily.first().map(|d| d.peak_clients).unwrap_or(0)),
                 grp(m.peak_clients_max)
             ),
@@ -828,7 +840,7 @@ fn ui(f: &mut Frame, m: &Metrics, view: &View, path: &str, clock: &str, network:
     if fx.is_some() {
         header.push("cost €"); // next to the $ figure — the number to match with AI Studio
     }
-    header.extend(["margin", "buys", "buys $", "users", "1 min", "peak"]);
+    header.extend(["margin", "buys", "buys $", "users", "1 h", "inflight"]);
     let header_row = Row::new(header).style(Style::default().fg(DIM));
     let rows: Vec<Row> = if m.daily.is_empty() {
         vec![Row::new(vec![Cell::from(Span::styled(
@@ -854,7 +866,7 @@ fn ui(f: &mut Frame, m: &Metrics, view: &View, path: &str, clock: &str, network:
                         Cell::from(Span::styled(grp(d.purchases), Style::default().fg(BONE))),
                         Cell::from(Span::styled(usd(d.purchased), Style::default().fg(GOLD))),
                         Cell::from(Span::styled(grp(d.users), Style::default().fg(BONE))),
-                        Cell::from(Span::styled(grp(d.peak_1m), Style::default().fg(SAGE))),
+                        Cell::from(Span::styled(grp(d.peak_1h), Style::default().fg(SAGE))),
                         Cell::from(Span::styled(grp(d.peak_clients), Style::default().fg(SAGE))),
                     ])
                     .collect::<Vec<Cell>>(),
@@ -876,8 +888,8 @@ fn ui(f: &mut Frame, m: &Metrics, view: &View, path: &str, clock: &str, network:
         Constraint::Length(5), // buys
         Constraint::Length(8), // buys $
         Constraint::Length(6), // users
-        Constraint::Length(6), // 1 min
-        Constraint::Length(5), // peak
+        Constraint::Length(5), // 1 h
+        Constraint::Length(8), // inflight
     ]);
     let mut ts = TableState::default();
     if !m.daily.is_empty() {

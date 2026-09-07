@@ -59,11 +59,15 @@ impl Store {
         // Peak number of distinct clients served in parallel that day (a MAX, not a sum) —
         // the capacity signal for the single Nym client / provider slots (inflight.rs).
         let _ = conn.execute("ALTER TABLE daily ADD COLUMN peak_clients INTEGER NOT NULL DEFAULT 0", []);
-        // Most DIFFERENT clients that sent anything within the same 60-second window that
-        // day. `peak_clients` only sees the slow (spawned) paths at one instant — two people
-        // whose chats don't overlap by a few seconds read as 1 there; this is the "how
-        // many were on the server at once" number an operator actually means.
+        // Kept so old rows still parse; no longer written or shown (2026-09-07). It counted
+        // distinct SURB reply TAGS in a 60-second window, which is not a count of people: one
+        // app gets several tags, and every catalog fetch, ping and invoice poll carried one
+        // while never being a user. It regularly read higher than the day's user count.
         let _ = conn.execute("ALTER TABLE daily ADD COLUMN peak_1m INTEGER NOT NULL DEFAULT 0", []);
+        // Most DIFFERENT paying SESSIONS seen within the same hour that day — the same
+        // identity `users` counts, so the two are comparable by construction: `peak_1h` can
+        // never exceed the day's `users`. This is "how busy was the busiest hour".
+        let _ = conn.execute("ALTER TABLE daily ADD COLUMN peak_1h INTEGER NOT NULL DEFAULT 0", []);
         // Distinct paying sessions per UTC day ("users"): one row per (day, hashed session
         // id), so COUNT(*) per day is the number of different sessions that chatted. The
         // hash (sha256, 16 hex) keeps raw session ids out of the metrics table; rows older
@@ -121,9 +125,16 @@ impl Store {
         );
     }
 
+    /// The metrics identity of a session: sha256, first 8 bytes as hex. Raw session ids
+    /// never reach the metrics tables, and the in-memory hour window keys on the same value
+    /// so "users" and "busiest hour" count the same population.
+    pub fn user_key(session_id: &str) -> String {
+        scrai_core::auth::sha256(&[session_id.as_bytes()]).iter().take(8).map(|b| format!("{b:02x}")).collect()
+    }
+
     /// Remember that `session_id` chatted on `day` (idempotent). Best-effort like `bump_daily`.
     pub fn note_user(&self, day: &str, session_id: &str) {
-        let h: String = scrai_core::auth::sha256(&[session_id.as_bytes()]).iter().take(8).map(|b| format!("{b:02x}")).collect();
+        let h = Self::user_key(session_id);
         let _ = self.conn.execute("INSERT OR IGNORE INTO daily_users (day, sid) VALUES (?1, ?2)", params![day, h]);
         // keep the table small: 90 days is plenty for the admin's 12-day view
         if let Some(cut) = day_minus(day, 90) {
@@ -141,11 +152,11 @@ impl Store {
         );
     }
 
-    /// Raise the day's 60-second-window client peak (a MAX, like `bump_peak`).
-    pub fn bump_window_peak(&self, day: &str, n: usize) {
+    /// Raise the day's busiest-hour session count (a MAX, like `bump_peak`).
+    pub fn bump_hour_peak(&self, day: &str, n: usize) {
         let _ = self.conn.execute(
-            "INSERT INTO daily (day, peak_1m) VALUES (?1, ?2) \
-             ON CONFLICT(day) DO UPDATE SET peak_1m = MAX(peak_1m, ?2)",
+            "INSERT INTO daily (day, peak_1h) VALUES (?1, ?2) \
+             ON CONFLICT(day) DO UPDATE SET peak_1h = MAX(peak_1h, ?2)",
             params![day, n as i64],
         );
     }
