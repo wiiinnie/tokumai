@@ -272,6 +272,75 @@ fn faucet_db_path() -> std::path::PathBuf {
     std::path::PathBuf::from(crate::cfg("DATA").unwrap_or_else(|_| "./data".into())).join("faucet.db")
 }
 
+/// The sales ledger: one line per settled purchase, appended and never rewritten.
+///
+/// state.db is an operational snapshot — it holds what the server needs to keep working,
+/// it is rewritten constantly, and `scrub_account_links` deliberately empties a field in
+/// it after 14 days. None of that is what bookkeeping wants. This file is: append-only,
+/// plain CSV, safe to copy off the box and keep for as long as records must be kept.
+///
+/// It never contains an account, a session or anything about usage — only the facts a
+/// sale consists of. So the 14-day scrub takes nothing away from accounting.
+fn sales_ledger_path() -> std::path::PathBuf {
+    crate::data_dir().join("sales.csv")
+}
+
+/// "YYYY-MM-DD HH:MM:SS" in UTC. Same civil_from_days arithmetic scrai-admin uses, so the
+/// two agree and neither needs a date crate.
+fn utc_stamp(ms: u64) -> String {
+    let secs = (ms / 1000) as i64;
+    let z = secs.div_euclid(86_400) + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = y + i64::from(m <= 2);
+    let t = secs.rem_euclid(86_400);
+    format!("{y:04}-{m:02}-{d:02} {:02}:{:02}:{:02}", t / 3600, (t % 3600) / 60, t % 60)
+}
+
+/// The number printed on the buyer's receipt. Derived from OUR invoice id, so it is
+/// unique, reproducible, and says nothing about the buyer — and the app derives the very
+/// same string, which is what makes "quote your receipt number" work at all.
+fn receipt_number(inv_id: &str, paid_at: u64) -> String {
+    let year = &utc_stamp(paid_at)[0..4];
+    format!("TKM-{year}-{}", inv_id.chars().take(8).collect::<String>().to_uppercase())
+}
+
+/// Append one settled sale. Failure is logged, never fatal: a disk problem must not stop
+/// the money path, but it must not pass unnoticed either.
+fn append_sale(inv: &Inv) {
+    use std::io::Write;
+    let path = sales_ledger_path();
+    let fresh = !path.exists();
+    let line = format!(
+        "{},{},{},{:.2},{},{},{},{},{}\n",
+        utc_stamp(inv.paid_at),
+        receipt_number(&inv.id, inv.paid_at),
+        inv.id,
+        inv.amount_usd as f64,
+        "USD",
+        if inv.country.is_empty() { "--" } else { &inv.country },
+        inv.method,
+        inv.provider_ref,
+        if inv.consent_version.is_empty() { "-" } else { &inv.consent_version },
+    );
+    let write = || -> std::io::Result<()> {
+        let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&path)?;
+        if fresh {
+            f.write_all(b"settled_utc,receipt,invoice,amount,currency,country,rail,provider_ref,consent\n")?;
+        }
+        f.write_all(line.as_bytes())
+    };
+    if let Err(e) = write() {
+        eprintln!("scrai-server: could NOT append to the sales ledger ({}): {e}", path.display());
+    }
+}
+
 /// Where testers redeem an invite invoice (`FAUCET_URL`, e.g. https://faucet.tokumai.com);
 /// the app links to `<that>/claim` with the code and memo in the fragment.
 ///
@@ -331,6 +400,11 @@ pub struct Inv {
     /// registration — it never changes what is charged.
     #[serde(default)]
     country: String,
+    /// When this invoice settled. The scrub measures the account link's lifetime from
+    /// here — 0 on anything paid before this field existed, which the scrub reads as
+    /// "old enough" rather than "never expires".
+    #[serde(default)]
+    paid_at: u64,
     /// Which wording of the two purchase consents (§ 356 (5) BGB) the buyer agreed to, and
     /// when this server recorded it. The TEXT itself is versioned in the app and in
     /// docs/consent/, so a later rewording can never be mistaken for what this buyer saw.
@@ -665,14 +739,50 @@ impl Pay {
         if let Some(inv) = self.invoices.get_mut(invoice_id) {
             if inv.status != "paid" {
                 inv.status = "paid".into();
+                inv.paid_at = now_ms();
                 if let Some(c) = country.filter(|c| c.len() == 2 && c.bytes().all(|b| b.is_ascii_alphabetic())) {
                     inv.country = c.to_ascii_uppercase();
                 }
                 let scrai = inv.amount_toku;
                 let account = inv.account_id.clone();
+                // The bookkeeping record is written HERE, once, while every field is still
+                // present — not derived later from a snapshot the scrub has been through.
+                if !inv.testnet {
+                    append_sale(inv);
+                }
                 *self.entitlements.entry(account).or_default() += scrai;
                 self.rev += 1;
             }
+        }
+    }
+
+    /// How long a settled invoice keeps the buyer's account on it. Long enough to answer
+    /// "I paid and got nothing" and to decide a goodwill refund; after that the link is
+    /// dead weight. What we give up knowingly: a chargeback arriving later can no longer
+    /// be tied to an account, so repeat abuse is invisible. The money is gone either way —
+    /// only the pattern would have been visible, and a permanent payment↔account link is
+    /// too high a price for it.
+    const ACCOUNT_LINK_MS: u64 = 14 * 24 * 3_600_000;
+
+    /// Drop the account from invoices that have been settled longer than that. The row
+    /// stays — amount, currency, country, rail and timestamp are the bookkeeping record —
+    /// it just no longer says who bought it.
+    ///
+    /// Note for whoever reads scrai-admin: the "payers" figure counts distinct accounts on
+    /// PAID invoices, so it now decays as invoices age out. The sales ledger is the count
+    /// that does not move.
+    pub fn scrub_account_links(&mut self) {
+        let now = now_ms();
+        let mut changed = 0usize;
+        for inv in self.invoices.values_mut() {
+            if inv.status == "paid" && !inv.account_id.is_empty() && now.saturating_sub(inv.paid_at) > Self::ACCOUNT_LINK_MS {
+                inv.account_id.clear();
+                changed += 1;
+            }
+        }
+        if changed > 0 {
+            self.rev += 1;
+            println!("scrai-server: dropped the account link from {changed} settled invoice(s)");
         }
     }
 
@@ -924,6 +1034,7 @@ impl Pay {
                 expires_at: raised.raised.expires_at,
                 expected_unym: raised.expected_unym,
                 country: String::new(),   // filled in at settlement, from the rail's own answer
+                paid_at: 0,
                 consent_at: if consent.is_empty() { 0 } else { now_ms() },
                 consent_version: consent,
                 testnet,
@@ -2163,6 +2274,50 @@ mod tests {
     /// so the one test that flips it takes the write side; invoice-creating tests read.
     static ENV_LOCK: std::sync::RwLock<()> = std::sync::RwLock::new(());
 
+    /// The ledger is what bookkeeping reads, so its shape is a promise: column order,
+    /// header, and the fact that an account NEVER appears in it. Takes the write lock —
+    /// it points DATA at a temp directory.
+    #[test]
+    fn the_sales_ledger_records_the_sale_and_no_buyer() {
+        let _env = ENV_LOCK.write().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("tokumai-ledger-{}", now_ms()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let prev = std::env::var("DATA").ok();
+        std::env::set_var("DATA", &dir);
+
+        let mut pay = Pay::default();
+        pay.invoices.insert(
+            "abc123def456".into(),
+            Inv {
+                id: "abc123def456".into(), provider_ref: "tr_XYZ".into(),
+                account_id: "the-buyer".into(), amount_usd: 20, amount_toku: 20 * TOKU_PER_USD,
+                method: "card".into(), status: "pending".into(), expires_at: now_ms() + 60_000,
+                expected_unym: 0, consent_version: "2026-09-07".into(), consent_at: now_ms(),
+                country: String::new(), paid_at: 0, testnet: false, invite_code: String::new(),
+            },
+        );
+        pay.settle("abc123def456", Some("NL".into()));
+
+        let csv = std::fs::read_to_string(dir.join("sales.csv")).expect("ledger written");
+        let mut lines = csv.lines();
+        assert_eq!(
+            lines.next().unwrap(),
+            "settled_utc,receipt,invoice,amount,currency,country,rail,provider_ref,consent"
+        );
+        let row: Vec<&str> = lines.next().expect("one sale").split(',').collect();
+        assert_eq!(row[1], receipt_number("abc123def456", pay.invoices["abc123def456"].paid_at));
+        assert_eq!(row[2], "abc123def456");
+        assert_eq!(row[3], "20.00");
+        assert_eq!(row[4], "USD");
+        assert_eq!(row[5], "NL");
+        assert_eq!(row[6], "card");
+        assert_eq!(row[7], "tr_XYZ");
+        assert!(!csv.contains("the-buyer"), "the buyer must never reach the ledger");
+
+        match prev { Some(v) => std::env::set_var("DATA", v), None => std::env::remove_var("DATA") }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     fn account() -> (SigningKey, String, String) {
         let sk = SigningKey::from_bytes(&[9u8; 32]);
         let mut der = vec![0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00];
@@ -2276,10 +2431,10 @@ mod tests {
         let aid2 = aid.clone();
         pay.invoices.insert("t1".into(), Inv { id: "t1".into(), provider_ref: "TOKU-MEMO2345".into(), account_id: aid2,
             amount_usd: 1, amount_toku: TOKU_PER_USD, method: "nyx".into(), status: "pending".into(),
-            expires_at: now_ms() + 60_000, expected_unym: 59_000_000, consent_version: String::new(), consent_at: 0, country: String::new(), testnet: true, invite_code: "TOKU-AAAA-BBBB".into() });
+            expires_at: now_ms() + 60_000, expected_unym: 59_000_000, consent_version: String::new(), consent_at: 0, country: String::new(), paid_at: 0, testnet: true, invite_code: "TOKU-AAAA-BBBB".into() });
         pay.invoices.insert("r1".into(), Inv { id: "r1".into(), provider_ref: "TOKU-REAL2345".into(), account_id: aid,
             amount_usd: 5, amount_toku: 5 * TOKU_PER_USD, method: "nyx".into(), status: "pending".into(),
-            expires_at: now_ms() + 60_000, expected_unym: 295_000_000, consent_version: "2026-09-07".into(), consent_at: now_ms(), country: "DE".into(), testnet: false, invite_code: String::new() });
+            expires_at: now_ms() + 60_000, expected_unym: 295_000_000, consent_version: "2026-09-07".into(), consent_at: now_ms(), country: "DE".into(), paid_at: 0, testnet: false, invite_code: String::new() });
         let t = pay.testnet_invoices();
         assert_eq!(t.len(), 1);
         assert_eq!((t[0].amount_usd, t[0].memo.as_str(), t[0].unym), (1, "TOKU-MEMO2345", 59_000_000));
@@ -2695,7 +2850,7 @@ mod card_tests {
             id: id.into(), provider_ref: format!("TOKU-{id}"), account_id: "acct".into(),
             amount_usd: 1, amount_toku: TOKU_PER_USD, method: "nyx".into(), status: status.into(),
             expires_at: now_ms() + 60_000, expected_unym: 59_000_000, testnet: false,
-            consent_version: "2026-09-07".into(), consent_at: now_ms(), country: String::new(), invite_code: String::new(),
+            consent_version: "2026-09-07".into(), consent_at: now_ms(), country: String::new(), paid_at: 0, invite_code: String::new(),
         };
         pay.invoices.insert("open1".into(), inv("open1", "pending"));
         pay.invoices.insert("open2".into(), inv("open2", "pending"));
@@ -2781,7 +2936,7 @@ mod card_tests {
             amount_usd: 10, amount_toku: 10 * TOKU_PER_USD, method: "card".into(),
             status: "pending".into(), expires_at: now_ms() + 60_000, expected_unym: 0,
             consent_version: "2026-09-07".into(), consent_at: now_ms(), country: String::new(),
-            testnet: false, invite_code: String::new(),
+            paid_at: 0, testnet: false, invite_code: String::new(),
         };
         for id in ["a", "b", "c", "d"] {
             pay.invoices.insert(id.into(), mk(id));
@@ -2797,5 +2952,41 @@ mod card_tests {
         assert_eq!(pay.invoices["d"].country, "");
         // the money still lands whatever the country said
         assert_eq!(pay.entitlement("acct"), 4 * 10 * TOKU_PER_USD);
+    }
+
+    #[test]
+    fn the_account_link_is_dropped_after_the_window_and_not_before() {
+        let mut pay = Pay::default();
+        let mk = |id: &str, paid_ago_days: u64| Inv {
+            id: id.into(), provider_ref: format!("tr_{id}"), account_id: "acct".into(),
+            amount_usd: 10, amount_toku: 10 * TOKU_PER_USD, method: "card".into(),
+            status: "paid".into(), expires_at: now_ms(), expected_unym: 0,
+            consent_version: "2026-09-07".into(), consent_at: now_ms(), country: "IT".into(),
+            paid_at: now_ms().saturating_sub(paid_ago_days * 24 * 3_600_000),
+            testnet: false, invite_code: String::new(),
+        };
+        pay.invoices.insert("fresh".into(), mk("fresh", 13));
+        pay.invoices.insert("old".into(), mk("old", 15));
+        let mut pending = mk("pending", 99);
+        pending.status = "pending".into();
+        pay.invoices.insert("pending".into(), pending);
+
+        pay.scrub_account_links();
+
+        assert_eq!(pay.invoices["fresh"].account_id, "acct", "inside the window it stays");
+        assert_eq!(pay.invoices["old"].account_id, "", "outside the window it goes");
+        assert_eq!(pay.invoices["pending"].account_id, "acct", "an unsettled invoice still needs its owner");
+        // everything bookkeeping needs survives the scrub
+        assert_eq!(pay.invoices["old"].amount_usd, 10);
+        assert_eq!(pay.invoices["old"].country, "IT");
+        assert_eq!(pay.invoices["old"].provider_ref, "tr_old");
+    }
+
+    #[test]
+    fn the_receipt_number_matches_what_the_app_prints() {
+        // app: `TKM-${year}-${invoiceId.slice(0,8).toUpperCase()}`
+        let at = 1_788_000_000_000; // 2026-09-27
+        assert!(utc_stamp(at).starts_with("2026-"));
+        assert_eq!(receipt_number("fa57043ac2a52be28bd787c527deb025", at), "TKM-2026-FA57043A");
     }
 }

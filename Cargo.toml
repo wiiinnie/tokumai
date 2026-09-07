@@ -10,7 +10,7 @@ members = ["core", "src-tauri", "server", "ledger", "mixbench", "loadtest"]
 # reply (`serverVersion`) and in scrai-admin. Bump ALL copies with scripts/bump-version.sh —
 # never edit one by hand.
 [workspace.package]
-version = "0.5.7"
+version = "0.5.8"
 
 # opt-level 3 + aggressive inlining merged Nym's async mixnet frames large enough to
 # overflow iOS's small thread stacks at gateway connect (SIGSEGV, release-only; debug

@@ -583,6 +583,10 @@ const WATCH_PER_TICK: usize = 5;
             // gateway call. Bounded on both sides: at most WATCH_PER_TICK invoices per
             // tick, and each invoice at most once every 25 s (pay.rs WATCH_EVERY_MS).
             _ = watch_tick.tick() => {
+                // Housekeeping on the same beat: settled invoices older than 14 days lose
+                // the buyer's account. Cheap (a scan of a small map) and it must not depend
+                // on anyone happening to poll an invoice.
+                paywall.scrub_account_links();
                 let candidates = paywall.watch_candidates(WATCH_PER_TICK);
                 if !candidates.is_empty() {
                     let (tx, gw, slots) = (pay_tx.clone(), gateway.clone(), gateway_slots.clone());
