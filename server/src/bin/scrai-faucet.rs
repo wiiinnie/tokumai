@@ -75,16 +75,16 @@ const PAID_HTML: &str = r##"<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex">
-<title>Payment received — tokumai</title>
+<title>Card checkout — tokumai</title>
 <style>
-  :root{--ink:#141210;--surface:#1C1917;--surface-2:#262220;--line:#332E2A;--bone:#ECE6DC;--muted:#9C938A;--signal:#CBA14E;--mix:#8AA06B;
+  :root{--ink:#141210;--surface:#1C1917;--surface-2:#262220;--line:#332E2A;--bone:#ECE6DC;--muted:#9C938A;--signal:#CBA14E;--acc:#7A5FFF;
     --mono:ui-monospace,SFMono-Regular,Menlo,monospace;--body:system-ui,-apple-system,'Hanken Grotesk',sans-serif;--display:Georgia,'Fraunces',serif}
   *{box-sizing:border-box}
   html,body{margin:0;background:var(--ink);color:var(--bone);font-family:var(--body);-webkit-font-smoothing:antialiased;min-height:100%}
   .wrap{max-width:520px;margin:0 auto;padding:64px 22px}
-  .logo{font-family:var(--display);font-weight:700;font-size:22px;margin-bottom:38px}.logo b{color:var(--mix)}
+  .logo{font-family:var(--display);font-weight:700;font-size:22px;margin-bottom:38px}.logo b{color:var(--acc)}
   .card{border:1px solid var(--line);border-radius:16px;background:var(--surface);padding:26px 24px}
-  .eyebrow{font-family:var(--mono);font-size:11.5px;letter-spacing:.12em;color:var(--mix);text-transform:uppercase;margin-bottom:10px}
+  .eyebrow{font-family:var(--mono);font-size:11.5px;letter-spacing:.12em;color:var(--acc);text-transform:uppercase;margin-bottom:10px}
   h1{font-family:var(--display);font-weight:700;font-size:30px;line-height:1.1;margin:0 0 14px}
   p{font-size:15px;line-height:1.55;color:var(--muted);margin:0 0 12px}
   p b{color:var(--bone)}
@@ -93,12 +93,12 @@ const PAID_HTML: &str = r##"<!doctype html>
 </head>
 <body>
 <div class="wrap">
-  <div class="logo">Scramble<b>AI</b></div>
+  <div class="logo">tokum<b>ai</b></div>
   <div class="card">
     <div class="eyebrow">Card checkout</div>
-    <h1>Payment received</h1>
-    <p><b>You can close this tab and return to tokumai.</b> The app picks the payment up on its own and collects your credit — usually within a few seconds, no further steps.</p>
-    <p>If the checkout was cancelled or failed, nothing was charged; pick an amount in the app again.</p>
+    <h1>You can close this tab</h1>
+    <p><b>The app takes it from here.</b> If the payment went through, it is picked up on its own and your credit is collected — usually within a few seconds, no further steps.</p>
+    <p>If you cancelled, or the payment failed, nothing was charged; pick an amount in the app again.</p>
     <div class="fine">This page holds no order details and sets no cookie. Once collected, the credit is unlinkable to this payment. No refunds after checkout.</div>
   </div>
 </div>
