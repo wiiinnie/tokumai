@@ -13,6 +13,9 @@
 #      rsync 3.4 rejects Apple's --extended-attributes ("unexpected end of file").
 #   3. Upload with altool + the same key (no Apple-ID password, no 2FA prompt).
 #
+# Pass --no-upload to stop after the export: the .ipa is left on disk and nothing reaches
+# App Store Connect.
+#
 # Needs in the repo-root .env (git-ignored):
 #   ASC_ADMIN_KEY_ID=…   ASC_ISSUER_ID=…     and ~/.appstoreconnect/private_keys/AuthKey_<id>.p8
 # Bundle must not carry libapp.a (project.yml: Externals → buildPhase: none) — checked below.
@@ -75,6 +78,14 @@ xcodebuild -exportArchive -archivePath "$ARCHIVE" -exportOptionsPlist "$EXPORT_P
   | grep -E "EXPORT (SUCCEEDED|FAILED)|error:" || true
 IPA="$APPLE/build/asc/tokumai.ipa"
 [ -f "$IPA" ] || { echo "export produced no ipa — see the xcdistributionlogs bundle in \$TMPDIR" >&2; exit 1; }
+
+# --no-upload: archive and export, then stop. For a build you want to keep on disk
+# (a version that is ready but not being handed to testers yet) — uploading is the one
+# step that cannot be undone, so it has to be asked for.
+if [ "${1:-}" = "--no-upload" ]; then
+  echo "✓ built, NOT uploaded — $IPA ($(du -h "$IPA" | cut -f1))"
+  exit 0
+fi
 
 echo "→ 3/3 upload $(du -h "$IPA" | cut -f1) to App Store Connect"
 xcrun altool --upload-app -t ios -f "$IPA" --apiKey "$ASC_ADMIN_KEY_ID" --apiIssuer "$ASC_ISSUER_ID" 2>&1 | grep -E "UPLOAD SUCCEEDED|ERROR|WARN" || true
