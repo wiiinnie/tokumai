@@ -138,6 +138,14 @@ const httpBackend = {
     document.body.appendChild(a); a.click(); a.remove();
     return Promise.resolve(filename);
   },
+  // Browser dev: the receipt is an anchor download, like the images above.
+  saveFile: (dataB64, filename) => {
+    const a = document.createElement("a");
+    a.href = `data:application/pdf;base64,${dataB64}`;
+    a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    return Promise.resolve(filename);
+  },
   // Browser dev: exports are plain anchor downloads too.
   shareText: (filename, text) => {
     const a = document.createElement("a");
@@ -189,6 +197,7 @@ const tauriBackend = (invoke) => ({
   setMixnetPerf: (coverMs, mixMs, sendMs, continuous) => invoke("set_mixnet_perf", { coverMs, mixMs, sendMs, continuous }),
   openExternal: (url) => invoke("open_external", { url }),
   saveImage: (dataB64, filename) => invoke("save_image", { data: dataB64, filename }),
+  saveFile: (dataB64, filename) => invoke("save_file", { data: dataB64, filename }),
   shareText: (filename, text) => invoke("share_text", { filename, text }),
   // Chat vault (Rust-side files, key in the OS keychain — see src-tauri/src/vault.rs).
   vaultList: () => invoke("vault_list"),
@@ -294,6 +303,7 @@ export const Backend = {
   pendingLoad: () => pick("pendingLoad"),
   pendingSave: (list) => pick("pendingSave", list),
   saveImage: (dataB64, filename, mimeType) => pick("saveImage", dataB64, filename, mimeType),
+  saveFile: (dataB64, filename) => pick("saveFile", dataB64, filename),
   shareText: (filename, text) => pick("shareText", filename, text),
   uploadBegin: (mimeType, totalBytes) => pick("uploadBegin", mimeType, totalBytes),
   uploadChunk: (uploadId, seq, data) => pick("uploadChunk", uploadId, seq, data),

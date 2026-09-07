@@ -856,6 +856,7 @@ async fn serve(cfg: Cfg) -> Result<(), String> {
                 ),
             }
         }
+        // nosemgrep: scrai-secret-in-log -- names the missing VARIABLE, never a value
         (None, true) => eprintln!("scrai-faucet: no faucet wallet configured (FAUCET_MNEMONIC) — site only, claims refused"),
         (_, false) => println!("scrai-faucet: faucet disabled (FAUCET_ENABLED=0) — serving the site only"),
     }

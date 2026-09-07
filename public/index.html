@@ -310,6 +310,13 @@
      is made — the payment panel's version comes too late to inform it. */
   .railnote{font-size:11.5px;line-height:1.5;color:var(--muted);margin:9px 2px 0}
   .railnote b{color:var(--bone);font-weight:600}
+  .rlist{border:1px solid var(--line);border-radius:12px;background:var(--surface-2);overflow:hidden}
+  .rrow{display:flex;align-items:center;gap:10px;padding:9px 12px;border-bottom:1px solid var(--line);font-size:13px}
+  .rrow:last-child{border-bottom:0}
+  .rrow .ramt{font-weight:600;min-width:56px}
+  .rrow .rwhen{font-family:var(--mono);font-size:10.5px;color:var(--muted);flex:1}
+  .rrow .rdl{font-family:var(--mono);font-size:10.5px;color:var(--acc2);cursor:pointer}
+  .rrow .rdl:hover{color:var(--bone);text-decoration:underline}
   .cardwait{font-size:13.5px;line-height:1.5;color:var(--bone);margin:0 0 12px}
   .cardwait b{color:var(--gold)}
   .cardpriv{margin-top:12px;font-size:12px;line-height:1.45;color:var(--muted)}
@@ -1208,6 +1215,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       </div>
       <div id="coinMenu"></div>
       <p class="railnote" id="railNote"></p>
+      <div id="receiptList"></div>
       <div id="continueRow" style="margin-top:14px"></div>
       <p class="hint" id="buyStatus" style="margin:10px 0 0"></p>
       <div id="payPanel" style="display:none"></div>
@@ -1592,6 +1600,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   import { formatToku, formatTokens, billingNotes, billingDetail } from "./billing.js";
   import { pruneMessages, pruneForHandover, PRUNE_DEFAULTS } from "./prune.js";
   import { scanText, GUARD_DEFAULTS } from "./guard.js";
+  import { receiptPdf, toBase64 } from "./receipt.js";
 
   // --- app state (mirrors what the backend reports; the backend is the truth) ---
   let models = [];                       // [{model,vendor,kind,trainsOnInput,rate}]
@@ -1960,6 +1969,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // says so and leaves the address on screen to copy.
   function openLink(url){
     const fell = e => {
+      // nosemgrep: scrai-js-window-open -- dev-bridge fallback only; the app path is open_external
       try{ window.open(url,"_blank","noopener"); }catch(__){}
       const s=$("buyStatus");
       if(s){ s.className="hint"; s.textContent = "Could not open the browser" + (e && e.message ? " ("+e.message+")" : "") + " — open this yourself: " + url; }
@@ -5178,6 +5188,25 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       acctStatus("Migration prep failed: "+(e.message||e), "bad");
     }finally{ redeeming=false; }
   }
+  // A payment that settles while the app is closed arrives through the sweep, never
+  // through the payment panel's poll. Without this, whether a buyer gets their receipt
+  // would depend on whether they happened to keep the window open.
+  async function sweepReceipts(){
+    const pend = pendingList.slice();
+    let wrote = false;
+    for(const p of pend){
+      if(p.testnet) continue;
+      try{
+        const st = await Backend.invoiceStatus(p.invoiceId);
+        if(st && st.status === "paid"){
+          rememberReceipt(p, (p.amountToku ?? p.amountScrai) || 0);
+          removePending(p.invoiceId);
+          wrote = true;
+        }
+      }catch(_){ /* offline or gone — the next sweep tries again */ }
+    }
+    if(wrote){ renderPending(); renderReceipts(); }
+  }
   // Sweep any settled-but-uncollected payment (entitlement) into held credit.
   async function checkCredit(){
     if(checking) return;
@@ -5185,6 +5214,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     try{
       const r=await Backend.collect(); lastCredCheck = Date.now();
       await refreshState();
+      if(r && r.collected > 0) await sweepReceipts();
       credResult = r&&r.collected>0 ? `+${formatToku(r.collected)} TOKU collected` : "nothing outstanding";
       checking = false; renderAccount();
     }catch(e){
@@ -5544,7 +5574,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     consentImmediate = false; consentWaiver = false;
     { const i=$("inviteInput"); if(i) i.value=""; setInviteMsg("",""); }
     syncBuyMode();
-    renderBuyBal(); showChooser(true); renderTiers(); renderContinue(); renderRailNote(); renderPending();
+    renderBuyBal(); showChooser(true); renderTiers(); renderContinue(); renderRailNote(); renderPending(); renderReceipts();
     $("payPanel").innerHTML="";
     $("buyStatus").textContent = fakePayments
       ? "dev mode — settles instantly, no real money moves."
@@ -5584,8 +5614,6 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     }
     if(expired) renderPending();   // rebuild once, only when something dropped off
   }
-  // Cancelling was only reachable from the pending list — you had to leave the very window
-  // you were standing in. The list keeps its ✕; this is the second way in (2026-09-07).
   // The wording of the two consent boxes is versioned: the server stores WHICH text was
   // agreed to, so a later rewording cannot be mistaken for what an earlier buyer saw.
   // Bump this whenever either sentence below changes.
@@ -5599,6 +5627,8 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   function consentPayload(){
     return { version: CONSENT_VERSION, immediateStart: consentImmediate, waiverAck: consentWaiver };
   }
+  // Cancelling was only reachable from the pending list — you had to leave the very window
+  // you were standing in. The list keeps its ✕; this is the second way in (2026-09-07).
   let payCancelAsk = false;
   function askCancelInvoice(){
     if(!activeInvoice) return;
@@ -5753,6 +5783,98 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   }
   function buyOrInvoice(usd){ return fakePayments ? buyTier(usd) : startInvoice(usd, selectedMethod); }
 
+  // ---- purchase receipts ------------------------------------------------------------
+  // A receipt is a document the BUYER keeps. We hold just enough on this device to rebuild
+  // the PDF (amount, date, rail, consent version) — never on the server, which would mean
+  // assembling a document tied to a purchase on our side.
+  //
+  // The seller block is compiled into the app on purpose rather than fetched: a receipt
+  // names who sold to you, and that must not be something a server could rewrite. Keep it
+  // in step with server/site/imprint.html by hand.
+  const SELLER = [
+    "Hermes Blockchain Ventures — Matthias Winter (sole proprietorship)",
+    "Schraudolphstraße 2A, 80799 München, Germany",
+    "Represented by Matthias Winter · VAT ID DE334168661",
+    "hermes-stakepool@proton.me",
+  ];
+  const RECEIPTS_KEY = "tokumai.receipts";
+  const RECEIPTS_MAX = 60;
+
+  function loadReceipts(){
+    try{ const r=JSON.parse(localStorage.getItem(RECEIPTS_KEY)||"[]"); return Array.isArray(r)?r:[]; }
+    catch(_){ return []; }
+  }
+  function rememberReceipt(inv, toku){
+    // The number is derived from our own invoice id, so it is unique, stable across a
+    // re-download, and says nothing about the buyer.
+    const id=String(inv.invoiceId||"");
+    const rec={
+      number: `TKM-${new Date().getUTCFullYear()}-${id.slice(0,8).toUpperCase()}`,
+      at: Date.now(),
+      usd: Number(inv.amountUsd||0),
+      toku: Number(toku||0),
+      method: isCardInv(inv) ? "Card, Apple Pay or Google Pay (via Mollie)" : "Coin transfer",
+      consent: CONSENT_VERSION,
+    };
+    const list=[rec, ...loadReceipts().filter(r=>r && r.number!==rec.number)].slice(0, RECEIPTS_MAX);
+    try{ localStorage.setItem(RECEIPTS_KEY, JSON.stringify(list)); }catch(_){}
+    return rec;
+  }
+  function receiptDate(ms){
+    const d=new Date(ms);
+    return d.toISOString().replace("T"," ").slice(0,16)+" UTC";
+  }
+  function receiptDoc(rec){
+    return {
+      number: rec.number,
+      date: receiptDate(rec.at),
+      item: `tokumai credit, ${formatToku(rec.toku)} TOKU`,
+      amount: `$${rec.usd.toFixed(2)} USD`,
+      method: rec.method,
+      // § 19 UStG: a small business must NOT show VAT — showing it would mean owing it.
+      vat: "none — small business under § 19 UStG",
+      seller: SELLER,
+      withdrawal: [
+        "Digital content, delivered as soon as your payment was confirmed.",
+        "Because you asked for delivery to begin at once and confirmed that you",
+        "thereby lose it, your 14-day right of withdrawal has expired with full",
+        "delivery (§ 356 (5) BGB / Art. 16 (m) Consumer Rights Directive).",
+      ],
+      consent: [
+        "1. I ask you to start delivering the credit immediately, before the",
+        "   14-day withdrawal period ends.",
+        "2. I understand that I lose my right of withdrawal once the credit has",
+        "   been delivered in full.",
+        `Both confirmed at checkout on ${receiptDate(rec.at)} (wording version ${rec.consent||"—"}).`,
+      ],
+      footer: [
+        "Credit is usable only for tokumai's own service. It is not payable out in money",
+        "and is not transferable. Small-business rule § 19 UStG: no VAT is shown.",
+        "This receipt was produced on your device — we hold no copy of it.",
+      ],
+    };
+  }
+  async function downloadReceipt(number){
+    const rec=loadReceipts().find(r=>r.number===number); if(!rec) return;
+    const st=$("buyStatus");
+    try{
+      const bytes=receiptPdf(receiptDoc(rec));
+      const where=await Backend.saveFile(toBase64(bytes), `${rec.number}.pdf`);
+      if(st) st.textContent = where ? `Receipt saved — ${where}` : "Receipt not saved.";
+    }catch(e){ if(st) st.textContent = "Could not save the receipt: "+((e&&e.message)||e); }
+  }
+  function renderReceipts(){
+    const el=$("receiptList"); if(!el) return;
+    const list=loadReceipts();
+    if(!list.length){ el.innerHTML=""; return; }
+    el.innerHTML = `<div class="grouplbl" style="margin-top:16px">Receipts</div>
+      <div class="rlist">${list.slice(0,8).map(r=>`<div class="rrow">
+        <span class="ramt">$${r.usd.toFixed(2)}</span>
+        <span class="rwhen">${esc(receiptDate(r.at))}</span>
+        <span class="rdl" data-click="downloadReceipt" data-args="&quot;${escAttr(r.number)}&quot;">PDF ↓</span>
+      </div>`).join("")}</div>`;
+  }
+
   function setPayStatus(kind, extra){
     const s=$("buyStatus"); if(!s) return;
     if(kind==="waiting")        s.textContent = (activeInvoice && isCardInv(activeInvoice))
@@ -5817,7 +5939,11 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         updateWatch(st.watch);
         if(st.status==="paid"){
           stopPoll(); stopCountdown(); activeInvoice=null; removePending(inv.invoiceId); setPayStatus("collecting");
-          const r=await Backend.collect(); await refreshState(); renderBuyBal(); showChooser(true); renderTiers(); renderPending(); setPayStatus("collected", r.collected);
+          const r=await Backend.collect(); await refreshState(); renderBuyBal(); showChooser(true); renderTiers(); renderPending();
+          // The receipt is written from what THIS device knows about the purchase, before
+          // anything else can go wrong — the buyer is entitled to it either way.
+          if(!inv.testnet) { rememberReceipt(inv, (inv.amountToku ?? inv.amountScrai) || r.collected); renderReceipts(); }
+          setPayStatus("collected", r.collected);
         }else if(st.status==="expired"){
           stopPoll(); stopCountdown(); activeInvoice=null; removePending(inv.invoiceId); showChooser(true); renderTiers(); renderPending(); setPayStatus("expired");
         }
@@ -5988,7 +6114,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   Object.assign(window,{ pickModel, copyPhrase, newChat, openSession, deleteSession, exportSession, toggleMenu, selectModelIdx,
     autogrow, onKey, sendMsg, retryMsg, showHandover, downloadHandover, closeHandover, pickImport, importHandover,
     cancelMsg, resendMsg, showDismissed, retrieveMsg, openConnSheet, closeConnSheet, rebuildRoute, rebuildRouteFromSheet, copyResumeLog, routeDismiss, useOfficialServer, iterateImg,
-    openBuy, closeBuy, buyTier, buyOrInvoice, checkInvite, selectCoin, pickVariant, copyUri, copyTopupId, openTopupSheet, closeTopupSheet, confirmTopup, openAccount, closeAccount, doAccountNew, doAccountReveal, doAccountRestore, doAccountDelete, doMigrate, doRedeem, redeemSliderChanged, toggleRedeemPick, askCancelInvoice, dismissCancelAsk, confirmCancelInvoice, toggleConsent, startQrScan, stopQrScan,
+    openBuy, closeBuy, buyTier, buyOrInvoice, checkInvite, selectCoin, pickVariant, copyUri, copyTopupId, openTopupSheet, closeTopupSheet, confirmTopup, openAccount, closeAccount, doAccountNew, doAccountReveal, doAccountRestore, doAccountDelete, doMigrate, doRedeem, redeemSliderChanged, toggleRedeemPick, askCancelInvoice, dismissCancelAsk, confirmCancelInvoice, toggleConsent, downloadReceipt, startQrScan, stopQrScan,
     showRestore, askNew, redeemThen, cancelAcctView, saveServer, srvSelected, qNav, scrollToBottom, reopenGuard, checkCredit,
     openEntryPicker, showExitInfo, chooseGateway, closeGw, filterGw, toggleGwOpt,
     acceptTerms, declineTerms, termsAgreeToggle, chooseModel, openLink, toggleImgOvl, saveImgTap, liveNudgeUse, liveNudgeSkip, reconnectMix, runMixPing, resetMixPerf,
@@ -6147,7 +6273,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     if(mixConnected) maybeShowTutorial();
     // Sweep any settled-but-uncollected payment into held credit on startup.
     if(isTauri() && account){
-      try{ const r=await Backend.collect(); if(r&&r.collected>0){ await refreshState(); renderBal(); } }catch(_){}
+      try{ const r=await Backend.collect(); if(r&&r.collected>0){ await refreshState(); renderBal(); await sweepReceipts(); } }catch(_){}
     }
     // Show the real entry/exit gateways + flags once the route is up.
     if(isTauri()) refreshRoute();

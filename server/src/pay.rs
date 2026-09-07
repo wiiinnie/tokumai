@@ -2671,6 +2671,7 @@ mod card_tests {
         assert_eq!(pay.watch_candidates(5).len(), 2, "due again after the cooldown");
 
         // An invoice long past its window stops being asked about.
+        // nosemgrep: scrai-unwrap-in-server-hot-path -- test fixture, not the request path
         pay.invoices.get_mut("open1").unwrap().expires_at = now_ms().saturating_sub(WATCH_GRACE_MS + 1_000);
         pay.last_check.clear();
         let after = pay.watch_candidates(5);

@@ -2355,6 +2355,167 @@ async fn save_image(data: String, filename: String) -> Result<Option<String>, St
     }
 }
 
+// ---- saving a document (the purchase receipt) --------------------------------------
+// Separate from save_image: a receipt is a FILE, not a picture. On desktop the user picks
+// where it goes, on iOS the share sheet does, on Android it lands in Downloads — the three
+// places each platform's users look for a saved document. Deliberately not automatic: the
+// buyer asked for the download, so the act stays theirs.
+
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
+#[tauri::command]
+async fn save_file(data: String, filename: String) -> Result<Option<String>, String> {
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+    let bytes = B64.decode(data.as_bytes()).map_err(|e| format!("bad file data: {e}"))?;
+    let handle = rfd::AsyncFileDialog::new().set_file_name(&filename).save_file().await;
+    match handle {
+        Some(f) => {
+            f.write(&bytes).await.map_err(|e| e.to_string())?;
+            Ok(Some(f.path().to_string_lossy().to_string()))
+        }
+        None => Ok(None), // cancelled — not an error
+    }
+}
+
+/// iOS: no user-visible filesystem, so the document goes through the share sheet ("Save to
+/// Files", Mail, AirDrop). Written to the app's tmp directory first because the sheet takes
+/// a file URL.
+#[cfg(target_os = "ios")]
+#[tauri::command]
+async fn save_file(app: AppHandle, data: String, filename: String) -> Result<Option<String>, String> {
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+    let bytes = B64.decode(data.as_bytes()).map_err(|e| format!("bad file data: {e}"))?;
+    let name: String = filename.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '-' || *c == '_').collect();
+    let path = std::env::temp_dir().join(if name.is_empty() { "receipt.pdf".into() } else { name });
+    std::fs::write(&path, &bytes).map_err(|e| format!("could not stage the file: {e}"))?;
+    let p = path.to_string_lossy().to_string();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.run_on_main_thread(move || {
+        let _ = tx.send(ios_share::present_share_sheet(&p));
+    })
+    .map_err(|e| e.to_string())?;
+    rx.await.map_err(|e| e.to_string())??;
+    Ok(Some("shared".into()))
+}
+
+/// Android: MediaStore Downloads. Needs no permission from API 29 on (scoped storage), and
+/// puts the file exactly where a browser download would go, so the Files app finds it.
+#[cfg(target_os = "android")]
+#[tauri::command]
+async fn save_file(data: String, filename: String) -> Result<Option<String>, String> {
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+    let bytes = B64.decode(data.as_bytes()).map_err(|e| format!("bad file data: {e}"))?;
+    let name: String = filename
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '-' || *c == '_')
+        .collect();
+    let name = if name.is_empty() { "receipt.pdf".to_string() } else { name };
+    android_save_to_downloads(bytes, name).map(Some)
+}
+
+/// The JNI half of the above. Runs on the Android main thread (the only place wry hands us
+/// the Activity), and answers over a channel — the caller is an async command and must not
+/// block that thread itself.
+#[cfg(target_os = "android")]
+fn android_save_to_downloads(bytes: Vec<u8>, filename: String) -> Result<String, String> {
+    use jni::{jni_sig, jni_str};
+    let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
+    tauri::wry::prelude::dispatch(move |env, activity, _webview| {
+        let out = (|| -> Result<String, String> {
+            let raw_vm = env.get_java_vm().map_err(|e| format!("no JavaVM: {e}"))?.get_java_vm_pointer();
+            let raw_ctx = activity.as_raw();
+            let vm = unsafe { jni::JavaVM::from_raw(raw_vm.cast()) };
+            let attached: Result<Result<String, String>, jni::errors::Error> =
+                vm.attach_current_thread(|env| Ok((|| -> Result<String, String> {
+                let ctx = unsafe { jni::objects::JObject::from_raw(env, raw_ctx.cast()) };
+                let jerr = |what: &'static str| move |e: jni::errors::Error| format!("{what}: {e}");
+
+                // Scoped storage arrived in API 29; below that this would need
+                // WRITE_EXTERNAL_STORAGE and a runtime prompt. Say so rather than fail oddly.
+                let sdk = env
+                    .get_static_field(jni_str!("android/os/Build$VERSION"), jni_str!("SDK_INT"), jni_sig!("I"))
+                    .and_then(|v| v.i())
+                    .map_err(jerr("SDK_INT"))?;
+                if sdk < 29 {
+                    return Err("saving files needs Android 10 or newer".into());
+                }
+
+                let resolver = env
+                    .call_method(
+                        &ctx,
+                        jni_str!("getContentResolver"),
+                        jni_sig!("()Landroid/content/ContentResolver;"),
+                        &[],
+                    )
+                    .and_then(|v| v.l())
+                    .map_err(jerr("getContentResolver"))?;
+
+                // Literal column names on purpose: these are the documented VALUES of
+                // MediaStore.MediaColumns.* and Environment.DIRECTORY_DOWNLOADS, and reading
+                // them back out of the classes would be three more JNI round trips for nothing.
+                let values = env
+                    .new_object(jni_str!("android/content/ContentValues"), jni_sig!("()V"), &[])
+                    .map_err(jerr("ContentValues"))?;
+                for (k, v) in [
+                    ("_display_name", filename.as_str()),
+                    ("mime_type", "application/pdf"),
+                    ("relative_path", "Download"),
+                ] {
+                    let jk = env.new_string(k).map_err(jerr("key"))?;
+                    let jv = env.new_string(v).map_err(jerr("value"))?;
+                    env.call_method(
+                        &values,
+                        jni_str!("put"),
+                        jni_sig!("(Ljava/lang/String;Ljava/lang/String;)V"),
+                        &[(&jk).into(), (&jv).into()],
+                    )
+                    .map_err(jerr("ContentValues.put"))?;
+                }
+
+                let collection = env
+                    .get_static_field(
+                        jni_str!("android/provider/MediaStore$Downloads"),
+                        jni_str!("EXTERNAL_CONTENT_URI"),
+                        jni_sig!("Landroid/net/Uri;"),
+                    )
+                    .and_then(|v| v.l())
+                    .map_err(jerr("EXTERNAL_CONTENT_URI"))?;
+
+                let item = env
+                    .call_method(
+                        &resolver,
+                        jni_str!("insert"),
+                        jni_sig!("(Landroid/net/Uri;Landroid/content/ContentValues;)Landroid/net/Uri;"),
+                        &[(&collection).into(), (&values).into()],
+                    )
+                    .and_then(|v| v.l())
+                    .map_err(jerr("insert"))?;
+                if item.is_null() {
+                    return Err("Android refused to create the file in Downloads".into());
+                }
+
+                let stream = env
+                    .call_method(
+                        &resolver,
+                        jni_str!("openOutputStream"),
+                        jni_sig!("(Landroid/net/Uri;)Ljava/io/OutputStream;"),
+                        &[(&item).into()],
+                    )
+                    .and_then(|v| v.l())
+                    .map_err(jerr("openOutputStream"))?;
+                let arr = env.byte_array_from_slice(&bytes).map_err(jerr("byte[]"))?;
+                env.call_method(&stream, jni_str!("write"), jni_sig!("([B)V"), &[(&arr).into()])
+                    .map_err(jerr("write"))?;
+                env.call_method(&stream, jni_str!("close"), jni_sig!("()V"), &[])
+                    .map_err(jerr("close"))?;
+                Ok(format!("Downloads/{filename}"))
+            })()));
+            attached.map_err(|e| format!("attach: {e}"))?
+        })();
+        let _ = tx.send(out);
+    });
+    rx.recv().map_err(|_| "the Android main thread did not answer".to_string())?
+}
+
 /// Android (first build): pictures stay in the chat — the gallery/share path needs the
 /// MediaStore plugin, which is not wired yet. Says so instead of failing silently.
 #[cfg(target_os = "android")]
@@ -2973,7 +3134,7 @@ pub fn run() {
             state, local_state, set_server, account_new, account_reveal, account_restore, account_delete, account_migrate_qr,
             invoice, invoice_status, invoice_cancel, invite_check, ocr_scan, pdf_text, pdf_ocr, pdf_pages, collect, redeem, chat,
             smart_available, smart_detect, coconut_redeem,
-            mixnet_route, mixnet_ping, cancel_chat, app_resumed, app_hidden, resume_stats, list_entry_gateways, set_entry_gateway, set_mixnet_perf, open_external, save_image,
+            mixnet_route, mixnet_ping, cancel_chat, app_resumed, app_hidden, resume_stats, list_entry_gateways, set_entry_gateway, set_mixnet_perf, open_external, save_image, save_file,
             share_text, upload_begin, upload_chunk, upload_pipeline, pick_image, open_account_security,
             vault_list, vault_load, vault_save, vault_remove, vault_purge_webdata, pending_load, pending_save
         ])
