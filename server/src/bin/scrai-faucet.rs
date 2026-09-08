@@ -516,6 +516,22 @@ impl Faucet {
 // the site: static HTML with a handful of {{placeholders}} from env
 // ---------------------------------------------------------------------------
 
+/// Is this env value a link we may put on the site?
+///
+/// `starts_with("https://")` alone was not enough: the .env.example placeholder
+/// `https://testflight.apple.com/join/<code>` passes that test, so a copied-but-unfilled
+/// line put a button on the download page that led nowhere — live for a day before anyone
+/// noticed (2026-09-08). Angle brackets and whitespace are exactly what an unfilled
+/// placeholder looks like and neither belongs in a URL, so both are refused. The card then
+/// falls back to "not published yet", which is at least true.
+fn publishable_link(raw: &str) -> bool {
+    let u = raw.trim();
+    u.starts_with("https://")
+        && u.len() > "https://".len()
+        && !u.contains(['<', '>'])
+        && !u.chars().any(char::is_whitespace)
+}
+
 fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
@@ -562,7 +578,7 @@ fn human_mb(bytes: u64) -> String {
 }
 
 fn site_html(dl_dir: &Path) -> String {
-    let env_link = |var: &str| std::env::var(var).ok().filter(|u| u.starts_with("https://")).map(|u| html_escape(&u));
+    let env_link = |var: &str| std::env::var(var).ok().filter(|u| publishable_link(u)).map(|u| html_escape(u.trim()));
     let (mver, files) = read_manifest(dl_dir);
     let mut s = SITE.to_string();
     let off = |label: &str| format!(r#"<span class="btn off">{label} · not published yet</span>"#);
@@ -929,6 +945,21 @@ async fn main() {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn an_unfilled_placeholder_is_not_a_publishable_link() {
+        assert!(publishable_link("https://testflight.apple.com/join/AbCd1234"));
+        assert!(publishable_link("  https://tokumai.com/  "), "surrounding space is trimmed, not fatal");
+
+        // the exact line that went live on 2026-09-08, copied from .env.example
+        assert!(!publishable_link("https://testflight.apple.com/join/<code>"));
+        assert!(!publishable_link("https://<host>/x"));
+        assert!(!publishable_link("https://example.com/a b"));
+        assert!(!publishable_link("http://tokumai.com/"), "plain http is never published");
+        assert!(!publishable_link("https://"), "a bare scheme is not a link");
+        assert!(!publishable_link(""));
+    }
     use super::rpc_from_lcd;
 
     #[test]
