@@ -5466,8 +5466,19 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       }else{
         inviteOk=false; inviteCode=""; el.value="";
         const got=Number(r&&r.toku)||0;
-        setInviteMsg("good", got>0 ? `redeemed — +${formatToku(got)} TOKU` : "already redeemed on this account");
-        await refreshState(); renderBuyBal();
+        // Redeeming only puts the credit on the ACCOUNT, as an entitlement. What the
+        // balance line reads is the SESSION, and collect() is the only thing that moves
+        // one to the other — so without this the code visibly worked and the number did
+        // not move until the user found "Check for credit" by hand (tester, 2026-09-08).
+        // The paid-invoice path has always done both at this exact moment; so does this.
+        // Unconditional on purpose: a redeem whose collect was lost last time (crash,
+        // dead route) comes back as "already redeemed" with the credit still waiting.
+        let coll=0;
+        try{ coll=Number((await Backend.collect()||{}).collected)||0; }catch(_){}
+        setInviteMsg("good", got>0 ? `redeemed — +${formatToku(got)} TOKU`
+                          : coll>0 ? `already redeemed — +${formatToku(coll)} TOKU collected`
+                          : "already redeemed on this account");
+        await refreshState(); renderBuyBal(); renderBal();
       }
     }catch(e){
       inviteOk=false; inviteCode="";
