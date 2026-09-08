@@ -1400,7 +1400,7 @@ impl Gateway {
         if inv.method == "card" {
             return self.card.check_status(inv).await;
         }
-        self.rail.check_status(&inv.provider_ref).await.map(Paid::plain)
+        self.rail.check_status(inv).await
     }
 
     /// Chain-watch health for the pay screen — only native NYM has one.
@@ -1677,22 +1677,39 @@ impl Rail {
     /// "paid" | "pending" | "expired". Processing deliberately does NOT count as
     /// paid — honouring BTCPay's "Settled" honours the operator's confirmation
     /// settings instead of second-guessing them here.
-    async fn check_status(&self, provider_ref: &str) -> Result<String, String> {
+    ///
+    /// Takes the whole invoice for the same reason the card rail does (audit M2): a
+    /// settled status alone is not enough to credit. It matters MORE here than at Mollie,
+    /// because a BTCPay store has a payment-tolerance setting — with it above zero an
+    /// invoice reaches "Settled" having received less than it asked for, and no code on
+    /// our side would have noticed.
+    async fn check_status(&self, our: &Inv) -> Result<Paid, String> {
+        let provider_ref = our.provider_ref.as_str();
         match self {
             Rail::None => Err("no payment gateway configured".into()),
-            Rail::Fake => Ok("paid".into()),
+            Rail::Fake => Ok(Paid::plain("paid".into())),
             Rail::BtcPay { base_url, api_key, .. } => {
                 let inv: Value = btcpay(
                     api_key,
                     crate::http::client().get(format!("{base_url}/api/v1/invoices/{provider_ref}")),
                 )
                 .await?;
-                Ok(match inv.get("status").and_then(|s| s.as_str()).unwrap_or("") {
+                let state = match inv.get("status").and_then(|s| s.as_str()).unwrap_or("") {
                     "Settled" => "paid",
+                    // `Invalid` is BTCPay for "paid, but late or short". Refusing to credit
+                    // is the safe direction, but the money DID arrive: those invoices need
+                    // an eye on the BTCPay dashboard, nothing here can see them again.
                     "Expired" | "Invalid" => "expired",
                     _ => "pending",
+                };
+                if state != "paid" {
+                    return Ok(Paid::plain(state.into()));
                 }
-                .into())
+                if let Err(why) = btcpay_settlement_matches(&inv, our) {
+                    eprintln!("scrai-server: REFUSING to settle BTCPay {provider_ref} for invoice {}: {why}", our.id);
+                    return Err("this payment does not match the invoice — it was not credited; contact support".into());
+                }
+                Ok(Paid::plain("paid".into()))
             }
             Rail::CoinGate { base_url, api_key, .. } => {
                 let order: Value = coingate(
@@ -1700,7 +1717,7 @@ impl Rail {
                     crate::http::client().get(format!("{base_url}/orders/{provider_ref}")),
                 )
                 .await?;
-                Ok(coingate_status(order.get("status").and_then(|s| s.as_str()).unwrap_or("")).into())
+                Ok(Paid::plain(coingate_status(order.get("status").and_then(|s| s.as_str()).unwrap_or("")).into()))
             }
         }
     }
@@ -2173,6 +2190,33 @@ fn is_mollie_url(u: &str) -> bool {
 fn quoted_amount(api_key: &str, usd: u32) -> (&'static str, String) {
     let currency = if api_key.starts_with("test_") { "EUR" } else { "USD" };
     (currency, format!("{usd}.00"))
+}
+
+/// Does this settled BTCPay invoice belong to us and carry what we asked for?
+///
+/// Pure, so the rule is testable without the network. The amount is parsed rather than
+/// compared as text: BTCPay writes "10.00" today, but "10" is as valid a rendering of the
+/// same number and a string comparison would refuse a perfectly good payment.
+fn btcpay_settlement_matches(inv: &Value, our: &Inv) -> Result<(), String> {
+    let order = inv.pointer("/metadata/orderId").and_then(|o| o.as_str()).unwrap_or("");
+    if order != our.id {
+        return Err(format!("metadata.orderId is {order:?}, expected {:?}", our.id));
+    }
+    let currency = inv.get("currency").and_then(|c| c.as_str()).unwrap_or("");
+    if !currency.eq_ignore_ascii_case("USD") {
+        return Err(format!("invoice is priced in {currency:?}, expected USD"));
+    }
+    // Under-payment is a STORE SETTING at BTCPay (payment tolerance), not an exotic
+    // failure — so this is the check that earns its place.
+    let paid = inv
+        .get("amount")
+        .and_then(|a| a.as_str().and_then(|s| s.parse::<f64>().ok()).or_else(|| a.as_f64()))
+        .ok_or_else(|| "invoice carries no readable amount".to_string())?;
+    let want = our.amount_usd as f64;
+    if (paid - want).abs() > 0.005 {
+        return Err(format!("invoice is for {paid:.2} USD, expected {want:.2}"));
+    }
+    Ok(())
 }
 
 /// Does this `paid` Mollie payment belong to `expect_ref` and carry the amount we quoted?
@@ -2988,5 +3032,34 @@ mod card_tests {
         let at = 1_788_000_000_000; // 2026-09-27
         assert!(utc_stamp(at).starts_with("2026-"));
         assert_eq!(receipt_number("fa57043ac2a52be28bd787c527deb025", at), "TKM-2026-FA57043A");
+    }
+
+    #[test]
+    fn a_settled_btcpay_invoice_still_has_to_be_ours_and_for_our_amount() {
+        let ours = Inv {
+            id: "abc123".into(), provider_ref: "XyZ".into(), account_id: "acct".into(),
+            amount_usd: 20, amount_toku: 20 * TOKU_PER_USD, method: "btc".into(),
+            status: "pending".into(), expires_at: now_ms() + 60_000, expected_unym: 0,
+            consent_version: "2026-09-07".into(), consent_at: now_ms(), country: String::new(),
+            paid_at: 0, testnet: false, invite_code: String::new(),
+        };
+        let inv = |order: &str, amount: Value, currency: &str| {
+            json!({ "status": "Settled", "amount": amount, "currency": currency,
+                    "metadata": { "orderId": order } })
+        };
+
+        assert!(btcpay_settlement_matches(&inv("abc123", json!("20.00"), "USD"), &ours).is_ok());
+        // BTCPay may render the same number either way; a text compare would refuse this
+        assert!(btcpay_settlement_matches(&inv("abc123", json!("20"), "USD"), &ours).is_ok());
+        assert!(btcpay_settlement_matches(&inv("abc123", json!(20.0), "USD"), &ours).is_ok());
+
+        // the store's payment tolerance let a short payment settle
+        assert!(btcpay_settlement_matches(&inv("abc123", json!("19.00"), "USD"), &ours).is_err());
+        // someone else's settled invoice
+        assert!(btcpay_settlement_matches(&inv("other", json!("20.00"), "USD"), &ours).is_err());
+        // priced in the wrong currency — 20 EUR is not 20 USD
+        assert!(btcpay_settlement_matches(&inv("abc123", json!("20.00"), "EUR"), &ours).is_err());
+        // a reply with nothing in it settles nothing
+        assert!(btcpay_settlement_matches(&json!({ "status": "Settled" }), &ours).is_err());
     }
 }
