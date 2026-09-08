@@ -115,15 +115,12 @@ pub fn env_file() -> std::path::PathBuf {
 /// Money rails whose configuration is network-scoped (`{base}_MAINNET` / `{base}_TESTNET`).
 /// Getting one of these wrong does not fail loudly — it settles invoices against the wrong
 /// world — so they are checked at boot (`testnet_rails_on_mainnet`).
-pub const MONEY_RAILS: [&str; 8] = [
+pub const MONEY_RAILS: [&str; 7] = [
     "NYX_LCD_URL",
     "NYX_RECEIVE_ADDRESS",
     "BTCPAY_URL",
     "BTCPAY_STORE_ID",
     "BTCPAY_API_KEY",
-    // A CoinGate SANDBOX key is as dangerous as Mollie's test key: its orders can be
-    // marked paid without money moving, so it must never survive the flip to mainnet.
-    "COINGATE_API_KEY",
     "MOLLIE_API_KEY",
     // The faucet wallet pin. A mainnet server still pinned to the sandbox faucet refuses
     // every invite credit (fail closed) — visible only as testers whose $1 never lands.

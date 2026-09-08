@@ -115,15 +115,14 @@ pub fn rails_info() -> Value {
     })
 }
 
-/// A coin processor is configured (BTCPay or CoinGate), or the dev rail stands in.
+/// A coin rail is configured (our BTCPay), or the dev rail stands in.
 fn btc_enabled() -> bool {
     if fake_payments_enabled() {
         return true;
     }
-    coingate_from_env().is_some()
-        || (crate::net_var("BTCPAY_URL").is_some()
-            && crate::net_var("BTCPAY_STORE_ID").is_some()
-            && crate::net_var("BTCPAY_API_KEY").is_some())
+    crate::net_var("BTCPAY_URL").is_some()
+        && crate::net_var("BTCPAY_STORE_ID").is_some()
+        && crate::net_var("BTCPAY_API_KEY").is_some()
 }
 
 pub async fn card_info() -> Value {
@@ -394,7 +393,7 @@ pub struct Inv {
     #[serde(default)]
     expected_unym: u64,
     /// ISO-3166 country the money came from, as the payment rail reports it (Mollie's
-    /// `countryCode`; CoinGate when that rail is on). NOT asked of the buyer and not
+    /// `countryCode`). NOT asked of the buyer and not
     /// derivable for a direct coin transfer, where it stays empty. Its only job is to show
     /// how close cross-border EU B2C turnover is to the threshold that would force OSS
     /// registration — it never changes what is charged.
@@ -1412,20 +1411,16 @@ impl Gateway {
     }
 }
 
-/// BTCPay or CoinGate (real) or the fake (dev). Selection fails loudly when
-/// nothing is configured — an issuer that hands out TOKU for imaginary money must
-/// never be a silent default.
+/// Our own BTCPay (real) or the fake (dev). Selection fails loudly when nothing is
+/// configured — an issuer that hands out TOKU for imaginary money must never be a
+/// silent default.
+///
+/// A processor rail (CoinGate) lived here until 2026-09-08. It was removed when the
+/// account never materialised: coins are served from our own BTCPay from now on, which
+/// is also the only way to accept Monero at all — no EU processor will touch it.
 pub enum Rail {
     Fake,
     BtcPay { base_url: String, store_id: String, api_key: String },
-    /// The processor alternative to running our own node: an order is raised in USD
-    /// and locked to ONE coin. See the CoinGate section below for why one.
-    CoinGate {
-        base_url: String,
-        api_key: String,
-        /// What CoinGate pays out in — `None` leaves it to the account's own setting.
-        receive_currency: Option<String>,
-    },
     None,
 }
 
@@ -1437,7 +1432,6 @@ impl Rail {
             // non-nyx invoice still settled for free. Refuse to boot in that mixed state.
             let real = [
                 "NYX_RECEIVE_ADDRESS", "NYX_LCD_URL", "BTCPAY_URL", "BTCPAY_STORE_ID", "BTCPAY_API_KEY",
-                "COINGATE_API_KEY", "COINGATE_API_KEY_TESTNET", "COINGATE_API_KEY_MAINNET",
                 "MOLLIE_API_KEY", "MOLLIE_API_KEY_TESTNET", "MOLLIE_API_KEY_MAINNET",
             ]
             .iter()
@@ -1448,29 +1442,6 @@ impl Rail {
             }
             eprintln!("scrai-server: FAKE_PAYMENTS=1 — invoices settle on first poll. DEV ONLY.");
             return Rail::Fake;
-        }
-        // CoinGate first: both coin rails can be configured at once (a leftover BTCPay
-        // store while the processor is brought up), and picking one silently would leave
-        // the operator watching the wrong dashboard for money that never arrives.
-        if let Some((base_url, api_key)) = coingate_from_env() {
-            if crate::net_var("BTCPAY_URL").is_some() {
-                eprintln!("scrai-server: a CoinGate app and a BTCPay store are both configured — raising invoices on CoinGate, ignoring BTCPay.");
-            }
-            let receive_currency = crate::cfg("COINGATE_RECEIVE_CURRENCY")
-                .ok()
-                .map(|c| c.trim().to_string())
-                .filter(|c| !c.is_empty());
-            // The coins themselves come from COINGATE_COINS, per invoice — see `offered_coins`.
-            let coins = offered_coins();
-            if coins.is_empty() {
-                eprintln!("scrai-server: CoinGate is configured but COINGATE_COINS lists nothing usable — the coin tiles stay greyed out.");
-            } else {
-                println!(
-                    "scrai-server: coins on sale — {}",
-                    coins.iter().map(|c| format!("{} ({} platform {})", c.id, c.currency, c.platform)).collect::<Vec<_>>().join(", ")
-                );
-            }
-            return Rail::CoinGate { base_url, api_key, receive_currency };
         }
         // Network-scoped (BTCPAY_URL_MAINNET / _TESTNET, legacy BTCPAY_URL fallback).
         match (
@@ -1489,14 +1460,13 @@ impl Rail {
         match self {
             Rail::Fake => "fake",
             Rail::BtcPay { .. } => "btcpay",
-            Rail::CoinGate { .. } => "coingate",
             Rail::None => "none",
         }
     }
 
-    /// `wanted` is the coin id the buyer picked ("btc-ln", "usdc-sol"). It only means
-    /// something to the CoinGate rail; BTCPay and the dev rail ignore it.
-    async fn create_invoice(&self, usd: u32, reference: &str, wanted: &str) -> Result<RaisedInvoice, String> {
+    /// `wanted` is the coin id the buyer picked. BTCPay and the dev rail ignore it — the
+    /// store decides which coins it accepts, and the invoice carries every one of them.
+    async fn create_invoice(&self, usd: u32, reference: &str, _wanted: &str) -> Result<RaisedInvoice, String> {
         match self {
             Rail::None => Err("this server cannot sell TOKU — no payment gateway configured".into()),
             Rail::Fake => Ok(RaisedInvoice {
@@ -1578,99 +1548,6 @@ impl Rail {
                     expires_at,
                 })
             }
-            Rail::CoinGate { base_url, api_key, receive_currency } => {
-                // `wanted` IS the coin id ("btc-ln", "usdc-sol"). begin_create already
-                // checked it is on sale; falling back to the first offered coin covers an
-                // older app that still sends the bare rail name.
-                let coins = offered_coins();
-                let coin = coins
-                    .iter()
-                    .find(|c| c.id == wanted)
-                    .or_else(|| coins.first())
-                    .ok_or("no coin is configured on this server")?;
-                let (pay_currency, platform_id) = (&coin.currency, &coin.platform);
-                // 1. the order, priced in fiat. `order_id` is our own reference, so a
-                //    support question can be traced back without CoinGate learning
-                //    anything about the account.
-                let mut body = json!({
-                    "price_amount": format!("{usd}.00"),
-                    "price_currency": "USD",
-                    "order_id": reference,
-                    "title": "tokumai credit",
-                    "description": format!("${usd} of prepaid tokumai credit"),
-                });
-                if let Some(rc) = receive_currency {
-                    body["receive_currency"] = json!(rc);
-                }
-                let order: Value = coingate(
-                    api_key,
-                    crate::http::client().post(format!("{base_url}/orders")).json(&body),
-                )
-                .await?;
-                // CoinGate's own id is a NUMBER; the string `order_id` is the one we sent.
-                let provider_ref = json_scalar(&order, "id");
-                if provider_ref.is_empty() {
-                    return Err("CoinGate accepted the order but returned no id".into());
-                }
-
-                // 2. lock it to one coin. This white-label call is what returns the bare
-                //    address instead of a checkout page — the hosted picker would have the
-                //    customer's browser talk to CoinGate at the exact moment the mixnet is
-                //    supposed to be protecting them. It also starts the 20-minute window.
-                let checkout: Value = coingate(
-                    api_key,
-                    crate::http::client()
-                        .post(format!("{base_url}/orders/{provider_ref}/checkout"))
-                        .json(&json!({ "pay_currency": pay_currency, "platform_id": platform_id })),
-                )
-                .await?;
-                let destination = json_scalar(&checkout, "payment_address");
-                if destination.is_empty() {
-                    return Err("CoinGate returned no payment address for this order".into());
-                }
-                let amount = json_scalar(&checkout, "pay_amount");
-                let currency = match json_scalar(&checkout, "pay_currency") {
-                    c if c.is_empty() => pay_currency.clone(),
-                    c => c.to_uppercase(),
-                };
-                // Lightning is decided by the platform WE asked for, never by the reply's
-                // own flag: the pay screen hides every option whose method matches
-                // /ln|lightning/, so a wrong label here makes the address vanish from the UI.
-                let lightning = *platform_id == COINGATE_PLATFORM_LIGHTNING_BTC;
-                let method = if lightning { format!("{currency}-LN") } else { currency.clone() };
-                let uri = match (lightning, currency.as_str()) {
-                    (true, _) => format!("lightning:{destination}"),
-                    (false, "BTC") if !amount.is_empty() => format!("bitcoin:{destination}?amount={amount}"),
-                    (false, "BTC") => format!("bitcoin:{destination}"),
-                    _ => destination.clone(),
-                };
-                // CoinGate expires a checked-out order after 20 minutes and stops watching —
-                // unlike BTCPay, whose late settlement `begin_status`'s sweep was built for.
-                // A confirmation that lands after the window is a CoinGate support case, not
-                // something this server can credit on its own.
-                let expires_at = checkout
-                    .get("expire_at")
-                    .and_then(|e| e.as_str())
-                    .and_then(rfc3339_ms)
-                    .unwrap_or_else(|| now_ms() + 20 * 60_000);
-                Ok(RaisedInvoice {
-                    provider_ref,
-                    pay_to: destination.clone(),
-                    instruction: if amount.is_empty() {
-                        "Pay to the destination below.".into()
-                    } else {
-                        format!("Send exactly {amount} {currency} to the destination below — the rate is held until the timer runs out.")
-                    },
-                    options: json!([{
-                        "method": method,
-                        "destination": destination,
-                        "uri": uri,
-                        "amount": amount,
-                        "currency": currency,
-                    }]),
-                    expires_at,
-                })
-            }
         }
     }
 
@@ -1710,14 +1587,6 @@ impl Rail {
                     return Err("this payment does not match the invoice — it was not credited; contact support".into());
                 }
                 Ok(Paid::plain("paid".into()))
-            }
-            Rail::CoinGate { base_url, api_key, .. } => {
-                let order: Value = coingate(
-                    api_key,
-                    crate::http::client().get(format!("{base_url}/orders/{provider_ref}")),
-                )
-                .await?;
-                Ok(Paid::plain(coingate_status(order.get("status").and_then(|s| s.as_str()).unwrap_or("")).into()))
             }
         }
     }
@@ -1773,15 +1642,13 @@ async fn btcpay(api_key: &str, req: reqwest::RequestBuilder) -> Result<Value, St
 
 
 // ---------------------------------------------------------------------------
-// CoinGate — an EU-licensed processor (UAB Decentralized, Vilnius) instead of our
-// own node: it takes the coin and settles fiat, so no Bitcoin node, no xpub, no
-// custody here. The trade for that is one coin per invoice — CoinGate has no
-// multi-method invoice, and its hosted picker is the browser round trip the mixnet
-// exists to avoid — so we take the white-label `/checkout` call, which hands back
-// the bare address, and the app renders the QR itself exactly as on every other rail.
+// Coin tiles. A processor rail (CoinGate) served these until 2026-09-08; it was removed
+// when the account never came through. Coins are our own BTCPay from now on — which was
+// always the only way to accept Monero anyway, since no EU processor will touch it.
 // ---------------------------------------------------------------------------
 
-/// One sellable coin: a CoinGate (currency, platform) pair plus the words the app shows.
+/// One sellable coin: a (currency, platform) pair plus the words the app shows.
+/// Unused while `offered_coins` is empty — kept for the Monero tile.
 ///
 /// The chain is a property of the coin, not a payment method of its own — the app draws one
 /// tile per `group` and puts the variants behind a picker, so "USDC" is one choice and
@@ -1802,110 +1669,21 @@ pub struct Coin {
     pub min_usd: u32,
 }
 
-/// Platform ids are CoinGate's own (GET /v2/currencies lists them). Ethereum mainnet is
-/// deliberately absent from the known set: at $5 the gas defeats the purchase.
-const KNOWN_COINS: &[(&str, &str, &str, &str, &str, &str, u64, u32)] = &[
-    // id, group, group label, variant label, note, currency, platform, min usd
-    ("btc-ln", "btc", "Bitcoin", "Lightning", "instant · fee under 1¢", "BTC", 43, 0),
-    ("btc", "btc", "Bitcoin", "On-chain", "10–60 min · miner fee applies", "BTC", 5, 20),
-    ("usdc-sol", "usdc", "USDC", "Solana", "SPL · ~$0.001 network fee", "USDC", 20, 0),
-    ("usdc-base", "usdc", "USDC", "Base", "ERC-20 · ~$0.01 network fee", "USDC", 42, 0),
-    ("usdc-pol", "usdc", "USDC", "Polygon", "ERC-20 · ~$0.01 network fee", "USDC", 39, 0),
-    ("usdc-bsc", "usdc", "USDC", "BNB Chain", "BEP-20 · ~$0.05 network fee", "USDC", 3, 0),
-    ("usdc-arb", "usdc", "USDC", "Arbitrum", "ERC-20 · ~$0.02 network fee", "USDC", 40, 0),
-    ("usdc-op", "usdc", "USDC", "Optimism", "ERC-20 · ~$0.02 network fee", "USDC", 44, 0),
-];
 
-fn known_coin(id: &str) -> Option<Coin> {
-    KNOWN_COINS.iter().find(|c| c.0 == id).map(|c| Coin {
-        id: c.0.into(),
-        group: c.1.into(),
-        group_label: c.2.into(),
-        label: c.3.into(),
-        note: c.4.into(),
-        currency: c.5.into(),
-        platform: c.6,
-        min_usd: c.7,
-    })
-}
 
-/// What this server sells, in the order the app shows it.
+/// What this server sells as separate coin tiles, in the order the app shows it.
 ///
-/// `COINGATE_COINS` lists ids from the table above — `btc-ln,btc,usdc-sol`. An entry may
-/// also spell out a coin the table does not know, `id:CURRENCY:PLATFORM[:MIN_USD]`, so a new
-/// chain is one line in .env rather than a release. Unknown bare ids are skipped with a
-/// warning: a typo must not silently sell something else.
+/// Empty today, and that is the whole behaviour: with BTCPay the STORE decides which coins
+/// it accepts, and every accepted one comes back as an option on the same invoice. The app
+/// reads an empty list as "keep the plain Bitcoin tile", which is what it has always done
+/// on this rail.
 ///
-/// Unset, it falls back to the single coin the older `COINGATE_PAY_CURRENCY` /
-/// `COINGATE_PLATFORM_ID` pair described, so an existing .env keeps working.
+/// It is kept rather than deleted because Monero will need it: served through BTCPay, XMR
+/// would otherwise arrive as a third option UNDER a tile labelled "Bitcoin". Filling this
+/// in is how that gets its own tile — but not before we have seen what a real store calls
+/// its payment methods, which is guesswork until the node is up.
 pub fn offered_coins() -> Vec<Coin> {
-    // Only CoinGate sells per-coin. With BTCPay (or the dev rail) the processor decides what
-    // it accepts, so there is no list to offer and nothing to gate on — an empty list means
-    // "the app keeps its plain Bitcoin tile", which is what every build before 0.5.1 did.
-    if coingate_from_env().is_none() {
-        return Vec::new();
-    }
-    let spec = crate::cfg("COINGATE_COINS").unwrap_or_default();
-    let spec = spec.trim();
-    if spec.is_empty() {
-        let currency = crate::cfg("COINGATE_PAY_CURRENCY").unwrap_or_else(|_| "BTC".into());
-        let platform = crate::cfg("COINGATE_PLATFORM_ID")
-            .ok()
-            .and_then(|p| p.trim().parse().ok())
-            .unwrap_or(COINGATE_PLATFORM_BITCOIN);
-        // Name it after the table entry that matches, so the app still says "Lightning".
-        if let Some(c) = KNOWN_COINS
-            .iter()
-            .find(|c| c.5.eq_ignore_ascii_case(&currency) && c.6 == platform)
-            .and_then(|c| known_coin(c.0))
-        {
-            return vec![c];
-        }
-        return vec![Coin {
-            id: currency.to_lowercase(),
-            group: currency.to_lowercase(),
-            group_label: currency.to_uppercase(),
-            label: currency.to_uppercase(),
-            note: String::new(),
-            currency: currency.to_uppercase(),
-            platform,
-            min_usd: 0,
-        }];
-    }
-    let mut out = Vec::new();
-    for raw in spec.split(',') {
-        let raw = raw.trim();
-        if raw.is_empty() {
-            continue;
-        }
-        let parts: Vec<&str> = raw.split(':').collect();
-        match parts.as_slice() {
-            [id] => match known_coin(id) {
-                Some(c) => out.push(c),
-                None => eprintln!("scrai-server: COINGATE_COINS: unknown coin {id} — skipped (spell it out as id:CURRENCY:PLATFORM to add one)"),
-            },
-            [id, cur, plat, rest @ ..] => {
-                let Ok(platform) = plat.trim().parse::<u64>() else {
-                    eprintln!("scrai-server: COINGATE_COINS: {id} has a non-numeric platform — skipped");
-                    continue;
-                };
-                let min_usd = rest.first().and_then(|m| m.trim().parse().ok()).unwrap_or(0);
-                let cur = cur.trim().to_uppercase();
-                out.push(Coin {
-                    id: (*id).into(),
-                    group: id.split('-').next().unwrap_or(id).into(),
-                    group_label: cur.clone(),
-                    label: id.split_once('-').map(|(_, v)| v.to_uppercase()).unwrap_or_else(|| cur.clone()),
-                    note: String::new(),
-                    currency: cur,
-                    platform,
-                    min_usd,
-                });
-            }
-            _ => eprintln!("scrai-server: COINGATE_COINS: cannot read {raw} — skipped"),
-        }
-    }
-    out
+    Vec::new()
 }
 
 /// The offered coins grouped for the catalog: one entry per tile, variants in order, the
@@ -1932,97 +1710,11 @@ fn variant_json(c: &Coin) -> Value {
     json!({ "id": c.id, "label": c.label, "note": c.note, "minUsd": c.min_usd })
 }
 
-const COINGATE_API: &str = "https://api.coingate.com/api/v2";
-/// The sandbox is a separate host with SEPARATE credentials — a coingate.com key does
-/// not work here and vice versa — which is what makes the key an honest signal of
-/// which world the money is in.
-const COINGATE_API_SANDBOX: &str = "https://api-sandbox.coingate.com/api/v2";
-/// `platform_id` for BTC, from the public `GET /api/v2/currencies`: BTC carries
-/// `bitcoin` = 5 and `lightning_btc` = 43. On-chain is the default because the pay
-/// screen filters Lightning options out of the UI today.
-const COINGATE_PLATFORM_BITCOIN: u64 = 5;
-const COINGATE_PLATFORM_LIGHTNING_BTC: u64 = 43;
 
-/// Which CoinGate world this server talks to, decided by WHICH key is set rather than
-/// by `TESTNET`. Deriving the host from the mode would let a live key be pointed at the
-/// sandbox — or worse, let a sandbox key, whose orders can be marked paid for nothing,
-/// mint real credit on a real server. Pure, with the lookup injected: the env-var tests
-/// in this crate share one process (that trap has bitten twice).
-fn coingate_endpoint(get: impl Fn(&str) -> Option<String>) -> Option<(String, String)> {
-    let val = |n: &str| get(n).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
-    if let Some(k) = val("COINGATE_API_KEY_MAINNET") {
-        return Some((COINGATE_API.to_string(), k));
-    }
-    if let Some(k) = val("COINGATE_API_KEY_TESTNET") {
-        return Some((COINGATE_API_SANDBOX.to_string(), k));
-    }
-    let key = val("COINGATE_API_KEY")?;
-    let base = match val("COINGATE_SANDBOX").as_deref() {
-        Some("1") => COINGATE_API_SANDBOX,
-        _ => COINGATE_API,
-    };
-    Some((base.to_string(), key))
-}
 
-fn coingate_from_env() -> Option<(String, String)> {
-    coingate_endpoint(|n| std::env::var(n).ok())
-}
 
-/// CoinGate's order status → ours. `confirming` is deliberately NOT paid, for the same
-/// reason BTCPay's `Processing` is not: the money is visible, not final. Everything
-/// terminal that is not "the merchant has it" is an expiry as far as credit goes.
-fn coingate_status(status: &str) -> &'static str {
-    match status {
-        "paid" => "paid",
-        "expired" | "canceled" | "invalid" | "refunded" | "partially_refunded" => "expired",
-        // new | pending | confirming | anything CoinGate adds later
-        _ => "pending",
-    }
-}
 
-/// One JSON field as text. CoinGate returns its order id as a number and its amounts as
-/// strings, and `as_str()` on the former quietly yields "" — which would post a checkout
-/// to `/orders//checkout`.
-fn json_scalar(v: &Value, key: &str) -> String {
-    match v.get(key) {
-        Some(Value::String(s)) => s.clone(),
-        Some(Value::Number(n)) => n.to_string(),
-        _ => String::new(),
-    }
-}
 
-async fn coingate(api_key: &str, req: reqwest::RequestBuilder) -> Result<Value, String> {
-    let res = req
-        // CoinGate's own scheme, not Bearer.
-        .header("authorization", format!("Token {api_key}"))
-        .timeout(std::time::Duration::from_secs(20))
-        .send()
-        .await
-        .map_err(|e| format!("CoinGate unreachable: {e}"))?;
-    let status = res.status();
-    let retry_after = retry_after_secs(&res);
-    let body: Value = res.json().await.unwrap_or(Value::Null);
-    if !status.is_success() {
-        let msg = body
-            .get("message")
-            .and_then(|m| m.as_str())
-            .or_else(|| body.get("reason").and_then(|r| r.as_str()))
-            .unwrap_or("");
-        return Err(match status.as_u16() {
-            401 | 403 => "CoinGate rejected the API key — check COINGATE_API_KEY, and that a sandbox key is not pointed at the live API (or the other way round)".into(),
-            404 => "CoinGate does not know this order".into(),
-            422 => format!("CoinGate refused the order: {}", msg.chars().take(200).collect::<String>()),
-            // Throttled or temporarily down: the user gets a plain "try again in N";
-            // CoinGate's own text stays in the operator log.
-            429 | 502 | 503 | 504 => {
-                eprintln!("scrai-server: CoinGate {status} (retry-after {retry_after:?}): {}", msg.chars().take(200).collect::<String>());
-                provider_busy("the payment processor", retry_after)
-            }
-            s => format!("CoinGate {s}: {}", msg.chars().take(200).collect::<String>()),
-        });
-    }
-    Ok(body)
-}
 
 // ---------------------------------------------------------------------------
 // Cards via Mollie — hosted checkout, no card data here, no webhook (the server has
@@ -2274,7 +1966,7 @@ async fn mollie(api_key: &str, req: reqwest::RequestBuilder) -> Result<Value, Mo
     Ok(body)
 }
 
-/// `2026-08-29T10:47:54+00:00` → unix ms. Mollie's and CoinGate's timestamps are both
+/// `2026-08-29T10:47:54+00:00` → unix ms. Mollie's timestamps are
 /// RFC 3339 with a numeric offset (or `Z`); anything else parses as None and the caller
 /// falls back.
 fn rfc3339_ms(s: &str) -> Option<u64> {
@@ -2692,34 +2384,6 @@ mod tests {
         assert!(back.issuance(&req_key).is_none());
     }
 
-    /// The coin list is what the app draws its tiles from, so a typo in COINGATE_COINS must
-    /// not turn into a silently different coin, and a coin nobody offers must not be
-    /// sellable. Pure — reads the spec through a closure, so it touches no global env.
-    #[test]
-    fn the_coin_spec_reads_ids_and_refuses_what_it_does_not_know() {
-        // known ids carry their own copy; an unknown one is dropped, not guessed
-        let known: Vec<Coin> = "btc-ln, btc ,usdc-sol,nope"
-            .split(',')
-            .filter_map(|id| known_coin(id.trim()))
-            .collect();
-        assert_eq!(known.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), ["btc-ln", "btc", "usdc-sol"]);
-        assert_eq!(known[0].platform, 43);          // Lightning
-        assert_eq!(known[1].min_usd, 20);           // on-chain starts at $20
-        assert_eq!(known[2].currency, "USDC");
-        assert!(known_coin("usdc-eth").is_none(), "Ethereum mainnet is deliberately not in the table");
-
-        // grouping: one tile per group, variants in the order given
-        let coins = vec![known_coin("btc-ln").unwrap(), known_coin("btc").unwrap(), known_coin("usdc-sol").unwrap()];
-        let mut groups: Vec<(String, Vec<String>)> = Vec::new();
-        for c in &coins {
-            match groups.iter_mut().find(|g| g.0 == c.group) {
-                Some(g) => g.1.push(c.id.clone()),
-                None => groups.push((c.group.clone(), vec![c.id.clone()])),
-            }
-        }
-        assert_eq!(groups.len(), 2);
-        assert_eq!(groups[0].1, ["btc-ln", "btc"]);
-    }
 
     /// Every kind the dispatch loop routes to the paywall must actually be answered by
     /// `begin` — the drift between the two lists is what produced "unknown kind:
@@ -2780,77 +2444,6 @@ mod tests {
     }
 }
 
-#[cfg(test)]
-mod coingate_tests {
-    use super::*;
-
-    /// The rail must never be decided by TESTNET: sandbox credentials only work against
-    /// the sandbox host, so the KEY is the honest signal. Pure lookup — the real env is
-    /// process-global and shared with every other test in this crate.
-    #[test]
-    fn the_coingate_key_decides_which_world_the_money_is_in() {
-        let env = |pairs: &[(&str, &str)]| {
-            let m: std::collections::HashMap<String, String> =
-                pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
-            move |k: &str| m.get(k).cloned()
-        };
-        let live = |k: &str| Some((COINGATE_API.to_string(), k.to_string()));
-        let sandbox = |k: &str| Some((COINGATE_API_SANDBOX.to_string(), k.to_string()));
-
-        assert_eq!(coingate_endpoint(env(&[])), None, "no key → no CoinGate rail");
-        assert_eq!(coingate_endpoint(env(&[("COINGATE_API_KEY_MAINNET", "live-key")])), live("live-key"));
-        assert_eq!(coingate_endpoint(env(&[("COINGATE_API_KEY_TESTNET", "sbx-key")])), sandbox("sbx-key"));
-
-        // A half-migrated .env: the mainnet key wins, and it takes the live host WITH it.
-        assert_eq!(
-            coingate_endpoint(env(&[
-                ("COINGATE_API_KEY_TESTNET", "sbx-key"),
-                ("COINGATE_API_KEY_MAINNET", "live-key"),
-            ])),
-            live("live-key")
-        );
-
-        // An empty value is not a value.
-        assert_eq!(
-            coingate_endpoint(env(&[
-                ("COINGATE_API_KEY_MAINNET", "   "),
-                ("COINGATE_API_KEY_TESTNET", "sbx-key"),
-            ])),
-            sandbox("sbx-key")
-        );
-
-        // The bare name stays live unless the sandbox is asked for explicitly.
-        assert_eq!(coingate_endpoint(env(&[("COINGATE_API_KEY", "k")])), live("k"));
-        assert_eq!(
-            coingate_endpoint(env(&[("COINGATE_API_KEY", "k"), ("COINGATE_SANDBOX", "1")])),
-            sandbox("k")
-        );
-    }
-
-    /// Only "paid" credits an account. `confirming` is money in flight, and every
-    /// terminal not-paid state must expire rather than hang the invoice on "pending".
-    #[test]
-    fn only_a_paid_coingate_order_credits() {
-        assert_eq!(coingate_status("paid"), "paid");
-        for s in ["new", "pending", "confirming", "", "something_new"] {
-            assert_eq!(coingate_status(s), "pending", "{s}");
-        }
-        for s in ["expired", "canceled", "invalid", "refunded", "partially_refunded"] {
-            assert_eq!(coingate_status(s), "expired", "{s}");
-        }
-    }
-
-    /// CoinGate sends the order id as a NUMBER and the amounts as strings; `as_str()`
-    /// on the id yields "" and would post the checkout to `/orders//checkout`.
-    #[test]
-    fn a_numeric_coingate_id_survives_as_text() {
-        let order = json!({ "id": 538, "order_id": "abc", "pay_amount": "0.00042" });
-        assert_eq!(json_scalar(&order, "id"), "538");
-        assert_eq!(json_scalar(&order, "order_id"), "abc");
-        assert_eq!(json_scalar(&order, "pay_amount"), "0.00042");
-        assert_eq!(json_scalar(&order, "missing"), "");
-    }
-}
 
 #[cfg(test)]
 mod card_tests {
