@@ -44,3 +44,8 @@ jobs:
           name: scrambleai-windows-x86_64
           path: target/release/bundle/nsis/*.exe
           if-no-files-found: error
+          # A build artifact is worth keeping until it has been downloaded and published,
+          # not for the 90 days GitHub keeps it by default. 19 Linux runs at ~144 MB had
+          # filled the account's Actions storage to 90% by 2026-09-08 — every one of them
+          # a superseded copy of a file already on the download site.
+          retention-days: 7
