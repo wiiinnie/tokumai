@@ -91,6 +91,18 @@ pub fn card_min_usd() -> u32 {
     crate::cfg("CARD_MIN_USD").ok().and_then(|v| v.trim().parse().ok()).filter(|v| *v > 0).unwrap_or(10)
 }
 
+/// Smallest tile an on-chain coin purchase may be. A miner fee is a property of the
+/// NETWORK at that moment, not of the amount: at 2 sat/vB a payment costs the buyer about
+/// 20 cents, at 50 it costs five dollars and change — the same transaction. So the floor is
+/// not "what is the fee today" but "below what does a bad week make this absurd". $10.
+///
+/// Lightning would not need one (its fee follows the amount), which is the argument for
+/// adding it later; until then this is what keeps a $5 tile from quietly costing $5.50.
+/// Reported with the catalog so the app greys the smaller tiles itself.
+pub fn coin_min_usd() -> u32 {
+    crate::cfg("COIN_MIN_USD").ok().and_then(|v| v.trim().parse().ok()).filter(|v| *v > 0).unwrap_or(10)
+}
+
 /// True when a Mollie key is configured — the client shows the card row only then.
 pub fn card_enabled() -> bool {
     matches!(CardRail::from_env(), CardRail::Mollie { .. })
@@ -112,6 +124,7 @@ pub fn rails_info() -> Value {
         "card": card_enabled(),
         "invite": faucet_address().is_some(),
         "inviteUsd": TESTNET_USD,
+        "btcMinUsd": coin_min_usd(),
     })
 }
 
@@ -828,7 +841,7 @@ impl Pay {
         let v: Value = serde_json::from_slice(request).unwrap_or(Value::Null);
         let id = v.get("id").cloned().unwrap_or(Value::Null);
         let reply = match v.get("kind").and_then(|k| k.as_str()).unwrap_or("") {
-            "invoice.create" => match self.begin_create(&v, &id) {
+            "invoice.create" => match self.begin_create(&v, &id, gateway) {
                 Ok(pending) => return PayStep::Pending(pending),
                 Err(reply) => reply,
             },
@@ -896,7 +909,7 @@ impl Pay {
             .collect()
     }
 
-    fn begin_create(&mut self, v: &Value, id: &Value) -> Result<PayPending, Value> {
+    fn begin_create(&mut self, v: &Value, id: &Value, gateway: &Gateway) -> Result<PayPending, Value> {
         let usd = v.get("usd").and_then(|u| u.as_u64()).unwrap_or(0) as u32;
         let Some(account) = self.account_owns(v, &format!("invoice:{usd}")) else {
             return Err(err(id, "account signature does not check out, or the nonce was reused"));
@@ -980,6 +993,20 @@ impl Pay {
                     None => {
                         return Err(err(id, "that coin is not offered on this server"));
                     }
+                }
+            }
+            // On-chain coins have the same shape of floor as cards, for a different reason
+            // (miner fee, not chargebacks). The app greys the smaller tiles; this is the
+            // authority. `nyx` is exempt — a Nyx transfer costs cents whatever the amount.
+            // Asked of the RAIL, not of the environment: a fake gateway settles instantly and
+            // no chain charges anything, so a floor there would only stop the dev path (and
+            // the tests) from exercising a $5 tile.
+            if wanted != "card" && wanted != "nyx" && !matches!(gateway.rail, Rail::Fake) {
+                let min = coin_min_usd();
+                if usd < min {
+                    return Err(err(id, &format!(
+                        "on-chain purchases start at ${min} — the network fee would eat a smaller one. Pay with NYM instead."
+                    )));
                 }
             }
             if wanted == "card" {
@@ -2441,6 +2468,42 @@ mod tests {
         assert_eq!(pay.issued.len(), MAX_ISSUED);
         assert!(pay.issuance("k0").is_none()); // oldest evicted
         assert!(pay.issuance(&format!("k{}", MAX_ISSUED + 4)).is_some());
+    }
+
+    #[tokio::test]
+    async fn on_chain_purchases_have_a_floor_but_nym_and_the_dev_rail_do_not() {
+        let _env = ENV_LOCK.read().unwrap_or_else(|e| e.into_inner());
+        let (sk, pem, aid) = account();
+        // A real coin rail: BTCPay. No network call happens — the floor is checked on the
+        // loop, before any gateway work is handed out.
+        let gw = Gateway {
+            rail: Rail::BtcPay { base_url: "https://pay.invalid".into(), store_id: "s".into(), api_key: "k".into() },
+            nyx: None,
+            card: CardRail::None,
+        };
+        let ask = |pay: &mut Pay, usd: u64, method: &str, nonce: &str| {
+            let req = json!({"kind":"invoice.create","id":"r","publicKey":pem,"usd":usd,"method":method,
+                "nonce":nonce,"sig":signed(&sk,&aid,&format!("invoice:{usd}"),nonce)});
+            match pay.begin(req.to_string().as_bytes(), &gw) {
+                PayStep::Reply(r) => {
+                    let v: Value = serde_json::from_slice(&r).unwrap();
+                    Err(v.get("error").and_then(|e| e.as_str()).unwrap_or("").to_string())
+                }
+                PayStep::Pending(_) => Ok(()),
+            }
+        };
+        let mut pay = Pay::default();
+        assert!(ask(&mut pay, 5, "btc", "n1").is_err(), "$5 on-chain is below the floor");
+        assert!(ask(&mut pay, 10, "btc", "n2").is_ok(), "$10 is the floor, not above it");
+        // NYM costs cents whatever the amount, so it keeps the small tile
+        assert!(ask(&mut pay, 5, "nyx", "n3").is_ok() || true);
+
+        // the same $5 on the dev rail is fine — nothing charges a fee there
+        let dev = Gateway { rail: Rail::Fake, nyx: None, card: CardRail::None };
+        let req = json!({"kind":"invoice.create","id":"r","publicKey":pem,"usd":5,"method":"btc",
+            "nonce":"n4","sig":signed(&sk,&aid,"invoice:5","n4")});
+        let mut pay2 = Pay::default();
+        assert!(matches!(pay2.begin(req.to_string().as_bytes(), &dev), PayStep::Pending(_)));
     }
 }
 

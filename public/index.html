@@ -262,8 +262,8 @@
   .pm.soon{opacity:.5;cursor:not-allowed}
   /* Between the name and the tag, in one row. They live OUTSIDE the 26px square logo box
      the other tiles use — inside it they had no width to spread into and stacked. */
-  .cardmarks{display:flex;align-items:center;gap:5px;flex:0 1 auto;flex-wrap:nowrap;min-width:0;overflow:hidden}
-  .cardmarks svg{border-radius:4px;display:block;flex:none;height:26px;width:auto}
+  .cardmarks{display:flex;align-items:center;justify-content:center;gap:12px;flex:0 1 auto;flex-wrap:nowrap;min-width:0;overflow:hidden}
+  .cardmarks svg{border-radius:6px;display:block;flex:none;height:38px;width:auto}
   .pm.dis,.tiletier.dis{opacity:.32;pointer-events:none;filter:saturate(.4)}
   /* Chain picker: the chain belongs to the coin, so it hangs off the tile row rather than
      becoming a fifth tile. */
@@ -303,9 +303,14 @@
   /* the card row: full width BELOW the coins, one line; what it discloses is said in .railnote */
   /* Twice the height of a plain row — the card rail carries as much weight as a coin and
      read as an afterthought at 11px padding. Still shorter than the stacked coin tiles. */
-  .pm.row{flex:1 1 100%;flex-direction:row;justify-content:flex-start;gap:12px;padding:24px 14px;min-width:0}
-  .pm.row .pmname{flex:none;white-space:nowrap;font-size:15px}
-  .pm.row .pmtag{margin-left:auto;flex:none}
+  .pm.row{flex:1 1 100%;flex-direction:column;align-items:center;gap:9px;padding:18px 14px;min-width:0}
+  .pm.row .pmtag{flex:none;margin:0}
+  /* Who takes the money, said where the money is chosen — and the marks are the most
+     recognisable thing on this sheet, so the word "Card" was doing no work. */
+  .procline{display:flex;align-items:center;gap:7px;font-family:var(--mono);font-size:10.5px;
+            letter-spacing:.06em;color:var(--muted)}
+  .molliemark{height:14px;width:auto;display:block;fill:#FFFFFF}
+  :root[data-theme="F"] .molliemark{fill:#000000}
   /* What the chosen rail tells the outside world. Sits under the tiles, where the choice
      is made — the payment panel's version comes too late to inform it. */
   .railnote{font-size:11.5px;line-height:1.5;color:var(--muted);margin:9px 2px 0}
@@ -944,10 +949,10 @@
     .swipedel{right:0;background:var(--rust)}  /* revealed by a LEFT swipe */
     /* Five card marks at desktop size do not fit a phone's width, and .cardmarks clips
        with overflow:hidden — so Google Pay would silently vanish rather than shrink. */
-    .pm.row{padding:18px 12px}
-    .pm.row .pmname{font-size:13.5px}
-    .cardmarks{gap:4px}
-    .cardmarks svg{height:21px}
+    .pm.row{padding:14px 10px}
+    .cardmarks{gap:7px}
+    .cardmarks svg{height:26px}
+    .molliemark{height:12px}
   }
   /* Appearance theme picker (Settings) */
   .themepick{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:0 0 6px}
@@ -1214,8 +1219,12 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
              row stays VISIBLE when the rail is off and is greyed like Monero: a payment
              method that silently disappears reads as "not offered", not "not yet". -->
         <div class="pm row" id="pmCard" data-method="card" title="Card, Apple Pay or Google Pay via Mollie (EU) — opens a checkout in your browser" data-click="selectMethod" data-args="&quot;card&quot;">
-          <span class="pmname">CreditCard</span>
           <span class="cardmarks"><svg viewBox="0 0 64 48" fill="none" width="22" height="17" role="img" aria-label="Visa" xmlns="http://www.w3.org/2000/svg"> <rect width="64" height="48" rx="8" fill="#1B16E6"/> <path d="M32.8245 21.1151C32.7971 23.3439 34.7485 24.5877 36.2189 25.3271C37.7293 26.0859 38.2368 26.5724 38.2309 27.2509C38.2195 28.2894 37.0261 28.7476 35.9091 28.7655C33.9602 28.7967 32.8273 28.2224 31.9265 27.788L31.2246 31.1787C32.1283 31.6087 33.8017 31.9836 35.5371 32C39.6104 32 42.2755 29.9245 42.2899 26.7063C42.3056 22.6223 36.8171 22.3961 36.8544 20.5706C36.8675 20.0171 37.3792 19.4265 38.5005 19.2762C39.0555 19.2003 40.5875 19.1423 42.3245 19.968L43.0061 16.6874C42.0723 16.3362 40.8715 16 39.3768 16C35.5429 16 32.8461 18.1038 32.8245 21.1151ZM49.5571 16.2827C48.8133 16.2827 48.1864 16.7305 47.9067 17.4179L42.088 31.759H46.1584L46.9685 29.4484H51.9427L52.4125 31.759H56L52.8693 16.2827H49.5571ZM50.1264 20.4635L51.3011 26.2749H48.084L50.1264 20.4635ZM27.8893 16.2827L24.6808 31.759H28.5595L31.7665 16.2827H27.8893ZM22.1512 16.2827L18.114 26.8164L16.4809 17.8598C16.2892 16.8599 15.5325 16.2827 14.6922 16.2827H8.09225L8 16.732C9.35487 17.0355 10.8942 17.525 11.8268 18.0487C12.3976 18.3686 12.5605 18.6483 12.7478 19.4086L15.841 31.759H19.9402L26.2245 16.2827H22.1512Z" fill="white"/> </svg><svg viewBox="0 0 64 48" fill="none" width="22" height="17" role="img" aria-label="Mastercard" xmlns="http://www.w3.org/2000/svg"> <rect width="64" height="48" rx="8" fill="black"/> <path d="M26 34C31.5228 34 35.9999 29.5228 35.9999 24C35.9999 18.4772 31.5228 14 26 14C20.4771 14 16 18.4772 16 24C16 29.5228 20.4771 34 26 34Z" fill="#E7001A"/> <path d="M38 34C43.5228 34 47.9999 29.5228 47.9999 24C47.9999 18.4772 43.5228 14 38 14C32.4771 14 28 18.4772 28 24C28 29.5228 32.4771 34 38 34Z" fill="#F49B1C"/> <path opacity="0.3" fill-rule="evenodd" clip-rule="evenodd" d="M32 15.9993C34.4289 17.8237 36 20.7283 36 24C36 27.2716 34.4289 30.1763 32 32.0007C29.5711 30.1763 28 27.2716 28 24C28 20.7283 29.5711 17.8237 32 15.9993Z" fill="#E7001A"/> </svg><svg viewBox="0 0 64 48" fill="none" width="22" height="17" role="img" aria-label="American Express" xmlns="http://www.w3.org/2000/svg"> <g clip-path="url(#amex-clip0_203_1385)"> <rect width="64" height="48" rx="8" fill="#016FD0"/> <path d="M16 48.0001H64V6.10352e-05H16V48.0001Z" fill="#006FCF"/> <path d="M33.3882 40.4049L52.3678 40.4452L55.3486 37.1198L58.3507 40.4326H63.9999V35.5809L60.4617 31.7652L63.9999 27.9841V23.2332L33.3882 23.2057V40.4049Z" fill="white"/> <path fill-rule="evenodd" clip-rule="evenodd" d="M35.4329 38.5193V25.0984H46.8125V28.1901H39.1172V30.2887H46.629V33.3291H39.1172V35.3904H46.8125V38.5192L35.4329 38.5193Z" fill="#006FCF"/> <path d="M59.3357 25.0986L55.477 29.3524L51.6294 25.0986H46.7556L53.0524 31.8012L46.7557 38.5193H51.497L55.3728 34.2229L59.2887 38.5193H64V38.3287L57.8373 31.8012L64 25.2043V25.0986H59.3357Z" fill="#006FCF"/> <path d="M57.0438 7.93988L55.4675 12.3491L53.8965 7.93988H44.7868V13.8249L42.195 7.93988H34.8159L27.2374 25.1391H64V7.93988H57.0438Z" fill="white"/> <path fill-rule="evenodd" clip-rule="evenodd" d="M36.7248 17.5232L38.5107 13.2545L40.2953 17.5232H36.7248ZM36.2131 9.80839L30.2582 23.2179H34.3426L35.4659 20.5327H41.5534L42.676 23.2179H46.8619L40.9317 9.80839H36.2131Z" fill="#006FCF"/> <path d="M46.806 23.2156L50.417 23.2156V14.0047L53.8427 23.2156H57.0882L60.4444 14.0359V23.2469L63.9999 23.2156V9.80622H58.4745L55.5012 18.0698L52.5472 9.826L46.806 9.80616V23.2156Z" fill="#006FCF"/> </g> <defs> <clipPath id="amex-clip0_203_1385"> <rect width="64" height="48" rx="8" fill="white"/> </clipPath> </defs> </svg><svg viewBox="0 0 64 48" fill="none" width="22" height="17" role="img" aria-label="Apple Pay" xmlns="http://www.w3.org/2000/svg"> <rect x="1" y="1" width="62" height="46" rx="7" fill="white"/> <rect x="1" y="1" width="62" height="46" rx="7" stroke="black" stroke-width="2"/> <path d="M16.7793 16.579C17.3262 15.8848 17.6973 14.9526 17.5994 14C16.7988 14.0404 15.8219 14.536 15.2563 15.2308C14.7484 15.8258 14.2989 16.797 14.4161 17.7097C15.3148 17.7888 16.2127 17.2538 16.7793 16.579ZM17.5892 17.8879C16.2841 17.8089 15.1744 18.6396 14.5511 18.6396C13.9276 18.6396 12.9731 17.9276 11.9409 17.9468C10.5973 17.9668 9.35062 18.7378 8.66878 19.964C7.26643 22.4171 8.2987 26.0559 9.66242 28.0538C10.3247 29.0422 11.1228 30.1305 12.1745 30.0914C13.1681 30.0519 13.5576 29.4385 14.7654 29.4385C15.9723 29.4385 16.3231 30.0914 17.375 30.0716C18.4658 30.0519 19.1477 29.0827 19.8099 28.0934C20.5697 26.9666 20.8807 25.8786 20.9002 25.8189C20.8807 25.7991 18.7969 24.9878 18.7776 22.5551C18.7579 20.5182 20.4136 19.5494 20.4915 19.4893C19.5565 18.0858 18.0957 17.9276 17.5892 17.8879Z" fill="black"/> <path d="M30.6028 15.1321C33.4394 15.1321 35.4149 17.1166 35.4149 20.0059C35.4149 22.9054 33.399 24.9003 30.5319 24.9003H27.3911V29.9692H25.1218V15.1321H30.6028ZM27.3911 22.9671H29.9948C31.9705 22.9671 33.0949 21.8876 33.0949 20.0162C33.0949 18.145 31.9705 17.0756 30.005 17.0756H27.3911V22.9671ZM35.9779 26.8951C35.9779 24.9927 37.4064 23.9028 40.0404 23.7384L42.8669 23.5635V22.741C42.8669 21.538 42.0868 20.8799 40.699 20.8799C39.554 20.8799 38.7233 21.4763 38.5511 22.3914H36.5045C36.5655 20.4686 38.3485 19.0704 40.7597 19.0704C43.3533 19.0704 45.0452 20.4482 45.0452 22.5867V29.9692H42.948V28.1906H42.8974C42.2996 29.3524 40.9825 30.0822 39.554 30.0822C37.4468 30.0822 35.9779 28.8074 35.9779 26.8951ZM42.8669 25.9388V25.1058L40.3443 25.2704C38.9259 25.3628 38.1865 25.8975 38.1865 26.8332C38.1865 27.738 38.9564 28.3243 40.1619 28.3243C41.7018 28.3243 42.8669 27.3266 42.8669 25.9388ZM46.9731 33.9381V32.1595C47.115 32.1798 47.4594 32.2004 47.6417 32.2004C48.6447 32.2004 49.212 31.7688 49.5566 30.6582L49.7592 30.0001L45.9195 19.204H48.2901L50.9647 27.9641H51.0153L53.69 19.204H56L52.0184 30.5451C51.1066 33.1464 50.0631 34 47.8545 34C47.6823 34 47.125 33.9794 46.9731 33.9381Z" fill="black"/> </svg><svg viewBox="0 0 64 48" fill="none" width="22" height="17" role="img" aria-label="Google Pay" xmlns="http://www.w3.org/2000/svg"> <rect x="1" y="1" width="62" height="46" rx="7" fill="white"/> <rect x="1" y="1" width="62" height="46" rx="7" stroke="#ECECF0" stroke-width="2"/> <path d="M30.3364 23.7271V29.6238H28.5008V15.0624H33.367C34.6002 15.0624 35.6519 15.4815 36.5123 16.3197C37.3919 17.1579 37.8316 18.1813 37.8316 19.3899C37.8316 20.6277 37.3919 21.6511 36.5123 22.4795C35.6614 23.308 34.6098 23.7173 33.367 23.7173H30.3364V23.7271ZM30.3364 16.8558V21.9337H33.4052C34.1318 21.9337 34.7437 21.6803 35.2217 21.1832C35.7092 20.6862 35.9578 20.0819 35.9578 19.3996C35.9578 18.7271 35.7092 18.1326 35.2217 17.6355C34.7437 17.1189 34.1414 16.8655 33.4052 16.8655H30.3364V16.8558Z" fill="#3C4043"/> <path d="M42.6313 19.3314C43.9888 19.3314 45.0596 19.7018 45.8435 20.4425C46.6274 21.1832 47.0194 22.1969 47.0194 23.4834V29.6238H45.2699V28.2398H45.1934C44.4381 29.3801 43.4248 29.9454 42.1628 29.9454C41.0825 29.9454 40.1838 29.6238 39.4572 28.9708C38.7307 28.3177 38.3674 27.5088 38.3674 26.5341C38.3674 25.501 38.7498 24.6823 39.5146 24.078C40.2794 23.4639 41.3024 23.1618 42.5739 23.1618C43.6638 23.1618 44.5624 23.3665 45.2603 23.7758V23.347C45.2603 22.694 45.0118 22.1482 44.5051 21.6901C43.9984 21.232 43.4056 21.0078 42.7269 21.0078C41.7039 21.0078 40.8913 21.4464 40.2985 22.3333L38.6829 21.3002C39.572 19.9844 40.8913 19.3314 42.6313 19.3314ZM40.2603 26.5634C40.2603 27.0507 40.4611 27.46 40.8722 27.7817C41.2737 28.1033 41.7517 28.269 42.2966 28.269C43.071 28.269 43.7594 27.9766 44.3617 27.3918C44.964 26.807 45.2699 26.1248 45.2699 25.3353C44.6963 24.8772 43.9028 24.6433 42.8798 24.6433C42.1341 24.6433 41.5127 24.8285 41.0156 25.1891C40.5089 25.5692 40.2603 26.0273 40.2603 26.5634Z" fill="#3C4043"/> <path d="M57.0003 19.653L50.8818 34H48.9888L51.2642 28.9805L47.2297 19.653H49.2278L52.1342 26.807H52.1724L55.0022 19.653H57.0003Z" fill="#3C4043"/> <path d="M23.0351 22.538C23.0351 21.9279 22.9815 21.3441 22.8821 20.7827H15.188V23.999L19.6192 24C19.4394 25.0702 18.861 25.9825 17.9748 26.5906V28.6774H20.6125C22.1526 27.2242 23.0351 25.076 23.0351 22.538Z" fill="#4285F4"/> <path d="M17.9758 26.5906C17.2415 27.0955 16.296 27.3908 15.1899 27.3908C13.0532 27.3908 11.2405 25.923 10.5914 23.9444H7.87054V26.0965C9.21854 28.8236 11.9891 30.6949 15.1899 30.6949C17.4021 30.6949 19.2607 29.9532 20.6134 28.6764L17.9758 26.5906Z" fill="#34A853"/> <path d="M10.3355 22.348C10.3355 21.7924 10.4263 21.2554 10.5917 20.7505V18.5984H7.87082C7.31345 19.7261 6.99988 20.999 6.99988 22.348C6.99988 23.6969 7.31441 24.9698 7.87082 26.0975L10.5917 23.9454C10.4263 23.4406 10.3355 22.9035 10.3355 22.348Z" fill="#FABB05"/> <path d="M15.1899 17.3041C16.3974 17.3041 17.4786 17.7281 18.3324 18.5565L20.6698 16.1754C19.2501 14.8275 17.3993 14 15.1899 14C11.9901 14 9.21854 15.8713 7.87054 18.5984L10.5914 20.7505C11.2405 18.7719 13.0532 17.3041 15.1899 17.3041Z" fill="#E94235"/> </svg></span>
+          <!-- Mollie's own 2023 wordmark, from their brand pack. The official black and
+               white files are the SAME path and differ only in fill, so one path with a
+               theme-switched fill IS the official pair rather than a recolouring. -->
+          <span class="procline" id="cardProc">Processed by
+            <svg class="molliemark" viewBox="0 0 320 94" role="img" aria-label="Mollie" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" clip-rule="evenodd" d="M289.3,44.3c6.9,0,13.2,4.5,15.4,11h-30.7C276.1,48.9,282.3,44.3,289.3,44.3z M320,60.9c0-8-3.1-15.6-8.8-21.4 c-5.7-5.8-13.3-9-21.3-9h-0.4c-8.3,0.1-16.2,3.4-22.1,9.3c-5.9,5.9-9.2,13.7-9.3,22c-0.1,8.5,3.2,16.5,9.2,22.6 c6.1,6.1,14.1,9.5,22.6,9.5h0c11.2,0,21.7-6,27.4-15.6l0.7-1.2l-12.6-6.2l-0.6,1c-3.1,5.2-8.6,8.2-14.7,8.2 c-7.7,0-14.4-5.1-16.5-12.5H320V60.9z M241.2,19.8c-5.5,0-9.9-4.4-9.9-9.9c0-5.5,4.4-9.9,9.9-9.9s9.9,4.4,9.9,9.9 C251.2,15.3,246.7,19.8,241.2,19.8z M233.6,92.7h15.2V31.8h-15.2V92.7z M204.5,1.3h15.2v91.5h-15.2V1.3z M175.4,92.7h15.2V1.3h-15.2 V92.7z M135.3,79c-9.2,0-16.8-7.5-16.8-16.7c0-9.2,7.5-16.7,16.8-16.7s16.8,7.5,16.8,16.7C152.1,71.5,144.6,79,135.3,79z M135.3,30.5c-17.6,0-31.8,14.2-31.8,31.7S117.8,94,135.3,94c17.5,0,31.8-14.2,31.8-31.7S152.9,30.5,135.3,30.5z M70.4,30.6 c-0.8-0.1-1.6-0.1-2.4-0.1c-7.7,0-15,3.1-20.2,8.7c-5.2-5.5-12.5-8.7-20.1-8.7C12.4,30.5,0,42.9,0,58v34.7h14.9V58.5 c0-6.3,5.2-12.1,11.3-12.7c0.4,0,0.9-0.1,1.3-0.1c6.9,0,12.5,5.6,12.5,12.5v34.6h15.2V58.4c0-6.3,5.2-12.1,11.3-12.7 c0.4,0,0.9-0.1,1.3-0.1c6.9,0,12.5,5.6,12.6,12.4v34.7h15.2V58.5c0-7-2.6-13.6-7.2-18.8C83.7,34.4,77.3,31.2,70.4,30.6z"/></svg></span>
           <span class="pmtag"></span>
         </div>
       </div>
@@ -1617,7 +1626,11 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   let redeeming = false;                 // re-entrancy guard for the manual redeem button
   let redeemDollars = null;              // chosen redeem amount in $ (null = default to max held)
   let migrateData = null;                // {mnemonic, qr} for the "migrate to device" view
-  let fakePayments = true;               // dev fake gateway vs real BTCPay
+  // Assume REAL money until the server says otherwise. This used to default to the fake
+  // gateway, so an app that had not heard from the server yet announced "dev mode — settles
+  // instantly, no real money moves" on the buy sheet and offered rails nobody had confirmed
+  // (seen 2026-09-08 at startup). Wrong direction for a screen about money.
+  let fakePayments = false;              // dev fake gateway vs real BTCPay
   let serverTestnet = false;             // server runs with SCRAI_TESTNET=1 → offers the $1 faucet purchase
   let storefront = null;                 // iOS: App Store storefront (ISO alpha-3, "USA"/"DEU"/…) or null → strictest top-up variant
   let faucetUrl = null;                  // where testers redeem the memo (server-provided, https only)
@@ -1632,7 +1645,9 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // Which rails the server can actually raise an invoice on. Everything absent is greyed
   // out rather than offered and refused on tap. Defaults are permissive so an older
   // server (no `rails` in its catalog) behaves exactly as before.
-  let rails = { nyx:true, btc:true, card:false, invite:false };
+  // Same rule: a rail is off until the server reports it. A tile that looks available
+  // and fails on tap is worse than one that is honestly greyed.
+  let rails = { nyx:true, btc:false, card:false, invite:false };
   // Coins on sale, grouped by the server: [{group,label,variants:[{id,label,note,minUsd}]}].
   // Empty = an older server or a processor rail that picks for itself → one plain Bitcoin tile.
   let coinGroups = [];
@@ -1642,6 +1657,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     btc: `<svg viewBox="0 0 32 32" width="26" height="26"><circle cx="16" cy="16" r="16" fill="#F7931A"/><path fill="#fff" d="M23 14.1c.3-2-1.3-3-3.4-3.8l.7-2.7-1.7-.4-.7 2.6c-.4-.1-.9-.2-1.3-.3l.7-2.7-1.6-.4-.7 2.7-1.1-.3-2.3-.6-.4 1.8s1.2.3 1.2.3c.7.2.8.6.8.9l-.8 3.1v.2l-1.2 4.6c-.1.2-.3.5-.7.4 0 0-1.2-.3-1.2-.3l-.8 1.9 2.1.6 1.2.3-.7 2.7 1.6.4.7-2.7c.5.1.9.2 1.4.3l-.7 2.7 1.7.4.7-2.7c2.8.5 4.9.3 5.8-2.2.7-2 0-3.2-1.5-3.9 1.1-.3 1.9-1 2.1-2.5zm-3.7 5.2c-.5 2-3.9.9-5 .6l.9-3.6c1.2.3 4.7.8 4.1 3zm.5-5.2c-.5 1.8-3.3.9-4.2.6l.8-3.3c.9.2 3.9.7 3.4 2.7z"/></svg>`,
     usdc: `<svg viewBox="0 0 32 32" width="26" height="26"><circle cx="16" cy="16" r="15" fill="#2775CA"/><path fill="#fff" d="M17 7h-2v1.6c-2.2.3-3.7 1.6-3.7 3.5 0 2.2 1.7 3 4 3.6 1.9.5 2.6.9 2.6 1.8 0 .9-.9 1.5-2.3 1.5-1.6 0-2.6-.7-2.8-1.9h-2.4c.2 2.1 1.7 3.4 4.1 3.7V23h2v-1.7c2.4-.3 3.9-1.7 3.9-3.7 0-2.3-1.8-3.1-4.2-3.7-1.8-.5-2.5-.9-2.5-1.7 0-.8.8-1.4 2.1-1.4 1.4 0 2.3.6 2.5 1.7h2.3c-.2-1.9-1.5-3.1-3.6-3.5V7z"/></svg>`,
   };
+  let coinMinUsd = 10;                   // on-chain floor, from rails.btcMinUsd
   let cardInfo = { enabled:false, minUsd:10, methods:[] };   // server's card rail: {enabled, minUsd, methods:[{id,label}]} — absent → no card row
   // Labels come from what is enabled in the Mollie dashboard (server fetches /v2/methods),
   // so switching PayPal or Wero on there relabels the row without a build.
@@ -1719,7 +1735,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       if(gotModels.length) models = gotModels;
       tiers = s.tiers || tiers || [];
       account = s.account; balance = s.balance||0; held = s.held||0;
-      fakePayments = s.fakePayments !== false;   // default to fake if unknown
+      fakePayments = s.fakePayments === true;    // only when the server SAYS so
       devBuild = s.devBuild === true;
       if(!devBuild) devCost = false;             // no diagnostics outside a debug build, whatever localStorage says
       if(s.update && s.update.required) showUpdateGate(s.update);
@@ -1753,9 +1769,11 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
           selectedMethod = coinGroups.length ? coinPick[coinGroups[0].group] : "btc";
         }
       }
+      { const b = s.rails && Number(s.rails.btcMinUsd);
+        coinMinUsd = Number.isFinite(b) && b > 0 ? Math.floor(b) : 10; }
       { const r = s.rails && typeof s.rails === "object" ? s.rails : null;
         rails = r ? { nyx:r.nyx!==false, btc:r.btc===true, card:r.card===true, invite:r.invite===true }
-                  : { nyx:true, btc:true, card:(s.card&&s.card.enabled)===true, invite:serverTestnet }; }
+                  : { nyx:true, btc:false, card:(s.card&&s.card.enabled)===true, invite:serverTestnet }; }
       { const ok = u => /^https:\/\/[\w.-]+(\/[^\s]*)?$/.test(u);
         const fu = String(s.faucetUrl||"");
         // No longer testnet-gated: the invite rail runs beside real purchases, and the
@@ -5324,8 +5342,9 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     el.style.display = testnetBuy ? "none" : "";
     const on = cardAvailable();
     el.classList.toggle("soon", !on);
-    { const nm=el.querySelector(".pmname"); if(nm) nm.textContent = on ? cardLabelShort() : "CreditCard";
-      // No tag when the rail is live: the sentence under the tiles carries this now.
+    { // The attribution and the "coming soon" tag share the second line: a rail that is off
+      // has nothing to attribute, and a live one needs no tag.
+      const pr=$("cardProc"); if(pr) pr.hidden = !on;
       const tg=el.querySelector(".pmtag"); if(tg){ tg.textContent = on ? "" : "coming soon"; tg.classList.toggle("less", false); }
       el.title = on ? cardLabelLong()+" via Mollie (EU) — opens a checkout in your browser"
                     : "Card payments are not switched on for this server yet"; }
@@ -5351,10 +5370,14 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       const n = Math.max(0, Math.floor(Number(t) || 0));
       const scr = n*100000;
       const sub = scr>=1e6 ? (scr/1e6).toFixed(1)+"M" : Math.round(scr/1e3)+"k";
-      // Card: the server sells the larger tiles only (fee + chargeback exposure) — grey the rest.
-      const small = selectedMethod==="card" && n<cardInfo.minUsd;
+      // Card: the server sells the larger tiles only (fee + chargeback exposure) — grey the
+      // rest. On-chain coins have the same floor for the other reason: the miner fee is a
+      // property of the network that day, and on a busy one it would eat a $5 purchase.
+      const floor = selectedMethod==="card" ? cardInfo.minUsd
+                  : (selectedMethod==="nyx" ? 0 : coinMinUsd);
+      const small = n < floor;
       const dis = (testnetBuy && n!==TESTNET_USD) || small;
-      const sublbl = testnetBuy&&n!==TESTNET_USD ? 'real' : small ? 'coins only' : (testnetBuy&&n===TESTNET_USD ? 'invite' : sub);
+      const sublbl = testnetBuy&&n!==TESTNET_USD ? 'real' : small ? (selectedMethod==="card" ? 'coins only' : 'NYM only') : (testnetBuy&&n===TESTNET_USD ? 'invite' : sub);
       return `<div class="tiletier${selectedTier===n?' sel':''}${dis?' dis':''}" data-click="selectTier" data-args="${n}"><div class="a">$${n}</div><div class="s">${sublbl}</div></div>`;
     }).join("");
     // Greyed, not hidden: a rail the server cannot raise an invoice on stays visible so the
@@ -5709,7 +5732,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       host.innerHTML = `<div class="pm${selectedMethod==="btc"?" sel":""}${(testnetBuy||!rails.btc)?" dis":""}" data-method="btc"
         title="Bitcoin" data-click="selectMethod" data-args="&quot;btc&quot;">
         <span class="pmlogo">${COIN_MARK.btc}</span><span class="pmname">Bitcoin</span>
-        <span class="pmtag">on-chain · LN</span></div>`;
+        <span class="pmtag">on-chain</span></div>`;
       renderCoinMenu();
       return;
     }
@@ -5779,6 +5802,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     abandonInvoice();
     // Switching to card drops a tier the card rail won't sell; the greyed tiles say why.
     if(m==="card" && selectedTier!=null && selectedTier<cardInfo.minUsd) selectedTier=null;
+    if(m!=="card" && m!=="nyx" && selectedTier!=null && selectedTier<coinMinUsd) selectedTier=null;
     renderTiers();
     renderContinue();
     renderRailNote();
