@@ -97,9 +97,23 @@ pub fn derive_session_keys(mnemonic: &str, index: u32) -> Result<SessionKeys, St
     Ok(SessionKeys { signing, public_key_pem: pem, session_id })
 }
 
-/// Short fingerprint for the user to compare after restoring.
+/// The account's public short name: to compare after restoring, and to receive credit
+/// (the "top-up ID" — safe to share, it can only receive).
+///
+/// 16 hex characters, 64 bits. It was 8 (32 bits), which is plenty when the value is only
+/// ever COMPARED — but the moment anyone types it somewhere for a payment to be credited
+/// to, a collision means money reaching the wrong account. At 32 bits that becomes likely
+/// around a hundred thousand accounts; at 64 it does not become likely at all. Lengthening
+/// it now costs nothing, and the old value stays a prefix of the new one, so a fingerprint
+/// somebody wrote down still recognisably belongs to the same account (2026-09-08).
 pub fn fingerprint(account_id: &str) -> String {
-    format!("{}-{}", &account_id[0..4], &account_id[4..8])
+    account_id
+        .as_bytes()
+        .chunks(4)
+        .take(4)
+        .map(|c| String::from_utf8_lossy(c).into_owned())
+        .collect::<Vec<_>>()
+        .join("-")
 }
 
 impl Account {

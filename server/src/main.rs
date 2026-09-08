@@ -581,6 +581,10 @@ const WATCH_PER_TICK: usize = 5;
     // faucet-funded invite sat unsettled for as long as the tester left the app closed,
     // while the claim page said "waiting for the chain" and waited for something only the
     // app could cause (2026-09-06). Now the server checks a few open invoices itself.
+    // Before serving anything: a voucher burned in a run that did not survive to credit it.
+    if credit_pending_vouchers(&db, &mut paywall) {
+        persist_changed(&mut db, &sessions, &quorum, &paywall, &mut saved);
+    }
     let mut watch_tick = tokio::time::interval(std::time::Duration::from_secs(WATCH_TICK_SECS));
     watch_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
@@ -589,6 +593,13 @@ const WATCH_PER_TICK: usize = 5;
             // gateway call. Bounded on both sides: at most WATCH_PER_TICK invoices per
             // tick, and each invoice at most once every 25 s (pay.rs WATCH_EVERY_MS).
             _ = watch_tick.tick() => {
+                // A voucher whose burn landed but whose credit did not — the crash window
+                // between the two stores. Repaired here rather than only at boot: a task
+                // that fails without taking the process with it would otherwise leave a
+                // buyer waiting for a restart that may be weeks away.
+                if credit_pending_vouchers(&db, &mut paywall) {
+                    persist_changed(&mut db, &sessions, &quorum, &paywall, &mut saved);
+                }
                 // Housekeeping on the same beat: settled invoices older than 14 days lose
                 // the buyer's account. Cheap (a scan of a small map) and it must not depend
                 // on anyone happening to poll an invoice.
@@ -856,6 +867,52 @@ const WATCH_PER_TICK: usize = 5;
                 }
                 continue;
             }
+            // Redeeming a voucher never leaves the machine, so it stays on the loop — and it
+            // has to, because it touches BOTH stores: the burn is SQL, the credit is the pay
+            // snapshot. Order matters and is argued in docs/vouchers.md: burn first (a crash
+            // then loses a credit, which `credit_pending_vouchers` repairs) rather than
+            // credit first (a crash then leaves a spent code valid, which nothing can).
+            if kind == pay::VOUCHER_KIND {
+                let v: serde_json::Value = serde_json::from_slice(&m.message).unwrap_or(serde_json::Value::Null);
+                let id = v.get("id").cloned().unwrap_or(serde_json::Value::Null);
+                let code = v.get("code").and_then(|c| c.as_str()).unwrap_or("");
+                let reply = match paywall.voucher_claimant(&v) {
+                    None => serde_json::json!({ "id": id, "kind": "error",
+                        "error": "account signature does not check out, or the nonce was reused" }),
+                    Some(account) => {
+                        let hash = pay::voucher_hash(code);
+                        let now = pay::now_ms();
+                        match db.voucher_burn(&hash, &account, now) {
+                            store::VoucherBurn::Burned { toku } => {
+                                paywall.credit_voucher(&account, toku);
+                                db.voucher_credited(&hash, now);
+                                println!("scrai-server: voucher redeemed — {toku} TOKU");
+                                serde_json::json!({ "id": id, "kind": "voucher.ok", "toku": toku,
+                                    "entitlement": paywall.entitlement(&account) })
+                            }
+                            // A reply lost on the way back makes the app try again with the
+                            // same code. Refusing that would punish someone who did nothing
+                            // wrong; the credit is already theirs (or will be, at boot).
+                            store::VoucherBurn::AlreadyYours => serde_json::json!({ "id": id, "kind": "voucher.ok",
+                                "toku": 0, "entitlement": paywall.entitlement(&account) }),
+                            store::VoucherBurn::Spent => serde_json::json!({ "id": id, "kind": "error",
+                                "error": "this code has already been redeemed" }),
+                            store::VoucherBurn::Void => serde_json::json!({ "id": id, "kind": "error",
+                                "error": "this code was refunded and can no longer be redeemed" }),
+                            store::VoucherBurn::Unknown => serde_json::json!({ "id": id, "kind": "error",
+                                "error": "that code is not valid" }),
+                        }
+                    }
+                };
+                // The credit lives in the snapshot, so it must reach disk before the ack —
+                // same rule as a cancelled invoice a few lines below.
+                persist_changed(&mut db, &sessions, &quorum, &paywall, &mut saved);
+                let out = serde_json::to_vec(&reply).unwrap_or_default();
+                if let Err(e) = senders[to.idx].read().await.send_reply(to.tag, out).await {
+                    eprintln!("scrai-server: voucher reply failed: {e}");
+                }
+                continue;
+            }
             // H2 (pay): authenticate/throttle on the loop, then run the gateway HTTP in a
             // spawned task — its result comes back via pay_tx and finish() runs here. A slow
             // LCD node used to stall every chat reserve/settle for up to 15 s.
@@ -1119,6 +1176,26 @@ fn persist_changed(
 
 /// Record today's peak of simultaneously served clients — one sqlite write per NEW high
 /// (or per day), nothing on the steady state.
+/// Credit every voucher that was burned but never paid out, and say so in the log — this
+/// firing at all means a crash or a failed write happened, which is worth knowing about.
+/// Returns true when something changed, so the caller persists.
+fn credit_pending_vouchers(db: &store::Store, paywall: &mut pay::Pay) -> bool {
+    let pending = db.vouchers_to_credit();
+    if pending.is_empty() {
+        return false;
+    }
+    let now = pay::now_ms();
+    for (hash, account, toku) in &pending {
+        paywall.credit_voucher(account, *toku);
+        db.voucher_credited(hash, now);
+    }
+    println!(
+        "scrai-server: repaired {} voucher(s) that were redeemed but never credited",
+        pending.len()
+    );
+    true
+}
+
 fn note_peak(db: &store::Store, inflight: &inflight::Inflight<ReplyTo>, written: &mut (String, usize)) {
     let now = inflight.current();
     let today = today_utc();

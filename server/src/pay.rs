@@ -228,6 +228,34 @@ pub const PAY_KINDS: [&str; 5] = [
     "invite.check",
 ];
 
+/// Redeeming a voucher is handled on the loop in main.rs rather than here, because it needs
+/// BOTH stores: the burn is SQL in `state.db`'s `vouchers` table, the credit is a bump in
+/// this snapshot. Nothing spans the two, which is the whole reason the order matters.
+pub const VOUCHER_KIND: &str = "voucher.redeem";
+
+/// `TOKU-XXXX-XXXX-XXXX` → the sha256 hex the table is keyed by. Case and spacing are
+/// forgiven (people retype these from a screen), the hash is of the normalised form.
+pub fn voucher_hash(code: &str) -> String {
+    let norm: String = code.chars().filter(|c| c.is_ascii_alphanumeric()).map(|c| c.to_ascii_uppercase()).collect();
+    scrai_core::auth::sha256(&[norm.as_bytes()]).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// A fresh code, in the shape the app's existing field already accepts.
+pub fn new_voucher_code() -> String {
+    // Crockford-ish: no I, O, 0, 1 — these are read off a screen and typed by hand.
+    const ALPHABET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    let mut out = String::from("TOKU");
+    let raw = rand_hex(24);
+    for (i, b) in raw.as_bytes().chunks(2).take(12).enumerate() {
+        if i % 4 == 0 {
+            out.push('-');
+        }
+        let n = usize::from_str_radix(&String::from_utf8_lossy(b), 16).unwrap_or(0);
+        out.push(ALPHABET[n % ALPHABET.len()] as char);
+    }
+    out
+}
+
 /// The version string of the consent wording the buyer confirmed, or "" when the request
 /// carries no (or an incomplete) consent. Both flags must be true — a request that ticks
 /// one box is no better than one that ticks none.
@@ -681,6 +709,24 @@ impl Pay {
     }
     pub fn entitlement(&self, account_id: &str) -> u64 {
         *self.entitlements.get(account_id).unwrap_or(&0)
+    }
+
+    /// Credit a redeemed voucher. Deliberately does NOT decide whether the voucher may be
+    /// redeemed — the database did that, atomically, in `voucher_burn`. This only moves the
+    /// number, so a crash between the two can be repaired by replaying it.
+    pub fn credit_voucher(&mut self, account: &str, toku: u64) {
+        if toku == 0 {
+            return;
+        }
+        *self.entitlements.entry(account.to_string()).or_default() += toku;
+        self.rev += 1;
+    }
+
+    /// Prove the caller owns the account they want the credit on. Same shape as every other
+    /// money request: the purpose string is what stops a signature made for one thing being
+    /// replayed as another.
+    pub fn voucher_claimant(&mut self, v: &Value) -> Option<String> {
+        self.account_owns(v, "voucher")
     }
 
     /// Deduct entitlement for a coconut issuance. Called BEFORE the (off-loop) issuance
