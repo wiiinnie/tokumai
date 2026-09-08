@@ -135,6 +135,12 @@ impl Store {
             [],
         )
         .map_err(|e| e.to_string())?;
+        // When the server last handed this order to the payment gateway. Without it the
+        // one-second tick re-dispatches an order for as long as the raise takes, and the
+        // LAST raise to answer overwrites the row — so a buyer who already had the FIRST
+        // one's address on screen pays a memo the invoice no longer expects. See
+        // `web_orders_pending`.
+        let _ = conn.execute("ALTER TABLE web_orders ADD COLUMN raising_at INTEGER", []);
 
         // Distinct paying sessions per UTC day ("users"): one row per (day, hashed session
         // id), so COUNT(*) per day is the number of different sessions that chatted. The
@@ -242,18 +248,41 @@ impl Store {
             .unwrap_or(false)
     }
 
-    /// Orders the server has not answered yet. Bounded: a tick must stay cheap.
+    /// How long a dispatched order stays claimed before another tick may retry it. Longer
+    /// than any gateway call we are willing to wait for (QUEUE_WAIT + the provider timeout),
+    /// short enough that a raise lost to a crash is retried while the buyer is still there.
+    const RAISE_CLAIM_MS: u64 = 90_000;
+
+    /// Orders the server has not answered yet, CLAIMED in the same call. Bounded: a tick
+    /// must stay cheap.
+    ///
+    /// The claim is the point. The row is only cleared when the gateway answers, which can
+    /// take seconds — so a bare `invoice IS NULL` re-dispatches the same order on every
+    /// one-second tick. Each raise writes back over the row, and the page renders the first
+    /// answer it sees: the buyer ends up looking at address/memo A while the invoice has
+    /// been overwritten to expect B. They pay, nothing matches, and the code never arrives.
+    /// One claim per order per `RAISE_CLAIM_MS` closes that; the timeout is what lets a
+    /// raise that died with the process be retried at all.
     pub fn web_orders_pending(&self, max: usize) -> Vec<(String, u32, String)> {
-        let mut out = Vec::new();
+        let mut out: Vec<(String, u32, String)> = Vec::new();
+        let now = crate::pay::now_ms();
+        let cutoff = now.saturating_sub(Self::RAISE_CLAIM_MS) as i64;
         if let Ok(mut st) = self.conn.prepare(
             "SELECT id, usd, method FROM web_orders \
-             WHERE invoice IS NULL AND error IS NULL ORDER BY created_at LIMIT ?1",
+             WHERE invoice IS NULL AND error IS NULL AND cancelled_at IS NULL \
+               AND (raising_at IS NULL OR raising_at < ?2) \
+             ORDER BY created_at LIMIT ?1",
         ) {
-            if let Ok(rows) = st.query_map(params![max as i64], |r| {
+            if let Ok(rows) = st.query_map(params![max as i64, cutoff], |r| {
                 Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u32, r.get::<_, String>(2)?))
             }) {
                 out = rows.flatten().collect();
             }
+        }
+        for (id, _, _) in &out {
+            let _ = self
+                .conn
+                .execute("UPDATE web_orders SET raising_at = ?2 WHERE id = ?1", params![id, now as i64]);
         }
         out
     }
@@ -411,10 +440,18 @@ impl Store {
     }
 
     /// (hash, redeemed_at) of vouchers that still name the account that redeemed them.
+    ///
+    /// `credited_at IS NOT NULL` is not decoration: the account is the ONLY thing that says
+    /// where an uncredited voucher's money has to go, and `vouchers_to_credit` skips a row
+    /// without one. Scrubbing a voucher whose credit is still outstanding would destroy the
+    /// repair and the evidence in the same statement, and the buyer's money with them.
+    /// Privacy-wise nothing is given up: such a row is repaired within a tick, so it is only
+    /// ever still here because something is wrong and somebody will have to look at it.
     pub fn voucher_links(&self) -> Vec<(String, u64)> {
         let mut out = Vec::new();
         if let Ok(mut st) = self.conn.prepare(
-            "SELECT hash, redeemed_at FROM vouchers WHERE account IS NOT NULL AND redeemed_at IS NOT NULL",
+            "SELECT hash, redeemed_at FROM vouchers \
+             WHERE account IS NOT NULL AND redeemed_at IS NOT NULL AND credited_at IS NOT NULL",
         ) {
             if let Ok(rows) = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64))) {
                 out = rows.flatten().collect();
@@ -534,6 +571,75 @@ mod tests {
         s.save_many(&[("sessions", "{\"bal\":9}")]).unwrap();
         assert_eq!(s.load("sessions").as_deref(), Some("{\"bal\":9}"));
         assert_eq!(s.load("quorum").as_deref(), Some("{\"serials\":[1]}"));
+        let _ = std::fs::remove_file(&p);
+    }
+
+    fn tmp(tag: &str) -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(format!("scrai-store-{tag}-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        p
+    }
+
+    /// The bug this guards: the order row is only cleared when the gateway answers, so a
+    /// one-second tick used to hand the SAME order to the gateway again and again. Every
+    /// raise wrote back over the row, and the buyer paid whichever address the page had
+    /// rendered first — not the one the invoice ended up expecting.
+    #[test]
+    fn an_order_is_handed_to_the_gateway_once_while_the_raise_is_in_flight() {
+        let p = tmp("order-claim");
+        let s = Store::open(&p).unwrap();
+        assert!(s.web_order_new("ord1", 10, "card", "2026-09-07", 1_000));
+
+        // First tick claims it.
+        assert_eq!(s.web_orders_pending(8).len(), 1);
+        // Every tick for the next minute and a half sees nothing — the raise is in flight.
+        assert!(s.web_orders_pending(8).is_empty());
+        assert!(s.web_orders_pending(8).is_empty());
+
+        // The answer clears the row for good.
+        s.web_order_answer("ord1", Some("ord1"), Some("{}"), None);
+        assert!(s.web_orders_pending(8).is_empty());
+
+        // A raise that died with the process is retried once the claim goes stale.
+        assert!(s.web_order_new("ord2", 10, "nyx", "2026-09-07", 1_000));
+        assert_eq!(s.web_orders_pending(8).len(), 1);
+        let stale = (crate::pay::now_ms() - Store::RAISE_CLAIM_MS - 1_000) as i64;
+        s.conn
+            .execute("UPDATE web_orders SET raising_at = ?1 WHERE id = 'ord2'", params![stale])
+            .unwrap();
+        assert_eq!(s.web_orders_pending(8).len(), 1, "a claim older than the timeout is retried");
+
+        // A cancelled order is never raised, even if the cancel beat the first tick.
+        assert!(s.web_order_new("ord3", 10, "nyx", "2026-09-07", 1_000));
+        assert!(s.web_order_cancel("ord3", 2_000));
+        assert!(!s.web_orders_pending(8).iter().any(|(id, _, _)| id == "ord3"));
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// The account on a redeemed voucher is what says where an uncredited one's money must
+    /// go. Dropping it after fourteen days is right for a voucher that HAS been credited and
+    /// fatal for one that has not: `vouchers_to_credit` would never see it again.
+    #[test]
+    fn the_fourteen_day_scrub_never_touches_a_voucher_that_still_owes_its_credit() {
+        let p = tmp("voucher-scrub");
+        let s = Store::open(&p).unwrap();
+        let long_ago = 1_000u64;
+
+        assert!(s.voucher_mint("hash-credited", 500_000, "inv-a", long_ago));
+        assert!(s.voucher_mint("hash-owed", 500_000, "inv-b", long_ago));
+        assert!(matches!(s.voucher_burn("hash-credited", "acct-1", long_ago), VoucherBurn::Burned { .. }));
+        assert!(matches!(s.voucher_burn("hash-owed", "acct-2", long_ago), VoucherBurn::Burned { .. }));
+        s.voucher_credited("hash-credited", long_ago);
+
+        // Only the settled one is offered to the scrub.
+        let links = s.voucher_links();
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].0, "hash-credited");
+
+        // And the one that still owes a credit is still repairable.
+        let owed = s.vouchers_to_credit();
+        assert_eq!(owed.len(), 1);
+        assert_eq!((owed[0].0.as_str(), owed[0].1.as_str(), owed[0].2), ("hash-owed", "acct-2", 500_000));
         let _ = std::fs::remove_file(&p);
     }
 }
