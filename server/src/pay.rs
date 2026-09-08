@@ -120,7 +120,7 @@ pub fn card_enabled() -> bool {
 pub fn rails_info() -> Value {
     json!({
         "nyx": crate::nyx::Nyx::from_env().is_some(),
-        "btc": btc_enabled(),
+        "btc": coin_rail_ready(),
         "card": card_enabled(),
         "invite": faucet_address().is_some(),
         "inviteUsd": TESTNET_USD,
@@ -129,7 +129,7 @@ pub fn rails_info() -> Value {
 }
 
 /// A coin rail is configured (our BTCPay), or the dev rail stands in.
-fn btc_enabled() -> bool {
+pub fn coin_rail_ready() -> bool {
     if fake_payments_enabled() {
         return true;
     }

@@ -62,6 +62,10 @@
   .fine{font-size:12px;line-height:1.55;color:var(--muted);margin:12px 0 10px}
   .fine.c{text-align:center;font-family:var(--mono);font-size:10.5px;margin-top:7px}
   .fine.warn{border-left:2px solid var(--warn);padding-left:10px;color:var(--muted)}
+  /* Losing this tab loses the code, and only a refund can follow. That is worth a colour. */
+  .fine.danger{color:var(--warn);border:1px solid color-mix(in srgb,var(--warn) 45%,transparent);
+               border-radius:10px;background:color-mix(in srgb,var(--warn) 8%,transparent);padding:10px 12px}
+  .fine.danger b{color:var(--warn)}
   .fine.warn b,.fine b{color:var(--bone)}
   .watch{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:11px;
          color:var(--ok);margin-top:14px}
@@ -304,7 +308,7 @@
           (checkout && /^https:\/\/([a-z0-9-]+\.)*mollie\.com\//.test(checkout)
             ? '<a class="go" href="' + esc(checkout) + '">Open the checkout \u2192</a>' : "") +
           '<div class="watch"><span class="wd"></span><span id="wtx">checking\u2026</span></div>' +
-          '<p class="fine">Your code appears here by itself. <b>Do not close this tab</b> \u2014 ' +
+          '<p class="fine danger">Your code appears here by itself. <b>Do not close this tab</b> \u2014 ' +
           'the code is shown once and cannot be sent to you afterwards.</p>' +
           '<button class="cancel" type="button" id="cx">Cancel this purchase</button>' +
           '</div>';

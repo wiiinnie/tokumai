@@ -58,6 +58,9 @@ const PAGE_PRIVACY: &str = include_str!("../../site/privacy.html");
 /// invoice rides in the URL FRAGMENT, so it never reaches this server — nothing to log,
 /// nothing to store, and this route serves one static file to everyone.
 const PAGE_PAY: &str = include_str!("../../site/pay.html");
+/// Mollie's five official method marks, lifted out of index.html so the rail tiles can be
+/// generated without a wall of SVG inside Rust. Originals in docs/brand/.
+const CARD_MARKS: &str = include_str!("../../site/cardmarks.html");
 /// Where a tester redeems an invite code. The app links here with the code and the memo
 /// in the URL fragment, so neither reaches this server until the button is pressed.
 const PAGE_CLAIM: &str = include_str!("../../site/claim.html");
@@ -247,6 +250,49 @@ impl Cfg {
 // The faucet serves /pay on the clearnet; the payment rails live in the server, which has
 // no clearnet port. The two talk through tables in state.db (see docs/vouchers.md), so
 // these are the only places the faucet opens that database for WRITING.
+
+/// The "Available payment options" tiles.
+///
+/// Read from the SERVER's own configuration rather than written into the page by hand — the
+/// card tile claimed "not available yet" for a day after Mollie went live, because a static
+/// page cannot know. Both units run with the same working directory and load the same .env,
+/// so asking `pay` here gives exactly the answer the server would give.
+fn rails_html() -> String {
+    let dot = |cls: &str, glyph: &str| {
+        format!(
+            "<svg class=\"coin {cls}\" viewBox=\"0 0 32 32\" width=\"28\" height=\"28\"><circle cx=\"16\" cy=\"16\" r=\"15\" fill=\"currentColor\"></circle><text x=\"16\" y=\"22\" text-anchor=\"middle\" font-family=\"JetBrains Mono, monospace\" font-size=\"15\" font-weight=\"700\" fill=\"#141210\">{glyph}</text></svg>"
+        )
+    };
+    let tile = |on: bool, mark: String, name: &str, tag_on: &str| {
+        format!(
+            "<div class=\"pm {}\">{mark}<span class=\"pmname\">{name}</span><span class=\"pmtag\">{}</span></div>",
+            if on { "on" } else { "soon" },
+            if on { tag_on } else { "not yet" },
+        )
+    };
+    let card_tag = format!("available - from ${}", scrai_server::pay::card_min_usd());
+    let coin_tag = format!("available - from ${}", scrai_server::pay::coin_min_usd());
+
+    let mut out = String::from("<div class=\"pms\" id=\"rails\">");
+    out.push_str(&tile(
+        scrai_server::nyx::Nyx::from_env().is_some(),
+        dot("nym", "N"),
+        "NYM",
+        "native - Nyx",
+    ));
+    out.push_str(&tile(
+        scrai_server::pay::card_enabled(),
+        format!("<span class=\"cardmarks\">{CARD_MARKS}</span>"),
+        "Card, Apple Pay, Google Pay",
+        &card_tag,
+    ));
+    out.push_str(&tile(scrai_server::pay::coin_rail_ready(), dot("btc", "B"), "Bitcoin", &coin_tag));
+    // Monero rides on the same BTCPay store; until that store carries it there is nothing to
+    // say beyond "not yet" — and saying it honestly is the point of generating this at all.
+    out.push_str(&tile(false, dot("xmr", "M"), "Monero", &coin_tag));
+    out.push_str("</div>");
+    out
+}
 
 fn state_rw(state_db: &Path) -> Result<Connection, String> {
     Connection::open_with_flags(state_db, OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX)
@@ -644,6 +690,17 @@ fn site_html(dl_dir: &Path) -> String {
     let env_link = |var: &str| std::env::var(var).ok().filter(|u| publishable_link(u)).map(|u| html_escape(u.trim()));
     let (mver, files) = read_manifest(dl_dir);
     let mut s = SITE.to_string();
+    s = s.replace("{{RAILS}}", &rails_html());
+    // The macOS buy-sheet capture, when one exists. No drawn placeholder: every other picture
+    // on this page is a real screenshot, and a fake would show.
+    s = s.replace(
+        "{{SHOT_MAC_BUY}}",
+        if IMAGES.iter().any(|(n, _)| *n == "how-mac-buy-dark.jpg") {
+            "<button class=\"shot\" type=\"button\" data-full=\"/img/how-mac-buy\" aria-label=\"Enlarge: buying credit in the macOS app\"><img src=\"/img/how-mac-buy-dark.jpg\" alt=\"Buy credit sheet in the macOS app\" loading=\"lazy\"></button>"
+        } else {
+            ""
+        },
+    );
     let off = |label: &str| format!(r#"<span class="btn off">{label} · not published yet</span>"#);
     // Bundles we host ourselves: from the manifest (relative /dl/ link on this very host).
     for (ph, key, label, primary) in [
