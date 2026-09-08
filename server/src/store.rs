@@ -130,6 +130,7 @@ impl Store {
                invoice TEXT,\
                pay_json TEXT,\
                paid_at INTEGER,\
+               cancelled_at INTEGER,\
                error TEXT)",
             [],
         )
@@ -279,6 +280,34 @@ impl Store {
         out
     }
 
+    /// The buyer pressed cancel. The invoice itself lives in the pay snapshot, so the
+    /// server cancels it on its next beat — the faucet only records the wish.
+    pub fn web_order_cancel(&self, id: &str, now: u64) -> bool {
+        self.conn
+            .execute(
+                "UPDATE web_orders SET cancelled_at = ?2 \
+                 WHERE id = ?1 AND cancelled_at IS NULL AND paid_at IS NULL",
+                params![id, now as i64],
+            )
+            .map(|n| n > 0)
+            .unwrap_or(false)
+    }
+
+    /// Cancelled orders whose invoice is still open. Cleared by setting `error`, which also
+    /// stops the page from polling for something that will never come.
+    pub fn web_orders_to_cancel(&self) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        if let Ok(mut st) = self.conn.prepare(
+            "SELECT id, invoice FROM web_orders \
+             WHERE cancelled_at IS NOT NULL AND invoice IS NOT NULL AND error IS NULL",
+        ) {
+            if let Ok(rows) = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))) {
+                out = rows.flatten().collect();
+            }
+        }
+        out
+    }
+
     pub fn web_order_paid(&self, id: &str, now: u64) {
         let _ = self.conn.execute(
             "UPDATE web_orders SET paid_at = ?2 WHERE id = ?1 AND paid_at IS NULL",
@@ -379,6 +408,32 @@ impl Store {
             }
         }
         out
+    }
+
+    /// (hash, redeemed_at) of vouchers that still name the account that redeemed them.
+    pub fn voucher_links(&self) -> Vec<(String, u64)> {
+        let mut out = Vec::new();
+        if let Ok(mut st) = self.conn.prepare(
+            "SELECT hash, redeemed_at FROM vouchers WHERE account IS NOT NULL AND redeemed_at IS NOT NULL",
+        ) {
+            if let Ok(rows) = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64))) {
+                out = rows.flatten().collect();
+            }
+        }
+        out
+    }
+
+    /// Drop the account from a redeemed voucher — the same fourteen-day rule an invoice
+    /// follows, so the two do not disagree about how long a purchase stays attributable.
+    pub fn voucher_forget_account(&self, hashes: &[String]) -> usize {
+        let mut n = 0;
+        for h in hashes {
+            n += self
+                .conn
+                .execute("UPDATE vouchers SET account = NULL WHERE hash = ?1", params![h])
+                .unwrap_or(0);
+        }
+        n
     }
 
     /// Refund path: void every unredeemed voucher of one invoice. Refuses a redeemed one —

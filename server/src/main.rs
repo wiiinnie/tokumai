@@ -536,6 +536,8 @@ const WATCH_PER_TICK: usize = 5;
 /// Web orders answered per tick. Small on purpose: each one is a gateway call, and the
 /// same slots serve every paying app.
 const WEB_ORDERS_PER_TICK: usize = 3;
+/// How often those are picked up. Fast, because it is the only wait a buyer sees.
+const ORDER_TICK_MS: u64 = 1000;
     println!("scrai-server: concurrency caps — chats {max_chats} (openai {max_openai}), gateway calls {max_gateway}, coconut crypto {max_crypto}");
     if scrai_server::cfg("OPENAI_API_KEY").is_ok_and(|k| !k.trim().is_empty()) {
         println!(
@@ -588,6 +590,9 @@ const WEB_ORDERS_PER_TICK: usize = 3;
     if credit_pending_vouchers(&db, &mut paywall) {
         persist_changed(&mut db, &sessions, &quorum, &paywall, &mut saved);
     }
+    // One second, because a person is looking at a spinner. See the arm below.
+    let mut order_tick = tokio::time::interval(std::time::Duration::from_millis(ORDER_TICK_MS));
+    order_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut watch_tick = tokio::time::interval(std::time::Duration::from_secs(WATCH_TICK_SECS));
     watch_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
@@ -595,18 +600,20 @@ const WEB_ORDERS_PER_TICK: usize = 3;
             // Ask the chain about a few open invoices, off the loop like every other
             // gateway call. Bounded on both sides: at most WATCH_PER_TICK invoices per
             // tick, and each invoice at most once every 25 s (pay.rs WATCH_EVERY_MS).
-            _ = watch_tick.tick() => {
-                // A voucher whose burn landed but whose credit did not — the crash window
-                // between the two stores. Repaired here rather than only at boot: a task
-                // that fails without taking the process with it would otherwise leave a
-                // buyer waiting for a restart that may be weeks away.
-                if credit_pending_vouchers(&db, &mut paywall) {
+            // Web orders booked by the faucet on /pay. It cannot raise an invoice itself —
+            // the rails live here, and this box has no clearnet port — so it leaves a row and
+            // we answer it. On its OWN beat, not the chain watcher's: nobody is waiting on a
+            // chain poll, but somebody IS watching a spinner while this happens. The query is
+            // one indexed lookup on a table that is almost always empty.
+            _ = order_tick.tick() => {
+                // A buyer who pressed cancel: the invoice lives here, so the cancelling does
+                // too. Recorded as an error on the row, which also stops the page polling for
+                // something that will never arrive.
+                for (order_id, invoice) in db.web_orders_to_cancel() {
+                    paywall.cancel_invoice(&invoice);
+                    db.web_order_answer(&order_id, Some(&invoice), None, Some("cancelled"));
                     persist_changed(&mut db, &sessions, &quorum, &paywall, &mut saved);
                 }
-                // Web orders booked by the faucet on /pay. It cannot raise an invoice itself
-                // — the rails live here, and this box has no clearnet port — so it leaves a
-                // row and we answer it. An order survives either process dying: it is simply
-                // still there on the next tick.
                 for (order_id, usd, method) in db.web_orders_pending(WEB_ORDERS_PER_TICK) {
                     match paywall.begin_web_order(&order_id, usd, &method) {
                         Err(why) => db.web_order_answer(&order_id, None, None, Some(&why)),
@@ -622,6 +629,15 @@ const WEB_ORDERS_PER_TICK: usize = 3;
                         }
                     }
                 }
+            }
+            _ = watch_tick.tick() => {
+                // A voucher whose burn landed but whose credit did not — the crash window
+                // between the two stores. Repaired here rather than only at boot: a task
+                // that fails without taking the process with it would otherwise leave a
+                // buyer waiting for a restart that may be weeks away.
+                if credit_pending_vouchers(&db, &mut paywall) {
+                    persist_changed(&mut db, &sessions, &quorum, &paywall, &mut saved);
+                }
                 // Mirror settlement into the order row, so the faucet can answer "paid yet?"
                 // without ever parsing the pay snapshot.
                 for (order_id, invoice) in db.web_orders_awaiting_payment() {
@@ -633,6 +649,14 @@ const WEB_ORDERS_PER_TICK: usize = 3;
                 // the buyer's account. Cheap (a scan of a small map) and it must not depend
                 // on anyone happening to poll an invoice.
                 paywall.scrub_account_links();
+                // The same rule for vouchers: a redeemed one stops naming its account after
+                // fourteen days, so the two halves of a purchase do not disagree about how
+                // long it stays attributable.
+                let stale = paywall.voucher_links_expired(&db.voucher_links());
+                if !stale.is_empty() {
+                    let n = db.voucher_forget_account(&stale);
+                    println!("scrai-server: dropped the account link from {n} redeemed voucher(s)");
+                }
                 let candidates = paywall.watch_candidates(WATCH_PER_TICK);
                 if !candidates.is_empty() {
                     let (tx, gw, slots) = (pay_tx.clone(), gateway.clone(), gateway_slots.clone());

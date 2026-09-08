@@ -984,6 +984,22 @@ async fn handle(f: Arc<Faucet>, mut sock: tokio::net::TcpStream, peer: SocketAdd
             };
             respond(&mut sock, 200, "application/json", &json(&body)).await
         }
+        ("POST", "/api/order/cancel") => {
+            let v: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+            let id = v.get("id").and_then(|i| i.as_str()).unwrap_or("");
+            let ok = state_rw(&f.cfg.state_db())
+                .and_then(|c| {
+                    c.execute(
+                        "UPDATE web_orders SET cancelled_at = ?2 \
+                         WHERE id = ?1 AND cancelled_at IS NULL AND paid_at IS NULL",
+                        rusqlite::params![id, scrai_server::pay::now_ms() as i64],
+                    )
+                    .map(|n| n > 0)
+                    .map_err(|e| e.to_string())
+                })
+                .unwrap_or(false);
+            respond(&mut sock, 200, "application/json", &json(&json!({"cancelled": ok}))).await
+        }
         // Reveal the code. Once — the store holds only its hash, so a second call cannot
         // produce it again and says so instead of pretending.
         ("POST", "/api/order/code") => {

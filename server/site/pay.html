@@ -155,9 +155,10 @@
   if (!frag) {
     // No invoice in the link: this is somebody buying a code here rather than paying an
     // invoice the app already raised. Different flow, same page — see docs/vouchers.md.
-    buyFlow();
+    buyFlow("");
     return;
   }
+  if (/^order=/.test(frag)) { buyFlow(frag); return; }
   var inv;
   try { inv = decode(frag); } catch (e) { inv = null; }
   if (!inv || typeof inv !== "object" || inv.v !== 1) {
@@ -216,7 +217,7 @@
   //
   // Nothing on this page knows an account: the payout is a voucher code, which the buyer
   // carries into an app. So there is no top-up ID to fill in and nothing to identify.
-  function buyFlow(){
+  function buyFlow(frag){
     var TIERS = [5, 10, 20, 50];
     var CONSENT = "2026-09-07";          // must match docs/consent/<version>.md
     var pick = 10, rail = "nyx", c1 = false, c2 = false, order = null, timer = null, clock = null;
@@ -262,8 +263,10 @@
       if (go) go.onclick = start;
     }
     function start(){
+      // Not the mixnet: a web order is raised on the server itself. The wait is the
+      // pickup beat plus whatever the payment rail takes to answer.
       out.innerHTML = '<div class="card"><h1>Raising the invoice\u2026</h1>' +
-        '<p class="lead">This goes through the mixnet, so it takes a few seconds.</p></div>';
+        '<p class="lead">A moment \u2014 the payment details are being prepared.</p></div>';
       fetch("/api/order", { method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ usd: pick, method: rail,
           consent: { version: CONSENT, immediateStart: true, waiverAck: true } }) })
@@ -271,7 +274,12 @@
         .then(function(j){
           if (!j || !j.id) { fail("That did not work", (j && j.error) || "Please try again."); return; }
           order = j.id;
-          timer = setInterval(poll, 2500);
+          // Into the FRAGMENT, so a reload resumes instead of losing a raised invoice — and a
+          // fragment is never sent to the server, so the id stays out of the logs.
+          try { history.replaceState(null, "", "#order=" + order); } catch (e) {}
+          // Tight while there is nothing to show yet, calmer once the details are up:
+          // the first stretch is somebody staring at a spinner.
+          timer = setInterval(poll, 900);
           clock = setInterval(tickWatch, 1000);
           poll();
         })
@@ -282,7 +290,12 @@
         .then(function(r){ return r.json(); })
         .then(function(j){
           if (!j) return;
-          if (j.state === "error") { clearInterval(timer); clearInterval(clock); fail("That did not work", j.error || ""); return; }
+          if (j.state === "error") {
+            clearInterval(timer); clearInterval(clock);
+            if (j.error === "cancelled") { cancelled(); return; }
+            fail("That did not work", j.error || "");
+            return;
+          }
           if (j.state === "pay") { lastPoll = Date.now(); showPay(j.pay); return; }
           if (j.state === "paid") { clearInterval(timer); clearInterval(clock); reveal(); return; }
         })
@@ -295,6 +308,9 @@
       // reset the copy buttons under the reader's finger.
       if (!paying) {
         paying = true;
+        // Details are on screen now; polling can drop back to a chain-sized pace.
+        clearInterval(timer);
+        timer = setInterval(poll, 2500);
         var opts = (p.options || []).map(function(o){
           var m = String(o.memo || "");
           // The memo is not decoration: a Nyx transfer without it CANNOT be credited, which
@@ -328,6 +344,14 @@
     }
     function cancel(){
       clearInterval(timer); clearInterval(clock);
+      // Tell the server too. Without this the invoice stayed open until it expired and the
+      // chain watcher went on polling it for hours.
+      fetch("/api/order/cancel", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: order }) }).catch(function(){});
+      try { history.replaceState(null, "", location.pathname); } catch (e) {}
+      cancelled();
+    }
+    function cancelled(){
       out.innerHTML = '<div class="card"><h1>Cancelled</h1>' +
         '<p class="lead">Nothing was charged. If you already sent the payment, it still ' +
         'arrives \u2014 write to us with the memo and we will issue your code.</p>' +
@@ -355,6 +379,17 @@
             'so treat it like cash.</p></div>';
         })
         .catch(function(){ fail("No connection", "Reload this page \u2014 the code is still waiting."); });
+    }
+    // A reload lands here with #order=… — pick the order back up rather than starting over
+    // on top of an invoice that is already raised.
+    var resume = /^order=([A-Za-z0-9]{8,64})$/.exec(frag || "");
+    if (resume) {
+      order = resume[1];
+      out.innerHTML = '<div class="card"><h1>Picking your order back up\u2026</h1></div>';
+      timer = setInterval(poll, 900);
+      clock = setInterval(tickWatch, 1000);
+      poll();
+      return;
     }
     draw();
   }

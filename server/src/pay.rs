@@ -715,6 +715,21 @@ impl Pay {
     }
     /// Has this invoice settled? Asked by the web-order sync, which mirrors the answer into
     /// `web_orders` so the faucet never has to read the pay snapshot.
+    /// Cancel an open invoice by id — the web-order path, where the request comes from a
+    /// table rather than from a signed client message. Marking it expired stops the chain
+    /// watcher; a transfer that arrives anyway is still swept in for 48 hours, exactly as
+    /// with a cancel from the app.
+    pub fn cancel_invoice(&mut self, invoice_id: &str) -> bool {
+        match self.invoices.get_mut(invoice_id) {
+            Some(inv) if inv.status == "pending" => {
+                inv.status = "expired".into();
+                self.rev += 1;
+                true
+            }
+            _ => false,
+        }
+    }
+
     pub fn invoice_paid(&self, invoice_id: &str) -> bool {
         self.invoices.get(invoice_id).is_some_and(|i| i.status == "paid")
     }
@@ -846,6 +861,19 @@ impl Pay {
     /// Note for whoever reads scrai-admin: the "payers" figure counts distinct accounts on
     /// PAID invoices, so it now decays as invoices age out. The sales ledger is the count
     /// that does not move.
+    /// Vouchers keep the redeeming account for the same reason and for the same fourteen
+    /// days as an invoice does — idempotency for a retry, and support for someone who paid
+    /// and got nothing. After that it is the same dead weight, and `sales.csv` keeps the
+    /// figures either way. Returns the hashes to clear; the caller owns the SQL.
+    pub fn voucher_links_expired(&self, redeemed_at: &[(String, u64)]) -> Vec<String> {
+        let now = now_ms();
+        redeemed_at
+            .iter()
+            .filter(|(_, at)| now.saturating_sub(*at) > Self::ACCOUNT_LINK_MS)
+            .map(|(h, _)| h.clone())
+            .collect()
+    }
+
     pub fn scrub_account_links(&mut self) {
         let now = now_ms();
         let mut changed = 0usize;
