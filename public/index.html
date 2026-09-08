@@ -309,6 +309,9 @@
      recognisable thing on this sheet, so the word "Card" was doing no work. */
   .procline{display:flex;align-items:center;gap:7px;font-family:var(--mono);font-size:10.5px;
             letter-spacing:.06em;color:var(--muted)}
+  /* An author `display:flex` beats the UA rule the `hidden` attribute relies on, so the
+     row showed "Processed by Mollie" AND "coming soon" at once (2026-09-08). */
+  .procline[hidden]{display:none}
   .molliemark{height:14px;width:auto;display:block;fill:#FFFFFF}
   :root[data-theme="F"] .molliemark{fill:#000000}
   /* What the chosen rail tells the outside world. Sits under the tiles, where the choice
@@ -1648,6 +1651,11 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // Same rule: a rail is off until the server reports it. A tile that looks available
   // and fails on tap is worse than one that is honestly greyed.
   let rails = { nyx:true, btc:false, card:false, invite:false };
+  // …but "off" and "not asked yet" are different things, and only one of them may say
+  // "coming soon". Until the catalog lands, a rail is greyed WITHOUT a claim about it
+  // (2026-09-08: a freshly started app announced "coming soon" for a card rail that had
+  // been live for a day, because SERVER_CARD is empty until the catalog reply arrives).
+  let railsKnown = false;
   // Coins on sale, grouped by the server: [{group,label,variants:[{id,label,note,minUsd}]}].
   // Empty = an older server or a processor rail that picks for itself → one plain Bitcoin tile.
   let coinGroups = [];
@@ -1772,6 +1780,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       { const b = s.rails && Number(s.rails.btcMinUsd);
         coinMinUsd = Number.isFinite(b) && b > 0 ? Math.floor(b) : 10; }
       { const r = s.rails && typeof s.rails === "object" ? s.rails : null;
+        if(r || (s.card && typeof s.card === "object")) railsKnown = true;
         rails = r ? { nyx:r.nyx!==false, btc:r.btc===true, card:r.card===true, invite:r.invite===true }
                   : { nyx:true, btc:false, card:(s.card&&s.card.enabled)===true, invite:serverTestnet }; }
       { const ok = u => /^https:\/\/[\w.-]+(\/[^\s]*)?$/.test(u);
@@ -5345,9 +5354,11 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     { // The attribution and the "coming soon" tag share the second line: a rail that is off
       // has nothing to attribute, and a live one needs no tag.
       const pr=$("cardProc"); if(pr) pr.hidden = !on;
-      const tg=el.querySelector(".pmtag"); if(tg){ tg.textContent = on ? "" : "coming soon"; tg.classList.toggle("less", false); }
+      const tg=el.querySelector(".pmtag");
+      if(tg){ tg.textContent = on ? "" : (railsKnown ? "coming soon" : ""); tg.classList.toggle("less", false); }
       el.title = on ? cardLabelLong()+" via Mollie (EU) — opens a checkout in your browser"
-                    : "Card payments are not switched on for this server yet"; }
+                    : (railsKnown ? "Card payments are not switched on for this server yet"
+                                  : "Still asking the server what it accepts"); }
     if((!on || testnetBuy) && selectedMethod==="card") selectMethodQuiet("nyx");
   }
 
@@ -5608,7 +5619,8 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     $("buyStatus").textContent = fakePayments
       ? "dev mode — settles instantly, no real money moves."
       : testnetBuy ? `Invite credit — $${TESTNET_USD}, paid by the faucet. Continue to raise the invoice.`
-      : "";                       // the disabled button says "Pick an amount above" already
+      : railsKnown ? ""           // the disabled button says "Pick an amount above" already
+      : "Asking the server which ways to pay it accepts\u2026";
     stopPendRefresh(); pendRefreshTimer=setInterval(tickPending, 1000);
     openScrim("buyScrim");
   }
@@ -5732,7 +5744,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       host.innerHTML = `<div class="pm${selectedMethod==="btc"?" sel":""}${(testnetBuy||!rails.btc)?" dis":""}" data-method="btc"
         title="Bitcoin" data-click="selectMethod" data-args="&quot;btc&quot;">
         <span class="pmlogo">${COIN_MARK.btc}</span><span class="pmname">Bitcoin</span>
-        <span class="pmtag">on-chain</span></div>`;
+        <span class="pmtag">${rails.btc ? "on-chain" : (railsKnown ? "soon" : "")}</span></div>`;
       renderCoinMenu();
       return;
     }

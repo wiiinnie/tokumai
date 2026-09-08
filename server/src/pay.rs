@@ -1366,12 +1366,27 @@ impl Gateway {
     }
 
     pub fn name(&self) -> String {
-        let mut n = self.rail.name().to_string();
+        // "none+nyx+mollie" read like a failure at boot, when it only means "no coin rail
+        // is configured" — which is the correct state between removing CoinGate and having
+        // BTCPay up. Name what IS there; say so plainly when nothing is.
+        let mut n = match self.rail {
+            Rail::None => String::new(),
+            ref r => r.name().to_string(),
+        };
+        let mut add = |part: &str| {
+            if !n.is_empty() {
+                n.push('+');
+            }
+            n.push_str(part);
+        };
         if self.nyx.is_some() {
-            n.push_str("+nyx");
+            add("nyx");
         }
         if let CardRail::Mollie { .. } = self.card {
-            n.push_str("+mollie");
+            add("mollie");
+        }
+        if n.is_empty() {
+            n.push_str("none — this server cannot sell anything");
         }
         n
     }
