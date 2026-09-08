@@ -112,7 +112,9 @@ impl Store {
         .map_err(|e| e.to_string())?;
         // Found by invoice when a refund is decided: a refund starts with somebody holding a
         // receipt, never with the code.
-        let _ = conn.execute("CREATE INDEX IF NOT EXISTS vouchers_by_invoice ON vouchers (invoice)", []);
+        // UNIQUE, not just an index: one voucher per invoice. A reloaded page must not be
+        // able to mint a second code for money that was paid once.
+        let _ = conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS vouchers_by_invoice ON vouchers (invoice)", []);
 
         // Distinct paying sessions per UTC day ("users"): one row per (day, hashed session
         // id), so COUNT(*) per day is the number of different sessions that chatted. The

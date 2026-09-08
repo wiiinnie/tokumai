@@ -308,7 +308,7 @@ pub fn faucet_address() -> Option<String> {
 
 /// The invite ledger the faucet owns (`faucet.db`, next to `state.db`). The server only
 /// ever reads it — see `faucet::code_has_uses_left`.
-fn faucet_db_path() -> std::path::PathBuf {
+pub fn faucet_db_path() -> std::path::PathBuf {
     std::path::PathBuf::from(crate::cfg("DATA").unwrap_or_else(|_| "./data".into())).join("faucet.db")
 }
 
@@ -453,6 +453,12 @@ pub struct Inv {
     consent_version: String,
     #[serde(default)]
     consent_at: u64,
+    /// Pays out as a VOUCHER CODE rather than as entitlement on this account: a purchase
+    /// made on the website, where there is no account to credit. Set at creation, honoured
+    /// once at settlement. The code is minted then — never at creation, or an unpaid
+    /// invoice would hand out credit.
+    #[serde(default)]
+    voucher: bool,
     /// Raised as a $1 invite purchase (faucet-paid). Persisted so scrai-admin and the
     /// faucet can tell invite buys from real ones after a restart. The stored name stays
     /// `testnet` — a field inside the snapshot is a format, not a label (2026-09-05).
@@ -1107,6 +1113,9 @@ impl Pay {
                 expected_unym: raised.expected_unym,
                 country: String::new(),   // filled in at settlement, from the rail's own answer
                 paid_at: 0,
+                // Set only by the web-order path (docs/vouchers.md), which does not exist
+                // yet. Every invoice raised by an app credits an account directly.
+                voucher: false,
                 consent_at: if consent.is_empty() { 0 } else { now_ms() },
                 consent_version: consent,
                 testnet,
@@ -2117,7 +2126,7 @@ mod tests {
                 account_id: "the-buyer".into(), amount_usd: 20, amount_toku: 20 * TOKU_PER_USD,
                 method: "card".into(), status: "pending".into(), expires_at: now_ms() + 60_000,
                 expected_unym: 0, consent_version: "2026-09-07".into(), consent_at: now_ms(),
-                country: String::new(), paid_at: 0, testnet: false, invite_code: String::new(),
+                country: String::new(), paid_at: 0, voucher: false, testnet: false, invite_code: String::new(),
             },
         );
         pay.settle("abc123def456", Some("NL".into()));
@@ -2255,10 +2264,10 @@ mod tests {
         let aid2 = aid.clone();
         pay.invoices.insert("t1".into(), Inv { id: "t1".into(), provider_ref: "TOKU-MEMO2345".into(), account_id: aid2,
             amount_usd: 1, amount_toku: TOKU_PER_USD, method: "nyx".into(), status: "pending".into(),
-            expires_at: now_ms() + 60_000, expected_unym: 59_000_000, consent_version: String::new(), consent_at: 0, country: String::new(), paid_at: 0, testnet: true, invite_code: "TOKU-AAAA-BBBB".into() });
+            expires_at: now_ms() + 60_000, expected_unym: 59_000_000, consent_version: String::new(), consent_at: 0, country: String::new(), paid_at: 0, voucher: false, testnet: true, invite_code: "TOKU-AAAA-BBBB".into() });
         pay.invoices.insert("r1".into(), Inv { id: "r1".into(), provider_ref: "TOKU-REAL2345".into(), account_id: aid,
             amount_usd: 5, amount_toku: 5 * TOKU_PER_USD, method: "nyx".into(), status: "pending".into(),
-            expires_at: now_ms() + 60_000, expected_unym: 295_000_000, consent_version: "2026-09-07".into(), consent_at: now_ms(), country: "DE".into(), paid_at: 0, testnet: false, invite_code: String::new() });
+            expires_at: now_ms() + 60_000, expected_unym: 295_000_000, consent_version: "2026-09-07".into(), consent_at: now_ms(), country: "DE".into(), paid_at: 0, voucher: false, testnet: false, invite_code: String::new() });
         let t = pay.testnet_invoices();
         assert_eq!(t.len(), 1);
         assert_eq!((t[0].amount_usd, t[0].memo.as_str(), t[0].unym), (1, "TOKU-MEMO2345", 59_000_000));
@@ -2611,7 +2620,7 @@ mod card_tests {
             id: id.into(), provider_ref: format!("TOKU-{id}"), account_id: "acct".into(),
             amount_usd: 1, amount_toku: TOKU_PER_USD, method: "nyx".into(), status: status.into(),
             expires_at: now_ms() + 60_000, expected_unym: 59_000_000, testnet: false,
-            consent_version: "2026-09-07".into(), consent_at: now_ms(), country: String::new(), paid_at: 0, invite_code: String::new(),
+            consent_version: "2026-09-07".into(), consent_at: now_ms(), country: String::new(), paid_at: 0, voucher: false, invite_code: String::new(),
         };
         pay.invoices.insert("open1".into(), inv("open1", "pending"));
         pay.invoices.insert("open2".into(), inv("open2", "pending"));
@@ -2697,7 +2706,7 @@ mod card_tests {
             amount_usd: 10, amount_toku: 10 * TOKU_PER_USD, method: "card".into(),
             status: "pending".into(), expires_at: now_ms() + 60_000, expected_unym: 0,
             consent_version: "2026-09-07".into(), consent_at: now_ms(), country: String::new(),
-            paid_at: 0, testnet: false, invite_code: String::new(),
+            paid_at: 0, voucher: false, testnet: false, invite_code: String::new(),
         };
         for id in ["a", "b", "c", "d"] {
             pay.invoices.insert(id.into(), mk(id));
@@ -2723,7 +2732,7 @@ mod card_tests {
             amount_usd: 10, amount_toku: 10 * TOKU_PER_USD, method: "card".into(),
             status: "paid".into(), expires_at: now_ms(), expected_unym: 0,
             consent_version: "2026-09-07".into(), consent_at: now_ms(), country: "IT".into(),
-            paid_at: now_ms().saturating_sub(paid_ago_days * 24 * 3_600_000),
+            paid_at: now_ms().saturating_sub(paid_ago_days * 24 * 3_600_000), voucher: false,
             testnet: false, invite_code: String::new(),
         };
         pay.invoices.insert("fresh".into(), mk("fresh", 13));
@@ -2758,7 +2767,7 @@ mod card_tests {
             amount_usd: 20, amount_toku: 20 * TOKU_PER_USD, method: "btc".into(),
             status: "pending".into(), expires_at: now_ms() + 60_000, expected_unym: 0,
             consent_version: "2026-09-07".into(), consent_at: now_ms(), country: String::new(),
-            paid_at: 0, testnet: false, invite_code: String::new(),
+            paid_at: 0, voucher: false, testnet: false, invite_code: String::new(),
         };
         let inv = |order: &str, amount: Value, currency: &str| {
             json!({ "status": "Settled", "amount": amount, "currency": currency,

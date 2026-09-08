@@ -1296,6 +1296,46 @@ async fn invoice(
     }))
 }
 
+/// Redeem a code: a voucher bought on the site, or an invite code. The app cannot tell them
+/// apart — they look alike on purpose — so the server does, and answers `voucher.invite`
+/// when the string turns out to be an invite. One round trip either way, which matters over
+/// a mixnet.
+#[tauri::command]
+async fn voucher_redeem(app: AppHandle, transport: State<'_, Arc<Transport>>, code: String) -> Result<Value, String> {
+    let w = wallet::load(&data_dir(&app)?);
+    let srv = server_addr(&w)?;
+    let m = w.mnemonic.ok_or("no account — create one first")?;
+    let a = account::from_mnemonic(&m)?;
+    let code: String = code
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+        .map(|c| c.to_ascii_uppercase())
+        .take(64)
+        .collect();
+    if code.is_empty() {
+        return Err("enter a code first".into());
+    }
+    let nonce = rand_hex(16);
+    let sig = a.sign("voucher", &nonce);
+    let resp = transport
+        .round_trip(
+            &srv,
+            &json!({"v":PROTO,"kind":"voucher.redeem","id":rand_hex(16),"code":code,
+                    "publicKey":a.public_key_pem,"nonce":nonce,"sig":sig}),
+            SURBS_SMALL,
+            TIMEOUT_MS,
+        )
+        .await?;
+    if let Some(e) = resp.get("error").and_then(|e| e.as_str()) {
+        return Err(e.to_string());
+    }
+    Ok(json!({
+        "kind": resp.get("kind").and_then(|k| k.as_str()).unwrap_or(""),
+        "toku": resp.get("toku").and_then(|t| t.as_u64()).unwrap_or(0),
+        "code": resp.get("code").and_then(|c| c.as_str()).unwrap_or(""),
+    }))
+}
+
 #[tauri::command]
 async fn invoice_status(app: AppHandle, transport: State<'_, Arc<Transport>>, id: String) -> Result<Value, String> {
     let w = wallet::load(&data_dir(&app)?);
@@ -3134,7 +3174,7 @@ pub fn run() {
             state, local_state, set_server, account_new, account_reveal, account_restore, account_delete, account_migrate_qr,
             invoice, invoice_status, invoice_cancel, invite_check, ocr_scan, pdf_text, pdf_ocr, pdf_pages, collect, redeem, chat,
             smart_available, smart_detect, coconut_redeem,
-            mixnet_route, mixnet_ping, cancel_chat, app_resumed, app_hidden, resume_stats, list_entry_gateways, set_entry_gateway, set_mixnet_perf, open_external, save_image, save_file,
+            mixnet_route, mixnet_ping, cancel_chat, app_resumed, app_hidden, resume_stats, list_entry_gateways, set_entry_gateway, set_mixnet_perf, open_external, save_image, save_file, voucher_redeem,
             share_text, upload_begin, upload_chunk, upload_pipeline, pick_image, open_account_security,
             vault_list, vault_load, vault_save, vault_remove, vault_purge_webdata, pending_load, pending_save
         ])

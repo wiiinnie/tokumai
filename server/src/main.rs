@@ -899,8 +899,18 @@ const WATCH_PER_TICK: usize = 5;
                                 "error": "this code has already been redeemed" }),
                             store::VoucherBurn::Void => serde_json::json!({ "id": id, "kind": "error",
                                 "error": "this code was refunded and can no longer be redeemed" }),
-                            store::VoucherBurn::Unknown => serde_json::json!({ "id": id, "kind": "error",
-                                "error": "that code is not valid" }),
+                            // Vouchers and invite codes look alike and share one field in the
+                            // app. The server tells them apart rather than the client trying
+                            // both — over a mixnet, a wrong guess costs a whole round trip.
+                            store::VoucherBurn::Unknown => {
+                                let norm: String = code.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+                                    .map(|c| c.to_ascii_uppercase()).collect();
+                                if scrai_server::faucet::code_has_uses_left(&pay::faucet_db_path(), &norm) {
+                                    serde_json::json!({ "id": id, "kind": "voucher.invite", "code": norm })
+                                } else {
+                                    serde_json::json!({ "id": id, "kind": "error", "error": "that code is not valid" })
+                                }
+                            }
                         }
                     }
                 };

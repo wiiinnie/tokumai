@@ -1195,7 +1195,10 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     <div class="mb">
       <p class="balline" id="buyBal"></p>
       <div id="iosTopup" style="display:none"></div>
-      <label class="setrow" id="testnetRow" style="display:none;cursor:default"><span><b>Invite code<span class="tpill">TESTER</span></b><small>If you have an invite code, enter it here — otherwise leave it empty and buy as usual. A valid code buys a <b>$1</b> credit that the tokumai faucet pays for you.</small><span class="inviteline"><input id="inviteInput" type="text" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" maxlength="32" placeholder="TOKU-XXXX-XXXX"><button type="button" class="ibtn" data-click="checkInvite">Check</button></span><small id="inviteMsg"></small></span></label>
+      <!-- One field for every kind of code — invites, vouchers, gifts. It names no place to get
+     one, deliberately: outside the US and the EU, App Store rule 3.1.1 forbids the app from
+     pointing at an outside purchase, and a helpful sentence here would be exactly that.
+     See docs/vouchers.md. --><label class="setrow" id="testnetRow" style="display:none;cursor:default"><span><b>Redeem a code<span class="tpill">CODE</span></b><small>Invite codes, vouchers and gift codes are all redeemed here. Leave it empty to buy an amount below as usual.</small><span class="inviteline"><input id="inviteInput" type="text" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" maxlength="32" placeholder="TOKU-XXXX-XXXX-XXXX"><button type="button" class="ibtn" data-click="checkInvite">Redeem</button></span><small id="inviteMsg"></small></span></label>
       <div class="grouplbl" id="amountLbl" style="margin-top:2px">Amount</div>
       <div id="tierRow" class="tiles"></div>
 
@@ -5417,8 +5420,10 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     testnetBuy = inviteOk || serverTestnet;
     if(testnetBuy){ selectedTier=TESTNET_USD; selectMethodQuiet("nyx"); }
     else if(selectedTier===TESTNET_USD){ selectedTier=null; }
+    // Always visible now: the field redeems vouchers as well as invites, and a voucher can
+    // exist on a server that runs no faucet at all.
     const row=$("testnetRow");
-    if(row) row.style.display = (rails.invite || serverTestnet) ? "" : "none";
+    if(row) row.style.display = "";
     // iOS: web top-up on top; the in-app amount/method chooser stays only for the invite
     // flow, which is not a purchase (nothing is charged — the faucet pays).
     const iosWeb = isIOSNative();
@@ -5444,18 +5449,26 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       const st=$("buyStatus"); if(st && !serverTestnet) st.textContent="";
       return;
     }
-    if(!/^[A-Z0-9-]{8,32}$/.test(code)){
-      inviteOk=false; inviteCode=""; setInviteMsg("bad","that does not look like an invite code");
+    if(!/^[A-Z0-9-]{8,40}$/.test(code)){
+      inviteOk=false; inviteCode=""; setInviteMsg("bad","that does not look like a code");
       syncBuyMode(); renderTiers(); renderContinue(); return;
     }
     setInviteMsg("","checking…");
     try{
-      const r=await Backend.inviteCheck(code);
-      inviteOk = !!(r && r.valid===true);
-      inviteCode = inviteOk ? code : "";
-      setInviteMsg(inviteOk?"good":"bad",
-        inviteOk ? `valid — $${TESTNET_USD} credit, paid by the faucet`
-                 : "that code is not valid, or it has been used up");
+      // ONE request. A voucher is redeemed outright; an invite code comes back as
+      // `voucher.invite` and switches this field into the $1 flow it always had. The server
+      // decides which it is — they look alike, and a wrong guess here would cost a whole
+      // mixnet round trip.
+      const r=await Backend.voucherRedeem(code);
+      if(r && r.kind==="voucher.invite"){
+        inviteOk=true; inviteCode=code;
+        setInviteMsg("good", `valid — $${TESTNET_USD} credit, paid by the faucet`);
+      }else{
+        inviteOk=false; inviteCode=""; el.value="";
+        const got=Number(r&&r.toku)||0;
+        setInviteMsg("good", got>0 ? `redeemed — +${formatToku(got)} TOKU` : "already redeemed on this account");
+        await refreshState(); renderBuyBal();
+      }
     }catch(e){
       inviteOk=false; inviteCode="";
       setInviteMsg("bad", e && e.message ? e.message : String(e));
