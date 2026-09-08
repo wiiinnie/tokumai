@@ -444,6 +444,16 @@ async fn main() {
         book_toku / scrai_core::coconut::TOKU_PER_USD,
         if pay::is_testnet_server() { " · testnet $1 books" } else { "" }
     );
+    // Codes sold on the website are bearer money whose only trace here is a fingerprint.
+    // Unkeyed, that fingerprint is a 2^60 search anyone holding a backup can finish; keyed,
+    // it is nothing without the key. Say which of the two this box is running, at boot,
+    // where it cannot be missed — the failure is silent by nature.
+    if pay::voucher_key().is_none() {
+        eprintln!(
+            "scrai-server: VOUCHER_KEY is not set (or is under 32 chars) — code purchases on the \
+             website are REFUSED. Existing codes still redeem. Set it in .env to enable them."
+        );
+    }
 
     // H9: a single (1-of-1) authority can forge unlimited credentials. That is fine for
     // a testnet bring-up but NEVER against real money — refuse to issue unless the
@@ -613,6 +623,13 @@ const ORDER_TICK_MS: u64 = 1000;
                     paywall.cancel_invoice(&invoice);
                     db.web_order_answer(&order_id, Some(&invoice), None, Some("cancelled"));
                     persist_changed(&mut db, &sessions, &quorum, &paywall, &mut saved);
+                }
+                // Bearer money must not outlive its window. Unconditional: a buyer who never
+                // pressed "I have written it down" is exactly the one whose code would
+                // otherwise sit in the table forever, since nothing prunes web_orders.
+                let forgotten = db.web_orders_forget_codes(pay::now_ms());
+                if forgotten > 0 {
+                    println!("scrai-server: forgot {forgotten} voucher code(s) past the display window");
                 }
                 for (order_id, usd, method) in db.web_orders_pending(WEB_ORDERS_PER_TICK) {
                     match paywall.begin_web_order(&order_id, usd, &method) {
@@ -958,9 +975,26 @@ const ORDER_TICK_MS: u64 = 1000;
                     None => serde_json::json!({ "id": id, "kind": "error",
                         "error": "account signature does not check out, or the nonce was reused" }),
                     Some(account) => {
-                        let hash = pay::voucher_hash(code);
                         let now = pay::now_ms();
-                        match db.voucher_burn(&hash, &account, now) {
+                        // The keyed fingerprint first, then the unkeyed one that preceded it:
+                        // codes handed out before VOUCHER_KEY existed still have to redeem, and
+                        // only the server can tell which construction a given code belongs to.
+                        // A miss changes nothing, so trying both costs a lookup.
+                        let mut candidates = vec![pay::voucher_hash(code)];
+                        let legacy = pay::voucher_hash_legacy(code);
+                        if !candidates.contains(&legacy) {
+                            candidates.push(legacy);
+                        }
+                        let mut hash = candidates[0].clone();
+                        let mut burn = store::VoucherBurn::Unknown;
+                        for c in &candidates {
+                            burn = db.voucher_burn(c, &account, now);
+                            if !matches!(burn, store::VoucherBurn::Unknown) {
+                                hash = c.clone();
+                                break;
+                            }
+                        }
+                        match burn {
                             store::VoucherBurn::Burned { toku } => {
                                 paywall.credit_voucher(&account, toku);
                                 db.voucher_credited(&hash, now);

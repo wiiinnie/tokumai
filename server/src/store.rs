@@ -141,6 +141,15 @@ impl Store {
         // one's address on screen pays a memo the invoice no longer expects. See
         // `web_orders_pending`.
         let _ = conn.execute("ALTER TABLE web_orders ADD COLUMN raising_at INTEGER", []);
+        // The voucher code IN THE CLEAR, from minting until the buyer confirms they have
+        // written it down (or until `web_orders_forget_codes` sweeps it). We used to keep
+        // only the fingerprint and hand the plaintext to exactly one HTTP response — which
+        // is right against double-minting and fatal against a dropped reply: the buyer had
+        // paid and nothing on earth could produce their code again. Holding it for minutes
+        // trades "the customer loses their money" for "we held a bearer code briefly", and
+        // that is the better trade in every direction (audit 2026-09-08, H2).
+        let _ = conn.execute("ALTER TABLE web_orders ADD COLUMN code TEXT", []);
+        let _ = conn.execute("ALTER TABLE web_orders ADD COLUMN code_at INTEGER", []);
 
         // Distinct paying sessions per UTC day ("users"): one row per (day, hashed session
         // id), so COUNT(*) per day is the number of different sessions that chatted. The
@@ -353,6 +362,51 @@ impl Store {
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
             .ok()
+    }
+
+    /// How long the plaintext code stays retrievable after minting. Long enough that a
+    /// buyer who closed the tab can reopen `#order=…` and still get it; short enough that
+    /// the window is a window and not a store.
+    const CODE_HOLD_MS: u64 = 30 * 60_000;
+
+    /// Remember the code we just minted, so a dropped reply is a retry rather than a loss.
+    pub fn web_order_code_set(&self, id: &str, code: &str, now: u64) {
+        let _ = self.conn.execute(
+            "UPDATE web_orders SET code = ?2, code_at = ?3 WHERE id = ?1",
+            params![id, code, now as i64],
+        );
+    }
+
+    /// The held plaintext, if it is still within the window. Outside it, `None` — the row
+    /// may still carry the column, and the sweep has simply not run yet.
+    pub fn web_order_code(&self, id: &str, now: u64) -> Option<String> {
+        let cutoff = now.saturating_sub(Self::CODE_HOLD_MS) as i64;
+        self.conn
+            .query_row(
+                "SELECT code FROM web_orders WHERE id = ?1 AND code IS NOT NULL AND code_at >= ?2",
+                params![id, cutoff],
+                |r| r.get::<_, String>(0),
+            )
+            .ok()
+    }
+
+    /// The buyer says they have it. This is the ONLY thing that makes the promise on the
+    /// page true, so it happens the moment they press the button, not on a timer.
+    pub fn web_order_code_ack(&self, id: &str) -> bool {
+        self.conn
+            .execute("UPDATE web_orders SET code = NULL WHERE id = ?1 AND code IS NOT NULL", params![id])
+            .map(|n| n > 0)
+            .unwrap_or(false)
+    }
+
+    /// Forget every held code past the window, acknowledged or not. Unconditional on
+    /// purpose: a buyer who never presses the button must not leave bearer money in the
+    /// table for as long as the table exists — and nothing prunes `web_orders`.
+    pub fn web_orders_forget_codes(&self, now: u64) -> usize {
+        let cutoff = now.saturating_sub(Self::CODE_HOLD_MS) as i64;
+        self.conn
+            .execute("UPDATE web_orders SET code = NULL WHERE code IS NOT NULL AND code_at < ?1", params![cutoff])
+            .unwrap_or(0)
     }
 
     // ---- vouchers ---------------------------------------------------------------------
@@ -613,6 +667,40 @@ mod tests {
         assert!(s.web_order_new("ord3", 10, "nyx", "2026-09-07", 1_000));
         assert!(s.web_order_cancel("ord3", 2_000));
         assert!(!s.web_orders_pending(8).iter().any(|(id, _, _)| id == "ord3"));
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// The whole of H2 in one test: minting is a retry, not a one-shot. A dropped reply, a
+    /// closed tab, two polls racing — all of them come back to the SAME code, until the
+    /// buyer says they have it or the window closes.
+    #[test]
+    fn a_minted_code_survives_a_lost_reply_until_it_is_acknowledged() {
+        let p = tmp("code-hold");
+        let s = Store::open(&p).unwrap();
+        let now = crate::pay::now_ms();
+        assert!(s.web_order_new("ord1", 10, "nyx", "2026-09-07", now));
+
+        // Nothing held yet.
+        assert_eq!(s.web_order_code("ord1", now), None);
+
+        // Minted and held: every retry in the window gets the same string back.
+        s.web_order_code_set("ord1", "TOKU-AAAA-BBBB-CCCC", now);
+        assert_eq!(s.web_order_code("ord1", now).as_deref(), Some("TOKU-AAAA-BBBB-CCCC"));
+        assert_eq!(s.web_order_code("ord1", now + 60_000).as_deref(), Some("TOKU-AAAA-BBBB-CCCC"));
+
+        // The buyer confirms — the copy goes at once, not on a timer.
+        assert!(s.web_order_code_ack("ord1"));
+        assert_eq!(s.web_order_code("ord1", now), None);
+        assert!(!s.web_order_code_ack("ord1"), "acking twice is not a second deletion");
+
+        // A buyer who never confirms is swept anyway: bearer money must not outlive the
+        // window just because somebody closed a tab.
+        assert!(s.web_order_new("ord2", 10, "nyx", "2026-09-07", now));
+        s.web_order_code_set("ord2", "TOKU-DDDD-EEEE-FFFF", now);
+        let past = now + Store::CODE_HOLD_MS + 1_000;
+        assert_eq!(s.web_order_code("ord2", past), None, "outside the window it is not handed out");
+        assert_eq!(s.web_orders_forget_codes(past), 1);
+        assert_eq!(s.web_orders_forget_codes(past), 0, "the sweep is idempotent");
         let _ = std::fs::remove_file(&p);
     }
 

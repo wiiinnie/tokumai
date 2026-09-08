@@ -384,26 +384,64 @@
       var a = document.getElementById("again");
       if (a) a.onclick = function(){ order = null; paying = false; draw(); };
     }
+    // Two polls can be in flight at once on a slow connection, and both can come back
+    // "paid". Without this guard both call reveal(): the second one loses the race, gets
+    // the "already issued" answer, and renders its failure OVER the code the first one had
+    // just put on screen (audit 2026-09-08).
+    var revealed = false;
     function reveal(){
+      if (revealed) return;
+      revealed = true;
       fetch("/api/order/code", { method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ id: order }) })
         .then(function(r){ return r.json(); })
         .then(function(j){
           if (!j || !j.code) {
+            revealed = false;
             fail("Paid, but the code cannot be shown", (j && j.error) ||
               "Contact us with your receipt and we will sort it out.");
             return;
           }
-          out.innerHTML = '<div class="card"><h1>Paid \u2014 here is your code</h1>' +
-            '<div class="code"><code id="vc">' + esc(j.code) + '</code>' +
-            '<button class="cp" type="button" data-copy="' + esc(j.code) + '">copy</button></div>' +
-            '<p class="lead">' + (j.toku || 0).toLocaleString("en-US") + ' TOKU \u00b7 one use. ' +
-            'In the app: <b>Buy credit \u2192 Redeem a code</b>.</p>' +
-            '<p class="fine warn"><b>Write it down before you close this.</b> We cannot show it again \u2014 ' +
-            'we keep only a fingerprint of it, never the code itself. Anyone holding it can redeem it, ' +
-            'so treat it like cash.</p></div>';
+          showCode(j.code, j.toku || 0);
         })
-        .catch(function(){ fail("No connection", "Reload this page \u2014 the code is still waiting."); });
+        .catch(function(){
+          revealed = false;
+          // True now, and it was not before: the code is held for half an hour, so a
+          // reload really does bring it back. Telling someone to reload used to be the
+          // fastest way to confirm they had lost it.
+          fail("No connection", "Reload this page \u2014 your code is held for 30 minutes and will be shown again.");
+        });
+    }
+    function showCode(code, toku){
+      out.innerHTML = '<div class="card"><h1>Paid \u2014 here is your code</h1>' +
+        '<div class="code"><code id="vc">' + esc(code) + '</code>' +
+        '<button class="cp" type="button" data-copy="' + esc(code) + '">copy</button></div>' +
+        '<p class="lead">' + toku.toLocaleString("en-US") + ' TOKU \u00b7 one use. ' +
+        'In the app: <b>Buy credit \u2192 Redeem a code</b>.</p>' +
+        '<div id="ackbox"><p class="fine warn"><b>Write it down or copy it now.</b> Reloading this ' +
+        'page shows it again for the next 30 minutes. Anyone holding it can redeem it, so treat ' +
+        'it like cash.</p>' +
+        '<button class="cancel" type="button" id="ackb">I have written it down \u2014 delete your copy</button></div>' +
+        '</div>';
+      var b = document.getElementById("ackb");
+      if (b) b.onclick = function(){ ack(); };
+    }
+    // The buyer's word is what ends the holding window. Pressing this is the moment the
+    // page's promise becomes true, so it says plainly what it did.
+    function ack(){
+      var box = document.getElementById("ackbox");
+      if (box) box.innerHTML = '<p class="fine">forgetting our copy\u2026</p>';
+      fetch("/api/order/ack", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: order }) })
+        .then(function(){
+          if (box) box.innerHTML = '<p class="fine danger"><b>Done \u2014 our copy is gone.</b> ' +
+            'This code now exists only on your screen. We keep a fingerprint of it, never the ' +
+            'code itself, so we cannot show or recover it.</p>';
+        })
+        .catch(function(){
+          if (box) box.innerHTML = '<p class="fine warn">That did not reach us \u2014 our copy is ' +
+            'still held and will be deleted automatically within 30 minutes.</p>';
+        });
     }
     // A reload lands here with #order=… — pick the order back up rather than starting over
     // on top of an invoice that is already raised.

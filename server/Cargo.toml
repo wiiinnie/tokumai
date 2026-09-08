@@ -45,6 +45,10 @@ base64 = "0.22"
 rusqlite = { version = "0.32", features = ["bundled"] }
 # openai.rs: the per-day safety identifier (sha256 hex).
 sha2 = "0.10"
+# pay.rs: the voucher fingerprint. A KEYED hash, so a leaked state.db is not a list of
+# bearer codes waiting to be brute-forced — the code space is 2^60, which an unsalted
+# sha256 hands to a GPU rig in a few months (audit 2026-09-08).
+hmac = "0.12"
 hex = "0.4"
 # scrai-admin: terminal dashboard (htop-style). Only used by that binary.
 ratatui = "0.28"

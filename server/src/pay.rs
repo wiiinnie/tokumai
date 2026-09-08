@@ -233,11 +233,57 @@ pub const PAY_KINDS: [&str; 5] = [
 /// this snapshot. Nothing spans the two, which is the whole reason the order matters.
 pub const VOUCHER_KIND: &str = "voucher.redeem";
 
-/// `TOKU-XXXX-XXXX-XXXX` → the sha256 hex the table is keyed by. Case and spacing are
-/// forgiven (people retype these from a screen), the hash is of the normalised form.
+/// The key the voucher fingerprint is computed under (`VOUCHER_KEY`). Its whole job is to
+/// make the `vouchers` table useless on its own.
+///
+/// A code is 12 characters from a 32-symbol alphabet — 2^60. That is plenty against someone
+/// guessing over the network and NOT plenty against someone holding the database: a
+/// candidate is hashed once and looked up against every stored fingerprint at the same
+/// time, so cracking the whole table costs what cracking one code costs. At GPU rates that
+/// is a couple of months for every unredeemed voucher we ever issued, out of any backup,
+/// forever (audit 2026-09-08).
+///
+/// Under a key, that attack needs the key, which does not live in the database. Unset →
+/// code purchases are refused (fail closed, like `faucet_address`): a rail that silently
+/// falls back to the weak construction is a rail nobody ever fixes.
+pub fn voucher_key() -> Option<Vec<u8>> {
+    crate::cfg("VOUCHER_KEY")
+        .ok()
+        .map(|k| k.trim().to_string())
+        .filter(|k| k.len() >= 32)
+        .map(|k| k.into_bytes())
+}
+
+/// `TOKU-XXXX-XXXX-XXXX` → the hex the table is keyed by. Case and spacing are forgiven
+/// (people retype these from a screen); the fingerprint is of the normalised form.
+///
+/// Keyed when `VOUCHER_KEY` is set. `voucher_hash_legacy` is the unkeyed construction that
+/// preceded it — kept for LOOKUP only, so codes handed out before the key existed still
+/// redeem. Nothing mints under it any more, so it dies out as those are spent.
 pub fn voucher_hash(code: &str) -> String {
-    let norm: String = code.chars().filter(|c| c.is_ascii_alphanumeric()).map(|c| c.to_ascii_uppercase()).collect();
-    scrai_core::auth::sha256(&[norm.as_bytes()]).iter().map(|b| format!("{b:02x}")).collect()
+    let norm = voucher_norm(code);
+    match voucher_key() {
+        Some(key) => {
+            use hmac::{Hmac, Mac};
+            // HMAC is defined for a key of ANY length — RFC 2104 pads or hashes it — so this
+            // constructor has no failing case, and voucher_key() has already refused anything
+            // under 32 bytes before we get here.
+            // nosemgrep: scrai-unwrap-in-server-hot-path -- unreachable, see above
+            let mut mac = <Hmac<sha2::Sha256> as Mac>::new_from_slice(&key).expect("HMAC accepts any key length");
+            mac.update(norm.as_bytes());
+            mac.finalize().into_bytes().iter().map(|b| format!("{b:02x}")).collect()
+        }
+        None => voucher_hash_legacy(code),
+    }
+}
+
+/// The pre-key fingerprint: bare sha256 of the normalised code. Lookup only.
+pub fn voucher_hash_legacy(code: &str) -> String {
+    scrai_core::auth::sha256(&[voucher_norm(code).as_bytes()]).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn voucher_norm(code: &str) -> String {
+    code.chars().filter(|c| c.is_ascii_alphanumeric()).map(|c| c.to_ascii_uppercase()).collect()
 }
 
 /// A fresh code, in the shape the app's existing field already accepts.
@@ -2820,6 +2866,58 @@ mod card_tests {
         assert_eq!(pay.invoices["old"].amount_usd, 10);
         assert_eq!(pay.invoices["old"].country, "IT");
         assert_eq!(pay.invoices["old"].provider_ref, "tr_old");
+    }
+
+    /// The fingerprint is keyed, the key comes from the environment, and codes minted
+    /// before the key existed still resolve — otherwise turning the key on would have
+    /// silently invalidated every code already in someone's hands.
+    #[test]
+    fn the_voucher_fingerprint_is_keyed_and_still_finds_pre_key_codes() {
+        let code = "TOKU-ABCD-EFGH-JKLM";
+        let bare = voucher_hash_legacy(code);
+
+        // No key: the legacy construction, and the rail is refused elsewhere.
+        std::env::remove_var("SCRAI_VOUCHER_KEY");
+        std::env::remove_var("VOUCHER_KEY");
+        assert!(voucher_key().is_none());
+        assert_eq!(voucher_hash(code), bare);
+
+        // A key shorter than 32 chars is treated as absent — a "key" someone typed by hand
+        // is not a key, and half a key is the worst of both worlds.
+        std::env::set_var("VOUCHER_KEY", "tooshort");
+        assert!(voucher_key().is_none(), "a short key must not be accepted as one");
+
+        std::env::set_var("VOUCHER_KEY", "0123456789abcdef0123456789abcdef");
+        let keyed = voucher_hash(code);
+        assert_ne!(keyed, bare, "the key has to change the fingerprint or it does nothing");
+        assert_eq!(keyed.len(), 64);
+        // Deterministic, and normalisation still applies (people retype these).
+        assert_eq!(voucher_hash("toku abcd efgh jklm"), keyed);
+        // A different key gives a different fingerprint — that is what makes a stolen
+        // database useless rather than merely inconvenient.
+        std::env::set_var("VOUCHER_KEY", "fedcba9876543210fedcba9876543210");
+        assert_ne!(voucher_hash(code), keyed);
+        // The legacy lookup is unaffected by the key, which is how old codes still redeem.
+        assert_eq!(voucher_hash_legacy(code), bare);
+        std::env::remove_var("VOUCHER_KEY");
+    }
+
+    /// Codes are read off a screen and typed by hand, so the alphabet drops the ambiguous
+    /// glyphs — and 256 % 32 == 0, so the byte→symbol fold is uniform. A modulo bias here
+    /// would quietly shrink a space we are relying on being 2^60.
+    #[test]
+    fn generated_codes_have_the_shape_and_no_modulo_bias() {
+        for _ in 0..64 {
+            let c = new_voucher_code();
+            assert_eq!(c.len(), 19, "TOKU-XXXX-XXXX-XXXX");
+            assert!(c.starts_with("TOKU-"));
+            let body: String = c.chars().filter(|ch| *ch != '-').skip(4).collect();
+            assert_eq!(body.len(), 12);
+            assert!(
+                body.chars().all(|ch| "ABCDEFGHJKLMNPQRSTUVWXYZ23456789".contains(ch)),
+                "no I, O, 0 or 1 — these get retyped: {c}"
+            );
+        }
     }
 
     #[test]

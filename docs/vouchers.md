@@ -1,6 +1,8 @@
 # Vouchers — buying on the site, redeeming in the app
 
-**Sketch, not built.** Written 2026-09-08 to be argued with before any code exists.
+Written 2026-09-08 as a sketch, **built the same day**, and corrected the same evening by
+`docs/security/audit-2026-09-08.md` — the one-shot code reveal below was the sketch's worst
+idea and is marked where it was changed.
 
 ## Why a code at all
 
@@ -48,9 +50,21 @@ CREATE TABLE vouchers (
 );
 ```
 
-**Only the hash.** The server can verify a code and burn it; it cannot produce one. Which means
-a lost code can be refunded but never recovered — and equally, nobody can talk a code out of
-support, because support does not have one either.
+**Only the fingerprint, and it is keyed.** The server can verify a code and burn it; it
+cannot produce one. Which means nobody can talk a code out of support, because support does
+not have one either.
+
+The key (`VOUCHER_KEY`, in `.env`, never in the database) is not decoration. A code is 12
+characters from a 32-symbol alphabet — 2^60. That is plenty against guessing over the
+network and nothing against someone holding a backup of `state.db`: one candidate is hashed
+once and tested against every stored fingerprint at the same time, so cracking the whole
+table costs what cracking one code costs. Under a key there is nothing to crack without the
+key. Unset → code purchases are refused, rather than quietly minting under the weak
+construction. `voucher_hash_legacy` remains as a lookup path so codes issued before the key
+still redeem.
+
+**The plaintext is held for 30 minutes** between minting and the buyer's confirmation — see
+"Where the code is created" below. That is a deliberate reversal of the first sketch.
 
 ## The three transitions
 
@@ -103,9 +117,23 @@ At settlement of a **web purchase**, not at checkout — an unpaid invoice must 
 1. generate 16 random bytes → `TOKU-XXXX-XXXX-XXXX` (the existing invite-code shape, so the
    app's field accepts both without a second parser),
 2. insert the **hash**,
-3. return the code to the page **once**, in the reply to its own status poll.
+3. hold the plaintext on the order row and return it on **every** call for the next 30
+   minutes.
 
-The code exists in one place after that: the buyer's screen. That is the whole design.
+The first sketch said "once, and then it exists only on the buyer's screen". That was wrong,
+and the audit of 2026-09-08 says why: a reply lost between the server and the browser — a
+closed laptop, a mobile handover, a killed tab — destroyed a paid buyer's credit with no way
+back. The UNIQUE index blocks a replacement mint and voiding leaves the row in place, so
+not even direct SQL was a clean repair. Holding it trades *the customer loses their money*
+for *we held a bearer code for a few minutes*, and that is the better trade in every
+direction.
+
+It ends two ways, and only two:
+
+- the buyer presses **"I have written it down"** → `POST /api/order/ack` clears it at once;
+- nobody presses anything → the server's order tick sweeps it after the window,
+  unconditionally. This matters because nothing prunes `web_orders`: without the sweep a
+  code would sit there for the life of the table.
 
 ## What `/pay` has to gain
 

@@ -9054,6 +9054,7 @@ dependencies = [
  "ed25519-dalek",
  "env_logger",
  "hex",
+ "hmac",
  "nym-network-defaults",
  "nym-sdk",
  "nym-validator-client",

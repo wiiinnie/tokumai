@@ -336,18 +336,57 @@ fn web_order(state_db: &Path, id: &str) -> Option<(Option<String>, Option<String
 /// Mint the code for a paid order — HERE, not in the server, so no process that holds the
 /// mint ever holds a code. It is shown exactly once: only the hash is stored, and the
 /// UNIQUE index on `invoice` is what makes a second attempt fail rather than mint again.
-fn mint_voucher(state_db: &Path, invoice: &str, toku: u64) -> Result<String, String> {
+/// Mint the code for a settled order — or hand back the one already minted.
+///
+/// The second half is the point. This used to return the plaintext exactly once and keep
+/// only its fingerprint, so a reply lost between here and the browser destroyed a paid
+/// buyer's credit with no way back: the UNIQUE index blocks a replacement mint, and voiding
+/// leaves the row in place, so not even direct SQL was a clean fix. Now the plaintext is
+/// held on the order row for `CODE_HOLD_MS` and returned on every call in that window — a
+/// dropped response becomes a retry, and a buyer who closed the tab can reopen `#order=…`.
+/// It is dropped the moment they confirm they have written it down (`/api/order/ack`), and
+/// swept unconditionally after the window whether they confirm or not.
+fn mint_voucher(state_db: &Path, order: &str, invoice: &str, toku: u64) -> Result<String, String> {
+    let now = scrai_server::pay::now_ms();
+    let conn = state_rw(state_db)?;
+
+    // Already minted and still held: the same code, not an error. This is the retry path.
+    let held: Option<String> = conn
+        .query_row(
+            "SELECT code FROM web_orders WHERE id = ?1 AND code IS NOT NULL AND code_at >= ?2",
+            rusqlite::params![order, (now.saturating_sub(30 * 60_000)) as i64],
+            |r| r.get::<_, String>(0),
+        )
+        .ok();
+    if let Some(code) = held {
+        return Ok(code);
+    }
+
+    // Fail closed rather than mint under the unkeyed fingerprint: a `vouchers` table whose
+    // rows can be brute-forced out of a backup is exactly what the key exists to prevent.
+    if scrai_server::pay::voucher_key().is_none() {
+        return Err("code purchases are not configured on this server (VOUCHER_KEY)".into());
+    }
     let code = scrai_server::pay::new_voucher_code();
     let hash = scrai_server::pay::voucher_hash(&code);
-    let n = state_rw(state_db)?
+    let n = conn
         .execute(
             "INSERT OR IGNORE INTO vouchers (hash, toku, invoice, created_at) VALUES (?1,?2,?3,?4)",
-            rusqlite::params![hash, toku as i64, invoice, scrai_server::pay::now_ms() as i64],
+            rusqlite::params![hash, toku as i64, invoice, now as i64],
         )
         .map_err(|e| format!("could not issue the code: {e}"))?;
     if n == 0 {
-        return Err("a code was already issued for this payment and cannot be shown twice".into());
+        // A code exists for this invoice but is no longer held — the window has passed and
+        // the plaintext is gone for good. Say so plainly; there is nothing to retry.
+        return Err("this code has already been shown and confirmed, or its display window has \
+                    closed. We keep only a fingerprint, so it cannot be shown again — if you never \
+                    received it, contact us with your receipt number".into());
     }
+    conn.execute(
+        "UPDATE web_orders SET code = ?2, code_at = ?3 WHERE id = ?1",
+        rusqlite::params![order, code, now as i64],
+    )
+    .map_err(|e| format!("could not hold the code: {e}"))?;
     Ok(code)
 }
 
@@ -1011,7 +1050,7 @@ async fn handle(f: Arc<Faucet>, mut sock: tokio::net::TcpStream, peer: SocketAdd
                         .and_then(|p| serde_json::from_str::<Value>(&p).ok())
                         .and_then(|p| p.get("amountToku").or(p.get("amountScrai")).and_then(|t| t.as_u64()))
                         .unwrap_or(0);
-                    match mint_voucher(&f.cfg.state_db(), &inv, toku) {
+                    match mint_voucher(&f.cfg.state_db(), id, &inv, toku) {
                         Ok(code) => respond(&mut sock, 200, "application/json",
                             &json(&json!({"code": code, "toku": toku}))).await,
                         Err(e) => respond(&mut sock, 409, "application/json", &json(&json!({"error": e}))).await,
@@ -1020,6 +1059,23 @@ async fn handle(f: Arc<Faucet>, mut sock: tokio::net::TcpStream, peer: SocketAdd
                 _ => respond(&mut sock, 400, "application/json",
                     &json(&json!({"error": "that payment is not settled"}))).await,
             }
+        }
+        // "I have written it down." The only thing that makes the promise on the page true,
+        // so it happens on the buyer's word rather than on a timer.
+        ("POST", "/api/order/ack") => {
+            let v: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+            let id = v.get("id").and_then(|i| i.as_str()).unwrap_or("");
+            let ok = state_rw(&f.cfg.state_db())
+                .and_then(|c| {
+                    c.execute(
+                        "UPDATE web_orders SET code = NULL WHERE id = ?1 AND code IS NOT NULL",
+                        rusqlite::params![id],
+                    )
+                    .map(|n| n > 0)
+                    .map_err(|e| e.to_string())
+                })
+                .unwrap_or(false);
+            respond(&mut sock, 200, "application/json", &json(&json!({"forgotten": ok}))).await
         }
         ("GET", _) => respond(&mut sock, 404, "text/plain", b"not found").await,
         _ => respond(&mut sock, 405, "text/plain", b"method not allowed").await,
