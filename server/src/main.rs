@@ -631,8 +631,8 @@ const ORDER_TICK_MS: u64 = 1000;
                 if forgotten > 0 {
                     println!("scrai-server: forgot {forgotten} voucher code(s) past the display window");
                 }
-                for (order_id, usd, method) in db.web_orders_pending(WEB_ORDERS_PER_TICK) {
-                    match paywall.begin_web_order(&order_id, usd, &method) {
+                for (order_id, usd, method, consent) in db.web_orders_pending(WEB_ORDERS_PER_TICK) {
+                    match paywall.begin_web_order(&order_id, usd, &method, &consent) {
                         Err(why) => db.web_order_answer(&order_id, None, None, Some(&why)),
                         Ok(pending) => {
                             let (tx, gw, slots) = (pay_tx.clone(), gateway.clone(), gateway_slots.clone());

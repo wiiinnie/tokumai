@@ -317,13 +317,17 @@ fn consent_version(v: &Value) -> String {
     c.get("version")
         .and_then(|s| s.as_str())
         .map(str::trim)
-        .filter(|s| {
-            !s.is_empty()
-                && s.len() <= 32
-                && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.')
-        })
+        .filter(|s| consent_version_ok(s))
         .unwrap_or_default()
         .to_string()
+}
+
+/// What a consent version may look like. Narrow on purpose, and not only for tidiness: this
+/// string is written verbatim into `sales.csv`, so a comma or a newline in it would corrupt
+/// the bookkeeping record, and an unbounded one would let anyone posting an order write as
+/// much as they like into it. Matches the file names under `docs/consent/`.
+pub fn consent_version_ok(s: &str) -> bool {
+    !s.is_empty() && s.len() <= 32 && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.')
 }
 
 /// Refuse a purchase whose consent is missing, rather than only recording it. Off by
@@ -1050,9 +1054,22 @@ impl Pay {
     /// voucher code rather than entitlement. Authentication would be meaningless here —
     /// there is nobody to authenticate, and the money it produces belongs to whoever holds
     /// the code afterwards. What still holds: fixed tiles only, and the same rails.
-    pub fn begin_web_order(&mut self, our_id: &str, usd: u32, wanted: &str) -> Result<PayPending, String> {
+    pub fn begin_web_order(&mut self, our_id: &str, usd: u32, wanted: &str, consent: &str) -> Result<PayPending, String> {
         if !purchase_tiers().contains(&usd) {
             return Err(format!("${usd} is not a size we sell"));
+        }
+        // § 356 (5) does not care which surface the purchase happened on. The faucet already
+        // refuses an order without both boxes, but the record has to survive the trip to the
+        // INVOICE — it is `Inv.consent_version` that `append_sale` writes, and a web sale used
+        // to reach the ledger with a bare "-" while the confirmation sat in another table
+        // nothing joins (audit 2026-09-08, M2). Re-validated here because the version came
+        // from a page and is about to be written into a CSV.
+        let consent = consent.trim();
+        if !consent.is_empty() && !consent_version_ok(consent) {
+            return Err("that consent version is not one we recognise".into());
+        }
+        if consent.is_empty() && require_consent() {
+            return Err("this purchase carries no confirmation of the two statements".into());
         }
         if wanted == "card" && usd < card_min_usd() {
             return Err(format!("card purchases start at ${}", card_min_usd()));
@@ -1071,7 +1088,7 @@ impl Pay {
             wanted: wanted.to_string(),
             testnet: false,
             code: String::new(),
-            consent: String::new(),
+            consent: consent.to_string(),
         })
     }
 
@@ -2918,6 +2935,38 @@ mod card_tests {
                 "no I, O, 0 or 1 — these get retyped: {c}"
             );
         }
+    }
+
+    /// M2: a purchase made on the website has to reach the sales ledger with the version of
+    /// the wording its buyer confirmed. It used to arrive with a bare "-", because the
+    /// confirmation stayed in `web_orders` and never rode along to the invoice.
+    #[test]
+    fn a_web_order_carries_its_consent_and_refuses_a_malformed_one() {
+        let mut pay = Pay::default();
+        let pending = match pay.begin_web_order("ord1", 10, "nyx", "2026-09-07") {
+            Ok(p) => p,
+            Err(e) => panic!("a normal order should raise: {e}"),
+        };
+        match pending {
+            PayPending::Create { consent, account, usd, .. } => {
+                assert_eq!(consent, "2026-09-07", "the confirmation reaches the invoice");
+                assert!(account.is_empty(), "a web order has no account — the payout is a code");
+                assert_eq!(usd, 10);
+            }
+            _ => panic!("a web order raises an invoice"),
+        }
+
+        // This string is written verbatim into a CSV. A comma, a newline or an essay in it
+        // would corrupt or flood the bookkeeping record, so it is refused rather than stored.
+        for bad in ["2026-09-07,999.00,USD", "2026-09-07\nrow", &"x".repeat(33)] {
+            assert!(
+                pay.begin_web_order("ordx", 10, "nyx", bad).is_err(),
+                "a version that could break sales.csv must not be accepted: {bad:?}"
+            );
+        }
+
+        // An amount we do not sell is still refused, consent or no consent.
+        assert!(pay.begin_web_order("ord2", 7, "nyx", "2026-09-07").is_err());
     }
 
     #[test]

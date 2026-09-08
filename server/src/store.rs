@@ -272,23 +272,28 @@ impl Store {
     /// been overwritten to expect B. They pay, nothing matches, and the code never arrives.
     /// One claim per order per `RAISE_CLAIM_MS` closes that; the timeout is what lets a
     /// raise that died with the process be retried at all.
-    pub fn web_orders_pending(&self, max: usize) -> Vec<(String, u32, String)> {
-        let mut out: Vec<(String, u32, String)> = Vec::new();
+    pub fn web_orders_pending(&self, max: usize) -> Vec<(String, u32, String, String)> {
+        let mut out: Vec<(String, u32, String, String)> = Vec::new();
         let now = crate::pay::now_ms();
         let cutoff = now.saturating_sub(Self::RAISE_CLAIM_MS) as i64;
         if let Ok(mut st) = self.conn.prepare(
-            "SELECT id, usd, method FROM web_orders \
+            "SELECT id, usd, method, consent FROM web_orders \
              WHERE invoice IS NULL AND error IS NULL AND cancelled_at IS NULL \
                AND (raising_at IS NULL OR raising_at < ?2) \
              ORDER BY created_at LIMIT ?1",
         ) {
             if let Ok(rows) = st.query_map(params![max as i64, cutoff], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u32, r.get::<_, String>(2)?))
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)? as u32,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                ))
             }) {
                 out = rows.flatten().collect();
             }
         }
-        for (id, _, _) in &out {
+        for (id, _, _, _) in &out {
             let _ = self
                 .conn
                 .execute("UPDATE web_orders SET raising_at = ?2 WHERE id = ?1", params![id, now as i64]);
@@ -644,8 +649,11 @@ mod tests {
         let s = Store::open(&p).unwrap();
         assert!(s.web_order_new("ord1", 10, "card", "2026-09-07", 1_000));
 
-        // First tick claims it.
-        assert_eq!(s.web_orders_pending(8).len(), 1);
+        // First tick claims it — and carries the consent version, which is what reaches the
+        // invoice and from there the sales ledger.
+        let picked = s.web_orders_pending(8);
+        assert_eq!(picked.len(), 1);
+        assert_eq!(picked[0].3, "2026-09-07", "the confirmation must survive the trip to the invoice");
         // Every tick for the next minute and a half sees nothing — the raise is in flight.
         assert!(s.web_orders_pending(8).is_empty());
         assert!(s.web_orders_pending(8).is_empty());
@@ -666,7 +674,7 @@ mod tests {
         // A cancelled order is never raised, even if the cancel beat the first tick.
         assert!(s.web_order_new("ord3", 10, "nyx", "2026-09-07", 1_000));
         assert!(s.web_order_cancel("ord3", 2_000));
-        assert!(!s.web_orders_pending(8).iter().any(|(id, _, _)| id == "ord3"));
+        assert!(!s.web_orders_pending(8).iter().any(|(id, _, _, _)| id == "ord3"));
         let _ = std::fs::remove_file(&p);
     }
 

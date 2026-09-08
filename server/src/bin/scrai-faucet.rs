@@ -1003,6 +1003,14 @@ async fn handle(f: Arc<Faucet>, mut sock: tokio::net::TcpStream, peer: SocketAdd
                     &json(&json!({"error": "please confirm both statements above"}))).await;
                 return;
             }
+            // The version comes from a page and ends up verbatim in sales.csv, so it is
+            // checked here rather than trusted: a comma or a newline would corrupt the
+            // bookkeeping record, and an unbounded string would let anyone write into it.
+            if !scrai_server::pay::consent_version_ok(version) {
+                respond(&mut sock, 400, "application/json",
+                    &json(&json!({"error": "that consent version is not one we recognise"}))).await;
+                return;
+            }
             let id = format!("{:032x}", rand::random::<u128>());
             match web_order_new(&f.cfg.state_db(), &id, usd, method, version) {
                 Ok(()) => respond(&mut sock, 200, "application/json", &json(&json!({"id": id}))).await,
