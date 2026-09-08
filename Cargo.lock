@@ -5192,7 +5192,7 @@ dependencies = [
 
 [[package]]
 name = "mixbench"
-version = "0.5.8"
+version = "0.5.9"
 dependencies = [
  "nym-sdk",
  "tokio",
@@ -8997,7 +8997,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "scrai-core"
-version = "0.5.8"
+version = "0.5.9"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -9013,7 +9013,7 @@ dependencies = [
 
 [[package]]
 name = "scrai-ledger"
-version = "0.5.8"
+version = "0.5.9"
 dependencies = [
  "async-trait",
  "ed25519-dalek",
@@ -9028,7 +9028,7 @@ dependencies = [
 
 [[package]]
 name = "scrai-loadtest"
-version = "0.5.8"
+version = "0.5.9"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek",
@@ -9046,7 +9046,7 @@ dependencies = [
 
 [[package]]
 name = "scrai-server"
-version = "0.5.8"
+version = "0.5.9"
 dependencies = [
  "base64 0.22.1",
  "crossterm",
@@ -9071,7 +9071,7 @@ dependencies = [
 
 [[package]]
 name = "scrambleai"
-version = "0.5.8"
+version = "0.5.9"
 dependencies = [
  "aes-gcm 0.10.3",
  "base64 0.22.1",
