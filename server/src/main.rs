@@ -533,6 +533,9 @@ async fn main() {
 /// minute is indistinguishable from instant to the person waiting.
 const WATCH_TICK_SECS: u64 = 15;
 const WATCH_PER_TICK: usize = 5;
+/// Web orders answered per tick. Small on purpose: each one is a gateway call, and the
+/// same slots serve every paying app.
+const WEB_ORDERS_PER_TICK: usize = 3;
     println!("scrai-server: concurrency caps — chats {max_chats} (openai {max_openai}), gateway calls {max_gateway}, coconut crypto {max_crypto}");
     if scrai_server::cfg("OPENAI_API_KEY").is_ok_and(|k| !k.trim().is_empty()) {
         println!(
@@ -599,6 +602,32 @@ const WATCH_PER_TICK: usize = 5;
                 // buyer waiting for a restart that may be weeks away.
                 if credit_pending_vouchers(&db, &mut paywall) {
                     persist_changed(&mut db, &sessions, &quorum, &paywall, &mut saved);
+                }
+                // Web orders booked by the faucet on /pay. It cannot raise an invoice itself
+                // — the rails live here, and this box has no clearnet port — so it leaves a
+                // row and we answer it. An order survives either process dying: it is simply
+                // still there on the next tick.
+                for (order_id, usd, method) in db.web_orders_pending(WEB_ORDERS_PER_TICK) {
+                    match paywall.begin_web_order(&order_id, usd, &method) {
+                        Err(why) => db.web_order_answer(&order_id, None, None, Some(&why)),
+                        Ok(pending) => {
+                            let (tx, gw, slots) = (pay_tx.clone(), gateway.clone(), gateway_slots.clone());
+                            tokio::spawn(async move {
+                                let outcome = match tokio::time::timeout(QUEUE_WAIT, slots.acquire_owned()).await {
+                                    Ok(Ok(_permit)) => pay::run_gateway(pending, &gw).await,
+                                    _ => pay::gateway_busy(pending),
+                                };
+                                let _ = tx.send(PayDone { outcome, to: None, _guard: None }).await;
+                            });
+                        }
+                    }
+                }
+                // Mirror settlement into the order row, so the faucet can answer "paid yet?"
+                // without ever parsing the pay snapshot.
+                for (order_id, invoice) in db.web_orders_awaiting_payment() {
+                    if paywall.invoice_paid(&invoice) {
+                        db.web_order_paid(&order_id, pay::now_ms());
+                    }
                 }
                 // Housekeeping on the same beat: settled invoices older than 14 days lose
                 // the buyer's account. Cheap (a scan of a small map) and it must not depend
@@ -734,10 +763,35 @@ const WATCH_PER_TICK: usize = 5;
                     db.bump_daily(&today_utc(), 0, 0, 0, 1, delta);
                 }
                 persist_changed(&mut db, &sessions, &quorum, &paywall, &mut saved);
-                if let Some(to) = done.to {
-                    if let Err(e) = senders[to.idx].read().await.send_reply(to.tag, response).await {
-                        eprintln!("scrai-server: pay reply failed: {e}");
+                match done.to {
+                    Some(to) => {
+                        if let Err(e) = senders[to.idx].read().await.send_reply(to.tag, response).await {
+                            eprintln!("scrai-server: pay reply failed: {e}");
+                        }
                     }
+                    // Nobody to answer over the mixnet: either the chain watcher (which
+                    // returns nothing) or a web order, whose answer goes back into the table
+                    // the faucet reads.
+                    None if kind == "invoice.create" => {
+                        let v: serde_json::Value = serde_json::from_slice(&response).unwrap_or(serde_json::Value::Null);
+                        let order = v.get("invoiceId").and_then(|i| i.as_str()).map(str::to_string);
+                        match (order, v.get("error").and_then(|e| e.as_str())) {
+                            (Some(id), _) => {
+                                let body = String::from_utf8_lossy(&response).into_owned();
+                                db.web_order_answer(&id, Some(&id), Some(&body), None);
+                            }
+                            // A refused raise still has to reach the page, or it polls a row
+                            // that will never change. The order id rode along as the request id.
+                            (None, Some(e)) => {
+                                eprintln!("scrai-server: a web order could not be raised: {e}");
+                                if let Some(id) = v.get("id").and_then(|i| i.as_str()) {
+                                    db.web_order_answer(id, None, None, Some(e));
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    None => {}
                 }
             }
             inbound = in_rx.recv() => {

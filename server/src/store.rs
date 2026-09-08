@@ -116,6 +116,25 @@ impl Store {
         // able to mint a second code for money that was paid once.
         let _ = conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS vouchers_by_invoice ON vouchers (invoice)", []);
 
+        // The channel between the faucet (clearnet, serves /pay) and the server (mixnet only,
+        // owns the payment rails). A table rather than a port: no new listener on the box
+        // that holds the mint, no second Mollie client, and an order survives either process
+        // dying — it is simply still there on the next tick. See docs/vouchers.md.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS web_orders (\
+               id TEXT PRIMARY KEY,\
+               usd INTEGER NOT NULL,\
+               method TEXT NOT NULL,\
+               consent TEXT NOT NULL,\
+               created_at INTEGER NOT NULL,\
+               invoice TEXT,\
+               pay_json TEXT,\
+               paid_at INTEGER,\
+               error TEXT)",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+
         // Distinct paying sessions per UTC day ("users"): one row per (day, hashed session
         // id), so COUNT(*) per day is the number of different sessions that chatted. The
         // hash (sha256, 16 hex) keeps raw session ids out of the metrics table; rows older
@@ -207,6 +226,75 @@ impl Store {
              ON CONFLICT(day) DO UPDATE SET peak_1h = MAX(peak_1h, ?2)",
             params![day, n as i64],
         );
+    }
+
+    // ---- web orders (the faucet ↔ server channel) ---------------------------------------
+
+    /// The faucet books an order. Nothing is raised yet — the server picks it up.
+    pub fn web_order_new(&self, id: &str, usd: u32, method: &str, consent: &str, now: u64) -> bool {
+        self.conn
+            .execute(
+                "INSERT OR IGNORE INTO web_orders (id, usd, method, consent, created_at) VALUES (?1,?2,?3,?4,?5)",
+                params![id, usd as i64, method, consent, now as i64],
+            )
+            .map(|n| n > 0)
+            .unwrap_or(false)
+    }
+
+    /// Orders the server has not answered yet. Bounded: a tick must stay cheap.
+    pub fn web_orders_pending(&self, max: usize) -> Vec<(String, u32, String)> {
+        let mut out = Vec::new();
+        if let Ok(mut st) = self.conn.prepare(
+            "SELECT id, usd, method FROM web_orders \
+             WHERE invoice IS NULL AND error IS NULL ORDER BY created_at LIMIT ?1",
+        ) {
+            if let Ok(rows) = st.query_map(params![max as i64], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u32, r.get::<_, String>(2)?))
+            }) {
+                out = rows.flatten().collect();
+            }
+        }
+        out
+    }
+
+    /// The server answers: either an invoice and what to show, or why not.
+    pub fn web_order_answer(&self, id: &str, invoice: Option<&str>, pay_json: Option<&str>, error: Option<&str>) {
+        let _ = self.conn.execute(
+            "UPDATE web_orders SET invoice = ?2, pay_json = ?3, error = ?4 WHERE id = ?1",
+            params![id, invoice, pay_json, error],
+        );
+    }
+
+    /// Orders with an invoice that has not been seen paid yet — the server reflects the
+    /// paywall's own view into this table so the faucet never has to parse the pay snapshot.
+    pub fn web_orders_awaiting_payment(&self) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        if let Ok(mut st) = self.conn.prepare(
+            "SELECT id, invoice FROM web_orders WHERE invoice IS NOT NULL AND paid_at IS NULL",
+        ) {
+            if let Ok(rows) = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))) {
+                out = rows.flatten().collect();
+            }
+        }
+        out
+    }
+
+    pub fn web_order_paid(&self, id: &str, now: u64) {
+        let _ = self.conn.execute(
+            "UPDATE web_orders SET paid_at = ?2 WHERE id = ?1 AND paid_at IS NULL",
+            params![id, now as i64],
+        );
+    }
+
+    /// What the page needs to render one order: (invoice, pay_json, paid_at, error).
+    pub fn web_order(&self, id: &str) -> Option<(Option<String>, Option<String>, Option<i64>, Option<String>)> {
+        self.conn
+            .query_row(
+                "SELECT invoice, pay_json, paid_at, error FROM web_orders WHERE id = ?1",
+                params![id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .ok()
     }
 
     // ---- vouchers ---------------------------------------------------------------------

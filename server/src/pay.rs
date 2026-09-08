@@ -713,6 +713,12 @@ impl Pay {
     pub fn total_entitlement(&self) -> u64 {
         self.entitlements.values().sum()
     }
+    /// Has this invoice settled? Asked by the web-order sync, which mirrors the answer into
+    /// `web_orders` so the faucet never has to read the pay snapshot.
+    pub fn invoice_paid(&self, invoice_id: &str) -> bool {
+        self.invoices.get(invoice_id).is_some_and(|i| i.status == "paid")
+    }
+
     pub fn entitlement(&self, account_id: &str) -> u64 {
         *self.entitlements.get(account_id).unwrap_or(&0)
     }
@@ -809,12 +815,17 @@ impl Pay {
                 }
                 let scrai = inv.amount_toku;
                 let account = inv.account_id.clone();
+                let is_voucher = inv.voucher;
                 // The bookkeeping record is written HERE, once, while every field is still
                 // present — not derived later from a snapshot the scrub has been through.
                 if !inv.testnet {
                     append_sale(inv);
                 }
-                *self.entitlements.entry(account).or_default() += scrai;
+                // A voucher invoice has no account to credit — the payout IS the code, and
+                // it is minted by whoever shows it. Crediting here as well would pay twice.
+                if !is_voucher {
+                    *self.entitlements.entry(account).or_default() += scrai;
+                }
                 self.rev += 1;
             }
         }
@@ -961,6 +972,35 @@ impl Pay {
             .collect()
     }
 
+    /// Raise an invoice for a WEB order: no account, no signature, and the payout is a
+    /// voucher code rather than entitlement. Authentication would be meaningless here —
+    /// there is nobody to authenticate, and the money it produces belongs to whoever holds
+    /// the code afterwards. What still holds: fixed tiles only, and the same rails.
+    pub fn begin_web_order(&mut self, our_id: &str, usd: u32, wanted: &str) -> Result<PayPending, String> {
+        if !purchase_tiers().contains(&usd) {
+            return Err(format!("${usd} is not a size we sell"));
+        }
+        if wanted == "card" && usd < card_min_usd() {
+            return Err(format!("card purchases start at ${}", card_min_usd()));
+        }
+        if wanted != "card" && wanted != "nyx" && usd < coin_min_usd() {
+            return Err(format!("on-chain purchases start at ${}", coin_min_usd()));
+        }
+        Ok(PayPending::Create {
+            // The order id travels as the request id so a FAILED raise still names the order
+            // it belongs to — an error reply carries no invoiceId, and without this the page
+            // would poll a row that never changes.
+            id: Value::String(our_id.to_string()),
+            account: String::new(),
+            usd,
+            our_id: our_id.to_string(),
+            wanted: wanted.to_string(),
+            testnet: false,
+            code: String::new(),
+            consent: String::new(),
+        })
+    }
+
     fn begin_create(&mut self, v: &Value, id: &Value, gateway: &Gateway) -> Result<PayPending, Value> {
         let usd = v.get("usd").and_then(|u| u.as_u64()).unwrap_or(0) as u32;
         let Some(account) = self.account_owns(v, &format!("invoice:{usd}")) else {
@@ -1092,6 +1132,7 @@ impl Pay {
         consent: String,
         result: Result<Raised, String>,
     ) -> Value {
+        let account_is_web = account.is_empty();
         let raised = match result {
             Ok(r) => r,
             Err(e) => return err(id, &e),
@@ -1113,9 +1154,10 @@ impl Pay {
                 expected_unym: raised.expected_unym,
                 country: String::new(),   // filled in at settlement, from the rail's own answer
                 paid_at: 0,
-                // Set only by the web-order path (docs/vouchers.md), which does not exist
-                // yet. Every invoice raised by an app credits an account directly.
-                voucher: false,
+                // An empty account IS the web-order case: `account_owns` always yields one,
+                // so nothing an app raises can land here. Such an invoice pays out as a code
+                // instead of as entitlement — there is no account to credit.
+                voucher: account_is_web,
                 consent_at: if consent.is_empty() { 0 } else { now_ms() },
                 consent_version: consent,
                 testnet,
