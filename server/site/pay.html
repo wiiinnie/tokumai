@@ -119,7 +119,12 @@
     return host === "mollie.com" || /\.mollie\.com$/.test(host);
   };
 
+  // The "raising the invoice" ticker. Declared out here, not inside buyFlow, because
+  // fail() is out here and every terminal screen has to be able to stop it.
+  var rclock = null;
+  function stopRaise(){ if (rclock) { clearInterval(rclock); rclock = null; } }
   function fail(title, body){
+    stopRaise();
     out.innerHTML = '<div class="card bad"><h1>' + esc(title) + '</h1><p class="lead" style="margin:0">' + esc(body) + '</p></div>';
   }
 
@@ -263,10 +268,17 @@
       if (go) go.onclick = start;
     }
     function start(){
-      // Not the mixnet: a web order is raised on the server itself. The wait is the
-      // pickup beat plus whatever the payment rail takes to answer.
+      // Not the mixnet: a web order is raised on the server itself. The wait is the pickup
+      // beat (one second) plus whatever the payment rail takes to answer — normally under
+      // two seconds all in. It still gets a live row rather than a frozen line: a static
+      // "please wait" is indistinguishable from a hung page, and this is the moment a buyer
+      // is least willing to give the benefit of the doubt.
+      raiseAt = Date.now();
       out.innerHTML = '<div class="card"><h1>Raising the invoice\u2026</h1>' +
-        '<p class="lead">A moment \u2014 the payment details are being prepared.</p></div>';
+        '<p class="lead">Preparing your payment details. This usually takes a second or two ' +
+        '\u2014 please keep this tab open.</p>' +
+        '<div class="watch"><span class="wd"></span><span id="rtx">starting\u2026</span></div></div>';
+      rclock = setInterval(tickRaise, 1000);
       fetch("/api/order", { method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ usd: pick, method: rail,
           consent: { version: CONSENT, immediateStart: true, waiverAck: true } }) })
@@ -301,9 +313,22 @@
         })
         .catch(function(){ /* a dropped poll is not an error; the next one tries again */ });
     }
-    var lastPoll = 0, paying = false;
+    var lastPoll = 0, paying = false, raiseAt = 0;
+    // The raising row, in the same shape as the payment watch row below: a dot, what is
+    // happening, and how long it has been happening. It escalates rather than repeating
+    // itself — after six seconds something IS slow, and saying so is better than a spinner
+    // that has meant the same thing since the first second.
+    function tickRaise(){
+      var el = document.getElementById("rtx");
+      if (!el) { stopRaise(); return; }
+      var s = Math.round((Date.now() - raiseAt) / 1000);
+      el.textContent = s < 6 ? "asking the payment provider \u00b7 " + s + "s"
+                     : s < 30 ? "the payment provider is slower than usual \u00b7 " + s + "s"
+                     : "still waiting \u00b7 " + s + "s \u00b7 nothing has been charged";
+    }
     function showPay(p){
       if (!p) return;
+      stopRaise();
       // Rendered once — a re-render on every poll would blow away a half-made selection and
       // reset the copy buttons under the reader's finger.
       if (!paying) {
@@ -385,7 +410,14 @@
     var resume = /^order=([A-Za-z0-9]{8,64})$/.exec(frag || "");
     if (resume) {
       order = resume[1];
-      out.innerHTML = '<div class="card"><h1>Picking your order back up\u2026</h1></div>';
+      // Same live row as a fresh raise: on a reload this screen can sit here for a moment
+      // too, and a bare heading with nothing moving is the one thing a buyer reads as
+      // "it broke".
+      raiseAt = Date.now();
+      out.innerHTML = '<div class="card"><h1>Picking your order back up\u2026</h1>' +
+        '<p class="lead">Your invoice is still there \u2014 fetching it.</p>' +
+        '<div class="watch"><span class="wd"></span><span id="rtx">starting\u2026</span></div></div>';
+      rclock = setInterval(tickRaise, 1000);
       timer = setInterval(poll, 900);
       clock = setInterval(tickWatch, 1000);
       poll();
