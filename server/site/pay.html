@@ -39,6 +39,33 @@
   .btn:hover{filter:brightness(1.08)}
   .note{font-size:12.5px;line-height:1.55;color:var(--muted);margin-top:14px}
   .bad{border-color:var(--warn)} .bad h1{color:var(--warn)}
+  /* buying a code here (no invoice in the link) */
+  .tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-bottom:6px}
+  .tile{border:1px solid var(--line);border-radius:11px;background:var(--surface-2);color:var(--bone);
+        font:inherit;padding:10px 4px;cursor:pointer;display:flex;flex-direction:column;gap:2px;align-items:center}
+  .tile b{font-size:16px}
+  .tile span{font-family:var(--mono);font-size:9.5px;color:var(--muted)}
+  .tile.sel{border-color:var(--acc);background:color-mix(in srgb,var(--acc) 12%,var(--surface-2))}
+  .rail{display:flex;width:100%;align-items:center;gap:10px;border:1px solid var(--line);border-radius:11px;
+        background:var(--surface-2);color:var(--bone);font:inherit;padding:11px 13px;margin-bottom:7px;cursor:pointer}
+  .rail.sel{border-color:var(--acc);background:color-mix(in srgb,var(--acc) 10%,var(--surface-2))}
+  .rail .rn{flex:1;text-align:left;font-weight:600;font-size:14px}
+  .rail .rt{font-family:var(--mono);font-size:9.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+  .ck{display:flex;gap:10px;align-items:flex-start;border:1px solid var(--line);border-radius:11px;
+      background:var(--surface-2);padding:10px 12px;margin-bottom:7px;font-size:12.5px;line-height:1.5;cursor:pointer}
+  .ck.on{border-color:var(--acc);background:color-mix(in srgb,var(--acc) 9%,var(--surface-2))}
+  .ck input{margin:2px 0 0;accent-color:var(--acc)}
+  .go{display:block;width:100%;text-align:center;text-decoration:none;border:1px solid var(--acc);
+      background:var(--acc);color:#fff;font:inherit;font-weight:600;font-size:15px;border-radius:12px;
+      padding:13px;margin-top:12px;cursor:pointer}
+  .go[disabled]{opacity:.4;cursor:not-allowed}
+  .fine{font-size:12px;line-height:1.55;color:var(--muted);margin:12px 0 10px}
+  .fine.c{text-align:center;font-family:var(--mono);font-size:10.5px;margin-top:7px}
+  .fine.warn{border-left:2px solid var(--warn);padding-left:10px;color:var(--muted)}
+  .fine.warn b,.fine b{color:var(--bone)}
+  .code{display:flex;gap:8px;align-items:center;border:1px dashed var(--acc);border-radius:12px;
+        background:color-mix(in srgb,var(--acc) 8%,var(--surface-2));padding:14px;margin:4px 0 14px}
+  .code code{flex:1;font-family:var(--mono);font-size:19px;letter-spacing:.05em;word-break:break-all}
   .foot{margin-top:26px;font-family:var(--mono);font-size:10.5px;color:var(--muted);text-align:center}
   .foot a{color:var(--muted)}
 </style>
@@ -99,9 +126,23 @@
            '<button class="cp" type="button" data-copy="' + esc(value) + '">copy</button></div>';
   }
 
+  // Delegated, and attached BEFORE either flow runs: the buy flow returns early, so a
+  // listener wired at the end of the invoice branch would never exist for it.
+  out.addEventListener("click", function(e){
+    var b = e.target.closest("[data-copy]");
+    if (!b) return;
+    var v = b.getAttribute("data-copy");
+    var done = function(){ var t = b.textContent; b.textContent = "copied"; setTimeout(function(){ b.textContent = t; }, 1200); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(v).then(done, function(){});
+    else { var ta = document.createElement("textarea"); ta.value = v; document.body.appendChild(ta); ta.select();
+           try { document.execCommand("copy"); done(); } catch (err) {} document.body.removeChild(ta); }
+  });
+
   var frag = (location.hash || "").replace(/^#/, "");
   if (!frag) {
-    fail("Nothing to pay here", "Open this page from the app: Buy credit \u2192 pick an amount \u2192 Pay in the browser.");
+    // No invoice in the link: this is somebody buying a code here rather than paying an
+    // invoice the app already raised. Different flow, same page — see docs/vouchers.md.
+    buyFlow();
     return;
   }
   var inv;
@@ -156,15 +197,120 @@
           'transfer is seen on chain. It shows up as \u201cheld\u201d and is spent as blind-signed coins.</p></div>';
   out.innerHTML = html;
 
-  out.addEventListener("click", function(e){
-    var b = e.target.closest("[data-copy]");
-    if (!b) return;
-    var v = b.getAttribute("data-copy");
-    var done = function(){ var t = b.textContent; b.textContent = "copied"; setTimeout(function(){ b.textContent = t; }, 1200); };
-    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(v).then(done, function(){});
-    else { var ta = document.createElement("textarea"); ta.value = v; document.body.appendChild(ta); ta.select();
-           try { document.execCommand("copy"); done(); } catch (err) {} document.body.removeChild(ta); }
-  });
+
+
+  // ---- buying a code here ------------------------------------------------------------
+  //
+  // Nothing on this page knows an account: the payout is a voucher code, which the buyer
+  // carries into an app. So there is no top-up ID to fill in and nothing to identify.
+  function buyFlow(){
+    var TIERS = [5, 10, 20, 50];
+    var CONSENT = "2026-09-07";          // must match docs/consent/<version>.md
+    var pick = 10, rail = "nyx", c1 = false, c2 = false, order = null, timer = null;
+
+    function tile(n){
+      return '<button type="button" class="tile' + (n === pick ? " sel" : "") + '" data-tier="' + n + '">' +
+             '<b>$' + n + '</b><span>' + (n * 100000).toLocaleString("en-US") + ' TOKU</span></button>';
+    }
+    function railRow(id, name, tag){
+      return '<button type="button" class="rail' + (id === rail ? " sel" : "") + '" data-rail="' + id + '">' +
+             '<span class="rn">' + esc(name) + '</span><span class="rt">' + esc(tag) + '</span></button>';
+    }
+    function draw(){
+      var ready = c1 && c2;
+      out.innerHTML =
+        '<div class="card"><h1>Buy a code</h1>' +
+        '<p class="lead">Prepaid credit, redeemed in the tokumai app. Nothing here asks who you are — ' +
+        'you get a code, not an account.</p>' +
+        '<div class="tiles">' + TIERS.map(tile).join("") + '</div>' +
+        '<div class="lbl">Pay with</div>' +
+        railRow("nyx", "NYM", "native \u00b7 Nyx") +
+        railRow("card", "Card \u00b7 Apple Pay \u00b7 Google Pay", "Mollie") +
+        '<p class="fine">Sold under our <a href="/terms">Terms</a>. Please read the ' +
+        '<a href="/terms#withdrawal">right of withdrawal</a> and the <a href="/privacy">privacy notice</a> first. ' +
+        'An <b>unredeemed</b> code can be refunded; once redeemed it cannot.</p>' +
+        '<label class="ck' + (c1 ? " on" : "") + '"><input type="checkbox" id="k1"' + (c1 ? " checked" : "") + '>' +
+        '<span>I ask you to <b>start delivering the credit immediately</b>, before the 14-day withdrawal period ends.</span></label>' +
+        '<label class="ck' + (c2 ? " on" : "") + '"><input type="checkbox" id="k2"' + (c2 ? " checked" : "") + '>' +
+        '<span>I understand that I <b>lose my right of withdrawal</b> once the code has been issued.</span></label>' +
+        '<button class="go" type="button" id="go"' + (ready ? "" : " disabled") + '>Buy now \u2014 $' + pick + '</button>' +
+        (ready ? "" : '<p class="fine c">tick both boxes to continue</p>') +
+        '</div>';
+      [].forEach.call(out.querySelectorAll("[data-tier]"), function(b){
+        b.onclick = function(){ pick = +b.getAttribute("data-tier"); draw(); };
+      });
+      [].forEach.call(out.querySelectorAll("[data-rail]"), function(b){
+        b.onclick = function(){ rail = b.getAttribute("data-rail"); draw(); };
+      });
+      var k1 = document.getElementById("k1"), k2 = document.getElementById("k2");
+      if (k1) k1.onchange = function(){ c1 = k1.checked; draw(); };
+      if (k2) k2.onchange = function(){ c2 = k2.checked; draw(); };
+      var go = document.getElementById("go");
+      if (go) go.onclick = start;
+    }
+    function start(){
+      out.innerHTML = '<div class="card"><h1>Raising the invoice\u2026</h1>' +
+        '<p class="lead">This goes through the mixnet, so it takes a few seconds.</p></div>';
+      fetch("/api/order", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ usd: pick, method: rail,
+          consent: { version: CONSENT, immediateStart: true, waiverAck: true } }) })
+        .then(function(r){ return r.json(); })
+        .then(function(j){
+          if (!j || !j.id) { fail("That did not work", (j && j.error) || "Please try again."); return; }
+          order = j.id;
+          timer = setInterval(poll, 2500);
+          poll();
+        })
+        .catch(function(){ fail("No connection", "Check your network and try again."); });
+    }
+    function poll(){
+      fetch("/api/order?id=" + encodeURIComponent(order))
+        .then(function(r){ return r.json(); })
+        .then(function(j){
+          if (!j) return;
+          if (j.state === "error") { clearInterval(timer); fail("That did not work", j.error || ""); return; }
+          if (j.state === "pay") { showPay(j.pay); return; }
+          if (j.state === "paid") { clearInterval(timer); reveal(); return; }
+        })
+        .catch(function(){ /* a dropped poll is not an error; the next one tries again */ });
+    }
+    function showPay(p){
+      if (!p) return;
+      var opts = (p.options || []).map(function(o){
+        return row(esc(o.method || "pay to"), String(o.destination || ""), "");
+      }).join("");
+      var checkout = p.checkout || (p.options && p.options[0] && p.options[0].checkout) || "";
+      out.innerHTML = '<div class="card"><h1>Pay $' + pick + '</h1>' +
+        '<p class="lead">' + esc(p.instruction || "") + '</p>' + opts +
+        (checkout && /^https:\/\/([a-z0-9-]+\.)*mollie\.com\//.test(checkout)
+          ? '<a class="go" href="' + esc(checkout) + '">Open the checkout \u2192</a>' : "") +
+        '<p class="fine">This page keeps checking. When the payment lands, your code appears here \u2014 ' +
+        '<b>do not close this tab</b>.</p></div>';
+    }
+    function reveal(){
+      fetch("/api/order/code", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: order }) })
+        .then(function(r){ return r.json(); })
+        .then(function(j){
+          if (!j || !j.code) {
+            fail("Paid, but the code cannot be shown", (j && j.error) ||
+              "Contact us with your receipt and we will sort it out.");
+            return;
+          }
+          out.innerHTML = '<div class="card"><h1>Paid \u2014 here is your code</h1>' +
+            '<div class="code"><code id="vc">' + esc(j.code) + '</code>' +
+            '<button class="cp" type="button" data-copy="' + esc(j.code) + '">copy</button></div>' +
+            '<p class="lead">' + (j.toku || 0).toLocaleString("en-US") + ' TOKU \u00b7 one use. ' +
+            'In the app: <b>Buy credit \u2192 Redeem a code</b>.</p>' +
+            '<p class="fine warn"><b>Write it down before you close this.</b> We cannot show it again \u2014 ' +
+            'we keep only a fingerprint of it, never the code itself. Anyone holding it can redeem it, ' +
+            'so treat it like cash.</p></div>';
+        })
+        .catch(function(){ fail("No connection", "Reload this page \u2014 the code is still waiting."); });
+    }
+    draw();
+  }
+
 })();
 </script>
 </body>

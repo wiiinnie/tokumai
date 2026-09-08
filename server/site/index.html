@@ -41,6 +41,10 @@
   .hero h1{font-family:var(--display);font-weight:600;font-size:52px;line-height:1.04;letter-spacing:.005em;margin:0 0 18px;text-wrap:balance} .hero h1 b{font-weight:600;color:var(--acc)}
   .hero p{font-size:16px;color:var(--muted);margin:0 0 22px;max-width:520px} .hero p b{color:var(--bone);font-weight:600}
   .cta{display:flex;gap:10px;flex-wrap:wrap}
+  /* The one place on this site where money changes hands — it should look like it. */
+  .buycta{display:inline-block;background:var(--acc);color:#fff;border-radius:11px;padding:11px 20px;
+          font-weight:600;font-size:15px;text-decoration:none}
+  .buycta:hover{filter:brightness(1.08)}
   .btn{display:inline-flex;align-items:center;justify-content:center;min-height:40px;padding:0 16px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2);color:var(--bone);font:600 13px var(--body);text-decoration:none;cursor:pointer;line-height:1.2;white-space:nowrap}
   .btn:hover,.btn:focus-visible{border-color:var(--acc);color:var(--bone);outline:none}
   .btn.primary{background:var(--acc);border-color:var(--acc);color:#fff}
@@ -196,14 +200,16 @@
   <div class="sec" id="buy">
     <div class="eyebrow">02 · Buy TOKU</div>
     <h2>Credit that can’t be <b>traced</b> to a question</h2>
-    <p class="lead">TOKU is prepaid credit. You buy it in the app as an account top-up and spend it as blind-signed coins. Before you buy, three things happen in the app, and none of them asks who you are.</p>
+    <p class="lead">TOKU is prepaid credit, spent as blind-signed coins. Buy it in the app as an account top-up, or <a href="/pay">buy a code here</a> and redeem it in the app. Neither way asks who you are.</p>
+    <p class="lead" style="margin-top:-14px"><a class="buycta" href="/pay">Buy a code &rarr;</a></p>
     <div class="flow"><div class="fs"><button class="shot ph" type="button" data-full="/img/flow-ready" aria-label="Enlarge: tokumai on iPhone: connecting through the mixnet on first start" style="aspect-ratio:390/844"><img class="dk " src="/img/flow-ready-dark.jpg" alt="tokumai on iPhone: connecting through the mixnet on first start" loading="lazy"><img class="lt " src="/img/flow-ready-light.jpg" alt="tokumai on iPhone: connecting through the mixnet on first start" loading="lazy"></button><div class="fst"><i>a</i><b>Download the app</b><span>macOS, Linux, Windows, iPhone or Android, from the cards further down. It connects to the mixnet on first start.</span></div></div><div class="fs"><button class="shot ph" type="button" data-full="/img/flow-account" aria-label="Enlarge: Account sheet: create an anonymous account" style="aspect-ratio:390/844"><img class="dk " src="/img/flow-account-dark.jpg" alt="Account sheet: create an anonymous account" loading="lazy"><img class="lt " src="/img/flow-account-light.jpg" alt="Account sheet: create an anonymous account" loading="lazy"></button><div class="fst"><i>b</i><b>Open an anonymous account</b><span>Account → Create anonymous account. No email, no phone, no password. A 24-word phrase is generated on your device and is the whole account.</span></div></div><div class="fs"><button class="shot ph" type="button" data-full="/img/flow-topup" aria-label="Enlarge: Top up on the web: the top-up ID" style="aspect-ratio:390/844"><img class="dk " src="/img/flow-topup-dark.jpg" alt="Top up on the web: the top-up ID" loading="lazy"><img class="lt " src="/img/flow-topup-light.jpg" alt="Top up on the web: the top-up ID" loading="lazy"></button><div class="fst"><i>c</i><b>Pick an amount</b><span>Buy credit → an amount. The app raises the invoice and either shows you how to pay it, or hands it to this site. The credit lands in the app as “held”.</span></div></div></div>
     
 <div class="blk"><div class="bh"><i>1</i><b>Buy in the app</b><span>Buy credit → pick an amount</span></div>
   <div class="note">The invoice is raised and signed inside the app, where your account key
   lives — nothing here asks who you are, and there is no ID to type in. On iPhone the app
   hands the finished invoice to this site to pay; everywhere else you pay straight in the app.
-  <b>Nothing is bought on this page</b> — what follows is what the app will show you.</div>
+  <b>Buying a code on this site works too</b> — same amounts, same payment methods, and the
+  code is redeemed in the app under <b>Buy credit → Redeem a code</b>.</div>
 </div>
 
 <!-- Illustration, not a picker. Nobody buys here, so these are plain cards: the rail this

@@ -242,6 +242,69 @@ impl Cfg {
 // the server's view: invite invoices from state.db (read-only, fresh per call)
 // ---------------------------------------------------------------------------
 
+// ---- web orders and vouchers -------------------------------------------------------
+//
+// The faucet serves /pay on the clearnet; the payment rails live in the server, which has
+// no clearnet port. The two talk through tables in state.db (see docs/vouchers.md), so
+// these are the only places the faucet opens that database for WRITING.
+
+fn state_rw(state_db: &Path) -> Result<Connection, String> {
+    Connection::open_with_flags(state_db, OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX)
+        .map_err(|e| format!("state.db: {e}"))
+}
+
+/// Book an order. The server raises the invoice on its next tick.
+fn web_order_new(state_db: &Path, id: &str, usd: u32, method: &str, consent: &str) -> Result<(), String> {
+    let now = scrai_server::pay::now_ms() as i64;
+    state_rw(state_db)?
+        .execute(
+            "INSERT INTO web_orders (id, usd, method, consent, created_at) VALUES (?1,?2,?3,?4,?5)",
+            rusqlite::params![id, usd as i64, method, consent, now],
+        )
+        .map(|_| ())
+        .map_err(|e| format!("could not book the order: {e}"))
+}
+
+/// (invoice, pay_json, paid, error)
+fn web_order(state_db: &Path, id: &str) -> Option<(Option<String>, Option<String>, bool, Option<String>)> {
+    let conn = Connection::open_with_flags(
+        state_db,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .ok()?;
+    conn.query_row(
+        "SELECT invoice, pay_json, paid_at, error FROM web_orders WHERE id = ?1",
+        rusqlite::params![id],
+        |r| {
+            Ok((
+                r.get::<_, Option<String>>(0)?,
+                r.get::<_, Option<String>>(1)?,
+                r.get::<_, Option<i64>>(2)?.is_some(),
+                r.get::<_, Option<String>>(3)?,
+            ))
+        },
+    )
+    .ok()
+}
+
+/// Mint the code for a paid order — HERE, not in the server, so no process that holds the
+/// mint ever holds a code. It is shown exactly once: only the hash is stored, and the
+/// UNIQUE index on `invoice` is what makes a second attempt fail rather than mint again.
+fn mint_voucher(state_db: &Path, invoice: &str, toku: u64) -> Result<String, String> {
+    let code = scrai_server::pay::new_voucher_code();
+    let hash = scrai_server::pay::voucher_hash(&code);
+    let n = state_rw(state_db)?
+        .execute(
+            "INSERT OR IGNORE INTO vouchers (hash, toku, invoice, created_at) VALUES (?1,?2,?3,?4)",
+            rusqlite::params![hash, toku as i64, invoice, scrai_server::pay::now_ms() as i64],
+        )
+        .map_err(|e| format!("could not issue the code: {e}"))?;
+    if n == 0 {
+        return Err("a code was already issued for this payment and cannot be shown twice".into());
+    }
+    Ok(code)
+}
+
 fn server_invite_invoices(state_db: &Path) -> Result<Vec<TestnetInv>, String> {
     let conn = Connection::open_with_flags(state_db, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)
         .map_err(|e| format!("state.db: {e}"))?;
@@ -822,6 +885,67 @@ async fn handle(f: Arc<Faucet>, mut sock: tokio::net::TcpStream, peer: SocketAdd
                     let status = if e.starts_with("too many") { 429 } else { 400 };
                     respond(&mut sock, status, "application/json", &json(&json!({"error": e}))).await
                 }
+            }
+        }
+        // ---- buying a voucher on the web -------------------------------------------
+        // The faucet cannot raise an invoice (the rails live in the server), so it books an
+        // order and the server answers it. See docs/vouchers.md.
+        ("POST", "/api/order") => {
+            let v: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+            let usd = v.get("usd").and_then(|u| u.as_u64()).unwrap_or(0) as u32;
+            let method = match v.get("method").and_then(|m| m.as_str()) {
+                Some("card") => "card",
+                Some("nyx") => "nyx",
+                _ => "nyx",
+            };
+            // § 356 (5) BGB does not care which surface the purchase happened on: no order
+            // without both confirmations, exactly as in the app.
+            let ok = |k: &str| v.pointer(&format!("/consent/{k}")).and_then(|b| b.as_bool()).unwrap_or(false);
+            let version = v.pointer("/consent/version").and_then(|s| s.as_str()).unwrap_or("");
+            if version.is_empty() || !ok("immediateStart") || !ok("waiverAck") {
+                respond(&mut sock, 400, "application/json",
+                    &json(&json!({"error": "please confirm both statements above"}))).await;
+                return;
+            }
+            let id = format!("{:032x}", rand::random::<u128>());
+            match web_order_new(&f.cfg.state_db(), &id, usd, method, version) {
+                Ok(()) => respond(&mut sock, 200, "application/json", &json(&json!({"id": id}))).await,
+                Err(e) => respond(&mut sock, 500, "application/json", &json(&json!({"error": e}))).await,
+            }
+        }
+        ("GET", "/api/order") => {
+            let id = query_param(&req.query, "id").unwrap_or_default();
+            let body = match web_order(&f.cfg.state_db(), &id) {
+                None => json!({"state": "unknown"}),
+                Some((_, _, _, Some(e))) => json!({"state": "error", "error": e}),
+                Some((None, _, _, None)) => json!({"state": "raising"}),
+                Some((Some(inv), pay, paid, None)) => json!({
+                    "state": if paid { "paid" } else { "pay" },
+                    "invoice": inv,
+                    "pay": pay.and_then(|p| serde_json::from_str::<Value>(&p).ok()),
+                }),
+            };
+            respond(&mut sock, 200, "application/json", &json(&body)).await
+        }
+        // Reveal the code. Once — the store holds only its hash, so a second call cannot
+        // produce it again and says so instead of pretending.
+        ("POST", "/api/order/code") => {
+            let v: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+            let id = v.get("id").and_then(|i| i.as_str()).unwrap_or("");
+            match web_order(&f.cfg.state_db(), id) {
+                Some((Some(inv), pay, true, None)) => {
+                    let toku = pay
+                        .and_then(|p| serde_json::from_str::<Value>(&p).ok())
+                        .and_then(|p| p.get("amountToku").or(p.get("amountScrai")).and_then(|t| t.as_u64()))
+                        .unwrap_or(0);
+                    match mint_voucher(&f.cfg.state_db(), &inv, toku) {
+                        Ok(code) => respond(&mut sock, 200, "application/json",
+                            &json(&json!({"code": code, "toku": toku}))).await,
+                        Err(e) => respond(&mut sock, 409, "application/json", &json(&json!({"error": e}))).await,
+                    }
+                }
+                _ => respond(&mut sock, 400, "application/json",
+                    &json(&json!({"error": "that payment is not settled"}))).await,
             }
         }
         ("GET", _) => respond(&mut sock, 404, "text/plain", b"not found").await,
