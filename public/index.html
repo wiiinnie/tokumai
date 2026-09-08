@@ -5820,7 +5820,9 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     renderRailNote();
     const s=$("buyStatus");
     if(s) s.textContent = m==="card"
-      ? `Checkout opens in your browser via Mollie (EU) — ${cardLabelLong()}. From $${cardInfo.minUsd}.`
+      // The marks in the row already say which methods there are; naming them again here
+      // only made the sentence longer. The dash went with the label it introduced.
+      ? `Checkout opens in your browser via Mollie (EU). From $${cardInfo.minUsd}.`
       : "";
   }
   function buyOrInvoice(usd){ return fakePayments ? buyTier(usd) : startInvoice(usd, selectedMethod); }
