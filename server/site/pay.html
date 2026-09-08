@@ -63,6 +63,15 @@
   .fine.c{text-align:center;font-family:var(--mono);font-size:10.5px;margin-top:7px}
   .fine.warn{border-left:2px solid var(--warn);padding-left:10px;color:var(--muted)}
   .fine.warn b,.fine b{color:var(--bone)}
+  .watch{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:11px;
+         color:var(--ok);margin-top:14px}
+  .watch .wd{width:8px;height:8px;border-radius:50%;background:var(--ok);flex:none;
+             animation:wpulse 1.6s ease-in-out infinite}
+  @keyframes wpulse{0%,100%{opacity:1}50%{opacity:.35}}
+  @media (prefers-reduced-motion:reduce){.watch .wd{animation:none}}
+  .cancel{display:block;width:100%;background:none;border:0;color:var(--muted);font:inherit;
+          font-size:12.5px;padding:8px 0 0;cursor:pointer;text-decoration:underline}
+  .cancel:hover{color:var(--bone)}
   .code{display:flex;gap:8px;align-items:center;border:1px dashed var(--acc);border-radius:12px;
         background:color-mix(in srgb,var(--acc) 8%,var(--surface-2));padding:14px;margin:4px 0 14px}
   .code code{flex:1;font-family:var(--mono);font-size:19px;letter-spacing:.05em;word-break:break-all}
@@ -74,7 +83,7 @@
 <div class="wrap">
   <div class="logo"><span>tokum<b>ai</b></span></div>
   <div id="out"></div>
-  <div class="foot">Started in the app · nothing on this page identifies you ·
+  <div class="foot">Nothing on this page identifies you ·
     <a href="https://tokumai.com/">tokumai.com</a></div>
 </div>
 <script>
@@ -206,7 +215,7 @@
   function buyFlow(){
     var TIERS = [5, 10, 20, 50];
     var CONSENT = "2026-09-07";          // must match docs/consent/<version>.md
-    var pick = 10, rail = "nyx", c1 = false, c2 = false, order = null, timer = null;
+    var pick = 10, rail = "nyx", c1 = false, c2 = false, order = null, timer = null, clock = null;
 
     function tile(n){
       return '<button type="button" class="tile' + (n === pick ? " sel" : "") + '" data-tier="' + n + '">' +
@@ -259,6 +268,7 @@
           if (!j || !j.id) { fail("That did not work", (j && j.error) || "Please try again."); return; }
           order = j.id;
           timer = setInterval(poll, 2500);
+          clock = setInterval(tickWatch, 1000);
           poll();
         })
         .catch(function(){ fail("No connection", "Check your network and try again."); });
@@ -268,24 +278,58 @@
         .then(function(r){ return r.json(); })
         .then(function(j){
           if (!j) return;
-          if (j.state === "error") { clearInterval(timer); fail("That did not work", j.error || ""); return; }
-          if (j.state === "pay") { showPay(j.pay); return; }
-          if (j.state === "paid") { clearInterval(timer); reveal(); return; }
+          if (j.state === "error") { clearInterval(timer); clearInterval(clock); fail("That did not work", j.error || ""); return; }
+          if (j.state === "pay") { lastPoll = Date.now(); showPay(j.pay); return; }
+          if (j.state === "paid") { clearInterval(timer); clearInterval(clock); reveal(); return; }
         })
         .catch(function(){ /* a dropped poll is not an error; the next one tries again */ });
     }
+    var lastPoll = 0, paying = false;
     function showPay(p){
       if (!p) return;
-      var opts = (p.options || []).map(function(o){
-        return row(esc(o.method || "pay to"), String(o.destination || ""), "");
-      }).join("");
-      var checkout = p.checkout || (p.options && p.options[0] && p.options[0].checkout) || "";
-      out.innerHTML = '<div class="card"><h1>Pay $' + pick + '</h1>' +
-        '<p class="lead">' + esc(p.instruction || "") + '</p>' + opts +
-        (checkout && /^https:\/\/([a-z0-9-]+\.)*mollie\.com\//.test(checkout)
-          ? '<a class="go" href="' + esc(checkout) + '">Open the checkout \u2192</a>' : "") +
-        '<p class="fine">This page keeps checking. When the payment lands, your code appears here \u2014 ' +
-        '<b>do not close this tab</b>.</p></div>';
+      // Rendered once — a re-render on every poll would blow away a half-made selection and
+      // reset the copy buttons under the reader's finger.
+      if (!paying) {
+        paying = true;
+        var opts = (p.options || []).map(function(o){
+          var m = String(o.memo || "");
+          // The memo is not decoration: a Nyx transfer without it CANNOT be credited, which
+          // is why it gets its own labelled row rather than sitting inside the address.
+          return row(esc(o.method || "pay to"), String(o.destination || ""), "") +
+                 (m ? row("Memo \u2014 required", m, "memo") : "");
+        }).join("");
+        var checkout = p.checkout || (p.options && p.options[0] && p.options[0].checkout) || "";
+        out.innerHTML = '<div class="card"><h1>Pay $' + pick + '</h1>' +
+          '<p class="lead">' + esc(p.instruction || "") + '</p>' + opts +
+          (checkout && /^https:\/\/([a-z0-9-]+\.)*mollie\.com\//.test(checkout)
+            ? '<a class="go" href="' + esc(checkout) + '">Open the checkout \u2192</a>' : "") +
+          '<div class="watch"><span class="wd"></span><span id="wtx">checking\u2026</span></div>' +
+          '<p class="fine">Your code appears here by itself. <b>Do not close this tab</b> \u2014 ' +
+          'the code is shown once and cannot be sent to you afterwards.</p>' +
+          '<button class="cancel" type="button" id="cx">Cancel this purchase</button>' +
+          '</div>';
+        var cx = document.getElementById("cx");
+        if (cx) cx.onclick = cancel;
+      }
+      tickWatch();
+    }
+    // Same shape as the app's live row, so the two read alike: a dot, what it is doing, and
+    // when it last managed to do it.
+    function tickWatch(){
+      var el = document.getElementById("wtx");
+      if (!el) return;
+      var ago = lastPoll ? Math.round((Date.now() - lastPoll) / 1000) : 0;
+      el.textContent = "Live \u00b7 waiting for your payment \u00b7 last checked " +
+        (ago < 2 ? "just now" : ago + "s ago");
+    }
+    function cancel(){
+      clearInterval(timer); clearInterval(clock);
+      out.innerHTML = '<div class="card"><h1>Cancelled</h1>' +
+        '<p class="lead">Nothing was charged. If you already sent the payment, it still ' +
+        'arrives \u2014 write to us with the memo and we will issue your code.</p>' +
+        '<button class="go" type="button" id="again">Buy a code</button></div>';
+      var a = document.getElementById("again");
+      if (a) a.onclick = function(){ order = null; paying = false; draw(); };
     }
     function reveal(){
       fetch("/api/order/code", { method: "POST", headers: { "content-type": "application/json" },
