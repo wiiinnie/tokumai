@@ -1140,7 +1140,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
               <button class="ami" data-click="pickFile"><span class="aic">📄</span> Choose File</button>
             </div>
           </div>
-          <textarea id="input" rows="1" placeholder="Ask anything…" autocorrect="on" autocapitalize="sentences" spellcheck="true" data-input="autogrow" data-input-pass="this" data-keydown="onKey" data-keydown-pass="event"></textarea>
+          <textarea id="input" rows="1" placeholder="Ask anything…" autocorrect="on" autocapitalize="sentences" spellcheck="true" enterkeyhint="done" data-input="autogrow" data-input-pass="this" data-keydown="onKey" data-keydown-pass="event"></textarea>
           <button class="send" id="send" data-click="sendMsg" disabled>↑</button>
         </div>
         <div class="foot">
@@ -3272,7 +3272,21 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     $("send").disabled = busy || scanning || stripFailed || ($("input").value.trim()==="" && !pendingFile);
   }
   function autogrow(el){ el.style.height="auto"; el.style.height=Math.min(150,el.scrollHeight)+"px"; updateSendEnabled(); }
-  function onKey(e){ if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); sendMsg(); } }
+  // On a phone the Enter key sits a few millimetres from every letter, and hitting it used
+  // to send a half-typed prompt — irreversibly, since the model is already being paid for
+  // (tester, 2026-09-09). So on a touch device Enter puts the keyboard away and sending is
+  // the button, on purpose: it is the one action here that costs money and cannot be taken
+  // back, and it should take a deliberate aim at a target.
+  //
+  // A real keyboard keeps Enter-to-send with Shift+Enter for a newline — there the key is
+  // where the fingers already are and a mis-hit is not the same hazard.
+  const touchInput = () => { try { return matchMedia("(pointer: coarse)").matches; } catch(_) { return false; } };
+  function onKey(e){
+    if(e.key!=="Enter" || e.shiftKey) return;
+    e.preventDefault();
+    if(touchInput()){ if(e.target && e.target.blur) e.target.blur(); return; }
+    sendMsg();
+  }
 
   // ---------- image attachment (vision) ----------
   const MAX_IMG = 10*1024*1024;
