@@ -199,6 +199,15 @@ fi'
 # matching quote" — while PARSING, so the `if` below never even picks a branch and nothing
 # runs at all (2026-09-04: the word "instance's" in a comment cost a deploy round).
 # Catch it here rather than on the VPS.
+# A fingerprint of the body. The installed copy on the VPS carries the same line, and a
+# normal deploy compares them before running it.
+#
+# Why: the apply script is installed ONCE and only refreshed with --install-apply, so any
+# change here — a new binary to install, a unit to restart — is silently ignored by every
+# deploy until somebody remembers a note in this header. It cost two deploys and a
+# "No such file or directory" to find that out (2026-09-09). A note is not a mechanism.
+APPLY_MARK="$(printf '%s' "$APPLY_BODY" | cksum | awk '{print $1}')"
+
 SQ="'"
 case "$APPLY_BODY" in
   *"$SQ"*)
@@ -213,6 +222,7 @@ if [ "$MODE" = "--install-apply" ]; then
   echo "→ installing /opt/tokumai/bin/deploy-apply.sh (root-owned) — sudo once …"
   {
     printf '#!/usr/bin/env bash\nADMIN_HOME="${1:?admin home required}"\n'
+    printf 'APPLY_MARK=%s\n' "$APPLY_MARK"
     printf '%s\n' "$APPLY_BODY"
   } | ssh "${SSH_OPTS[@]}" "$TARGET" 'mkdir -p ~/scrai-stage && cat > ~/scrai-stage/deploy-apply.new'
   ssh -t "${SSH_OPTS[@]}" "$TARGET" \
@@ -275,9 +285,24 @@ ssh "${SSH_OPTS[@]}" "$TARGET" "WS_VER='$WS_VER'"'
 
 echo
 echo "   about to update, from $(basename "$SRC"):"
-echo "     tokumai.service        →  tokumai-server + tokumai-admin + pricing.json"
+echo "     tokumai.service        →  tokumai-server + tokumai-admin + tokumai-adminweb + pricing.json"
 echo "     tokumai-faucet.service →  tokumai.com · faucet.tokumai.com · payment.tokumai.com"
 echo
+# Is the copy on the VPS the one this file describes? A mismatch means the deploy would
+# install yesterday's set of binaries and say nothing about it.
+REMOTE_MARK="$(ssh "${SSH_OPTS[@]}" "$TARGET" \
+  'grep -m1 "^APPLY_MARK=" /opt/tokumai/bin/deploy-apply.sh 2>/dev/null | cut -d= -f2' || true)"
+if [ -n "$REMOTE_MARK" ] && [ "$REMOTE_MARK" != "$APPLY_MARK" ]; then
+  echo >&2
+  echo "deploy.sh: the apply script on $TARGET is OLDER than this file." >&2
+  echo "           It would install the previous set of binaries and units, quietly." >&2
+  echo "           Refresh it once, then deploy again:" >&2
+  echo >&2
+  echo "             scripts/deploy.sh $TARGET --install-apply" >&2
+  echo >&2
+  exit 1
+fi
+
 echo "→ 4/4  install binaries + pricing.json, restart the units named above"
 # If the root-owned apply script exists, run it (one sudo call — NOPASSWD-able);
 # otherwise fall back to the inline block (still one shared SSH connection).
