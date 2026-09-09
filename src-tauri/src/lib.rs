@@ -3014,6 +3014,34 @@ fn open_account_security() -> Result<(), String> {
 /// update notice come from whatever server the app is pointed at. So this string must be
 /// treated as hostile text, and never as something a launcher may re-parse (H1).
 pub(crate) fn is_openable_url(url: &str) -> bool {
+    // Support mail. The app writes these itself (About → Write to support, and the row on
+    // the payment panel); nothing the SERVER supplies can become one, because `siteUrl` and
+    // the checkout link are both validated as https before they get anywhere near here.
+    //
+    // Narrow anyway, and for one specific reason: a mailto's query is a header list, so a
+    // `?bcc=` or a `?to=` in a hand-made link is a way to make somebody's own mail client
+    // send to a third party. Only `subject` and `body` are recognised, and only ONE address.
+    if let Some(rest) = url.strip_prefix("mailto:") {
+        if url.chars().any(|c| c.is_whitespace() || c.is_control()) {
+            return false;
+        }
+        let (addr, query) = rest.split_once('?').unwrap_or((rest, ""));
+        // One plain address: something@something.tld, no comma-separated list.
+        let plain = |a: &str| {
+            let Some((user, host)) = a.split_once('@') else { return false };
+            !user.is_empty()
+                && host.contains('.')
+                && !host.starts_with('.')
+                && !host.ends_with('.')
+                && !a.contains(',')
+                && a.chars().all(|c| c.is_ascii_alphanumeric() || "._%+-@".contains(c))
+        };
+        if !plain(addr) {
+            return false;
+        }
+        return query.is_empty()
+            || query.split('&').all(|kv| matches!(kv.split_once('='), Some((k, _)) if k == "subject" || k == "body"));
+    }
     let rest = match url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")) {
         Some(r) => r,
         None => return false,
@@ -3042,7 +3070,7 @@ pub(crate) fn is_openable_url(url: &str) -> bool {
 #[tauri::command]
 fn open_external(app: AppHandle, url: String) -> Result<(), String> {
     if !is_openable_url(&url) {
-        return Err("only plain http(s) urls are allowed".into());
+        return Err("only plain http(s) links and a support mailto are allowed".into());
     }
     #[cfg(target_os = "ios")]
     {
@@ -3225,7 +3253,7 @@ mod c3_tests {
     // hostile text. The command injection is closed by not shelling out at all; this
     // pins the input filter that sits in front of it.
     #[test]
-    fn only_plain_http_urls_may_be_opened() {
+    fn only_plain_http_urls_and_a_narrow_support_mailto_may_be_opened() {
         assert!(is_openable_url("https://example.com/a?x=1"));
         assert!(is_openable_url("http://example.com"));
         // legitimate URL punctuation must keep working — no metacharacter blocklist
@@ -3236,6 +3264,22 @@ mod c3_tests {
         assert!(!is_openable_url("https://example.com/a\nb"), "a newline splits lines");
         assert!(!is_openable_url("https://example.com/a\tb"));
         assert!(!is_openable_url("https://example.com/a\u{0}b"));
+
+        // Support mail: the shape the app writes, and nothing else.
+        assert!(is_openable_url("mailto:hermes-stakepool@proton.me"));
+        assert!(is_openable_url("mailto:a@b.com?subject=hi&body=there%0A%0A--%0Aapp%200.5.9"));
+        // A mailto query is a HEADER list. Everything that could redirect the mail is out.
+        assert!(!is_openable_url("mailto:a@b.com?bcc=evil@x.com"), "bcc would send it elsewhere too");
+        assert!(!is_openable_url("mailto:a@b.com?cc=evil@x.com"));
+        assert!(!is_openable_url("mailto:a@b.com?to=evil@x.com"));
+        assert!(!is_openable_url("mailto:a@b.com,evil@x.com"), "one recipient, not a list");
+        assert!(!is_openable_url("mailto:a@b.com?subject=x&bcc=evil@x.com"), "one bad param spoils it");
+        assert!(!is_openable_url("mailto:notanaddress"));
+        assert!(!is_openable_url("mailto:a@b.com?subject=two words"), "whitespace still splits arguments");
+        assert!(!is_openable_url("mailto:"));
+        // And the schemes that were never allowed still are not.
+        assert!(!is_openable_url("file:///etc/passwd"));
+        assert!(!is_openable_url("javascript:alert(1)"));
         // wrong scheme / no host
         assert!(!is_openable_url("javascript:alert(1)"));
         assert!(!is_openable_url("file:///etc/passwd"));
