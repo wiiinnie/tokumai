@@ -49,13 +49,24 @@ struct Req {
 
 #[tokio::main]
 async fn main() {
+    // Stand where the services stand. Their units say WorkingDirectory=/opt/tokumai, and
+    // both `DATA` and the `./data` fallback may be RELATIVE — so started by hand from an SSH
+    // login (cwd = somebody's home) this would look for the database in the wrong place and
+    // exit, while the same binary run by systemd finds it. A console that only works from
+    // one directory is a console that fails at the moment it is needed.
+    if let Some(root) = scrai_server::install_root() {
+        let _ = std::env::set_current_dir(&root);
+    }
     let _ = dotenvy::from_path(scrai_server::env_file());
     let db: PathBuf = std::env::args()
         .nth(1)
         .map(PathBuf::from)
         .unwrap_or_else(|| scrai_server::data_dir().join("state.db"));
     if !db.exists() {
-        eprintln!("tokumai-adminweb: {} does not exist", db.display());
+        eprintln!("tokumai-adminweb: {} does not exist.", db.display());
+        eprintln!("    cwd {}", std::env::current_dir().map(|d| d.display().to_string()).unwrap_or_default());
+        eprintln!("    Pass the path explicitly if it lives elsewhere:");
+        eprintln!("      tokumai-adminweb /opt/tokumai/data/state.db");
         std::process::exit(1);
     }
     let addr = SocketAddr::from(([127, 0, 0, 1], port()));
