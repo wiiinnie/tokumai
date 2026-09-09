@@ -74,7 +74,7 @@ pub fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-fn purchase_tiers() -> Vec<u32> {
+pub fn purchase_tiers() -> Vec<u32> {
     crate::cfg("PURCHASE_TIERS")
         .ok()
         .map(|s| s.split(',').filter_map(|t| t.trim().parse().ok()).collect())

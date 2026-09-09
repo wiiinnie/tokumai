@@ -257,6 +257,33 @@ impl Cfg {
 /// card tile claimed "not available yet" for a day after Mollie went live, because a static
 /// page cannot know. Both units run with the same working directory and load the same .env,
 /// so asking `pay` here gives exactly the answer the server would give.
+/// The amounts on sale, each with its card price and — when the server discounts coins —
+/// its coin price. From the server's own tiers and percentage, so the page can never say
+/// a price the invoice will not charge.
+fn prices_html() -> String {
+    let pct = scrai_server::pay::coin_discount_pct();
+    let mut out = String::from("<div class=\"prices\">");
+    for usd in scrai_server::pay::purchase_tiers() {
+        let toku = (usd as u64 * 100_000).to_string();
+        let toku = toku
+            .as_bytes()
+            .rchunks(3)
+            .rev()
+            .map(|c| std::str::from_utf8(c).unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join(",");
+        let coin = if pct > 0 {
+            let cents = scrai_server::pay::charged_cents(usd, "nyx", false);
+            format!("<small class=\"cr\">${}.{:02} with NYM or Bitcoin</small>", cents / 100, cents % 100)
+        } else {
+            String::new()
+        };
+        out.push_str(&format!("<div class=\"pr\"><b>${usd}</b><small>{toku} TOKU</small>{coin}</div>"));
+    }
+    out.push_str("</div>");
+    out
+}
+
 fn rails_html() -> String {
     let dot = |cls: &str, glyph: &str| {
         format!(
@@ -279,11 +306,12 @@ fn rails_html() -> String {
     };
 
     let mut out = String::from("<div class=\"pms\" id=\"rails\">");
+    let nym_tag = if pct > 0 { format!("native - Nyx - {pct}% less") } else { "native - Nyx".to_string() };
     out.push_str(&tile(
         scrai_server::nyx::Nyx::from_env().is_some(),
         dot("nym", "N"),
         "NYM",
-        "native - Nyx",
+        &nym_tag,
     ));
     out.push_str(&tile(
         scrai_server::pay::card_enabled(),
@@ -755,6 +783,7 @@ fn site_html(dl_dir: &Path) -> String {
     let (mver, files) = read_manifest(dl_dir);
     let mut s = SITE.to_string();
     s = s.replace("{{RAILS}}", &rails_html());
+    s = s.replace("{{PRICES}}", &prices_html());
     s = s.replace("{{COIN_DISCOUNT_PCT}}", &scrai_server::pay::coin_discount_pct().to_string());
     // The macOS buy-sheet capture, when one exists. No drawn placeholder: every other picture
     // on this page is a real screenshot, and a fake would show.
