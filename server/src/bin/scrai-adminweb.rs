@@ -68,7 +68,21 @@ async fn main() {
     };
     println!("tokumai-adminweb: http://{addr}  ({})", db.display());
     println!("tokumai-adminweb: loopback only — reach it through an SSH tunnel:");
-    println!("    ssh -N -L {p}:127.0.0.1:{p} <admin>@<this-host>", p = port());
+    println!(
+        "    ssh -t -L {p}:127.0.0.1:{p} <admin>@<this-host> sudo -u scrai /opt/tokumai/bin/tokumai-adminweb",
+        p = port()
+    );
+    // The `sudo -u scrai` is not decoration. .env and the databases belong to that user, so
+    // started as anybody else the console reads fine and every ACTION fails — the network
+    // shows "?", minting a code returns a raw sqlite error. The page says so too, but the
+    // line somebody copies from should be the one that works.
+    let a = access(&db);
+    for (what, ok) in [("read .env", a["env"] == true), ("write state.db", a["state"] == true),
+                       ("write faucet.db", a["faucet"] == true)] {
+        if !ok {
+            eprintln!("tokumai-adminweb: cannot {what} as this user — actions will be refused");
+        }
+    }
 
     let db = Arc::new(db);
     loop {
@@ -207,6 +221,26 @@ fn hit_json(h: &admin::Hit) -> Value {
     })
 }
 
+/// Can this process actually do the three things the console offers?
+///
+/// It runs as whoever opened the SSH session, while `.env` and the databases belong to
+/// `scrai` — so the ordinary way to start it is the way that fails, and it fails in three
+/// unrelated-looking places: the network reads "?", minting a code says "attempt to write a
+/// readonly database", and a void would too. One cause, three cryptic symptoms; the page
+/// gets told the cause instead (2026-09-09).
+fn access(db: &PathBuf) -> Value {
+    let readable = |p: &std::path::Path| std::fs::File::open(p).is_ok();
+    let writable = |p: &std::path::Path| std::fs::OpenOptions::new().write(true).open(p).is_ok();
+    let env = std::path::PathBuf::from(admin::env_file_path());
+    let faucet = db.parent().map(|d| d.join("faucet.db")).unwrap_or_default();
+    json!({
+        "env": readable(&env), "envPath": env.display().to_string(),
+        "state": writable(db),
+        "faucet": !faucet.exists() || writable(&faucet),
+        "user": std::env::var("USER").unwrap_or_else(|_| "?".into()),
+    })
+}
+
 fn state_json(db: &PathBuf) -> Value {
     let m = admin::read_metrics(db);
     let days: Vec<Value> = m
@@ -231,6 +265,7 @@ fn state_json(db: &PathBuf) -> Value {
         "db": db.display().to_string(),
         "clock": admin::clock_utc(),
         "network": admin::current_network(),
+        "access": access(db),
         "usage": {
             "prompts": m.total_prompts, "sessions": m.sessions,
             "sessionCredit": m.session_balance,
