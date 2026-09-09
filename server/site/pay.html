@@ -226,10 +226,16 @@
     var TIERS = [5, 10, 20, 50];
     var CONSENT = "2026-09-07";          // must match docs/consent/<version>.md
     var pick = 10, rail = "nyx", c1 = false, c2 = false, order = null, timer = null, clock = null;
+    // Coins are cheaper by this much — a lower PRICE for the same credit, because a coin
+    // payment cannot be charged back. Server-set; 0 means no difference.
+    var COIN_OFF = Math.max(0, Math.min(50, Number("{{COIN_DISCOUNT_PCT}}") || 0));
+    function priceOf(n){ return rail === "card" ? n : Math.round(n * (100 - COIN_OFF)) / 100; }
+    function money(x){ return "$" + (Number.isInteger(x) ? x : x.toFixed(2)); }
 
     function tile(n){
+      var p = priceOf(n), off = COIN_OFF > 0 && rail !== "card";
       return '<button type="button" class="tile' + (n === pick ? " sel" : "") + '" data-tier="' + n + '">' +
-             '<b>$' + n + '</b><span>' + (n * 100000).toLocaleString("en-US") + ' TOKU</span></button>';
+             '<b>' + money(p) + '</b><span>' + (n * 100000).toLocaleString("en-US") + ' TOKU' + (off ? ' \u00b7 $' + n + ' by card' : '') + '</span></button>';
     }
     function railRow(id, name, tag){
       return '<button type="button" class="rail' + (id === rail ? " sel" : "") + '" data-rail="' + id + '">' +
@@ -243,7 +249,7 @@
         'you get a code, not an account.</p>' +
         '<div class="tiles">' + TIERS.map(tile).join("") + '</div>' +
         '<div class="lbl">Pay with</div>' +
-        railRow("nyx", "NYM", "native \u00b7 Nyx") +
+        railRow("nyx", "NYM", "native \u00b7 Nyx" + (COIN_OFF > 0 ? " \u00b7 " + COIN_OFF + "% less" : "")) +
         railRow("card", "Card \u00b7 Apple Pay \u00b7 Google Pay", "Mollie") +
         '<p class="fine">Sold under our <a href="/terms">Terms</a>. Please read the ' +
         '<a href="/terms#withdrawal">right of withdrawal</a> and the <a href="/privacy">privacy notice</a> first. ' +
@@ -252,7 +258,7 @@
         '<span>I ask you to <b>start delivering the credit immediately</b>, before the 14-day withdrawal period ends.</span></label>' +
         '<label class="ck' + (c2 ? " on" : "") + '"><input type="checkbox" id="k2"' + (c2 ? " checked" : "") + '>' +
         '<span>I understand that I <b>lose my right of withdrawal</b> once the code has been issued.</span></label>' +
-        '<button class="go" type="button" id="go"' + (ready ? "" : " disabled") + '>Buy now \u2014 $' + pick + '</button>' +
+        '<button class="go" type="button" id="go"' + (ready ? "" : " disabled") + '>Buy now \u2014 ' + money(priceOf(pick)) + (rail === "card" ? "" : " in NYM") + '</button>' +
         (ready ? "" : '<p class="fine c">tick both boxes to continue</p>') +
         '</div>';
       [].forEach.call(out.querySelectorAll("[data-tier]"), function(b){

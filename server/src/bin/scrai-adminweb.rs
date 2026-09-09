@@ -295,6 +295,7 @@ fn state_json(db: &PathBuf) -> Value {
         "db": db.display().to_string(),
         "clock": admin::clock_utc(),
         "network": admin::current_network(),
+        "margin": admin::env_file_value("MARGIN").and_then(|v| v.parse::<f64>().ok()).unwrap_or(1.3),
         "access": access(db),
         "usage": {
             "prompts": m.total_prompts, "sessions": m.sessions,

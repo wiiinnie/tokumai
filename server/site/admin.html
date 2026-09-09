@@ -277,7 +277,7 @@
   var grp = function(n){ return (Number(n) || 0).toLocaleString("en-US"); };
   var usd = function(toku){ return "$" + ((Number(toku) || 0) / 100000).toFixed(2); };
 
-  var sel = null, days = [], hit = null;
+  var sel = null, days = [], hit = null, marginTarget = 1.3;
 
   // The poll: 1.5 s, the TUI's own beat. One read, no socket to keep alive through a tunnel
   // that may be torn down and re-established at any moment.
@@ -288,6 +288,7 @@
 
   function paint(s){
     $("hVer").textContent = "admin · v" + s.version;
+    marginTarget = Number(s.margin) > 1 ? Number(s.margin) : 1.3;
     $("hDb").textContent = s.db;
     $("hClock").textContent = s.clock + " UTC";
     var net = $("hNet");
@@ -329,7 +330,9 @@
     days = s.days || [];
     $("days").innerHTML = days.map(function(d, i){
       var margin = d.cost > 0 ? (d.spent / d.cost) : 0;
-      var mc = margin >= 1.15 ? "s" : (margin > 0 ? "r" : "d");
+      // Green means "at or above the configured MARGIN", which the server reports — a
+      // number typed into this page would be the second place the margin lives.
+      var mc = margin >= marginTarget ? "s" : (margin > 0 ? "r" : "d");
       return '<tr data-i="' + i + '"' + (d.day === sel ? ' class="sel"' : '') + '>' +
         '<td>' + esc(d.day) + '</td>' +
         '<td class="s">' + grp(d.prompts) + '</td>' +

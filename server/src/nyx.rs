@@ -140,7 +140,8 @@ impl Nyx {
     /// rate, rounded UP to a WHOLE NYM (234.5678 → 235) — a round number is what
     /// a human actually types into a wallet, and ceiling means rounding can only
     /// ever favour the operator, never undercharge. Returns (raised, expected_unym).
-    pub async fn create_invoice(&self, usd: u32) -> Result<(crate::pay::RaisedInvoice, u64), String> {
+    pub async fn create_invoice(&self, cents: u32) -> Result<(crate::pay::RaisedInvoice, u64), String> {
+        let usd = cents as f64 / 100.0;
         let rate = self.usd_per_nym().await?;
         // L4: a near-zero (or non-finite) rate from a hostile/broken price feed would blow
         // usd/rate up to a huge whole_nym and then wrap `* MICRO` in release, settling the
@@ -148,7 +149,7 @@ impl Nyx {
         if !(rate.is_finite() && rate > 1e-6) {
             return Err(format!("implausible NYM price ({rate} USD/NYM) — refusing to quote"));
         }
-        let whole_nym = (usd as f64 / rate).ceil() as u64;
+        let whole_nym = (usd / rate).ceil() as u64;
         let expected_unym = whole_nym.saturating_mul(MICRO);
         let nym_amount = whole_nym.to_string();
         let memo = new_memo();

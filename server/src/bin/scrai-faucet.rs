@@ -271,7 +271,12 @@ fn rails_html() -> String {
         )
     };
     let card_tag = format!("available - from ${}", scrai_server::pay::card_min_usd());
-    let coin_tag = format!("available - from ${}", scrai_server::pay::coin_min_usd());
+    let pct = scrai_server::pay::coin_discount_pct();
+    let coin_tag = if pct > 0 {
+        format!("available - from ${} - {pct}% less", scrai_server::pay::coin_min_usd())
+    } else {
+        format!("available - from ${}", scrai_server::pay::coin_min_usd())
+    };
 
     let mut out = String::from("<div class=\"pms\" id=\"rails\">");
     out.push_str(&tile(
@@ -750,6 +755,7 @@ fn site_html(dl_dir: &Path) -> String {
     let (mver, files) = read_manifest(dl_dir);
     let mut s = SITE.to_string();
     s = s.replace("{{RAILS}}", &rails_html());
+    s = s.replace("{{COIN_DISCOUNT_PCT}}", &scrai_server::pay::coin_discount_pct().to_string());
     // The macOS buy-sheet capture, when one exists. No drawn placeholder: every other picture
     // on this page is a real screenshot, and a fake would show.
     s = s.replace(

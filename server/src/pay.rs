@@ -122,6 +122,32 @@ pub fn redeem_label() -> (String, String) {
     (clean("REDEEM_LABEL", "Have a code?"), clean("REDEEM_HINT", "Enter it here."))
 }
 
+/// Percentage off the tile price when it is paid with a coin (`COIN_DISCOUNT_PCT`, default 10,
+/// 0–50). A LOWER PRICE for the same credit — never extra credit, which would create balances
+/// of unequal face value. The saving is real: a coin payment cannot be charged back, and a
+/// chargeback on an anonymous, instantly consumed product is always lost, fee and spent API
+/// value included. Reported with the catalog; the iOS app never shows it (3.1.1).
+pub fn coin_discount_pct() -> u32 {
+    crate::cfg("COIN_DISCOUNT_PCT").ok().and_then(|v| v.trim().parse().ok()).map(|p: u32| p.min(50)).unwrap_or(10)
+}
+
+/// What the rail is asked to COLLECT, in cents — as opposed to the tile, which is what is
+/// CREDITED. Card and the dev rail: the tile. Coins: the tile less the discount. A testnet
+/// invoice: the tile, always — the faucet pays exactly what the invoice says and its budget
+/// is sized on that. Cents, so $4.50 is 450 and not a float.
+pub fn charged_cents(usd: u32, method: &str, testnet: bool) -> u32 {
+    let full = usd.saturating_mul(100);
+    if testnet || method == "card" {
+        return full;
+    }
+    full.saturating_mul(100 - coin_discount_pct()) / 100
+}
+
+/// `charged_cents` for an invoice, tolerating rows from before the field existed.
+fn charged_of(inv: &Inv) -> u32 {
+    if inv.charged_cents > 0 { inv.charged_cents } else { inv.amount_usd.saturating_mul(100) }
+}
+
 /// True when a Mollie key is configured — the client shows the card row only then.
 pub fn card_enabled() -> bool {
     matches!(CardRail::from_env(), CardRail::Mollie { .. })
@@ -144,6 +170,7 @@ pub fn rails_info() -> Value {
         "invite": faucet_address().is_some(),
         "inviteUsd": TESTNET_USD,
         "btcMinUsd": coin_min_usd(),
+        "coinDiscountPct": coin_discount_pct(),
     })
 }
 
@@ -447,7 +474,7 @@ fn append_sale(inv: &Inv) {
         utc_stamp(inv.paid_at),
         receipt_number(&inv.id, inv.paid_at),
         inv.id,
-        inv.amount_usd as f64,
+        charged_of(inv) as f64 / 100.0,
         "USD",
         if inv.country.is_empty() { "--" } else { &inv.country },
         inv.method,
@@ -580,6 +607,10 @@ pub struct Inv {
     consent_version: String,
     #[serde(default)]
     consent_at: u64,
+    /// What the rail collected, in cents — the tile less the coin discount, or the tile.
+    /// `amount_usd` stays the tile: it is what `amount_toku` is derived from.
+    #[serde(default)]
+    charged_cents: u32,
     /// Pays out as a VOUCHER CODE rather than as entitlement on this account: a purchase
     /// made on the website, where there is no account to credit. Set at creation, honoured
     /// once at settlement. The code is minted then — never at creation, or an unpaid
@@ -1331,6 +1362,7 @@ impl Pay {
                 expected_unym: raised.expected_unym,
                 country: String::new(),   // filled in at settlement, from the rail's own answer
                 paid_at: 0,
+                charged_cents: charged_cents(usd, &raised.method, testnet),
                 // An empty account IS the web-order case: `account_owns` always yields one,
                 // so nothing an app raises can land here. Such an invoice pays out as a code
                 // instead of as entitlement — there is no account to credit.
@@ -1350,6 +1382,9 @@ impl Pay {
             "instruction": raised.raised.instruction,
             "options": raised.raised.options,
             "amountUsd": usd,
+            // What the buyer actually pays — the receipt prints THIS, and the credit is the tile.
+            "chargedUsd": charged_cents(usd, &raised.method, testnet) as f64 / 100.0,
+            "coinDiscountPct": coin_discount_pct(),
             "amountToku": amount_toku,
             "amountScrai": amount_toku,   // pre-rename apps
             "expiresAt": raised.raised.expires_at,
@@ -1681,7 +1716,7 @@ impl Gateway {
         }
         if wanted == "nyx" {
             if let Some(nyx) = &self.nyx {
-                let (raised, expected_unym) = nyx.create_invoice(usd).await?;
+                let (raised, expected_unym) = nyx.create_invoice(charged_cents(usd, "nyx", testnet)).await?;
                 return Ok(Raised { raised, method: "nyx".into(), expected_unym });
             }
         }
@@ -1689,7 +1724,7 @@ impl Gateway {
             // never the processor-rail fallback: a testnet invoice is NYM from the faucet or nothing
             return Err("testnet purchases need the native NYM rail, which is not configured here".into());
         }
-        let raised = self.rail.create_invoice(usd, reference, wanted).await?;
+        let raised = self.rail.create_invoice(charged_cents(usd, wanted, testnet), reference, wanted).await?;
         // The method is the COIN, so status checks, the pay screen and scrai-admin all know
         // which chain an invoice belongs to. "btc" stays the id of on-chain Bitcoin, so an
         // invoice raised by an older app reads the same as it always did.
@@ -1782,7 +1817,7 @@ impl Rail {
 
     /// `wanted` is the coin id the buyer picked. BTCPay and the dev rail ignore it — the
     /// store decides which coins it accepts, and the invoice carries every one of them.
-    async fn create_invoice(&self, usd: u32, reference: &str, _wanted: &str) -> Result<RaisedInvoice, String> {
+    async fn create_invoice(&self, cents: u32, reference: &str, _wanted: &str) -> Result<RaisedInvoice, String> {
         match self {
             Rail::None => Err("this server cannot sell TOKU — no payment gateway configured".into()),
             Rail::Fake => Ok(RaisedInvoice {
@@ -1798,7 +1833,7 @@ impl Rail {
                     crate::http::client()
                         .post(format!("{base_url}/api/v1/stores/{store_id}/invoices"))
                         .json(&json!({
-                            "amount": format!("{usd}.00"),
+                            "amount": format!("{}.{:02}", cents / 100, cents % 100),
                             "currency": "USD",
                             // Our own id, so a support question can be traced back
                             // without BTCPay knowing anything about the account.
@@ -2220,7 +2255,7 @@ fn btcpay_settlement_matches(inv: &Value, our: &Inv) -> Result<(), String> {
         .get("amount")
         .and_then(|a| a.as_str().and_then(|s| s.parse::<f64>().ok()).or_else(|| a.as_f64()))
         .ok_or_else(|| "invoice carries no readable amount".to_string())?;
-    let want = our.amount_usd as f64;
+    let want = charged_of(our) as f64 / 100.0;
     if (paid - want).abs() > 0.005 {
         return Err(format!("invoice is for {paid:.2} USD, expected {want:.2}"));
     }
@@ -2345,7 +2380,7 @@ mod tests {
                 account_id: "the-buyer".into(), amount_usd: 20, amount_toku: 20 * TOKU_PER_USD,
                 method: "card".into(), status: "pending".into(), expires_at: now_ms() + 60_000,
                 expected_unym: 0, consent_version: "2026-09-07".into(), consent_at: now_ms(),
-                country: String::new(), paid_at: 0, voucher: false, testnet: false, invite_code: String::new(),
+                country: String::new(), paid_at: 0, charged_cents: 0, voucher: false, testnet: false, invite_code: String::new(),
             },
         );
         pay.settle("abc123def456", Some("NL".into()));
@@ -2483,10 +2518,10 @@ mod tests {
         let aid2 = aid.clone();
         pay.invoices.insert("t1".into(), Inv { id: "t1".into(), provider_ref: "TOKU-MEMO2345".into(), account_id: aid2,
             amount_usd: 1, amount_toku: TOKU_PER_USD, method: "nyx".into(), status: "pending".into(),
-            expires_at: now_ms() + 60_000, expected_unym: 59_000_000, consent_version: String::new(), consent_at: 0, country: String::new(), paid_at: 0, voucher: false, testnet: true, invite_code: "TOKU-AAAA-BBBB".into() });
+            expires_at: now_ms() + 60_000, expected_unym: 59_000_000, consent_version: String::new(), consent_at: 0, country: String::new(), paid_at: 0, charged_cents: 0, voucher: false, testnet: true, invite_code: "TOKU-AAAA-BBBB".into() });
         pay.invoices.insert("r1".into(), Inv { id: "r1".into(), provider_ref: "TOKU-REAL2345".into(), account_id: aid,
             amount_usd: 5, amount_toku: 5 * TOKU_PER_USD, method: "nyx".into(), status: "pending".into(),
-            expires_at: now_ms() + 60_000, expected_unym: 295_000_000, consent_version: "2026-09-07".into(), consent_at: now_ms(), country: "DE".into(), paid_at: 0, voucher: false, testnet: false, invite_code: String::new() });
+            expires_at: now_ms() + 60_000, expected_unym: 295_000_000, consent_version: "2026-09-07".into(), consent_at: now_ms(), country: "DE".into(), paid_at: 0, charged_cents: 0, voucher: false, testnet: false, invite_code: String::new() });
         let t = pay.testnet_invoices();
         assert_eq!(t.len(), 1);
         assert_eq!((t[0].amount_usd, t[0].memo.as_str(), t[0].unym), (1, "TOKU-MEMO2345", 59_000_000));
@@ -2839,7 +2874,7 @@ mod card_tests {
             id: id.into(), provider_ref: format!("TOKU-{id}"), account_id: "acct".into(),
             amount_usd: 1, amount_toku: TOKU_PER_USD, method: "nyx".into(), status: status.into(),
             expires_at: now_ms() + 60_000, expected_unym: 59_000_000, testnet: false,
-            consent_version: "2026-09-07".into(), consent_at: now_ms(), country: String::new(), paid_at: 0, voucher: false, invite_code: String::new(),
+            consent_version: "2026-09-07".into(), consent_at: now_ms(), country: String::new(), paid_at: 0, charged_cents: 0, voucher: false, invite_code: String::new(),
         };
         pay.invoices.insert("open1".into(), inv("open1", "pending"));
         pay.invoices.insert("open2".into(), inv("open2", "pending"));
@@ -2925,7 +2960,7 @@ mod card_tests {
             amount_usd: 10, amount_toku: 10 * TOKU_PER_USD, method: "card".into(),
             status: "pending".into(), expires_at: now_ms() + 60_000, expected_unym: 0,
             consent_version: "2026-09-07".into(), consent_at: now_ms(), country: String::new(),
-            paid_at: 0, voucher: false, testnet: false, invite_code: String::new(),
+            paid_at: 0, charged_cents: 0, voucher: false, testnet: false, invite_code: String::new(),
         };
         for id in ["a", "b", "c", "d"] {
             pay.invoices.insert(id.into(), mk(id));
@@ -2947,6 +2982,7 @@ mod card_tests {
     fn the_account_link_is_dropped_after_the_window_and_not_before() {
         let mut pay = Pay::default();
         let mk = |id: &str, paid_ago_days: u64| Inv {
+            charged_cents: 0,
             id: id.into(), provider_ref: format!("tr_{id}"), account_id: "acct".into(),
             amount_usd: 10, amount_toku: 10 * TOKU_PER_USD, method: "card".into(),
             status: "paid".into(), expires_at: now_ms(), expected_unym: 0,
@@ -3072,6 +3108,24 @@ mod card_tests {
         assert!(pay.admit_voucher("acct-2").is_ok());
     }
 
+    /// The tile is what is credited; what is collected depends on the rail. Coins are
+    /// cheaper by the configured percentage, cards and the faucet are not, and it is a
+    /// PRICE: a $5 tile paid in NYM is $4.50 of NYM for 500,000 TOKU — not $5 for more.
+    #[test]
+    fn coins_are_charged_less_and_credited_the_same() {
+        std::env::set_var("COIN_DISCOUNT_PCT", "10");
+        assert_eq!(charged_cents(10, "card", false), 1000);
+        assert_eq!(charged_cents(10, "nyx", false), 900);
+        assert_eq!(charged_cents(5, "nyx", false), 450);
+        assert_eq!(charged_cents(20, "btc", false), 1800);
+        assert_eq!(charged_cents(1, "nyx", true), 100, "the faucet pays the tile");
+        std::env::set_var("COIN_DISCOUNT_PCT", "0");
+        assert_eq!(charged_cents(10, "nyx", false), 1000, "0 switches it off");
+        std::env::set_var("COIN_DISCOUNT_PCT", "90");
+        assert_eq!(charged_cents(10, "nyx", false), 500, "clamped at 50");
+        std::env::remove_var("COIN_DISCOUNT_PCT");
+    }
+
     #[test]
     fn the_receipt_number_matches_what_the_app_prints() {
         // app: `TKM-${year}-${invoiceId.slice(0, 12).toUpperCase()}` — public/index.html
@@ -3088,7 +3142,7 @@ mod card_tests {
             amount_usd: 20, amount_toku: 20 * TOKU_PER_USD, method: "btc".into(),
             status: "pending".into(), expires_at: now_ms() + 60_000, expected_unym: 0,
             consent_version: "2026-09-07".into(), consent_at: now_ms(), country: String::new(),
-            paid_at: 0, voucher: false, testnet: false, invite_code: String::new(),
+            paid_at: 0, charged_cents: 0, voucher: false, testnet: false, invite_code: String::new(),
         };
         let inv = |order: &str, amount: Value, currency: &str| {
             json!({ "status": "Settled", "amount": amount, "currency": currency,

@@ -1719,6 +1719,12 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     btc: `<svg viewBox="0 0 32 32" width="26" height="26"><circle cx="16" cy="16" r="16" fill="#F7931A"/><path fill="#fff" d="M23 14.1c.3-2-1.3-3-3.4-3.8l.7-2.7-1.7-.4-.7 2.6c-.4-.1-.9-.2-1.3-.3l.7-2.7-1.6-.4-.7 2.7-1.1-.3-2.3-.6-.4 1.8s1.2.3 1.2.3c.7.2.8.6.8.9l-.8 3.1v.2l-1.2 4.6c-.1.2-.3.5-.7.4 0 0-1.2-.3-1.2-.3l-.8 1.9 2.1.6 1.2.3-.7 2.7 1.6.4.7-2.7c.5.1.9.2 1.4.3l-.7 2.7 1.7.4.7-2.7c2.8.5 4.9.3 5.8-2.2.7-2 0-3.2-1.5-3.9 1.1-.3 1.9-1 2.1-2.5zm-3.7 5.2c-.5 2-3.9.9-5 .6l.9-3.6c1.2.3 4.7.8 4.1 3zm.5-5.2c-.5 1.8-3.3.9-4.2.6l.8-3.3c.9.2 3.9.7 3.4 2.7z"/></svg>`,
     usdc: `<svg viewBox="0 0 32 32" width="26" height="26"><circle cx="16" cy="16" r="15" fill="#2775CA"/><path fill="#fff" d="M17 7h-2v1.6c-2.2.3-3.7 1.6-3.7 3.5 0 2.2 1.7 3 4 3.6 1.9.5 2.6.9 2.6 1.8 0 .9-.9 1.5-2.3 1.5-1.6 0-2.6-.7-2.8-1.9h-2.4c.2 2.1 1.7 3.4 4.1 3.7V23h2v-1.7c2.4-.3 3.9-1.7 3.9-3.7 0-2.3-1.8-3.1-4.2-3.7-1.8-.5-2.5-.9-2.5-1.7 0-.8.8-1.4 2.1-1.4 1.4 0 2.3.6 2.5 1.7h2.3c-.2-1.9-1.5-3.1-3.6-3.5V7z"/></svg>`,
   };
+  // Coins are cheaper by this much — a lower price for the same credit (the server says how
+  // much; 0 on a server that does not discount). Never shown on iOS: nothing there may hint at
+  // a purchase outside the store, and the coin rails are not offered there anyway.
+  let coinDiscountPct = 0;
+  const priceFor = usd => (selectedMethod==="card" || testnetBuy || isIOSNative() || !coinDiscountPct) ? usd : Math.round(usd*(100-coinDiscountPct))/100;
+  const money = x => "$" + (Number.isInteger(x) ? x : x.toFixed(2));
   let coinMinUsd = 10;                   // on-chain floor, from rails.btcMinUsd
   let cardInfo = { enabled:false, minUsd:10, methods:[] };   // server's card rail: {enabled, minUsd, methods:[{id,label}]} — absent → no card row
   // Labels come from what is enabled in the Mollie dashboard (server fetches /v2/methods),
@@ -1840,7 +1846,9 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         }
       }
       { const b = s.rails && Number(s.rails.btcMinUsd);
-        coinMinUsd = Number.isFinite(b) && b > 0 ? Math.floor(b) : 10; }
+        coinMinUsd = Number.isFinite(b) && b > 0 ? Math.floor(b) : 10;
+        const d = s.rails && Number(s.rails.coinDiscountPct);
+        coinDiscountPct = Number.isFinite(d) ? Math.max(0, Math.min(50, Math.floor(d))) : 0; }
       { const r = s.rails && typeof s.rails === "object" ? s.rails : null;
         if(r || (s.card && typeof s.card === "object")) railsKnown = true;
         rails = r ? { nyx:r.nyx!==false, btc:r.btc===true, card:r.card===true, invite:r.invite===true }
@@ -5647,7 +5655,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       const small = n < floor;
       const dis = (testnetBuy && n!==TESTNET_USD) || small;
       const sublbl = testnetBuy&&n!==TESTNET_USD ? 'real' : small ? (selectedMethod==="card" ? 'coins only' : 'NYM only') : (testnetBuy&&n===TESTNET_USD ? 'invite' : sub);
-      return `<div class="tiletier${selectedTier===n?' sel':''}${dis?' dis':''}" data-click="selectTier" data-args="${n}"><div class="a">$${n}</div><div class="s">${sublbl}</div></div>`;
+      return `<div class="tiletier${selectedTier===n?' sel':''}${dis?' dis':''}" data-click="selectTier" data-args="${n}"><div class="a">${esc(money(priceFor(n)))}</div><div class="s">${sublbl}</div></div>`;
     }).join("");
     // Greyed, not hidden: a rail the server cannot raise an invoice on stays visible so the
     // choice is legible — it just cannot be picked. renderCoinTiles applies that to the coins.
@@ -5783,7 +5791,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       <div class="ck${consentWaiver?" on":""}" data-click="toggleConsent" data-args="&quot;waiver&quot;">
         <span class="box">✓</span><span class="cktx">I understand that I <b>lose my right of withdrawal</b>
           once the credit has been delivered in full.</span></div>
-      <button class="btn primary" style="width:100%"${ready?` data-click="startPurchase"`:` disabled`}>Buy now — $${selectedTier} ${rail}</button>
+      <button class="btn primary" style="width:100%"${ready?` data-click="startPurchase"`:` disabled`}>Buy now — ${esc(money(priceFor(selectedTier)))} ${rail}</button>
       ${ready?"":`<p class="btnhint">tick both boxes to continue</p>`}
     </div>`;
   }
@@ -6143,7 +6151,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       // the sales ledger.
       number: `TKM-${new Date().getUTCFullYear()}-${id.slice(0,12).toUpperCase()}`,
       at: Date.now(),
-      usd: Number(inv.amountUsd||0),
+      usd: Number(inv.chargedUsd ?? inv.amountUsd ?? 0),   // what was paid, not the tile
       toku: Number(toku||0),
       method: isCardInv(inv) ? "Card, Apple Pay or Google Pay (via Mollie)" : "Coin transfer",
       consent: CONSENT_VERSION,
@@ -6337,7 +6345,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         ? (isIOSNative() ? `` : `<button class="btn" style="display:block;width:100%;margin-top:8px" data-click="payOnWeb">Pay on tokumai.com ↗</button>`) : ``;
       // nosemgrep: scrai-taint-untrusted-to-html -- reviewed 2026-08-29: url is safeMollieUrl()-gated and escAttr()-wrapped; amountUsd/amountScrai are numbers (toFixed/formatToku); nothing else from the server lands here
       $("payPanel").innerHTML = `<div class="paypanel">
-        <div class="paylead">Pay $${Number(inv.amountUsd||0).toFixed(2)} · ${formatToku((inv.amountToku ?? inv.amountScrai)||0)} TOKU by card · expires <span id="payExpiry">…</span></div>
+        <div class="paylead">Pay $${Number(inv.chargedUsd ?? inv.amountUsd ?? 0).toFixed(2)} · ${formatToku((inv.amountToku ?? inv.amountScrai)||0)} TOKU by card · expires <span id="payExpiry">…</span></div>
         <div class="cardwait"><b>Checkout opened in your browser.</b> Finish the payment there — your credit is picked up here automatically, you don’t need to come back to any page.</div>
         ${btn}${webBtn}
         <div class="cardpriv">Mollie (EU) sees your name, card and IP address — never your tokumai account or what you use it for. Once collected, the credit is unlinkable, exactly like a coin purchase. If a payment goes through and no credit arrives, we credit you — see the Terms.</div>
@@ -6421,7 +6429,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     // nosemgrep: scrai-taint-untrusted-to-html -- reviewed 2026-08-28: destination/memo/amount are esc()-wrapped in `blocks`, tnote's URL is escAttr()/esc()-wrapped; o.qr is an SVG the app renders locally (qrcode crate), the server only sends address + memo
     $("payPanel").innerHTML = `<div class="paypanel">
       ${tnote}
-      <div class="paylead">Pay $${inv.amountUsd.toFixed(2)} · ${formatToku((inv.amountToku ?? inv.amountScrai))} TOKU · expires <span id="payExpiry">…</span></div>
+      <div class="paylead">Pay $${Number(inv.chargedUsd ?? inv.amountUsd).toFixed(2)} · ${formatToku((inv.amountToku ?? inv.amountScrai))} TOKU · expires <span id="payExpiry">…</span></div>
       ${blocks}
       ${isNymInv?`<div id="watchState" class="watchrow"><span class="wd"></span> connecting to the Nyx chain…</div>`:""}
       ${webPayUrl(inv)&&!isIOSNative()?`<button class="btn" style="display:block;width:100%;margin-top:10px" data-click="payOnWeb">Open these details on tokumai.com ↗</button>`:""}
