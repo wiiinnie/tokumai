@@ -19,6 +19,13 @@ path = "src/bin/scrai-admin.rs"
 name = "scrai-faucet"
 path = "src/bin/scrai-faucet.rs"
 
+# The operator console as a page. Its own binary, not a route on the faucet: the faucet
+# answers the internet and this must never be able to, and two processes with two bindings
+# cannot be confused for one another by accident.
+[[bin]]
+name = "scrai-adminweb"
+path = "src/bin/scrai-adminweb.rs"
+
 [dependencies]
 scrai-core = { path = "../core" }
 # Embedded mixnet client — the server IS a Nym service provider (no public IP/DNS).

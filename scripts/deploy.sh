@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
-# deploy.sh — push the RUST server crate to the VPS, build there, install all three
-# binaries (tokumai-server, tokumai-admin, tokumai-faucet) + pricing.json, restart
+# deploy.sh — push the RUST server crate to the VPS, build there, install all four
+# binaries (tokumai-server, tokumai-admin, tokumai-adminweb, tokumai-faucet) + pricing.json, restart
 # tokumai and — when TESTNET=1 — tokumai-faucet (disabled otherwise).
 #
 # What ships: core/ + server/ + pricing.json + Cargo.lock (a minimal cargo
@@ -120,6 +120,13 @@ mv /opt/tokumai/bin/tokumai-server.new /opt/tokumai/bin/tokumai-server
 install -o scrai -g scrai -m 755 \
   "$ADMIN_HOME/scrai-stage/target/release/scrai-admin" /opt/tokumai/bin/tokumai-admin.new
 mv /opt/tokumai/bin/tokumai-admin.new /opt/tokumai/bin/tokumai-admin
+# The operator console as a page. Deliberately NOT a service: it is started inside the SSH
+# session that reaches it and dies with it, so there is no admin surface listening on the
+# box while nobody is looking at it. Bound to loopback in the binary, not by configuration.
+#   ssh -t -L 8791:127.0.0.1:8791 <admin>@<host> /opt/tokumai/bin/tokumai-adminweb
+install -o scrai -g scrai -m 755 \
+  "$ADMIN_HOME/scrai-stage/target/release/scrai-adminweb" /opt/tokumai/bin/tokumai-adminweb.new
+mv /opt/tokumai/bin/tokumai-adminweb.new /opt/tokumai/bin/tokumai-adminweb
 # Website + faucet (same crate, one binary). The pages are baked in with include_str!,
 # so updating the website MEANS replacing this binary and restarting its unit.
 install -o scrai -g scrai -m 755 \

@@ -2,6 +2,7 @@
 //! the binary (`main.rs`), the admin TUI and the fuzz targets (`fuzz/`) share one code
 //! path. Nothing here opens a socket — the binary owns the Nym client.
 
+pub mod admin;
 pub mod catalog;
 pub mod chat;
 pub mod faucet;

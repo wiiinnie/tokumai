@@ -1,0 +1,429 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>tokumai admin</title>
+<!--
+  The operator console. Two rules this file follows and should keep following:
+
+  1. NOTHING LOADS FROM OUTSIDE. No CDN, no web font, no analytics. An admin page that
+     fetches from the internet tells a third party when the operator is looking at their own
+     books — and this one is reached through an SSH tunnel precisely so that nobody learns
+     anything about it. System fonts, hand-written CSS, vanilla JS.
+  2. The palette is the SITE's (server/site/index.html), not the TUI's gold-and-sage. That
+     was the old look and this is where it stops being carried forward.
+-->
+<style>
+  :root{
+    --ink:#141210; --surface:#1C1917; --surface-2:#262220; --line:#332E2A;
+    --bone:#ECE6DC; --muted:#9C938A; --dim:#6F675E;
+    --acc:#7A5FFF; --acc2:#B9A3FF; --rust:#C15A43; --ok:#3FC98A;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--ink);color:var(--bone);font-family:var(--sans);font-size:14px}
+  .wrap{max-width:1280px;margin:0 auto;padding:0 16px 60px}
+
+  header{display:flex;align-items:center;gap:14px;padding:12px 16px;border-bottom:1px solid var(--line);
+         background:var(--surface-2);font-family:var(--mono);font-size:11.5px;color:var(--dim);flex-wrap:wrap}
+  .brand{font-family:var(--sans);font-size:15px;font-weight:700;color:var(--bone);letter-spacing:-.02em}
+  .brand i{font-style:normal;color:var(--acc)}
+  .grow{flex:1}
+  .clock{color:var(--acc2)}
+  .pill{font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;padding:3px 9px;border-radius:999px;
+        border:1px solid var(--line);color:var(--muted)}
+  .pill.main{border-color:color-mix(in srgb,var(--rust) 50%,transparent);color:var(--rust)}
+  .pill.test{border-color:color-mix(in srgb,var(--ok) 45%,transparent);color:var(--ok)}
+
+  .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:16px}
+  .card{border:1px solid var(--line);border-radius:10px;background:var(--surface-2);padding:13px 14px}
+  .card h3{margin:0 0 11px;font-family:var(--mono);font-size:10px;letter-spacing:.12em;
+           text-transform:uppercase;color:var(--acc2);font-weight:700}
+  .row{display:flex;justify-content:space-between;align-items:baseline;gap:10px;
+       font-family:var(--mono);font-size:12px;padding:3px 0}
+  .row > span{color:var(--dim)}
+  .row > b{font-weight:700;color:var(--bone);font-variant-numeric:tabular-nums}
+  .row > b.g{color:var(--acc2)} .row > b.s{color:var(--ok)} .row > b.r{color:var(--rust)}
+  .row.tot{border-top:1px solid var(--line);margin-top:7px;padding-top:7px}
+
+  .tw{overflow-x:auto;margin-top:16px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2)}
+  table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:12px;font-variant-numeric:tabular-nums}
+  th{text-align:right;color:var(--dim);font-weight:400;padding:9px;border-bottom:1px solid var(--line);
+     font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;white-space:nowrap}
+  th:first-child,td:first-child{text-align:left}
+  td{text-align:right;padding:7px 9px;border-bottom:1px solid color-mix(in srgb,var(--line) 55%,transparent);
+     white-space:nowrap}
+  tbody tr{cursor:pointer}
+  tbody tr:hover td{background:color-mix(in srgb,var(--acc) 7%,transparent)}
+  tr.sel td{background:color-mix(in srgb,var(--acc) 14%,transparent)}
+  td.g{color:var(--acc2)} td.s{color:var(--ok)} td.r{color:var(--rust)} td.d{color:var(--dim)}
+
+  .models{margin-top:12px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2);
+          padding:12px 14px}
+  .models h3{margin:0 0 9px;font-family:var(--mono);font-size:10px;letter-spacing:.12em;
+             text-transform:uppercase;color:var(--acc2)}
+
+  .bar{display:flex;gap:8px;align-items:center;margin-top:16px;flex-wrap:wrap}
+  button{font-family:var(--mono);font-size:11.5px;letter-spacing:.04em;padding:7px 13px;border-radius:8px;
+         border:1px solid var(--line);background:var(--surface-2);color:var(--muted);cursor:pointer}
+  button:hover{border-color:var(--muted);color:var(--bone)}
+  button:focus-visible{outline:2px solid var(--acc2);outline-offset:2px}
+  button.pri{border-color:color-mix(in srgb,var(--acc) 55%,var(--line));color:#cdbcff;
+             background:color-mix(in srgb,var(--acc) 14%,transparent)}
+  button.dgr{border-color:color-mix(in srgb,var(--rust) 50%,var(--line));color:#e79b86}
+  button[disabled]{opacity:.4;cursor:not-allowed}
+  .status{font-family:var(--mono);font-size:11px;color:var(--ok);margin-left:6px}
+  .status.bad{color:var(--rust)}
+
+  dialog{border:1px solid var(--line);border-radius:12px;background:var(--surface);color:var(--bone);
+         padding:0;max-width:640px;width:calc(100% - 32px)}
+  dialog::backdrop{background:rgba(10,9,8,.72)}
+  .dh{display:flex;align-items:center;gap:10px;padding:11px 16px;background:var(--surface-2);
+      border-bottom:1px solid var(--line);font-family:var(--mono);font-size:11px;
+      letter-spacing:.1em;text-transform:uppercase;color:var(--acc2)}
+  .db{padding:16px}
+  input[type=text]{width:100%;font-family:var(--mono);font-size:13px;padding:9px 11px;border-radius:8px;
+                   border:1px solid var(--line);background:var(--ink);color:var(--bone)}
+  input[type=text]:focus{outline:none;border-color:var(--acc)}
+  label.lbl{display:block;font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;
+            text-transform:uppercase;color:var(--dim);margin:0 0 6px}
+  .hint{font-family:var(--mono);font-size:10.5px;color:var(--dim);line-height:1.65;margin:9px 0 0}
+  .verdict{font-family:var(--mono);font-size:12px;line-height:1.55;border-left:2px solid var(--ok);
+           padding:7px 0 7px 11px;color:var(--ok);margin:12px 0}
+  .verdict.bad{border-left-color:var(--rust);color:var(--rust)}
+  .pick{font-family:var(--mono);font-size:12px;padding:7px 9px;border-radius:7px;color:var(--muted);
+        cursor:pointer;border:1px solid transparent}
+  .pick:hover{border-color:var(--line);color:var(--bone)}
+  .danger{font-family:var(--mono);font-size:11.5px;line-height:1.6;color:var(--rust);
+          border:1px solid color-mix(in srgb,var(--rust) 40%,transparent);border-radius:8px;
+          padding:10px 12px;margin:12px 0}
+  .dz{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+  [hidden]{display:none!important}
+  @media (max-width:980px){ .grid{grid-template-columns:repeat(2,1fr)} }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="brand">tokum<i>ai</i></span>
+  <span id="hVer">admin</span>
+  <span class="grow"></span>
+  <span id="hDb"></span>
+  <span class="clock" id="hClock">connecting…</span>
+  <span class="pill" id="hNet">…</span>
+</header>
+
+<div class="wrap">
+  <div class="grid">
+    <div class="card">
+      <h3>Usage · chats &amp; credit</h3>
+      <div class="row"><span>chat prompts</span><b class="s" id="uPrompts">–</b></div>
+      <div class="row"><span>active sessions</span><b id="uSessions">–</b></div>
+      <div class="row"><span>session credit</span><b class="g" id="uCredit">–</b></div>
+      <div class="row"><span>grounding, month</span><b id="uGround">–</b></div>
+    </div>
+    <div class="card">
+      <h3>Economy · money in</h3>
+      <div class="row"><span>paying accounts</span><b id="ePayers">–</b></div>
+      <div class="row"><span>purchased</span><b class="g" id="ePurchased">–</b></div>
+      <div class="row"><span>entitlement open</span><b id="eEnt">–</b></div>
+      <div class="row"><span>→ withdrawn ecash</span><b id="eWith">–</b></div>
+      <div class="row tot"><span>revenue − cost</span><b id="eProfit">–</b></div>
+    </div>
+    <div class="card">
+      <h3>Integrity · double-spend</h3>
+      <div class="row"><span>burned serials</span><b id="iBurned">–</b></div>
+      <div class="row"><span>offenders</span><b id="iOff">–</b></div>
+      <div class="row"><span>blacklisted</span><b id="iBlack">–</b></div>
+      <div class="row tot"><span>lifetime buys</span><b class="g" id="iBuys">–</b></div>
+    </div>
+    <div class="card">
+      <h3>Faucet · invites</h3>
+      <div class="row"><span>funded</span><b id="fFunded">–</b></div>
+      <div class="row"><span>today</span><b class="g" id="fToday">–</b></div>
+      <div class="row"><span>open invoices</span><b id="fOpen">–</b></div>
+      <div class="row"><span>unused codes</span><b id="fCodes">–</b></div>
+    </div>
+  </div>
+
+  <div class="tw">
+    <table>
+      <thead><tr>
+        <th>day</th><th>prompts</th><th>spent</th><th>cost</th><th>margin</th>
+        <th>buys</th><th>buys $</th><th>users</th><th>1 h</th><th>inflight</th>
+      </tr></thead>
+      <tbody id="days"></tbody>
+    </table>
+  </div>
+
+  <div class="models" id="modelsBox" hidden>
+    <h3 id="modelsTitle">Per model</h3>
+    <div id="models"></div>
+  </div>
+
+  <div class="bar">
+    <button class="pri" id="bRefund">Refund…</button>
+    <button id="bCode">Mint invite code</button>
+    <button class="dgr" id="bNet">Toggle network</button>
+    <span class="status" id="msg"></span>
+  </div>
+  <p class="hint">Read-only except those three. Bound to loopback — whoever reaches this page reaches the machine
+     that holds the issuer key, so the SSH tunnel is the only door and there is no login here to weaken it.</p>
+</div>
+
+<dialog id="dlg">
+  <div class="dh"><span>Refund</span><span class="grow"></span></div>
+  <div class="db">
+
+    <div id="sFind">
+      <label class="lbl" for="q">Receipt number, invoice id, payment reference — or the code itself</label>
+      <input type="text" id="q" autocomplete="off" spellcheck="false" placeholder="TKM-2026-…">
+      <p class="hint">The code is the strongest thing a buyer can show: holding it is what being entitled to it
+         means.<br>A receipt number identifies a purchase and proves nothing — it is printed on a document
+         anyone could have photographed.</p>
+      <div class="dz"><button class="pri" id="bFind">Search</button><button id="bClose1">Close</button></div>
+    </div>
+
+    <div id="sPick" hidden>
+      <p class="hint" style="margin-top:0" id="pickWhy"></p>
+      <div id="picks"></div>
+      <div class="dz"><button id="bBack1">Back</button></div>
+    </div>
+
+    <div id="sHit" hidden>
+      <div id="hitRows"></div>
+      <p class="verdict" id="verdict"></p>
+      <div id="evidenceWrap">
+        <label class="lbl" for="ev">What did the buyer show to prove this purchase is theirs?</label>
+        <input type="text" id="ev" autocomplete="off"
+               placeholder="pasted the code / Mollie tr_… + cardholder / chain tx from n1…">
+        <p class="hint">Recorded in refunds.csv. The question somebody asks months later is not whether we voided a
+           code, but why we believed the person asking.</p>
+      </div>
+      <div class="danger" id="dangerNote">This destroys the buyer's code. Refund the money the way it came —
+        Mollie back to the original method, NYM to the sending address on the chain. Never to an address someone
+        named in a message.</div>
+      <div class="dz">
+        <button class="dgr" id="bTech">Technical — statutory</button>
+        <button class="dgr" id="bGood">Goodwill</button>
+        <button id="bBack2">Back</button>
+      </div>
+    </div>
+
+    <div id="sDone" hidden>
+      <p class="verdict" id="doneMsg"></p>
+      <div class="dz"><button class="pri" id="bClose2">Close</button></div>
+    </div>
+
+  </div>
+</dialog>
+
+<script>
+(function(){
+  "use strict";
+  var $ = function(id){ return document.getElementById(id); };
+  var esc = function(s){ return String(s == null ? "" : s).replace(/[&<>"']/g, function(c){
+    return { "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]; }); };
+  var grp = function(n){ return (Number(n) || 0).toLocaleString("en-US"); };
+  var usd = function(toku){ return "$" + ((Number(toku) || 0) / 100000).toFixed(2); };
+
+  var sel = null, days = [], hit = null;
+
+  // The poll: 1.5 s, the TUI's own beat. One read, no socket to keep alive through a tunnel
+  // that may be torn down and re-established at any moment.
+  function poll(){
+    fetch("/api/state").then(function(r){ return r.json(); }).then(paint)
+      .catch(function(){ $("hClock").textContent = "server not answering"; });
+  }
+
+  function paint(s){
+    $("hVer").textContent = "admin · v" + s.version;
+    $("hDb").textContent = s.db;
+    $("hClock").textContent = s.clock + " UTC";
+    var net = $("hNet");
+    net.textContent = s.network;
+    net.className = "pill " + (s.network === "mainnet" ? "main" : "test");
+
+    $("uPrompts").textContent = grp(s.usage.prompts);
+    $("uSessions").textContent = grp(s.usage.sessions);
+    $("uCredit").textContent = usd(s.usage.sessionCredit);
+    $("uGround").textContent = grp(s.usage.groundingUsed) + " / " + grp(s.usage.groundingFree);
+
+    $("ePayers").textContent = grp(s.economy.payingAccounts);
+    $("ePurchased").textContent = usd(s.economy.purchased);
+    $("eEnt").textContent = usd(s.economy.entitlement);
+    $("eWith").textContent = usd(s.economy.withdrawn);
+    var profit = (Number(s.economy.revenue) || 0) - (Number(s.economy.cost) || 0);
+    var p = $("eProfit");
+    p.textContent = (profit < 0 ? "−" : "+") + usd(Math.abs(profit)).slice(1);
+    p.className = profit < 0 ? "r" : "s";
+
+    $("iBurned").textContent = grp(s.integrity.burned);
+    $("iOff").textContent = grp(s.integrity.offenders);
+    $("iBlack").textContent = grp(s.integrity.blacklisted);
+    $("iBuys").textContent = grp(s.integrity.lifetimeBuys) + " · " + usd(s.economy.purchased);
+
+    if (s.faucet.on) {
+      $("fFunded").textContent = grp(s.faucet.claims) + " · " + (s.faucet.unym / 1e6).toFixed(1) + " NYM";
+      $("fToday").textContent = grp(s.faucet.today) + " / " + grp(s.faucet.dailyMax);
+      $("fOpen").textContent = grp(s.faucet.openInvoices);
+      $("fCodes").textContent = grp((s.faucet.codes || []).filter(function(c){ return c.left > 0; }).length);
+    } else {
+      ["fFunded","fToday","fOpen","fCodes"].forEach(function(id){ $(id).textContent = "off"; });
+    }
+
+    days = s.days || [];
+    $("days").innerHTML = days.map(function(d, i){
+      var margin = d.cost > 0 ? (d.spent / d.cost) : 0;
+      var mc = margin >= 1.15 ? "s" : (margin > 0 ? "r" : "d");
+      return '<tr data-i="' + i + '"' + (d.day === sel ? ' class="sel"' : '') + '>' +
+        '<td>' + esc(d.day) + '</td>' +
+        '<td class="s">' + grp(d.prompts) + '</td>' +
+        '<td class="g">' + usd(d.spent) + '</td>' +
+        '<td>' + usd(d.cost) + '</td>' +
+        '<td class="' + mc + '">' + (margin > 0 ? margin.toFixed(2) : "—") + '</td>' +
+        '<td>' + grp(d.purchases) + '</td>' +
+        '<td class="g">' + usd(d.purchased) + '</td>' +
+        '<td>' + grp(d.users) + '</td>' +
+        '<td>' + grp(d.peak1h) + '</td>' +
+        '<td class="' + (d.inflight ? '' : 'd') + '">' + (d.inflight ? grp(d.inflight) : "—") + '</td>' +
+        '</tr>';
+    }).join("");
+    paintModels();
+  }
+
+  function paintModels(){
+    var d = days.filter(function(x){ return x.day === sel; })[0];
+    var box = $("modelsBox");
+    if (!d || !d.models || !d.models.length) { box.hidden = true; return; }
+    box.hidden = false;
+    $("modelsTitle").textContent = "Per model · " + d.day;
+    $("models").innerHTML = d.models.slice()
+      .sort(function(a, b){ return b.spent - a.spent; })
+      .map(function(m){
+        return '<div class="row"><span>' + esc(m.label) +
+               ' <span style="color:var(--dim)">' + esc(m.provider) + '</span></span>' +
+               '<b>' + grp(m.prompts) + ' · <span class="g">' + usd(m.spent) + '</span> · ' +
+               usd(m.cost) + '</b></div>';
+      }).join("");
+  }
+
+  $("days").addEventListener("click", function(e){
+    var tr = e.target.closest("tr[data-i]");
+    if (!tr) return;
+    var d = days[Number(tr.getAttribute("data-i"))];
+    sel = (d && d.day === sel) ? null : (d ? d.day : null);
+    [].forEach.call($("days").children, function(r){ r.classList.remove("sel"); });
+    if (sel) tr.classList.add("sel");
+    paintModels();
+  });
+
+  // ---- the three writes -------------------------------------------------------------
+  function say(text, bad){
+    var el = $("msg");
+    el.textContent = text;
+    el.className = "status" + (bad ? " bad" : "");
+    setTimeout(function(){ if (el.textContent === text) el.textContent = ""; }, 12000);
+  }
+  function post(path, body){
+    return fetch(path, { method: "POST", headers: { "content-type": "application/json" },
+                         body: JSON.stringify(body || {}) }).then(function(r){ return r.json(); });
+  }
+  $("bCode").onclick = function(){
+    post("/api/code").then(function(j){ say(j.message || "", /could not/.test(j.message || "")); poll(); });
+  };
+  $("bNet").onclick = function(){
+    post("/api/network").then(function(j){ say(j.message || ""); poll(); });
+  };
+
+  // ---- refund -----------------------------------------------------------------------
+  var dlg = $("dlg");
+  function show(which){
+    ["sFind","sPick","sHit","sDone"].forEach(function(id){ $(id).hidden = (id !== which); });
+  }
+  $("bRefund").onclick = function(){ show("sFind"); $("q").value = ""; dlg.showModal(); $("q").focus(); };
+  $("bClose1").onclick = function(){ dlg.close(); };
+  $("bClose2").onclick = function(){ dlg.close(); };
+  $("bBack1").onclick = function(){ show("sFind"); $("q").focus(); };
+  $("bBack2").onclick = function(){ show("sFind"); $("q").focus(); };
+  $("q").addEventListener("keydown", function(e){ if (e.key === "Enter") $("bFind").click(); });
+
+  $("bFind").onclick = function(){
+    var q = $("q").value.trim();
+    if (!q) return;
+    post("/api/find", { q: q }).then(function(j){
+      var hits = j.hits || [];
+      if (!hits.length) {
+        $("doneMsg").textContent = "nothing matches that receipt, invoice, code or payment reference";
+        $("doneMsg").className = "verdict bad";
+        show("sDone");
+        return;
+      }
+      if (hits.length === 1) { openHit(hits[0]); return; }
+      // A receipt number is a PREFIX of the invoice id, so it lives under the birthday bound.
+      // Rare at twelve hex, never impossible — so never act on the first match.
+      $("pickWhy").textContent = hits.length + " purchases match — pick one:";
+      $("picks").innerHTML = hits.map(function(h, i){
+        return '<div class="pick" data-i="' + i + '">' + esc(h.receipt) + ' · $' + h.usd +
+               ' · ' + esc(h.method) + ' · ' + esc(h.paid) + '</div>';
+      }).join("");
+      $("picks").onclick = function(e){
+        var el = e.target.closest(".pick");
+        if (el) openHit(hits[Number(el.getAttribute("data-i"))]);
+      };
+      show("sPick");
+    });
+  };
+
+  function openHit(h){
+    hit = h;
+    var money = h.method === "card" ? ("Mollie " + h.providerRef)
+                                    : ("memo " + h.providerRef + " — the sender is on the chain");
+    $("hitRows").innerHTML = [
+      ["receipt", h.receipt],
+      ["paid", h.paid + " UTC"],
+      ["amount", "$" + h.usd + " · " + grp(h.toku) + " TOKU"],
+      ["rail", h.method + " · " + h.country + " · consent " + h.consent],
+      ["find the money", money],
+      ["kind", h.isVoucher ? "code bought on the website" : "in-app purchase"],
+      ["status", h.status]
+    ].map(function(kv){
+      return '<div class="row"><span>' + esc(kv[0]) + '</span><b>' + esc(kv[1]) + '</b></div>';
+    }).join("");
+    $("verdict").textContent = h.verdict;
+    $("verdict").className = "verdict" + (h.voidable ? "" : " bad");
+    $("evidenceWrap").hidden = !h.voidable;
+    $("dangerNote").hidden = !h.voidable;
+    $("bTech").hidden = !h.voidable;
+    $("bGood").hidden = !h.voidable;
+    $("ev").value = "";
+    show("sHit");
+    if (h.voidable) $("ev").focus();
+  }
+
+  function doVoid(reason){
+    if (!hit) return;
+    var ev = $("ev").value.trim();
+    if (!ev) { $("ev").focus(); return; }
+    $("bTech").disabled = true; $("bGood").disabled = true;
+    post("/api/void", { invoice: hit.invoice, reason: reason, evidence: ev }).then(function(j){
+      $("bTech").disabled = false; $("bGood").disabled = false;
+      var bad = !!j.error || /could not|nothing was changed|no code|no such/.test(j.message || "");
+      $("doneMsg").textContent = j.message || j.error || "";
+      $("doneMsg").className = "verdict" + (bad ? " bad" : "");
+      show("sDone");
+      poll();
+    });
+  }
+  $("bTech").onclick = function(){ doVoid("technical"); };
+  $("bGood").onclick = function(){ doVoid("goodwill"); };
+
+  poll();
+  setInterval(poll, 1500);
+})();
+</script>
+</body>
+</html>
