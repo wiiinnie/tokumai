@@ -104,14 +104,14 @@ pub async fn handle(request: &[u8], pricing: &PricingTable, margin: f64, identit
     // Serve a fresh cached list without touching the providers. Never hold the lock
     // across the await below.
     if let Some(models) = cached_fresh() {
-        return serde_json::to_vec(&json!({ "id": id, "models": models, "testnet": crate::pay::is_testnet_server(), "faucetUrl": crate::pay::faucet_url(), "siteUrl": crate::pay::site_url(), "card": crate::pay::card_info().await, "rails": crate::pay::rails_info(), "coins": crate::pay::coins_info(), "serverVersion": crate::VERSION, "identities": identities })).unwrap_or_default();
+        return serde_json::to_vec(&json!({ "id": id, "models": models, "testnet": crate::pay::is_testnet_server(), "faucetUrl": crate::pay::faucet_url(), "siteUrl": crate::pay::site_url(), "card": crate::pay::card_info().await, "rails": crate::pay::rails_info(), "coins": crate::pay::coins_info(), "trickleMinutes": crate::pay::trickle_minutes(), "redeemLabel": crate::pay::redeem_label().0, "redeemHint": crate::pay::redeem_label().1, "serverVersion": crate::VERSION, "identities": identities })).unwrap_or_default();
     }
 
     let models = fetch_models(pricing, margin).await;
     if let Ok(mut guard) = CATALOG_CACHE.lock() {
         *guard = Some((Instant::now(), models.clone()));
     }
-    serde_json::to_vec(&json!({ "id": id, "models": models, "testnet": crate::pay::is_testnet_server(), "faucetUrl": crate::pay::faucet_url(), "siteUrl": crate::pay::site_url(), "card": crate::pay::card_info().await, "rails": crate::pay::rails_info(), "coins": crate::pay::coins_info(), "serverVersion": crate::VERSION, "identities": identities })).unwrap_or_default()
+    serde_json::to_vec(&json!({ "id": id, "models": models, "testnet": crate::pay::is_testnet_server(), "faucetUrl": crate::pay::faucet_url(), "siteUrl": crate::pay::site_url(), "card": crate::pay::card_info().await, "rails": crate::pay::rails_info(), "coins": crate::pay::coins_info(), "trickleMinutes": crate::pay::trickle_minutes(), "redeemLabel": crate::pay::redeem_label().0, "redeemHint": crate::pay::redeem_label().1, "serverVersion": crate::VERSION, "identities": identities })).unwrap_or_default()
 }
 
 /// A clone of the cached model list if it exists and is within its TTL, else `None`.

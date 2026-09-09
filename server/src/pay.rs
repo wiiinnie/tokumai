@@ -103,6 +103,25 @@ pub fn coin_min_usd() -> u32 {
     crate::cfg("COIN_MIN_USD").ok().and_then(|v| v.trim().parse().ok()).filter(|v| *v > 0).unwrap_or(10)
 }
 
+/// How often the app moves one $1 book from the coins on the device onto the session
+/// balance while it is open (`TRICKLE_MINUTES`, default 5). Server-set so it can be raised
+/// as the user base grows without shipping every platform: the same cadence for everyone
+/// is what keeps one session from standing out. The app enforces a floor of its own.
+pub fn trickle_minutes() -> u32 {
+    crate::cfg("TRICKLE_MINUTES").ok().and_then(|v| v.trim().parse().ok()).filter(|m| *m >= 1).unwrap_or(5)
+}
+
+/// The label and hint on the app's code field (`REDEEM_LABEL`, `REDEEM_HINT`). Server-set
+/// because on iOS the wording is an App Review question, not a product one: it must name
+/// the function without pointing at the purchase outside the store. Deliberately neutral
+/// defaults; the answer from App Review goes into .env, not into a build.
+pub fn redeem_label() -> (String, String) {
+    let clean = |k: &str, d: &str| {
+        crate::cfg(k).ok().map(|v| v.trim().chars().take(80).collect::<String>()).filter(|v| !v.is_empty()).unwrap_or_else(|| d.to_string())
+    };
+    (clean("REDEEM_LABEL", "Have a code?"), clean("REDEEM_HINT", "Enter it here."))
+}
+
 /// True when a Mollie key is configured — the client shows the card row only then.
 pub fn card_enabled() -> bool {
     matches!(CardRail::from_env(), CardRail::Mollie { .. })

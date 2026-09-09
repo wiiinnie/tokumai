@@ -1198,7 +1198,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       <!-- One field for every kind of code — invites, vouchers, gifts. It names no place to get
      one, deliberately: outside the US and the EU, App Store rule 3.1.1 forbids the app from
      pointing at an outside purchase, and a helpful sentence here would be exactly that.
-     See docs/vouchers.md. --><label class="setrow" id="testnetRow" style="display:none;cursor:default"><span><b>Redeem a code<span class="tpill">CODE</span></b><small>Invite codes, vouchers and gift codes are all redeemed here. Leave it empty to buy an amount below as usual.</small><span class="inviteline"><input id="inviteInput" type="text" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" maxlength="32" placeholder="TOKU-XXXX-XXXX-XXXX"><button type="button" class="ibtn" data-click="checkInvite">Redeem</button></span><small id="inviteMsg"></small></span></label>
+     See docs/vouchers.md. --><label class="setrow" id="testnetRow" style="display:none;cursor:default"><span><b><span id="redeemLbl">Have a code?</span><span class="tpill">CODE</span></b><small id="redeemHint">Enter it here.</small><span class="inviteline"><input id="inviteInput" type="text" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" maxlength="32" placeholder="TOKU-XXXX-XXXX-XXXX"><button type="button" class="ibtn" data-click="checkInvite">Redeem</button></span><small id="inviteMsg"></small></span></label>
       <div class="grouplbl" id="amountLbl" style="margin-top:2px">Amount</div>
       <div id="tierRow" class="tiles"></div>
 
@@ -1797,7 +1797,13 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       if(gotModels.length) models = gotModels;
       tiers = s.tiers || tiers || [];
       account = s.account; balance = s.balance||0; held = s.held||0;
+      phraseVerified = !(account && account.phraseVerified === false);
+      { const t = Number(s.trickleMinutes); trickleMinutes = Number.isFinite(t) && t >= 1 ? Math.floor(t) : 5; }
+      { const l = String(s.redeemLabel||"").slice(0,80), h = String(s.redeemHint||"").slice(0,80);
+        if(l){ const b=$("redeemLbl"); if(b) b.textContent = l; }
+        if(h){ const m=$("redeemHint"); if(m) m.textContent = h; } }
       refreshPhraseBackup();
+      startTrickle();
       fakePayments = s.fakePayments === true;    // only when the server SAYS so
       devBuild = s.devBuild === true;
       if(!devBuild) devCost = false;             // no diagnostics outside a debug build, whatever localStorage says
@@ -2136,6 +2142,9 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     const sv = $("abSrv"); if(sv) sv.textContent = srvVer ? `server ${srvVer}` : "server — not connected yet";
     const se = $("abSeller"); if(se) se.innerHTML = SELLER.map(esc).join("<br>");
     const st = $("abSite"); if(st) st.textContent = siteBase().replace(/^https:\/\//, "");
+    // iOS: no link to the website from inside the app (3.1.1). Terms, Privacy and Imprint
+    // stay — Apple requires the privacy link, and none of the three is a purchasing surface.
+    const wr = document.querySelector('.mpage[data-page="about"] .setrow[data-path="/"]'); if(wr) wr.hidden = isIOSNative();
   }
 
   // Consent is persisted per PROVIDER + terms version: every Google model shares
@@ -2274,9 +2283,9 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     if(held>0){
       $("heldLine").style.display="flex";
       // nosemgrep: scrai-taint-untrusted-to-html -- reviewed 2026-08-30: only formatted numbers + static copy
-      $("heldText").innerHTML = `${esc(formatToku(Math.max(0,balance-held)))} in session · ${esc(formatToku(held))} on this device only
+      $("heldText").innerHTML = `${esc(formatToku(Math.max(0,balance-held)))} recoverable from your phrase · <span style="color:var(--rust)">${esc(formatToku(held))} on this device only</span>${trickleOn() ? ` · ${esc(trickleEta())}` : ` · staying here (moving to phrase is off)`}
         <details class="why"><summary><span class="chev">›</span> What this means</summary>
-          <div class="body">Coins on this device are blind-signed <b>cash</b>: not linked to your account, not restorable from your recovery phrase. They redeem into your recoverable balance in $1 steps as you chat. <b>Redeem everything before deleting the app or moving to another device</b> — “Move to another device” does that for you.</div>
+          <div class="body">Coins on this device are blind-signed <b>cash</b>: not linked to your account, and a recovery phrase does not bring them back. ${trickleOn() ? `A dollar of them moves onto your phrase every ${esc(String(trickleMinutes))} minutes the app is open — the same pace as everyone, so it cannot be told apart. Lose the phone before then and the part still on it is gone, like cash.` : `Moving them onto your phrase is switched off (Account → Move credit onto my phrase), so they stay cash until spent.`} Chatting never waits for this.</div>
         </details>`;
     }
     else $("heldLine").style.display="none";
@@ -2601,7 +2610,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // `state` reply (Tauri package_info / dev bridge package.json) and replaces this
   // fallback on the first status. Codenames per minor series from Howard Marks'
   // "Mr Nice". The fallback string is rewritten by scripts/bump-version.sh.
-  const APP_CODENAMES = { "0.2": "kash", "0.3": "peroni", "0.4": "ichnusa", "0.5": "moretti" };
+  const APP_CODENAMES = { "0.2": "kash", "0.3": "peroni", "0.4": "ichnusa", "0.5": "moretti", "0.6": "sassicaia" };
   const versionLabel = v => { const m = /^(\d+\.\d+)\.\d+/.exec(v); const c = m && APP_CODENAMES[m[1]]; return c ? v + " (" + c + ")" : v; };
   let APP_VERSION = versionLabel("0.5.9");   // bump-version.sh: fallback
   let devCost = false;
@@ -4842,7 +4851,70 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // Tauri webview, so everything is rendered inside the modal) ----------
   let acctPhrase = null;   // revealed 24 words to show, or null
   let acctView = null;     // null | "restore" | "confirmNew" | "confirmRestore" | ...
-  let acctPage = null;     // drill-in sub-page: null(landing) | server | phrase | restore | migrate | credit | danger | backup
+  let acctPage = null;     // drill-in sub-page: null(landing) | server | phrase | restore | migrate | credit | danger | backup | check | trickle
+  // Three random words typed back from the notes before the wallet may buy anything. The
+  // webview never sees the phrase (H1): Rust picks the positions, Rust compares.
+  let phraseVerified = true;
+  let checkPositions = [], checkBusy = false, checkMsg = "";
+  async function startPhraseCheck(){
+    checkMsg = "";
+    try{ const r = await Backend.phraseCheckStart(); checkPositions = Array.isArray(r&&r.positions) ? r.positions.slice(0,3) : []; }
+    catch(e){ checkPositions = []; checkMsg = e && e.message ? e.message : String(e); }
+    acctPage = "check"; acctView = null; acctPhrase = null; renderAccount();
+    const f = $("chk0"); if(f) f.focus();
+  }
+  async function submitPhraseCheck(){
+    if(checkBusy) return;
+    const words = [0,1,2].map(i => { const el=$("chk"+i); return el ? el.value : ""; });
+    if(words.some(w => !w.trim())){ checkMsg = "all three, please"; renderAccount(); return; }
+    checkBusy = true; renderAccount();
+    try{
+      const r = await Backend.phraseCheckVerify(checkPositions, words);
+      checkBusy = false;
+      if(r && r.ok){
+        phraseVerified = true; checkMsg = "";
+        acctPage = null; acctView = null; renderAccount();
+        acctStatus("Phrase confirmed. This account can buy credit now.");
+        await refreshState();
+      }else{
+        // Not which one: a hint would be an oracle for anyone else holding the phone. New
+        // positions, so the previous screen cannot simply be copied.
+        checkMsg = "Not quite — check your notes. Three new words:";
+        try{ const n = await Backend.phraseCheckStart(); checkPositions = n.positions.slice(0,3); }catch(_){}
+        renderAccount(); const f = $("chk0"); if(f) f.focus();
+      }
+    }catch(e){ checkBusy = false; checkMsg = e && e.message ? e.message : String(e); renderAccount(); }
+  }
+  // Back to the words. On iOS that is the native, biometric-gated screen again; the
+  // positions are re-drawn afterwards, so nothing can be copied off the old ones.
+  async function showPhraseAgain(){ acctPage = "phrase"; acctView = null; acctPhrase = null; renderAccount(); if(isIOSNative()) await doAccountReveal(); }
+
+  // ---- the trickle: one $1 book from the coins on this device onto the session balance,
+  // every `trickleMinutes` the app is open, ±50 %, first one at a random moment inside the
+  // first interval. Runtime only — nothing is caught up after the app was closed, because a
+  // catch-up is a burst and with few users a burst is a fingerprint. The same cadence for
+  // everyone (server-set) is what keeps one session from standing out. Chatting never waits
+  // for this: the on-demand redeem when the session runs low is unchanged.
+  let trickleMinutes = 5, trickleTimer = null;
+  const TRICKLE_KEY = "tokumai.trickle";
+  function trickleOn(){ try{ return localStorage.getItem(TRICKLE_KEY) !== "0"; }catch(_){ return true; } }
+  function setTrickle(on){ try{ localStorage.setItem(TRICKLE_KEY, on ? "1" : "0"); }catch(_){} if(on) startTrickle(); else stopTrickle(); renderAccount(); renderBal(); }
+  function trickleDelayMs(){ const base = Math.max(1, trickleMinutes) * 60000; return Math.round(base * (0.5 + Math.random())); }
+  function startTrickle(){ if(trickleTimer || !isTauri()) return; trickleTimer = setTimeout(trickleTick, Math.round(Math.random() * Math.max(1, trickleMinutes) * 60000)); }
+  function stopTrickle(){ if(trickleTimer){ clearTimeout(trickleTimer); trickleTimer = null; } }
+  async function trickleTick(){
+    trickleTimer = null;
+    if(!trickleOn()) return;
+    if(held > 0 && !redeeming && !busy && account){
+      redeeming = true;
+      try{ const r = await Backend.redeem(); if(r){ balance = r.balance ?? balance; held = r.held ?? held; renderBal(); } }
+      catch(_){ /* offline or a dead route — the next tick tries again */ }
+      finally{ redeeming = false; }
+    }
+    trickleTimer = setTimeout(trickleTick, trickleDelayMs());
+  }
+  // "About N hours of use to go": books still on the device × the interval.
+  function trickleEta(){ const books = Math.ceil(held / 100000); if(books <= 0) return ""; const h = books * trickleMinutes / 60; return h < 1 ? `about ${Math.max(5, Math.round(h*60/5)*5)} minutes of use to go` : `about ${h < 10 ? h.toFixed(1).replace(/\.0$/,"") : Math.round(h)} hours of use to go`; }
   // The opt-in phrase copy (iOS: iCloud Keychain, end to end). `available` is false
   // elsewhere, and the row hides rather than offering a switch that does nothing.
   let phraseBackup = { available:false, on:false };
@@ -5093,7 +5165,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       <div class="fp">${esc(account.fingerprint)}</div>
       <div class="ses">session #${account.sessionIndex} · fingerprint</div>
       <div class="bal">${esc(tokuLine(balance))}</div>
-      <div class="held">${esc(formatToku(Math.max(0,balance-held)))} in session${held>0?``:` · nothing held on this device`}</div>
+      <div class="held">${esc(formatToku(Math.max(0,balance-held)))} recoverable from your phrase${held>0?` · <span style="color:var(--rust)">${esc(formatToku(held))} on this device only</span>${trickleOn()?` · ${esc(trickleEta())}`:``}`:` · nothing held on this device`}</div>
       ${checking
         ? `<div class="checkline busy">↻ Checking<span class="dots"></span> <span class="dim">· over the mixnet</span></div>`
         : `<div class="checkline" data-click="checkCredit">↻ Check for credit <span class="dim">· ${esc(credResult||checkedAgo())}</span></div>`}
@@ -5107,7 +5179,9 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         + `<div class="grouplbl">Setup</div>`
         + row("server","c-net","🌐","Server","tokumai server rendezvous", server?`<span class="pill ok">set</span>`:`<span class="pill warn">not set</span>`)
         + `<div class="grouplbl">Keys &amp; devices</div>`
+        + (phraseVerified ? "" : row("check","c-danger","⚠","Confirm your recovery phrase","three words from your notes — needed before buying", `<span class="pill warn">to do</span>`))
         + row("phrase","c-key","🔑","Recovery phrase","show &amp; copy the 24 words")
+        + row("trickle","c-migrate","⇢","Move credit onto my phrase", trickleOn() ? `a dollar every ${esc(String(trickleMinutes))} min the app is open` : "off · coins stay as cash on this device", trickleOn() ? `<span class="pill ok">on</span>` : `<span class="pill">off</span>`)
         + (phraseBackup.available
             ? row("backup","c-key","☁","Phrase in Keychain", phraseBackup.on ? "synced through iCloud, end to end" : "off · paper only",
                   phraseBackup.on ? `<span class="pill ok">on</span>` : `<span class="pill">off</span>`)
@@ -5125,9 +5199,9 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     // ---- sub-pages (each keeps the existing acctView confirm/reveal states) ----
     const phraseBlock = acctPhrase
       ? `<p class="hint">Write these ${acctPhrase.trim().split(/\s+/).length} words down. Anyone with them can spend your balance.</p><pre>${esc(acctPhrase)}</pre>
-         <div class="btnrow"><button class="btn" id="copyPhraseBtn" data-click="copyPhrase">⧉ Copy phrase</button></div>`
+         <div class="btnrow"><button class="btn" id="copyPhraseBtn" data-click="copyPhrase">⧉ Copy phrase</button>${phraseVerified ? `` : `<button class="btn primary" data-click="startPhraseCheck">I have written them down</button>`}</div>`
       : `<p class="pagelead">These 24 words are the only way back to your balance. Anyone with them can spend it — write them down, never photograph them.</p>
-         <div class="btnrow"><button class="btn primary" data-click="doAccountReveal">Show recovery phrase</button></div>`;
+         <div class="btnrow"><button class="btn primary" data-click="doAccountReveal">Show recovery phrase</button>${phraseVerified ? `` : `<button class="btn" data-click="startPhraseCheck">I have written them down</button>`}</div>`;
 
     const migratePage = acctView==="confirmMigrate"
       ? `<p class="hint">This first redeems ALL your held credit to your recoverable balance, then shows a code to move this account to another device. Continue?</p>
@@ -5182,9 +5256,26 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
          <p class="hint">What Apple does learn: that a tokumai entry exists in the Keychain tied to your Apple ID — that you use this app, not what you ask it. Off, the phrase exists only where you wrote it down.</p>
          <div class="btnrow"><button class="btn primary" data-click="setPhraseBackup" data-args="true">Keep it in Keychain</button></div>`;
 
+    const checkPage = `<p class="pagelead">From your notes, not from memory — that is the point. Type word ${checkPositions.map(p=>`<b>${esc(String(p))}</b>`).join(", word ")} of your recovery phrase.</p>
+      ${checkPositions.map((p,i)=>`<div class="mprow" style="margin-bottom:8px"><div class="mptop"><b>Word ${esc(String(p))}</b></div><input type="text" id="chk${i}" class="chkin" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" data-keydown="__enter__" data-fn="submitPhraseCheck"></div>`).join("")}
+      ${checkMsg ? `<p class="hint" style="color:var(--rust)">${esc(checkMsg)}</p>` : ``}
+      <div class="btnrow"><button class="btn primary" data-click="submitPhraseCheck" ${checkBusy?"disabled":""}>${checkBusy?"Checking…":"Confirm"}</button>
+        <button class="btn" data-click="showPhraseAgain">Show the phrase again</button></div>
+      <p class="hint">Until this is done, the account cannot buy credit. A phrase that was only ever looked at is one that gets screenshotted — and the screenshot lands in every cloud the photos sync to.</p>`;
+
+    const tricklePage = trickleOn()
+      ? `<p class="pagelead">A dollar of the coins on this device moves onto your recovery phrase every <b>${esc(String(trickleMinutes))} minutes</b> the app is open — at the same pace as everyone else, so it cannot be told apart. From the phrase, credit can always come back.</p>
+         <p class="hint">Until it has moved, it is cash: lose the phone and that part is gone. Chatting never waits for this. The pace is set by the server, the same for every app.</p>
+         <div class="btnrow"><button class="btn" data-click="setTrickle" data-args="false">Switch off — keep everything as cash here</button></div>`
+      : `<p class="pagelead">Switched off. The coins on this device stay cash until you spend them — nothing moves onto your recovery phrase on its own.</p>
+         <p class="hint" style="color:var(--rust)">Off, the phrase restores only what you had already used — which is nothing. Lose the phone, lose the credit.</p>
+         <div class="btnrow"><button class="btn primary" data-click="setTrickle" data-args="true">Switch on</button></div>`;
+
     const pages = {
       server:  { t:"Server",                 h:`<p class="pagelead">Pick the official server, or paste one from your own tokumai server.</p>${serverControls()}` },
       backup:  { t:"Phrase in Keychain",      h:backupPage },
+      check:   { t:"Confirm your phrase",     h:checkPage },
+      trickle: { t:"Move credit onto my phrase", h:tricklePage },
       phrase:  { t:"Recovery phrase",         h:phraseBlock },
       restore: { t:"Restore account",         h:restorePage },
       migrate: { t:"Move to another device",  h:migratePage },
@@ -5254,16 +5345,18 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       // biometric-gated screen instead, exactly as "Reveal recovery phrase" does.
       if(r && r.native){
         acctView=null; acctPhrase=null; acctPage=null; renderAccount();
-        acctStatus("New account created — the recovery phrase is on the screen in front of you. Write it down now: it is the only way back to this account.");
+        phraseVerified = false;
+        acctStatus("New account created — the recovery phrase is on the screen in front of you. Write it down, then confirm three words of it below.");
         return;
       }
       acctView=null; acctPhrase=r.mnemonic;
       // The new phrase renders on the "phrase" page only — leaving the view on the danger
       // page created the account and showed the words to nobody, which is a lost account
       // the moment the sheet closes (2026-09-06).
+      phraseVerified = false;
       acctPage="phrase";
       renderAccount();
-      acctStatus("New account created — write these words down now. They are the only way back to it.");
+      acctStatus("New account created — write these words down now, then confirm three of them.");
     }
     catch(e){ acctStatus("Could not create account: "+heldMsg(e), "bad"); }
   }
@@ -5589,8 +5682,10 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     // iOS: web top-up on top; the in-app amount/method chooser stays only for the invite
     // flow, which is not a purchase (nothing is charged — the faucet pays).
     const iosWeb = isIOSNative();
-    $("iosTopup").style.display = iosWeb ? "" : "none";
-    if(iosWeb) renderIosTopup();
+    // iOS: no top-up ID and no hand-over any more (App Store 3.1.1 — nothing in the app may
+    // point at a purchase outside it). What is left on this sheet is the code field, and
+    // the App Store purchase once StoreKit is in.
+    $("iosTopup").style.display = "none";
     const legacy = !iosWeb || testnetBuy;
     $("amountLbl").style.display = legacy ? "" : "none";
     $("tierRow").style.display   = legacy ? "" : "none";
@@ -5793,6 +5888,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
 
   function openBuy(){
     if(!account){ openAccount(); return; }
+    if(!phraseVerified){ openAccount(); startPhraseCheck(); acctStatus("Confirm three words of your recovery phrase before buying credit.", "bad"); return; }
     stopPoll(); stopCountdown(); activeInvoice=null; selectedTier=null;
     // A fresh sheet starts without a code — a validated one should not survive a close,
     // or a tester who already spent it sees a $1 tile the server will refuse.
@@ -6105,6 +6201,8 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   }
   function renderReceipts(){
     const el=$("receiptList"); if(!el) return;
+    // iOS: purchases go through the App Store, whose receipt is the receipt.
+    if(isIOSNative()){ el.innerHTML=""; return; }
     const list=loadReceipts();
     if(!list.length){ el.innerHTML=""; return; }
     el.innerHTML = `<div class="grouplbl" style="margin-top:16px">Receipts</div>
@@ -6236,7 +6334,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         : `<div class="hint">The checkout link is missing — cancel this payment and try again.</div>`;
       // Finish on the web instead: same invoice, handed over in the URL fragment.
       const webBtn = webPayUrl(inv)
-        ? `<button class="btn" style="display:block;width:100%;margin-top:8px" data-click="payOnWeb">Pay on tokumai.com ↗</button>` : ``;
+        ? (isIOSNative() ? `` : `<button class="btn" style="display:block;width:100%;margin-top:8px" data-click="payOnWeb">Pay on tokumai.com ↗</button>`) : ``;
       // nosemgrep: scrai-taint-untrusted-to-html -- reviewed 2026-08-29: url is safeMollieUrl()-gated and escAttr()-wrapped; amountUsd/amountScrai are numbers (toFixed/formatToku); nothing else from the server lands here
       $("payPanel").innerHTML = `<div class="paypanel">
         <div class="paylead">Pay $${Number(inv.amountUsd||0).toFixed(2)} · ${formatToku((inv.amountToku ?? inv.amountScrai)||0)} TOKU by card · expires <span id="payExpiry">…</span></div>
@@ -6326,7 +6424,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       <div class="paylead">Pay $${inv.amountUsd.toFixed(2)} · ${formatToku((inv.amountToku ?? inv.amountScrai))} TOKU · expires <span id="payExpiry">…</span></div>
       ${blocks}
       ${isNymInv?`<div id="watchState" class="watchrow"><span class="wd"></span> connecting to the Nyx chain…</div>`:""}
-      ${webPayUrl(inv)?`<button class="btn" style="display:block;width:100%;margin-top:10px" data-click="payOnWeb">Open these details on tokumai.com ↗</button>`:""}
+      ${webPayUrl(inv)&&!isIOSNative()?`<button class="btn" style="display:block;width:100%;margin-top:10px" data-click="payOnWeb">Open these details on tokumai.com ↗</button>`:""}
       ${inv.checkout?`<a class="btn" style="display:inline-block;margin:2px 0 4px" href="${escAttr(safeHttpUrl(inv.checkout))}" data-click="openLink" data-click-pass="href" data-prevent="1">Open BTCPay checkout (dev shortcut)</a>`:""}
       ${payCancelAsk
         ? `<div class="cancelconfirm">
@@ -6359,7 +6457,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     openBuy, closeBuy, buyTier, buyOrInvoice, checkInvite, selectCoin, pickVariant, copyUri, copyTopupId, openTopupSheet, closeTopupSheet, confirmTopup, openAccount, closeAccount, doAccountNew, doAccountReveal, doAccountRestore, doAccountDelete, doMigrate, doRedeem, redeemSliderChanged, toggleRedeemPick, askCancelInvoice, dismissCancelAsk, confirmCancelInvoice, toggleConsent, downloadReceipt, startQrScan, stopQrScan,
     showRestore, askNew, redeemThen, cancelAcctView, saveServer, srvSelected, qNav, scrollToBottom, reopenGuard, checkCredit,
     openEntryPicker, showExitInfo, chooseGateway, closeGw, filterGw, toggleGwOpt,
-    acceptTerms, declineTerms, termsAgreeToggle, chooseModel, openLink, openSite, writeSupport, paymentSupport, setPhraseBackup, askPhraseBackupYes, askPhraseBackupNo, toggleImgOvl, saveImgTap, liveNudgeUse, liveNudgeSkip, reconnectMix, runMixPing, resetMixPerf,
+    acceptTerms, declineTerms, termsAgreeToggle, chooseModel, openLink, openSite, writeSupport, paymentSupport, setPhraseBackup, askPhraseBackupYes, askPhraseBackupNo, startPhraseCheck, submitPhraseCheck, showPhraseAgain, setTrickle, toggleImgOvl, saveImgTap, liveNudgeUse, liveNudgeSkip, reconnectMix, runMixPing, resetMixPerf,
     pickImage, attachTap, pickNative, pickFile, closeAttachMenu, onImagePicked, clearImage, setMenuKind, toggleLatest, startMode, imgSettled,
     closeImport, decryptImport, selectMethod, copyMemo, openSettings, closeSettings,
     navPage, navBack, acctNav, acctBack, backFromRestore,

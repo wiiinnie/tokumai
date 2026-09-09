@@ -83,6 +83,17 @@ pub struct Wallet {
     /// stops answering, the liveness check switches to another without any user action.
     #[serde(default)]
     pub server_alternates: Vec<String>,
+    /// The user typed three random words of the phrase back from their notes. Until then
+    /// the app refuses to sell credit — a phrase that was only ever looked at is one that
+    /// gets screenshotted, and the screenshot lands in every cloud the photos sync to.
+    /// Defaults to TRUE for a wallet written before the check existed: those accounts
+    /// predate it and their holders are testers, not a fresh user to be walked through it.
+    #[serde(default = "yes")]
+    pub phrase_verified: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 pub fn wallet_path(data_dir: &Path) -> PathBuf {

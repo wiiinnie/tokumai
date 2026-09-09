@@ -335,7 +335,7 @@ fn restore_from_synced_phrase(dir: &Path) {
     match wallet::synced_phrase() {
         Ok(Some(m)) => match account::from_mnemonic(&m) {
             Ok(a) => {
-                let w = wallet::Wallet { mnemonic: Some(a.mnemonic), server: w.server, entry_gateway: w.entry_gateway, ..Default::default() };
+                let w = wallet::Wallet { mnemonic: Some(a.mnemonic), server: w.server, entry_gateway: w.entry_gateway, phrase_verified: true, ..Default::default() };
                 match wallet::save(dir, &w) {
                     Ok(()) => log::info!("[restore] account restored from the iCloud Keychain copy"),
                     Err(e) => log::error!("[restore] found a Keychain copy but could not save the wallet: {e}"),
@@ -920,7 +920,7 @@ fn local_state(app: AppHandle) -> Result<Value, String> {
     let account = match &w.mnemonic {
         Some(m) => {
             let a = account::from_mnemonic(m)?;
-            json!({ "fingerprint": account::fingerprint(&a.account_id), "sessionIndex": w.session_index })
+            json!({ "fingerprint": account::fingerprint(&a.account_id), "sessionIndex": w.session_index, "phraseVerified": w.phrase_verified })
         }
         None => Value::Null,
     };
@@ -940,7 +940,7 @@ async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<V
     let account = match &w.mnemonic {
         Some(m) => {
             let a = account::from_mnemonic(m)?;
-            json!({ "fingerprint": account::fingerprint(&a.account_id), "sessionIndex": w.session_index })
+            json!({ "fingerprint": account::fingerprint(&a.account_id), "sessionIndex": w.session_index, "phraseVerified": w.phrase_verified })
         }
         None => Value::Null,
     };
@@ -1155,7 +1155,9 @@ fn account_new_inner(app: &AppHandle, force: Option<bool>) -> Result<(PathBuf, S
         return Err(HELD_CREDIT_ERR.into());
     }
     let a = account::create_account();
-    let w = wallet::Wallet { mnemonic: Some(a.mnemonic.clone()), server: prev.server, entry_gateway: prev.entry_gateway, ..Default::default() };
+    // A NEW account starts unverified: the three-word check has to happen before this
+    // wallet may buy anything. A restore sets it true — typing all twenty-four words IS the proof.
+    let w = wallet::Wallet { mnemonic: Some(a.mnemonic.clone()), server: prev.server, entry_gateway: prev.entry_gateway, phrase_verified: false, ..Default::default() };
     wallet::save(&dir, &w)?;
     let fp = account::fingerprint(&a.account_id);
     Ok((dir, a.mnemonic, fp))
@@ -1264,9 +1266,52 @@ fn account_restore(app: AppHandle, mnemonic: String, force: Option<bool>) -> Res
         return Err(HELD_CREDIT_ERR.into());
     }
     let a = account::from_mnemonic(&mnemonic)?;
-    let w = wallet::Wallet { mnemonic: Some(a.mnemonic.clone()), server: prev.server, entry_gateway: prev.entry_gateway, ..Default::default() };
+    let w = wallet::Wallet { mnemonic: Some(a.mnemonic.clone()), server: prev.server, entry_gateway: prev.entry_gateway, phrase_verified: true, ..Default::default() };
     wallet::save(&dir, &w)?;
     Ok(json!({ "fingerprint": account::fingerprint(&a.account_id), "balance": 0 }))
+}
+
+/// The three-word check, step one: three distinct positions, drawn fresh on every call —
+/// so "show the phrase again" changes which words are asked, and nothing can be copied off
+/// the previous screen. The words themselves never go to the webview (H1): it gets numbers,
+/// sends back what the user typed, and hears yes or no.
+#[tauri::command]
+fn phrase_check_start(app: AppHandle) -> Result<Value, String> {
+    let w = wallet::load(&data_dir(&app)?);
+    let n = w.mnemonic.as_deref().map(|m| m.split_whitespace().count()).ok_or("no account")?;
+    if n < 12 {
+        return Err("no phrase to check".into());
+    }
+    use rand::seq::SliceRandom;
+    let mut all: Vec<u32> = (1..=n as u32).collect();
+    all.shuffle(&mut rand::rngs::OsRng);
+    let mut pick: Vec<u32> = all.into_iter().take(3).collect();
+    pick.sort_unstable();
+    Ok(json!({ "positions": pick, "total": n, "verified": w.phrase_verified }))
+}
+
+/// Step two. Case and surrounding whitespace are forgiven — these are read off paper.
+/// Which word was wrong is not reported: a few tries against one's own phrase need no
+/// hint, and a hint would be an oracle for anyone else holding the phone.
+#[tauri::command]
+fn phrase_check_verify(app: AppHandle, positions: Vec<u32>, words: Vec<String>) -> Result<Value, String> {
+    let dir = data_dir(&app)?;
+    let mut w = wallet::load(&dir);
+    let m = w.mnemonic.clone().ok_or("no account")?;
+    let all: Vec<&str> = m.split_whitespace().collect();
+    if positions.len() != 3 || words.len() != 3 {
+        return Err("three positions and three words".into());
+    }
+    let ok = positions.iter().zip(words.iter()).all(|(p, typed)| {
+        let idx = (*p as usize).wrapping_sub(1);
+        all.get(idx).is_some_and(|real| real.eq_ignore_ascii_case(typed.trim()))
+    });
+    if ok && !w.phrase_verified {
+        w.phrase_verified = true;
+        wallet::save(&dir, &w)?;
+        log::info!("[account] three-word check passed — the wallet may buy credit");
+    }
+    Ok(json!({ "ok": ok }))
 }
 
 /// Is the phrase copied to iCloud Keychain? `available` is false off iOS, so the row can
@@ -3329,6 +3374,8 @@ pub fn run() {
             smart_available, smart_detect, coconut_redeem,
             mixnet_route, mixnet_ping, cancel_chat, app_resumed, app_hidden, resume_stats, list_entry_gateways, set_entry_gateway, set_mixnet_perf, open_external, save_image, save_file, voucher_redeem,
             phrase_backup_get,
+            phrase_check_start,
+            phrase_check_verify,
             phrase_backup_set,
             share_text, upload_begin, upload_chunk, upload_pipeline, pick_image, open_account_security,
             vault_list, vault_load, vault_save, vault_remove, vault_purge_webdata, pending_load, pending_save
