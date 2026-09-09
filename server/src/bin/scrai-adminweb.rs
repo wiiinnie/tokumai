@@ -1,10 +1,10 @@
 // ---------------------------------------------------------------------------
-// scrai-adminweb — the operator's console, as a page instead of a terminal.
+// scrai-adminweb — the operator's console, installed as `tokumai-admin`.
 //
-// Same numbers and the same three writes as the ratatui admin (both read
-// `scrai_server::admin`, so they cannot drift), but a screen has room a terminal row does
-// not, and free text — the refund evidence line, a support reply later — stops being
-// hand-rolled cursor handling.
+// A page instead of a terminal. The ratatui console it replaced was retired on 2026-09-09;
+// `scrai_server::admin` — the data layer, and the three writes — is what both ran on, and
+// stays. A screen has room a terminal row does not, and free text — the refund evidence
+// line, a support reply later — stops being hand-rolled cursor handling.
 //
 // THE ONE THING THAT MUST NOT MOVE: this binds to LOOPBACK, always. The box it runs on
 // holds `authority.json`, the Coconut issuer key — whoever reaches this reaches a machine
@@ -13,7 +13,7 @@
 // second, weaker way in, written by us. `ADMIN_PORT` moves the port; nothing moves the
 // address.
 //
-//   ssh -N -L 8791:127.0.0.1:8791 <admin>@<vps>   then http://127.0.0.1:8791
+//   ssh -t -L 8791:127.0.0.1:8791 <admin>@<vps> sudo -u scrai /opt/tokumai/bin/tokumai-admin
 // ---------------------------------------------------------------------------
 
 use std::net::SocketAddr;
@@ -63,7 +63,7 @@ async fn main() {
         .map(PathBuf::from)
         .unwrap_or_else(|| scrai_server::data_dir().join("state.db"));
     if !db.exists() {
-        eprintln!("tokumai-adminweb: {} does not exist.", db.display());
+        eprintln!("tokumai-admin: {} does not exist.", db.display());
         eprintln!("    cwd {}", std::env::current_dir().map(|d| d.display().to_string()).unwrap_or_default());
         eprintln!("    Pass the path explicitly if it lives elsewhere:");
         eprintln!("      tokumai-adminweb /opt/tokumai/data/state.db");
@@ -73,14 +73,14 @@ async fn main() {
     let listener = match TcpListener::bind(addr).await {
         Ok(l) => l,
         Err(e) => {
-            eprintln!("tokumai-adminweb: cannot bind {addr}: {e}");
+            eprintln!("tokumai-admin: cannot bind {addr}: {e}");
             std::process::exit(1);
         }
     };
-    println!("tokumai-adminweb: http://{addr}  ({})", db.display());
-    println!("tokumai-adminweb: loopback only — reach it through an SSH tunnel:");
+    println!("tokumai-admin: http://{addr}  ({})", db.display());
+    println!("tokumai-admin: loopback only — reach it through an SSH tunnel:");
     println!(
-        "    ssh -t -L {p}:127.0.0.1:{p} <admin>@<this-host> sudo -u scrai /opt/tokumai/bin/tokumai-adminweb",
+        "    ssh -t -L {p}:127.0.0.1:{p} <admin>@<this-host> sudo -u scrai /opt/tokumai/bin/tokumai-admin",
         p = port()
     );
     // The `sudo -u scrai` is not decoration. .env and the databases belong to that user, so
@@ -91,7 +91,7 @@ async fn main() {
     for (what, ok) in [("read .env", a["env"] == true), ("write state.db", a["state"] == true),
                        ("write faucet.db", a["faucet"] == true)] {
         if !ok {
-            eprintln!("tokumai-adminweb: cannot {what} as this user — actions will be refused");
+            eprintln!("tokumai-admin: cannot {what} as this user — actions will be refused");
         }
     }
 

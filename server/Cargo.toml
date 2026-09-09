@@ -12,16 +12,13 @@ path = "src/main.rs"
 
 # htop-style read-only admin dashboard over the server's state.db (SSH on the box).
 [[bin]]
-name = "scrai-admin"
-path = "src/bin/scrai-admin.rs"
-
-[[bin]]
 name = "scrai-faucet"
 path = "src/bin/scrai-faucet.rs"
 
-# The operator console as a page. Its own binary, not a route on the faucet: the faucet
-# answers the internet and this must never be able to, and two processes with two bindings
-# cannot be confused for one another by accident.
+# The operator console — installed as `tokumai-admin`. A page on loopback, its own binary
+# and not a route on the faucet: the faucet answers the internet and this must never be
+# able to. The ratatui console it replaced was retired on 2026-09-09; `admin.rs` (the data
+# layer they shared) stays.
 [[bin]]
 name = "scrai-adminweb"
 path = "src/bin/scrai-adminweb.rs"

@@ -86,43 +86,6 @@ pub struct QuorumBlob {
     pub blacklist: HashSet<String>,
 }
 
-/// Wrap `text` at word boundaries onto at most two lines of ≤ `width` chars (a longer
-/// tail is cut with "…"), e.g. "Gemini 3.5 Flash-Lite" → "Gemini 3.5\nFlash-Lite".
-pub fn two_lines(text: &str, width: usize) -> String {
-    let mut lines: Vec<String> = vec![String::new()];
-    for word in text.split_whitespace() {
-        let last = lines.len() - 1;
-        let fits = lines[last].chars().count() + 1 + word.chars().count() <= width;
-        if lines[last].is_empty() {
-            lines[last].push_str(word);
-        } else if !fits && lines.len() < 2 {
-            lines.push(word.to_string());
-        } else {
-            lines[last].push(' ');
-            lines[last].push_str(word);
-        }
-    }
-    lines
-        .into_iter()
-        .map(|l| if l.chars().count() > width { l.chars().take(width - 1).collect::<String>() + "…" } else { l })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-/// Column header for a model: the catalog label from pricing.json ("Nano Banana 2 Lite",
-/// "Gemini 3.5 Flash-Lite"), wrapped onto two lines of ≤ 12 chars so neighbouring models
-/// stay tellable apart; the raw id only when the table doesn't know the model.
-pub fn model_header(id: &str) -> String {
-    static PRICING: std::sync::OnceLock<Option<scrai_core::pricing::PricingTable>> = std::sync::OnceLock::new();
-    let table = PRICING.get_or_init(|| scrai_core::pricing::PricingTable::parse(include_str!("../../pricing.json")).ok());
-    let label = table
-        .as_ref()
-        .and_then(|t| t.label(id))
-        .map(|l| l.to_string())
-        .unwrap_or_else(|| id.trim_start_matches("gemini-").replace('-', " "));
-    two_lines(&label, 12)
-}
-
 #[derive(Default)]
 pub struct DayRow {
     pub day: String,
@@ -171,9 +134,16 @@ pub fn provider_of(model: &str) -> &'static str {
     }
 }
 
-/// Single-line catalog label for the drill-down rows ("Nano Banana 2 Lite"), raw id as fallback.
+/// The catalog label for a model ("Nano Banana 2 Lite", "Gemini 3.5 Flash-Lite") from
+/// pricing.json; a tidied raw id when the table does not know it.
 pub fn model_label(id: &str) -> String {
-    model_header(id).replace('\n', " ")
+    static PRICING: std::sync::OnceLock<Option<scrai_core::pricing::PricingTable>> = std::sync::OnceLock::new();
+    let table = PRICING.get_or_init(|| scrai_core::pricing::PricingTable::parse(include_str!("../../pricing.json")).ok());
+    table
+        .as_ref()
+        .and_then(|t| t.label(id))
+        .map(|l| l.to_string())
+        .unwrap_or_else(|| id.trim_start_matches("gemini-").replace('-', " "))
 }
 
 #[derive(Default)]

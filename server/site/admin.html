@@ -364,7 +364,7 @@
     box.innerHTML = "<b>Running as “" + esc(a.user || "?") + "”, which cannot:</b><br>· " +
       bad.map(esc).join("<br>· ") +
       "<br><br>Those files belong to <b>scrai</b>, the user the services run as. Start the console as that user:" +
-      "<br><code>sudo -u scrai /opt/tokumai/bin/tokumai-adminweb</code>" +
+      "<br><code>sudo -u scrai /opt/tokumai/bin/tokumai-admin</code>" +
       "<br>Everything above still reads correctly — only the three actions are blocked.";
     if (network === "?") { /* the pill already says so */ }
   }
