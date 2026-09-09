@@ -1198,7 +1198,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       <!-- One field for every kind of code — invites, vouchers, gifts. It names no place to get
      one, deliberately: outside the US and the EU, App Store rule 3.1.1 forbids the app from
      pointing at an outside purchase, and a helpful sentence here would be exactly that.
-     See docs/vouchers.md. --><label class="setrow" id="testnetRow" style="display:none;cursor:default"><span><b><span id="redeemLbl">Have a code?</span><span class="tpill">CODE</span></b><small id="redeemHint">Enter it here.</small><span class="inviteline"><input id="inviteInput" type="text" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" maxlength="32" placeholder="TOKU-XXXX-XXXX-XXXX"><button type="button" class="ibtn" data-click="checkInvite">Redeem</button></span><small id="inviteMsg"></small></span></label>
+     See docs/vouchers.md. --><label class="setrow" id="testnetRow" style="display:none;cursor:default"><span><b><span id="redeemLbl">Have a code?</span></b><small id="redeemHint">Enter it here.</small><span class="inviteline"><input id="inviteInput" type="text" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" maxlength="34" value="TOKU-" placeholder="TOKU-XXXX-XXXX-XXXX"><button type="button" class="ibtn" data-click="checkInvite">Redeem</button></span><small id="inviteMsg"></small></span></label>
       <div class="grouplbl" id="amountLbl" style="margin-top:2px">Amount</div>
       <div id="tierRow" class="tiles"></div>
 
@@ -4213,7 +4213,8 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     { const inp=$("inviteInput");
       if(inp){
         inp.onkeydown = e => { if(e.key==="Enter"){ e.preventDefault(); checkInvite(); } };
-        inp.oninput = () => { if(inviteOk){ inviteOk=false; inviteCode=""; setInviteMsg("",""); syncBuyMode(); renderTiers(); renderContinue(); } };
+        inp.oninput = () => { formatCodeInput(inp); if(inviteOk){ inviteOk=false; inviteCode=""; setInviteMsg("",""); syncBuyMode(); renderTiers(); renderContinue(); } };
+        inp.onfocus = () => { if(!inp.value) inp.value = CODE_PREFIX; };
       } }
     $("tutChk").checked = tutorialEnabled();
     $("tutChk").onchange = ()=>{ try{ localStorage.setItem(TUT_KEY, $("tutChk").checked?"1":"0"); }catch(_){}; $("setStatus").textContent = "tutorial "+($("tutChk").checked?"on":"off"); };
@@ -5703,10 +5704,25 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // Ask the SERVER whether the code is good. It answers from the faucet's own ledger; an
   // answer of "valid" only decides which tiles we show — the code is checked again when
   // the invoice is raised, and once more by the faucet as it pays.
+  // The field always starts with "TOKU-" and puts the dashes in itself: type or paste
+  // "fnqwrj33x54k", get "TOKU-FNQW-RJ33-X54K". Whatever was typed is reduced to its letters
+  // and digits first, so a pasted code with or without dashes, with or without the prefix,
+  // in any case, comes out the same — and the server normalises the same way, so nothing
+  // here can make a valid code invalid. Groups of four, as many as were typed: the usual
+  // code is three, a longer legacy invite code simply gets more.
+  const CODE_PREFIX = "TOKU-";
+  function formatCodeInput(el){
+    let raw = String(el.value||"").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if(raw.startsWith("TOKU")) raw = raw.slice(4);
+    raw = raw.slice(0, 28);
+    const groups = raw.match(/.{1,4}/g) || [];
+    const next = CODE_PREFIX + groups.join("-");
+    if(el.value !== next){ el.value = next; try{ el.setSelectionRange(next.length, next.length); }catch(_){} }
+  }
   async function checkInvite(){
     const el=$("inviteInput"); if(!el) return;
-    const code=(el.value||"").trim().toUpperCase();
-    el.value=code;
+    formatCodeInput(el);
+    const code = el.value === CODE_PREFIX ? "" : el.value;
     abandonInvoice();
     if(!code){
       inviteOk=false; inviteCode=""; setInviteMsg("","");
@@ -5729,7 +5745,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         inviteOk=true; inviteCode=code;
         setInviteMsg("good", `valid — $${TESTNET_USD} credit, paid by the faucet`);
       }else{
-        inviteOk=false; inviteCode=""; el.value="";
+        inviteOk=false; inviteCode=""; el.value=CODE_PREFIX;
         const got=Number(r&&r.toku)||0;
         // Redeeming only puts the credit on the ACCOUNT, as an entitlement. What the
         // balance line reads is the SESSION, and collect() is the only thing that moves
@@ -5903,7 +5919,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     inviteOk = false; inviteCode = "";
     // Never carried over from a previous purchase — consent must be given per contract.
     consentImmediate = false; consentWaiver = false;
-    { const i=$("inviteInput"); if(i) i.value=""; setInviteMsg("",""); }
+    { const i=$("inviteInput"); if(i) i.value=CODE_PREFIX; setInviteMsg("",""); }
     syncBuyMode();
     renderBuyBal(); showChooser(true); renderTiers(); renderContinue(); renderRailNote(); renderPending(); renderReceipts();
     $("payPanel").innerHTML="";
