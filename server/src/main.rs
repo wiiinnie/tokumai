@@ -678,12 +678,19 @@ const ORDER_TICK_MS: u64 = 1000;
                     println!("scrai-server: dropped the payment details from {dropped} old web order(s)");
                 }
                 // The same rule for vouchers: a redeemed one stops naming its account after
-                // fourteen days, so the two halves of a purchase do not disagree about how
+                // ACCOUNT_LINK_DAYS (seven by default), so the two halves of a purchase do not disagree about how
                 // long it stays attributable.
                 let stale = paywall.voucher_links_expired(&db.voucher_links());
                 if !stale.is_empty() {
                     let n = db.voucher_forget_account(&stale);
                     println!("scrai-server: dropped the account link from {n} redeemed voucher(s)");
+                }
+                // And the purchase link, on the same clock: after ACCOUNT_LINK_DAYS (seven by default) a voucher no
+                // longer says which payment it came from — like an invoice no longer says
+                // whose it was. The code still resolves by fingerprint and still voids.
+                let cut = db.voucher_forget_invoices(pay::now_ms());
+                if cut > 0 {
+                    println!("scrai-server: dropped the purchase link from {cut} voucher(s)");
                 }
                 let candidates = paywall.watch_candidates(WATCH_PER_TICK);
                 if !candidates.is_empty() {

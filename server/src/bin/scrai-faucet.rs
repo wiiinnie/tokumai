@@ -395,6 +395,14 @@ fn mint_voucher(state_db: &Path, order: &str, invoice: &str, toku: u64) -> Resul
         return Ok(code);
     }
 
+    // Issued before, and the plaintext is gone: never a second code for the same money. The
+    // UNIQUE index on `vouchers.invoice` used to be this guard; it stops knowing the order
+    // once the purchase link expires (14 days), so the order row remembers on its own.
+    if scrai_server::store::web_order_code_issued(state_db, order) {
+        return Err("this code has already been shown and confirmed, or its display window has \
+                    closed. We keep only a fingerprint, so it cannot be shown again — if you never \
+                    received it, contact us with your receipt number".into());
+    }
     // Fail closed rather than mint under the unkeyed fingerprint: a `vouchers` table whose
     // rows can be brute-forced out of a backup is exactly what the key exists to prevent.
     if scrai_server::pay::voucher_key().is_none() {

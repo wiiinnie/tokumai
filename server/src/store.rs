@@ -415,7 +415,7 @@ impl Store {
     }
 
     /// Forget HOW an old order was to be paid: the address and the memo in `pay_json`, on
-    /// the same fourteen-day beat that strips the account off a settled invoice.
+    /// the same link-window beat that strips the account off a settled invoice.
     ///
     /// The row stays — amount, rail, consent and timestamps are the order's own record, and
     /// `sales.csv` is what accounting reads anyway. What goes is the payment detail, which
@@ -423,7 +423,7 @@ impl Store {
     /// was the one new table with no retention rule at all: it kept a payment address for
     /// as long as the table existed, which is to say forever (audit 2026-09-08).
     pub fn web_orders_forget_pay(&self, now: u64) -> usize {
-        let cutoff = now.saturating_sub(crate::pay::Pay::ACCOUNT_LINK_MS) as i64;
+        let cutoff = now.saturating_sub(crate::pay::Pay::account_link_ms()) as i64;
         self.conn
             .execute(
                 "UPDATE web_orders SET pay_json = NULL \
@@ -538,7 +538,24 @@ impl Store {
         out
     }
 
-    /// Drop the account from a redeemed voucher — the same fourteen-day rule an invoice
+    /// Drop the PURCHASE from a voucher after the same ACCOUNT_LINK_DAYS (seven by default) an invoice keeps its
+    /// account: past that, a code is a code and nobody can say which payment it came from.
+    /// The column is NOT NULL and UNIQUE, so it cannot simply be nulled — it becomes a
+    /// tombstone made from the fingerprint, which satisfies both and links to nothing.
+    /// Everything that looked a voucher up by invoice (refund by receipt, "who bought this")
+    /// stops finding it; the code itself still resolves, by hash, and still voids.
+    pub fn voucher_forget_invoices(&self, now: u64) -> usize {
+        let cutoff = now.saturating_sub(crate::pay::Pay::account_link_ms()) as i64;
+        self.conn
+            .execute(
+                "UPDATE vouchers SET invoice = ?1 || substr(hash, 1, 16) \
+                 WHERE created_at < ?2 AND invoice NOT LIKE ?3",
+                params![EXPIRED_LINK, cutoff, format!("{EXPIRED_LINK}%")],
+            )
+            .unwrap_or(0)
+    }
+
+    /// Drop the account from a redeemed voucher — the same link-window rule an invoice
     /// follows, so the two do not disagree about how long a purchase stays attributable.
     pub fn voucher_forget_account(&self, hashes: &[String]) -> usize {
         let mut n = 0;
@@ -613,6 +630,11 @@ impl Store {
     }
 }
 
+/// What `vouchers.invoice` becomes once the purchase link has expired. A prefix, not NULL:
+/// the column is NOT NULL and UNIQUE, and a tombstone built from the fingerprint keeps both
+/// true while pointing at nothing.
+pub const EXPIRED_LINK: &str = "expired:";
+
 // ---- the refund path, from a second process --------------------------------------------
 //
 // A refund is decided in `tokumai-admin`, which does not share the server's `Store`. These
@@ -663,6 +685,56 @@ pub fn voucher_state(db: &std::path::Path, invoice: &str) -> Option<(u64, Option
             },
         )
         .ok()
+}
+
+/// What one voucher is, by its fingerprint — the lookup that outlives the purchase link.
+pub fn voucher_state_by_hash(db: &std::path::Path, hash: &str) -> Option<(u64, Option<u64>, Option<u64>)> {
+    ro(db)?
+        .query_row(
+            "SELECT toku, redeemed_at, void_at FROM vouchers WHERE hash = ?1",
+            params![hash],
+            |r| {
+                Ok((
+                    r.get::<_, i64>(0)? as u64,
+                    r.get::<_, Option<i64>>(1)?.map(|v| v as u64),
+                    r.get::<_, Option<i64>>(2)?.map(|v| v as u64),
+                ))
+            },
+        )
+        .ok()
+}
+
+/// Has a code been issued for this web order — ever, held or not? The guard against
+/// minting a SECOND voucher for a paid order. It used to be the UNIQUE index on
+/// `vouchers.invoice`; once that link expires into a tombstone the index no longer knows
+/// the order, and this does.
+pub fn web_order_code_issued(db: &std::path::Path, order: &str) -> bool {
+    ro(db)
+        .and_then(|c| {
+            c.query_row("SELECT code_at IS NOT NULL FROM web_orders WHERE id = ?1", params![order], |r| r.get::<_, bool>(0))
+                .ok()
+        })
+        .unwrap_or(false)
+}
+
+/// Void by fingerprint — the way that still works after the purchase link has expired, and
+/// the way a pasted code is voided regardless. Same guard: a redeemed one is never voidable.
+pub fn void_voucher_by_hash(db: &std::path::Path, hash: &str, now: u64) -> Result<VoucherVoid, String> {
+    let conn = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX)
+        .map_err(|e| format!("state.db: {e}"))?;
+    let voided = conn
+        .execute(
+            "UPDATE vouchers SET void_at = ?2 WHERE hash = ?1 AND redeemed_at IS NULL AND void_at IS NULL",
+            params![hash, now as i64],
+        )
+        .unwrap_or(0);
+    if voided > 0 {
+        return Ok(VoucherVoid::Voided(voided));
+    }
+    let known: i64 = conn
+        .query_row("SELECT COUNT(*) FROM vouchers WHERE hash = ?1", params![hash], |r| r.get(0))
+        .unwrap_or(0);
+    Ok(if known == 0 { VoucherVoid::Unknown } else { VoucherVoid::AlreadySpent })
 }
 
 /// The invoice a code belongs to, by fingerprint. This is what makes "paste the code" the
@@ -787,7 +859,7 @@ mod tests {
         let p = tmp("weborder-retention");
         let s = Store::open(&p).unwrap();
         let now = crate::pay::now_ms();
-        let old = now - crate::pay::Pay::ACCOUNT_LINK_MS - 1_000;
+        let old = now - crate::pay::Pay::account_link_ms() - 1_000;
 
         assert!(s.web_order_new("fresh", 10, "nyx", "2026-09-07", now));
         assert!(s.web_order_new("stale", 10, "nyx", "2026-09-07", old));
@@ -806,8 +878,42 @@ mod tests {
         let _ = std::fs::remove_file(&p);
     }
 
+    /// After ACCOUNT_LINK_DAYS (seven by default) a voucher stops saying which purchase it came from — the same
+    /// window an invoice keeps its account — but stays a voucher: same value, same state,
+    /// still voidable by fingerprint. And a paid web order can never mint twice, link or no
+    /// link.
+    #[test]
+    fn the_purchase_link_on_a_voucher_expires_but_the_voucher_does_not() {
+        let p = tmp("voucher-link");
+        let s = Store::open(&p).unwrap();
+        let now = crate::pay::now_ms();
+        let old = now - crate::pay::Pay::account_link_ms() - 1_000;
+        assert!(s.voucher_mint("h-old", 500_000, "inv-old", old));
+        assert!(s.voucher_mint("h-new", 500_000, "inv-new", now));
+
+        assert_eq!(s.voucher_forget_invoices(now), 1, "only the old one");
+        assert_eq!(s.voucher_forget_invoices(now), 0, "and only once");
+        assert!(voucher_state(&p, "inv-old").is_none(), "by invoice it is gone");
+        assert!(voucher_state(&p, "inv-new").is_some(), "the fresh one is not");
+        assert_eq!(voucher_state_by_hash(&p, "h-old"), Some((500_000, None, None)), "by hash it is intact");
+        assert!(voucher_invoice_for(&p, "h-old").unwrap().starts_with(EXPIRED_LINK));
+
+        // Still refundable — by the code, which is what a buyer holds.
+        assert!(matches!(void_voucher_by_hash(&p, "h-old", now).unwrap(), VoucherVoid::Voided(1)));
+        assert!(matches!(void_voucher_by_hash(&p, "h-old", now).unwrap(), VoucherVoid::AlreadySpent));
+
+        // The web order remembers a code was issued even when the voucher no longer names it.
+        assert!(s.web_order_new("ord", 5, "nyx", "2026-09-07", old));
+        assert!(!web_order_code_issued(&p, "ord"));
+        s.web_order_code_set("ord", "TOKU-XXXX", old);
+        assert!(web_order_code_issued(&p, "ord"), "issued stays true after the plaintext is swept");
+        s.web_orders_forget_codes(now);
+        assert!(web_order_code_issued(&p, "ord"));
+        let _ = std::fs::remove_file(&p);
+    }
+
     /// The account on a redeemed voucher is what says where an uncredited one's money must
-    /// go. Dropping it after fourteen days is right for a voucher that HAS been credited and
+    /// go. Dropping it after ACCOUNT_LINK_DAYS (seven by default) is right for a voucher that HAS been credited and
     /// fatal for one that has not: `vouchers_to_credit` would never see it again.
     #[test]
     fn the_fourteen_day_scrub_never_touches_a_voucher_that_still_owes_its_credit() {

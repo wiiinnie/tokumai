@@ -205,7 +205,7 @@
       </table>
     </div>
     <p class="hint">WHEN a code was redeemed is known for both kinds. WHO is known for a voucher only while its
-       account link lives — fourteen days — and for an invite code never: the faucet ledger records a memo and an
+       account link lives — seven days by default — and for an invite code never: the faucet ledger records a memo and an
        invoice, and deliberately nothing about who typed the code. A voucher is listed by the first characters of
        its fingerprint, because the code itself is not kept.</p>
   </div>
@@ -558,7 +558,7 @@
     var ev = $("ev").value.trim();
     if (!ev) { $("ev").focus(); return; }
     $("bTech").disabled = true; $("bGood").disabled = true;
-    post("/api/void", { invoice: hit.invoice, reason: reason, evidence: ev }).then(function(j){
+    post("/api/void", { invoice: hit.invoice, hash: hit.hash || "", reason: reason, evidence: ev }).then(function(j){
       $("bTech").disabled = false; $("bGood").disabled = false;
       var bad = !!j.error || /could not|nothing was changed|no code|no such/.test(j.message || "");
       $("doneMsg").textContent = j.message || j.error || "";

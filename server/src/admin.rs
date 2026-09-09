@@ -659,8 +659,11 @@ pub struct Hit {
     pub is_voucher: bool,
     /// (toku, redeemed_at, void_at) when a code was minted for this invoice
     pub voucher: Option<(u64, Option<u64>, Option<u64>)>,
+    /// The voucher's fingerprint, when the search was by code. Set, a void goes by hash —
+    /// which is what still works once the purchase link has expired.
+    pub hash: String,
     /// In-app purchases: credit still sitting on the account, not yet withdrawn into
-    /// blind-signed coins. `None` once the fourteen-day account link has been scrubbed.
+    /// blind-signed coins. `None` once the link-window account link has been scrubbed.
     pub entitlement: Option<u64>,
 }
 
@@ -717,10 +720,33 @@ pub fn find_purchase(state_db: &Path, q: &str) -> Vec<Hit> {
     // A pasted code names its row directly — try the keyed fingerprint and the unkeyed one
     // that preceded it, exactly as the redeem path does.
     let mut by_code: Option<String> = None;
+    let mut by_hash = String::new();
     if up.starts_with("TOKU") {
         for h in [crate::pay::voucher_hash(raw), crate::pay::voucher_hash_legacy(raw)] {
             if let Some(inv) = crate::store::voucher_invoice_for(state_db, &h) {
+                // The link to the purchase has expired: this is a voucher and nothing else.
+                // Still a full answer — value, state, voidable — just no receipt behind it.
+                if inv.starts_with(crate::store::EXPIRED_LINK) {
+                    let st = crate::store::voucher_state_by_hash(state_db, &h);
+                    return vec![Hit {
+                        invoice: inv,
+                        receipt: "-".into(),
+                        usd: st.map(|s| (s.0 / TOKU_PER_USD) as u32).unwrap_or(0),
+                        toku: st.map(|s| s.0).unwrap_or(0),
+                        paid_at: 0,
+                        method: "-".into(),
+                        country: "--".into(),
+                        consent: "-".into(),
+                        provider_ref: "purchase link expired — refund against the buyer's receipt".into(),
+                        status: "paid".into(),
+                        is_voucher: true,
+                        voucher: st,
+                        entitlement: None,
+                        hash: h,
+                    }];
+                }
                 by_code = Some(inv);
+                by_hash = h;
                 break;
             }
         }
@@ -763,6 +789,7 @@ pub fn find_purchase(state_db: &Path, q: &str) -> Vec<Hit> {
             is_voucher: inv.voucher,
             voucher: crate::store::voucher_state(state_db, id),
             entitlement: (!inv.account_id.is_empty()).then(|| *pay.entitlements.get(&inv.account_id).unwrap_or(&0)),
+            hash: by_hash.clone(),
         });
     }
     out.sort_by(|a, b| b.paid_at.cmp(&a.paid_at));
@@ -770,8 +797,39 @@ pub fn find_purchase(state_db: &Path, q: &str) -> Vec<Hit> {
     out
 }
 
+/// A hit for a bare fingerprint — what the web console sends back when the operator picked
+/// a code whose purchase link has expired.
+pub fn hit_by_hash(state_db: &Path, hash: &str) -> Option<Hit> {
+    let inv = crate::store::voucher_invoice_for(state_db, hash)?;
+    let st = crate::store::voucher_state_by_hash(state_db, hash);
+    Some(Hit {
+        invoice: inv,
+        receipt: "-".into(),
+        usd: st.map(|s| (s.0 / TOKU_PER_USD) as u32).unwrap_or(0),
+        toku: st.map(|s| s.0).unwrap_or(0),
+        paid_at: 0,
+        method: "-".into(),
+        country: "--".into(),
+        consent: "-".into(),
+        provider_ref: "by code".into(),
+        status: "paid".into(),
+        is_voucher: true,
+        voucher: st,
+        entitlement: None,
+        hash: hash.to_string(),
+    })
+}
+
 pub fn do_void(state_db: &Path, hit: &Hit, reason: &str, evidence: &str) -> String {
-    match crate::store::void_voucher(state_db, &hit.invoice, crate::pay::now_ms()) {
+    let now = crate::pay::now_ms();
+    // By fingerprint when the search was by code — that is the void that outlives the
+    // purchase link — and by invoice otherwise.
+    let outcome = if hit.hash.is_empty() {
+        crate::store::void_voucher(state_db, &hit.invoice, now)
+    } else {
+        crate::store::void_voucher_by_hash(state_db, &hit.hash, now)
+    };
+    match outcome {
         Err(e) => format!("could not void: {e}"),
         Ok(crate::store::VoucherVoid::Unknown) => "no code exists for that invoice".into(),
         Ok(crate::store::VoucherVoid::AlreadySpent) => {
@@ -807,7 +865,7 @@ pub struct CodeItem {
     pub void_at: u64,
     /// The invoice a voucher was minted from — the join to sales.csv, and to a refund.
     pub invoice: String,
-    /// Who redeemed it, truncated. Only ever a voucher, only for the fourteen days the
+    /// Who redeemed it, truncated. Only ever a voucher, only for the ACCOUNT_LINK_DAYS (seven by default) the
     /// account link survives, and never a person: it is an account's own public-key hash.
     /// An invite code has none by construction — the faucet ledger records a memo and an
     /// invoice, and deliberately nothing about who typed the code.
@@ -820,7 +878,7 @@ pub struct CodeItem {
 ///
 /// What the list can and cannot answer, since somebody will ask it of this screen: WHEN a
 /// code was redeemed is known for both kinds. WHO redeemed it is known for a voucher for
-/// fourteen days, as an account id, and for an invite code never.
+/// ACCOUNT_LINK_DAYS (seven by default), as an account id, and for an invite code never.
 pub fn list_issued_codes(state_db: &Path) -> Vec<CodeItem> {
     let ro = |p: &Path| {
         Connection::open_with_flags(p, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX).ok()

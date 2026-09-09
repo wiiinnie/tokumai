@@ -412,11 +412,11 @@ pub fn faucet_db_path() -> std::path::PathBuf {
 ///
 /// state.db is an operational snapshot — it holds what the server needs to keep working,
 /// it is rewritten constantly, and `scrub_account_links` deliberately empties a field in
-/// it after 14 days. None of that is what bookkeeping wants. This file is: append-only,
+/// it after ACCOUNT_LINK_DAYS. None of that is what bookkeeping wants. This file is: append-only,
 /// plain CSV, safe to copy off the box and keep for as long as records must be kept.
 ///
 /// It never contains an account, a session or anything about usage — only the facts a
-/// sale consists of. So the 14-day scrub takes nothing away from accounting.
+/// sale consists of. So the link-window scrub takes nothing away from accounting.
 fn sales_ledger_path() -> std::path::PathBuf {
     crate::data_dir().join("sales.csv")
 }
@@ -511,10 +511,13 @@ pub fn append_refund(inv_id: &str, paid_at: u64, usd: u32, method: &str, provide
     };
     // The provider reference rides along so the money side can be found in Mollie — or on
     // the chain, where it is the memo — without a second lookup.
+    // A void after the purchase link expired has no receipt to name — the code was all the
+    // buyer showed. "-" rather than a number derived from a tombstone.
+    let receipt = if inv_id.starts_with(crate::store::EXPIRED_LINK) { "-".to_string() } else { receipt_number(inv_id, paid_at) };
     let line = format!(
         "{},{},{},{:.2},{},{},{},{},{}\n",
         utc_stamp(now_ms()),
-        receipt_number(inv_id, paid_at),
+        receipt,
         inv_id,
         usd as f64,
         "USD",
@@ -1013,13 +1016,18 @@ impl Pay {
         }
     }
 
-    /// How long a settled invoice keeps the buyer's account on it. Long enough to answer
-    /// "I paid and got nothing" and to decide a goodwill refund; after that the link is
-    /// dead weight. What we give up knowingly: a chargeback arriving later can no longer
-    /// be tied to an account, so repeat abuse is invisible. The money is gone either way —
-    /// only the pattern would have been visible, and a permanent payment↔account link is
-    /// too high a price for it.
-    pub const ACCOUNT_LINK_MS: u64 = 14 * 24 * 3_600_000;
+    /// How long a settled purchase keeps the buyer's account on it — and a voucher its
+    /// purchase — so that "I paid and got nothing" can be answered and a goodwill refund
+    /// judged. `ACCOUNT_LINK_DAYS`, default 7: long enough for a Friday purchase, a Monday
+    /// ticket and a Tuesday reply; short enough that the link is a support window and not a
+    /// record. What is given up knowingly: a chargeback arrives after 30–120 days and could
+    /// never be tied to an account under any sane window — the money is gone either way, only
+    /// the pattern would have been visible. Floor one day: a value that expires the link before
+    /// support can read a ticket is a value nobody meant.
+    pub fn account_link_ms() -> u64 {
+        let days: u64 = crate::cfg("ACCOUNT_LINK_DAYS").ok().and_then(|v| v.trim().parse().ok()).filter(|d| *d >= 1).unwrap_or(7);
+        days * 24 * 3_600_000
+    }
 
     /// Drop the account from invoices that have been settled longer than that. The row
     /// stays — amount, currency, country, rail and timestamp are the bookkeeping record —
@@ -1036,7 +1044,7 @@ impl Pay {
         let now = now_ms();
         redeemed_at
             .iter()
-            .filter(|(_, at)| now.saturating_sub(*at) > Self::ACCOUNT_LINK_MS)
+            .filter(|(_, at)| now.saturating_sub(*at) > Self::account_link_ms())
             .map(|(h, _)| h.clone())
             .collect()
     }
@@ -1045,7 +1053,7 @@ impl Pay {
         let now = now_ms();
         let mut changed = 0usize;
         for inv in self.invoices.values_mut() {
-            if inv.status == "paid" && !inv.account_id.is_empty() && now.saturating_sub(inv.paid_at) > Self::ACCOUNT_LINK_MS {
+            if inv.status == "paid" && !inv.account_id.is_empty() && now.saturating_sub(inv.paid_at) > Self::account_link_ms() {
                 inv.account_id.clear();
                 changed += 1;
             }
@@ -2990,8 +2998,11 @@ mod card_tests {
             paid_at: now_ms().saturating_sub(paid_ago_days * 24 * 3_600_000), voucher: false,
             testnet: false, invite_code: String::new(),
         };
-        pay.invoices.insert("fresh".into(), mk("fresh", 13));
-        pay.invoices.insert("old".into(), mk("old", 15));
+        // Relative to the configured window, not to a number of days: the window is
+        // ACCOUNT_LINK_DAYS (seven by default) and this test must not care which.
+        let window_days = Pay::account_link_ms() / (24 * 3_600_000);
+        pay.invoices.insert("fresh".into(), mk("fresh", window_days - 1));
+        pay.invoices.insert("old".into(), mk("old", window_days + 1));
         let mut pending = mk("pending", 99);
         pending.status = "pending".into();
         pay.invoices.insert("pending".into(), pending);

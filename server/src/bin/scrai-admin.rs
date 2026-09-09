@@ -784,7 +784,7 @@ mod tests {
             invoice: "abc123".into(), receipt: "TKM-2026-ABC123".into(), usd: 5, toku: 500_000,
             paid_at: 1_757_000_000_000, method: "card".into(), country: "DE".into(),
             consent: "2026-09-07".into(), provider_ref: "tr_x".into(), status: "paid".into(),
-            is_voucher, voucher, entitlement: ent,
+            is_voucher, voucher, entitlement: ent, hash: String::new(),
         }
     }
 

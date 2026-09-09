@@ -190,7 +190,7 @@ async fn route(sock: &mut tokio::net::TcpStream, req: &Req, db: &PathBuf) {
             reply(sock, &json!({ "hits": hits })).await
         }
         ("POST", "/api/void") => {
-            let (invoice, reason, evidence) = (s("invoice"), s("reason"), s("evidence"));
+            let (invoice, reason, evidence, hash) = (s("invoice"), s("reason"), s("evidence"), s("hash"));
             // The same two refusals the TUI makes, restated here because a browser is not a
             // trusted caller: a hand-written POST must not be able to skip the evidence line
             // or invent a reason that is not one of the two.
@@ -202,7 +202,12 @@ async fn route(sock: &mut tokio::net::TcpStream, req: &Req, db: &PathBuf) {
                 reply(sock, &json!({ "error": "a refund is either technical or goodwill" })).await;
                 return;
             }
-            match admin::find_purchase(db, &invoice).into_iter().find(|h| h.invoice == invoice) {
+            let found = if hash.is_empty() {
+                admin::find_purchase(db, &invoice).into_iter().find(|h| h.invoice == invoice)
+            } else {
+                admin::hit_by_hash(db, &hash)
+            };
+            match found {
                 None => reply(sock, &json!({ "error": "no such purchase" })).await,
                 Some(hit) => {
                     let msg = admin::do_void(db, &hit, &reason, evidence.trim());
@@ -243,7 +248,7 @@ fn hit_json(h: &admin::Hit) -> Value {
         Err(v) => (v, false),
     };
     json!({
-        "invoice": h.invoice, "receipt": h.receipt, "usd": h.usd, "toku": h.toku,
+        "invoice": h.invoice, "hash": h.hash, "receipt": h.receipt, "usd": h.usd, "toku": h.toku,
         "paid": scrai_server::pay::utc_stamp(h.paid_at),
         "method": h.method, "country": h.country, "consent": h.consent,
         "providerRef": h.provider_ref, "status": h.status, "isVoucher": h.is_voucher,
