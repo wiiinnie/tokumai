@@ -9,7 +9,7 @@
 // This blob scheme is fine at bring-up scale. When the nullifier set grows large,
 // swap the quorum blob for per-row tables (serials / offenders) without touching core.
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OpenFlags};
 use std::path::Path;
 
 /// What `voucher_burn` did. Each case is a different sentence to the buyer.
@@ -554,26 +554,7 @@ impl Store {
     /// Refund path: void every unredeemed voucher of one invoice. Refuses a redeemed one —
     /// spent credit cannot be clawed back, the same rule the app follows.
     pub fn voucher_void_by_invoice(&self, invoice: &str, now: u64) -> VoucherVoid {
-        let voided = self
-            .conn
-            .execute(
-                "UPDATE vouchers SET void_at = ?2 \
-                 WHERE invoice = ?1 AND redeemed_at IS NULL AND void_at IS NULL",
-                params![invoice, now as i64],
-            )
-            .unwrap_or(0);
-        if voided > 0 {
-            return VoucherVoid::Voided(voided);
-        }
-        let known: i64 = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM vouchers WHERE invoice = ?1", params![invoice], |r| r.get(0))
-            .unwrap_or(0);
-        if known == 0 {
-            VoucherVoid::Unknown
-        } else {
-            VoucherVoid::AlreadySpent
-        }
+        void_on(&self.conn, invoice, now)
     }
 
     /// The stored JSON blob for `key`, if any.
@@ -630,6 +611,74 @@ impl Store {
     pub fn delete(&self, key: &str) {
         let _ = self.conn.execute("DELETE FROM kv WHERE k = ?1", params![key]);
     }
+}
+
+// ---- the refund path, from a second process --------------------------------------------
+//
+// A refund is decided in `tokumai-admin`, which does not share the server's `Store`. These
+// take a path and open their own connection — the same shape `scrai-faucet` already uses on
+// this file.
+
+/// The single-use guard, on whatever connection. Both processes need it and the rule it
+/// encodes must not exist twice: spent credit cannot be clawed back, so a redeemed voucher
+/// is never voidable — the same rule the app follows for coins.
+fn void_on(conn: &Connection, invoice: &str, now: u64) -> VoucherVoid {
+    let voided = conn
+        .execute(
+            "UPDATE vouchers SET void_at = ?2 \
+             WHERE invoice = ?1 AND redeemed_at IS NULL AND void_at IS NULL",
+            params![invoice, now as i64],
+        )
+        .unwrap_or(0);
+    if voided > 0 {
+        return VoucherVoid::Voided(voided);
+    }
+    let known: i64 = conn
+        .query_row("SELECT COUNT(*) FROM vouchers WHERE invoice = ?1", params![invoice], |r| r.get(0))
+        .unwrap_or(0);
+    if known == 0 {
+        VoucherVoid::Unknown
+    } else {
+        VoucherVoid::AlreadySpent
+    }
+}
+
+fn ro(db: &std::path::Path) -> Option<Connection> {
+    Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX).ok()
+}
+
+/// What one voucher is: (TOKU, redeemed_at, void_at), by the invoice the buyer's receipt
+/// number points at. `redeemed_at` is the whole decision — see `docs/vouchers.md`.
+pub fn voucher_state(db: &std::path::Path, invoice: &str) -> Option<(u64, Option<u64>, Option<u64>)> {
+    ro(db)?
+        .query_row(
+            "SELECT toku, redeemed_at, void_at FROM vouchers WHERE invoice = ?1",
+            params![invoice],
+            |r| {
+                Ok((
+                    r.get::<_, i64>(0)? as u64,
+                    r.get::<_, Option<i64>>(1)?.map(|v| v as u64),
+                    r.get::<_, Option<i64>>(2)?.map(|v| v as u64),
+                ))
+            },
+        )
+        .ok()
+}
+
+/// The invoice a code belongs to, by fingerprint. This is what makes "paste the code" the
+/// strongest thing a buyer can show: it names the row directly, and holding the code is
+/// what being entitled to it means.
+pub fn voucher_invoice_for(db: &std::path::Path, hash: &str) -> Option<String> {
+    ro(db)?
+        .query_row("SELECT invoice FROM vouchers WHERE hash = ?1", params![hash], |r| r.get::<_, String>(0))
+        .ok()
+}
+
+/// Void from the admin. Same guard, its own connection.
+pub fn void_voucher(db: &std::path::Path, invoice: &str, now: u64) -> Result<VoucherVoid, String> {
+    let conn = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX)
+        .map_err(|e| format!("state.db: {e}"))?;
+    Ok(void_on(&conn, invoice, now))
 }
 
 #[cfg(test)]

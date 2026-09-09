@@ -62,6 +62,18 @@ struct Inv {
     /// no country) and for everything raised before 2026-09-07.
     #[serde(default)]
     country: String,
+    /// The rail's own id for the payment: a Mollie payment id, or the NYM memo. This is
+    /// what finds the money again — in the dashboard, or on the chain.
+    #[serde(default)]
+    provider_ref: String,
+    #[serde(default)]
+    paid_at: u64,
+    #[serde(default)]
+    consent_version: String,
+    /// Paid out as a CODE rather than as entitlement — a purchase made on the website,
+    /// with no account behind it. The only kind we can actually invalidate.
+    #[serde(default)]
+    voucher: bool,
 }
 #[derive(Deserialize, Default)]
 struct QuorumBlob {
@@ -169,6 +181,13 @@ fn model_label(id: &str) -> String {
 struct View {
     sel: usize,
     drawer: bool,
+    refund: Refund,
+}
+
+impl Default for Refund {
+    fn default() -> Self {
+        Refund::Off
+    }
 }
 
 #[derive(Default)]
@@ -676,7 +695,7 @@ fn ui(f: &mut Frame, m: &Metrics, view: &View, path: &str, clock: &str, network:
             format!("   net:{network}"),
             Style::default().fg(if network == "mainnet" { RUST } else { SAGE }).add_modifier(Modifier::BOLD),
         ),
-        Span::styled("   ↑↓ day · i details · n toggle · c code · q quit", Style::default().fg(DIM)),
+        Span::styled("   ↑↓ day · i details · n toggle · c code · v refund · q quit", Style::default().fg(DIM)),
         Span::styled(
             if status.is_empty() { String::new() } else { format!("   {status}") },
             Style::default().fg(GOLD),
@@ -1011,6 +1030,17 @@ fn ui(f: &mut Frame, m: &Metrics, view: &View, path: &str, clock: &str, network:
     strip.push(Span::styled("   i details", Style::default().fg(BONE)));
     f.render_widget(Paragraph::new(Line::from(strip)), root[3]);
 
+    // refund (v): its own popup, over everything. Drawn last so it wins.
+    if !matches!(view.refund, Refund::Off) {
+        let area = f.area();
+        let w = area.width.min(88);
+        let h = area.height.min(20);
+        let pop = Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h);
+        f.render_widget(Clear, pop);
+        f.render_widget(Paragraph::new(refund_lines(&view.refund)).block(block("REFUND · void an unredeemed code")), pop);
+        return;
+    }
+
     // drawer (i): the full INTEGRITY + FAUCET panels as a popup over the bottom row
     if view.drawer {
         let area = root[2];
@@ -1089,6 +1119,10 @@ fn clock_utc() -> String {
 }
 
 fn main() -> io::Result<()> {
+    // The admin has never needed .env — it only read state.db. The refund screen does: a
+    // pasted code is fingerprinted under VOUCHER_KEY, and without the key it would be
+    // hashed the old way and never found. Same load the faucet does.
+    let _ = dotenvy::from_path(scrai_server::env_file());
     let path: PathBuf = std::env::args()
         .nth(1)
         .map(PathBuf::from)
@@ -1110,6 +1144,361 @@ fn main() -> io::Result<()> {
 
 /// `c`: mint an invite code into faucet.db (next to state.db). Shown in the status line
 /// so it can be copied; also listed in the FAUCET panel afterwards.
+// ---------------------------------------------------------------------------
+// refunds (v): find a purchase, see whether its credit is still untouched, void it
+//
+// The rule this screen exists to enforce: a receipt number IDENTIFIES a purchase, it does
+// not AUTHORISE anything — it is printed on a document that can be photographed, and it is
+// the only thing a stranger would have. So the void asks for what the buyer showed, and
+// records it. What cannot be got wrong by mistake is the money: a refund always goes back
+// the way it came (Mollie to the original method, NYM to the sending address, which is on
+// the chain under the memo), never to an address somebody named in a support message.
+// ---------------------------------------------------------------------------
+
+#[derive(Clone)]
+struct Hit {
+    invoice: String,
+    receipt: String,
+    usd: u32,
+    toku: u64,
+    paid_at: u64,
+    method: String,
+    country: String,
+    consent: String,
+    provider_ref: String,
+    status: String,
+    is_voucher: bool,
+    /// (toku, redeemed_at, void_at) when a code was minted for this invoice
+    voucher: Option<(u64, Option<u64>, Option<u64>)>,
+    /// In-app purchases: credit still sitting on the account, not yet withdrawn into
+    /// blind-signed coins. `None` once the fourteen-day account link has been scrubbed.
+    entitlement: Option<u64>,
+}
+
+impl Hit {
+    /// The one question a refund turns on. For a voucher it is answerable for certain; for
+    /// an in-app purchase only while the credit has not been withdrawn, because after that
+    /// the coins are blind-signed and nobody — us included — can tell whether they were
+    /// spent.
+    fn refundable(&self) -> Result<String, String> {
+        if self.status != "paid" {
+            return Err(format!("this invoice is {}, so nothing was ever charged", self.status));
+        }
+        match (self.is_voucher, self.voucher) {
+            (true, None) => Err("paid, but no code was ever issued — nothing to void".into()),
+            (true, Some((_, Some(at), _))) => {
+                Err(format!("the code was REDEEMED on {} — spent credit cannot be clawed back", scrai_server::pay::utc_stamp(at)))
+            }
+            (true, Some((_, None, Some(at)))) => Err(format!("already voided on {}", scrai_server::pay::utc_stamp(at))),
+            (true, Some((toku, None, None))) => Ok(format!("code NOT redeemed — {} TOKU can be voided", grp(toku))),
+            (false, _) => match self.entitlement {
+                None => Err("in-app purchase, and the account link has expired — refund by hand if you decide to".into()),
+                Some(e) if e >= self.toku => Ok(format!(
+                    "in-app, {} TOKU still un-withdrawn — provably unspent, but there is nothing to void: \
+                     refund the money and the credit stays with the buyer",
+                    grp(e)
+                )),
+                Some(e) => Err(format!(
+                    "in-app, only {} TOKU un-withdrawn of {} bought — the rest is blind-signed and unknowable",
+                    grp(e),
+                    grp(self.toku)
+                )),
+            },
+        }
+    }
+}
+
+/// Find a purchase by whatever the buyer could plausibly quote. Every branch is a different
+/// strength of evidence, and the strongest one is the code itself: holding it is what being
+/// entitled to it means.
+fn find_purchase(state_db: &Path, q: &str) -> Vec<Hit> {
+    let raw = q.trim();
+    if raw.is_empty() {
+        return Vec::new();
+    }
+    let up: String = raw.chars().filter(|c| !c.is_whitespace()).collect::<String>().to_uppercase();
+
+    let conn = match Connection::open_with_flags(state_db, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+    let blob: Option<String> = conn.query_row("SELECT v FROM kv WHERE k = 'pay'", [], |r| r.get(0)).ok();
+    let pay: PayBlob = blob.and_then(|j| serde_json::from_str(&j).ok()).unwrap_or_default();
+
+    // A pasted code names its row directly — try the keyed fingerprint and the unkeyed one
+    // that preceded it, exactly as the redeem path does.
+    let mut by_code: Option<String> = None;
+    if up.starts_with("TOKU") {
+        for h in [scrai_server::pay::voucher_hash(raw), scrai_server::pay::voucher_hash_legacy(raw)] {
+            if let Some(inv) = scrai_server::store::voucher_invoice_for(state_db, &h) {
+                by_code = Some(inv);
+                break;
+            }
+        }
+    }
+    // A receipt number carries only the first 8 hex of the invoice id — 32 bits, so over
+    // enough sales two purchases WILL share a prefix. Never act on the first match: collect
+    // them all and make the operator choose.
+    let prefix = up
+        .strip_prefix("TKM-")
+        .and_then(|r| r.split_once('-'))
+        .map(|(_, p)| p.to_ascii_lowercase())
+        .filter(|p| p.len() == 8 && p.chars().all(|c| c.is_ascii_hexdigit()));
+
+    let mut out: Vec<Hit> = Vec::new();
+    for (id, inv) in pay.invoices.iter() {
+        let matches = match (&by_code, &prefix) {
+            (Some(want), _) => id == want,
+            (None, Some(p)) => id.to_ascii_lowercase().starts_with(p.as_str()),
+            (None, None) => {
+                id.eq_ignore_ascii_case(&up) || inv.provider_ref.eq_ignore_ascii_case(raw)
+            }
+        };
+        if !matches {
+            continue;
+        }
+        out.push(Hit {
+            receipt: scrai_server::pay::receipt_number(id, inv.paid_at),
+            invoice: id.clone(),
+            usd: inv.amount_usd,
+            toku: inv.amount_toku,
+            paid_at: inv.paid_at,
+            method: if inv.method.is_empty() { "?".into() } else { inv.method.clone() },
+            country: if inv.country.is_empty() { "--".into() } else { inv.country.clone() },
+            consent: if inv.consent_version.is_empty() { "-".into() } else { inv.consent_version.clone() },
+            provider_ref: inv.provider_ref.clone(),
+            status: inv.status.clone(),
+            is_voucher: inv.voucher,
+            voucher: scrai_server::store::voucher_state(state_db, id),
+            entitlement: (!inv.account_id.is_empty()).then(|| *pay.entitlements.get(&inv.account_id).unwrap_or(&0)),
+        });
+    }
+    out.sort_by(|a, b| b.paid_at.cmp(&a.paid_at));
+    out.truncate(12);
+    out
+}
+
+/// Where the refund screen is. Deliberately several steps: this destroys a buyer's credit,
+/// and the evidence line is the only record of why we believed the person asking.
+enum Refund {
+    Off,
+    Ask(String),
+    Pick(Vec<Hit>, usize),
+    Evidence(Box<Hit>, String),
+    Confirm(Box<Hit>, String),
+    Done(String),
+}
+
+fn do_void(state_db: &Path, hit: &Hit, reason: &str, evidence: &str) -> String {
+    match scrai_server::store::void_voucher(state_db, &hit.invoice, scrai_server::pay::now_ms()) {
+        Err(e) => format!("could not void: {e}"),
+        Ok(scrai_server::store::VoucherVoid::Unknown) => "no code exists for that invoice".into(),
+        Ok(scrai_server::store::VoucherVoid::AlreadySpent) => {
+            "that code is redeemed or already void — nothing was changed".into()
+        }
+        Ok(scrai_server::store::VoucherVoid::Voided(_)) => {
+            scrai_server::pay::append_refund(&hit.invoice, hit.paid_at, hit.usd, &hit.method, &hit.provider_ref, reason, evidence);
+            let how = if hit.method == "card" {
+                format!("refund ${} in Mollie against {}", hit.usd, hit.provider_ref)
+            } else {
+                format!("send ${} worth back to the address that paid memo {}", hit.usd, hit.provider_ref)
+            };
+            format!("VOIDED {} · logged to refunds.csv · now: {how}", hit.receipt)
+        }
+    }
+}
+
+/// One keystroke on the refund screen. Returns a status line when something happened.
+///
+/// The steps are not ceremony. Between "I found the purchase" and "the buyer's credit is
+/// gone" sit two deliberate acts: naming what they showed, and choosing why. Both end up in
+/// `refunds.csv`, because the question somebody will ask months later is not WHETHER we
+/// voided a code but why we believed the person asking for it.
+/// What one purchase looks like on the refund screen. Everything a decision needs, and the
+/// verdict spelled out rather than left to be inferred from a timestamp.
+fn hit_lines(h: &Hit) -> Vec<Line<'static>> {
+    let (verdict, colour) = match h.refundable() {
+        Ok(s) => (s, SAGE),
+        Err(s) => (s, RUST),
+    };
+    let money = if h.method == "card" {
+        format!("Mollie {}", h.provider_ref)
+    } else {
+        format!("memo {} — the sender is on the chain", h.provider_ref)
+    };
+    vec![
+        kv("receipt", h.receipt.clone(), BONE),
+        kv("invoice", h.invoice.clone(), DIM),
+        kv("paid", format!("{} UTC", scrai_server::pay::utc_stamp(h.paid_at)), BONE),
+        kv("amount", format!("${} · {} TOKU", h.usd, grp(h.toku)), GOLD),
+        kv("rail", format!("{} · {} · consent {}", h.method, h.country, h.consent), BONE),
+        kv("find the money", money, DIM),
+        kv("kind", if h.is_voucher { "code bought on the website".into() } else { "in-app purchase".to_string() }, BONE),
+        Line::from(""),
+        Line::from(Span::styled(verdict, Style::default().fg(colour))),
+    ]
+}
+
+fn refund_lines(r: &Refund) -> Vec<Line<'static>> {
+    let hint = |s: &str| Line::from(Span::styled(s.to_string(), Style::default().fg(DIM)));
+    match r {
+        Refund::Off => Vec::new(),
+        Refund::Ask(q) => vec![
+            Line::from("Receipt number, invoice id, the code itself, or a payment reference:"),
+            Line::from(""),
+            Line::from(Span::styled(format!("  {q}_"), Style::default().fg(BONE))),
+            Line::from(""),
+            hint("The code is the strongest thing a buyer can show — holding it is what being"),
+            hint("entitled to it means. A receipt number identifies a purchase but proves nothing:"),
+            hint("it is printed on a document anyone could have photographed."),
+            Line::from(""),
+            hint("Enter searches · Esc closes"),
+        ],
+        Refund::Pick(hits, sel) => {
+            let mut v = vec![
+                Line::from(format!("{} purchases share that receipt prefix — pick one:", hits.len())),
+                Line::from(""),
+            ];
+            for (i, h) in hits.iter().enumerate() {
+                let mark = if i == *sel { "▸ " } else { "  " };
+                v.push(Line::from(Span::styled(
+                    format!("{mark}{} · ${} · {} · {}", h.receipt, h.usd, h.method, scrai_server::pay::utc_stamp(h.paid_at)),
+                    Style::default().fg(if i == *sel { BONE } else { DIM }),
+                )));
+            }
+            v.push(Line::from(""));
+            v.push(hint("↑↓ choose · Enter opens · Esc closes"));
+            v
+        }
+        Refund::Evidence(h, text) => {
+            let mut v = hit_lines(h);
+            v.push(Line::from(""));
+            if h.refundable().is_err() {
+                v.push(hint("Nothing to void here. Esc closes."));
+                return v;
+            }
+            v.push(Line::from("What did the buyer show to prove this purchase is theirs?"));
+            v.push(Line::from(Span::styled(format!("  {text}_"), Style::default().fg(BONE))));
+            v.push(hint("e.g. \"pasted the code\", \"Mollie tr_… + cardholder\", \"chain tx from bech32…\""));
+            v.push(hint("Enter continues · Esc closes"));
+            v
+        }
+        Refund::Confirm(h, evidence) => {
+            let mut v = hit_lines(h);
+            v.push(Line::from(""));
+            v.push(kv("evidence", evidence.clone(), BONE));
+            v.push(Line::from(""));
+            v.push(Line::from(Span::styled(
+                "This destroys the buyer's code. Refund the money the way it came — never to an",
+                Style::default().fg(RUST),
+            )));
+            v.push(Line::from(Span::styled(
+                "address someone named in a message.",
+                Style::default().fg(RUST),
+            )));
+            v.push(Line::from(""));
+            v.push(hint("t = technical (statutory) · g = goodwill · Esc cancels"));
+            v
+        }
+        Refund::Done(msg) => vec![Line::from(msg.clone()), Line::from(""), hint("Esc closes")],
+    }
+}
+
+fn refund_key(r: &mut Refund, k: KeyCode, state_db: &Path) -> Option<String> {
+    match r {
+        Refund::Off => None,
+        Refund::Ask(q) => match k {
+            KeyCode::Esc => {
+                *r = Refund::Off;
+                None
+            }
+            KeyCode::Backspace => {
+                q.pop();
+                None
+            }
+            KeyCode::Char(c) if q.len() < 64 => {
+                q.push(c);
+                None
+            }
+            KeyCode::Enter => {
+                let hits = find_purchase(state_db, q);
+                *r = match hits.len() {
+                    0 => Refund::Done("nothing matches that receipt, invoice, code or payment reference".into()),
+                    1 => Refund::Evidence(Box::new(hits.into_iter().next()?), String::new()),
+                    _ => Refund::Pick(hits, 0),
+                };
+                None
+            }
+            _ => None,
+        },
+        // More than one match means a receipt-number PREFIX collided (8 hex = 32 bits, so
+        // this happens eventually). Never guess — the operator picks.
+        Refund::Pick(hits, sel) => match k {
+            KeyCode::Esc => {
+                *r = Refund::Off;
+                None
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                *sel = (*sel + 1).min(hits.len().saturating_sub(1));
+                None
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                *sel = sel.saturating_sub(1);
+                None
+            }
+            KeyCode::Enter => {
+                let hit = hits.remove(*sel);
+                *r = Refund::Evidence(Box::new(hit), String::new());
+                None
+            }
+            _ => None,
+        },
+        Refund::Evidence(hit, text) => match k {
+            KeyCode::Esc => {
+                *r = Refund::Off;
+                None
+            }
+            KeyCode::Backspace => {
+                text.pop();
+                None
+            }
+            KeyCode::Char(c) if text.len() < 60 => {
+                text.push(c);
+                None
+            }
+            // No evidence, no void. The receipt number alone is on a piece of paper anyone
+            // could be holding, so it can never be the whole basis for destroying credit.
+            KeyCode::Enter if text.trim().is_empty() => {
+                Some("say what the buyer showed — a code, a Mollie payment, a chain transfer".into())
+            }
+            KeyCode::Enter => {
+                *r = Refund::Confirm(hit.clone(), text.clone());
+                None
+            }
+            _ => None,
+        },
+        Refund::Confirm(hit, evidence) => match k {
+            KeyCode::Esc => {
+                *r = Refund::Off;
+                None
+            }
+            KeyCode::Char('t') | KeyCode::Char('g') => {
+                let reason = if matches!(k, KeyCode::Char('t')) { "technical" } else { "goodwill" };
+                let msg = do_void(state_db, hit, reason, evidence);
+                *r = Refund::Done(msg.clone());
+                Some(msg)
+            }
+            _ => None,
+        },
+        Refund::Done(_) => {
+            if matches!(k, KeyCode::Esc | KeyCode::Enter) {
+                *r = Refund::Off;
+            }
+            None
+        }
+    }
+}
+
 fn mint_invite_code(state_db: &Path) -> String {
     let Some(dir) = state_db.parent() else { return "no data dir".into() };
     let fdb = dir.join("faucet.db");
@@ -1130,6 +1519,14 @@ fn run<B: Backend>(term: &mut Terminal<B>, path: &PathBuf, path_str: &str) -> io
         if event::poll(Duration::from_millis(1500))? {
             if let Event::Key(k) = event::read()? {
                 let last = m.daily.len().saturating_sub(1);
+                // The refund screen takes EVERY key while it is open: it has a text field,
+                // and a stray "q" in the middle of typing a receipt number must not quit.
+                if !matches!(view.refund, Refund::Off) {
+                    if let Some(msg) = refund_key(&mut view.refund, k.code, path) {
+                        status = msg;
+                    }
+                    continue;
+                }
                 match k.code {
                     KeyCode::Char('q') => return Ok(()),
                     KeyCode::Esc if view.drawer => view.drawer = false,
@@ -1141,6 +1538,7 @@ fn run<B: Backend>(term: &mut Terminal<B>, path: &PathBuf, path_str: &str) -> io
                     KeyCode::End => view.sel = last,
                     KeyCode::Char('n') => status = toggle_network(),
                     KeyCode::Char('c') => status = mint_invite_code(path),
+                    KeyCode::Char('v') => view.refund = Refund::Ask(String::new()),
                     _ => {}
                 }
             }
@@ -1151,6 +1549,51 @@ fn run<B: Backend>(term: &mut Terminal<B>, path: &PathBuf, path_str: &str) -> io
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn hit(is_voucher: bool, voucher: Option<(u64, Option<u64>, Option<u64>)>, ent: Option<u64>) -> Hit {
+        Hit {
+            invoice: "abc123".into(), receipt: "TKM-2026-ABC123".into(), usd: 5, toku: 500_000,
+            paid_at: 1_757_000_000_000, method: "card".into(), country: "DE".into(),
+            consent: "2026-09-07".into(), provider_ref: "tr_x".into(), status: "paid".into(),
+            is_voucher, voucher, entitlement: ent,
+        }
+    }
+
+    /// The one decision the refund screen exists to make, and the asymmetry behind it: a
+    /// voucher's state is knowable, an in-app purchase's is only knowable while the credit
+    /// has not been withdrawn into blind-signed coins.
+    #[test]
+    fn only_an_unredeemed_code_can_actually_be_voided() {
+        // The good case: bought on the website, code never entered anywhere.
+        assert!(hit(true, Some((500_000, None, None)), None).refundable().is_ok());
+
+        // Redeemed — the credit has left as coins nobody can trace, ours included.
+        let spent = hit(true, Some((500_000, Some(1_757_000_100_000), None)), None);
+        assert!(spent.refundable().unwrap_err().contains("REDEEMED"));
+
+        // Already refunded once.
+        let void = hit(true, Some((500_000, None, Some(1_757_000_100_000))), None);
+        assert!(void.refundable().unwrap_err().contains("already voided"));
+
+        // Paid, but the buyer never asked for the code.
+        assert!(hit(true, None, None).refundable().unwrap_err().contains("no code"));
+
+        // In-app, credit still sitting un-withdrawn: provably unspent, but there is nothing
+        // to invalidate — the refund is money out, and the buyer keeps the credit.
+        let held = hit(false, None, Some(500_000)).refundable().expect("un-withdrawn is answerable");
+        assert!(held.contains("nothing to void"), "{held}");
+
+        // In-app, already withdrawn: unknowable.
+        assert!(hit(false, None, Some(0)).refundable().is_err());
+
+        // In-app past the fourteen-day scrub: we cannot even find the account any more.
+        assert!(hit(false, None, None).refundable().unwrap_err().contains("account link has expired"));
+
+        // Nothing was ever charged.
+        let mut unpaid = hit(true, Some((500_000, None, None)), None);
+        unpaid.status = "pending".into();
+        assert!(unpaid.refundable().unwrap_err().contains("nothing was ever charged"));
+    }
 
     #[test]
     fn network_toggle_flips_only_managed_lines() {

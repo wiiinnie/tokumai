@@ -377,7 +377,7 @@ fn sales_ledger_path() -> std::path::PathBuf {
 
 /// "YYYY-MM-DD HH:MM:SS" in UTC. Same civil_from_days arithmetic scrai-admin uses, so the
 /// two agree and neither needs a date crate.
-fn utc_stamp(ms: u64) -> String {
+pub fn utc_stamp(ms: u64) -> String {
     let secs = (ms / 1000) as i64;
     let z = secs.div_euclid(86_400) + 719_468;
     let era = z.div_euclid(146_097);
@@ -396,7 +396,7 @@ fn utc_stamp(ms: u64) -> String {
 /// The number printed on the buyer's receipt. Derived from OUR invoice id, so it is
 /// unique, reproducible, and says nothing about the buyer — and the app derives the very
 /// same string, which is what makes "quote your receipt number" work at all.
-fn receipt_number(inv_id: &str, paid_at: u64) -> String {
+pub fn receipt_number(inv_id: &str, paid_at: u64) -> String {
     let year = &utc_stamp(paid_at)[0..4];
     format!("TKM-{year}-{}", inv_id.chars().take(8).collect::<String>().to_uppercase())
 }
@@ -428,6 +428,48 @@ fn append_sale(inv: &Inv) {
     };
     if let Err(e) = write() {
         eprintln!("scrai-server: could NOT append to the sales ledger ({}): {e}", path.display());
+    }
+}
+
+/// Where refunds are recorded. Deliberately NOT a column on the sale: `sales.csv` is
+/// append-only and a settled sale is a fact that happened — a correction is its own event,
+/// with its own date, and that is also how it has to look to a tax office. Two files, one
+/// joined by the receipt number.
+///
+/// `evidence` is what the buyer showed to prove the purchase was theirs. It is recorded
+/// because the receipt number alone identifies a purchase without authorising anything —
+/// it is printed on a document that can be photographed — so somebody has to be able to
+/// ask later WHY we believed the requester (audit 2026-09-08).
+pub fn append_refund(inv_id: &str, paid_at: u64, usd: u32, method: &str, provider_ref: &str, reason: &str, evidence: &str) {
+    use std::io::Write;
+    let path = crate::data_dir().join("refunds.csv");
+    let fresh = !path.exists();
+    let clean = |s: &str| -> String {
+        s.chars().filter(|c| !matches!(c, ',' | '\n' | '\r' | '"')).take(64).collect()
+    };
+    // The provider reference rides along so the money side can be found in Mollie — or on
+    // the chain, where it is the memo — without a second lookup.
+    let line = format!(
+        "{},{},{},{:.2},{},{},{},{},{}\n",
+        utc_stamp(now_ms()),
+        receipt_number(inv_id, paid_at),
+        inv_id,
+        usd as f64,
+        "USD",
+        method,
+        clean(provider_ref),
+        clean(reason),
+        clean(evidence),
+    );
+    let write = || -> std::io::Result<()> {
+        let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&path)?;
+        if fresh {
+            f.write_all(b"refunded_utc,receipt,invoice,amount,currency,rail,provider_ref,reason,evidence\n")?;
+        }
+        f.write_all(line.as_bytes())
+    };
+    if let Err(e) = write() {
+        eprintln!("scrai-server: could NOT append to the refund ledger ({}): {e}", path.display());
     }
 }
 
