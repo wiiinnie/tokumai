@@ -128,6 +128,23 @@ fn wallet_key() -> Result<[u8; 32], String> {
 /// its own entry, so wiping one never affects the other. A key written by a pre-rebrand
 /// build is adopted rather than replaced: generating a fresh one would leave the existing
 /// wallet and vault files undecryptable.
+#[cfg(target_os = "ios")]
+pub(crate) fn keychain_key(account: &str, what: &str) -> Result<[u8; 32], String> {
+    use rand::RngCore;
+    // ThisDeviceOnly, never synchronizable: this key is what makes the encrypted wallet
+    // file worthless off this phone. There was no pre-rebrand iOS entry to adopt — iOS ran
+    // plaintext until 2026-09-09 — so this is fetch-or-create and nothing else.
+    if let Some(b64) = crate::keychain_ios::get(account, false)? {
+        return decode_key(std::str::from_utf8(&b64).unwrap_or(""), what);
+    }
+    let mut key = [0u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut key);
+    crate::keychain_ios::set(account, B64.encode(key).as_bytes(), false)?;
+    log::info!("[{what}] generated a fresh {what} encryption key in the iOS Keychain (this device only)");
+    Ok(key)
+}
+
+#[cfg(not(target_os = "ios"))]
 pub(crate) fn keychain_key(account: &str, what: &str) -> Result<[u8; 32], String> {
     use rand::RngCore;
     let entry = keyring::Entry::new(KEYCHAIN_SERVICE, account).map_err(|e| e.to_string())?;
@@ -159,20 +176,53 @@ fn decode_key(b64: &str, what: &str) -> Result<[u8; 32], String> {
     bytes.try_into().map_err(|_| format!("{what} key in keychain has the wrong length"))
 }
 
-/// Whether to encrypt the wallet with an OS-keychain key (H6). On iOS the app's data
-/// container is ALREADY sandboxed and encrypted at rest by the OS (Data Protection), so the
-/// keychain is redundant there — and the `keyring` backend round-trips unreliably on dev
-/// builds (`set_password` succeeds, the next `get_password` fails), which silently resets
-/// the wallet: the server/seed "vanish" after a save. So iOS stores the wallet as plaintext
-/// inside its private container; desktop keeps keychain encryption, where the real threat is
-/// a world-readable file + backup/sync agents (Time Machine, iCloud Drive, Dropbox).
-#[cfg(any(target_os = "ios", target_os = "android"))]
+/// Whether to encrypt the wallet with an OS-keychain key (H6).
+///
+/// iOS ran PLAINTEXT until 2026-09-09, on the argument that the container is encrypted at
+/// rest by Data Protection anyway. What that argument missed: the container is in the
+/// iCloud backup by default, and that backup Apple can read. So the phrase and the bearer
+/// coins were leaving the phone in the clear. Two fixes together: the container is now
+/// excluded from backup (lib.rs), and the wallet is encrypted under a Keychain key marked
+/// ThisDeviceOnly (keychain_ios.rs) — the file is worthless anywhere but here. A legacy
+/// plaintext wallet is read once and re-saved encrypted by `load`/`save` as before.
+///
+/// Android stays plaintext-in-sandbox: `keyring` has no backend there, and Auto Backup is
+/// switched off in the manifest instead, which closes the same door.
+#[cfg(target_os = "android")]
 pub(crate) fn use_keychain() -> bool {
-    false // app-private, OS-encrypted sandbox on both; `keyring` has no Android backend anyway
+    false
 }
-#[cfg(not(any(target_os = "ios", target_os = "android")))]
+#[cfg(not(target_os = "android"))]
 pub(crate) fn use_keychain() -> bool {
     true
+}
+
+// ---- the opt-in phrase copy (iOS) ------------------------------------------------------
+//
+// Not the wallet key and not the wallet: the RECOVERY PHRASE alone, as a Synchronizable
+// Keychain item, so iCloud Keychain carries it to the user's next phone. End to end —
+// Apple stores it and cannot read it; what Apple learns is that an entry for this app
+// exists under this Apple ID. Off by default, asked once after the first top-up (the
+// moment there is something worth protecting), and the phrase never goes anywhere else.
+
+#[cfg(target_os = "ios")]
+const KEYCHAIN_PHRASE: &str = "recovery-phrase";
+
+/// The synced phrase, if the user opted in on this or another of their devices.
+#[cfg(target_os = "ios")]
+pub(crate) fn synced_phrase() -> Result<Option<String>, String> {
+    Ok(crate::keychain_ios::get(KEYCHAIN_PHRASE, true)?
+        .and_then(|b| String::from_utf8(b).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty()))
+}
+
+#[cfg(target_os = "ios")]
+pub(crate) fn set_synced_phrase(mnemonic: Option<&str>) -> Result<(), String> {
+    match mnemonic {
+        Some(m) => crate::keychain_ios::set(KEYCHAIN_PHRASE, m.trim().as_bytes(), true),
+        None => crate::keychain_ios::delete(KEYCHAIN_PHRASE, true),
+    }
 }
 
 /// Write `contents` to the wallet file atomically: temp + fsync + rename over the target,

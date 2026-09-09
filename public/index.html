@@ -1260,6 +1260,27 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   </div>
 </div>
 
+<!-- Asked ONCE, after the first credit has actually landed — not on first start, where there
+     is nothing to protect and it gets tapped away by exactly the person who later loses the
+     balance. iOS only: the phrase copy lives in iCloud Keychain (end to end; Apple stores it
+     and cannot read it). Default off. -->
+<div class="scrim" id="phraseScrim" data-click="__backdrop__" data-close="askPhraseBackupNo">
+  <div class="modal" style="padding:14px 20px 26px">
+    <div class="sheetgrab"></div>
+    <div class="sheett">Credit arrived. Keep your phrase somewhere safe?</div>
+    <div class="sheetd"><b>Fresh credit is cash on this phone for a few hours of use</b> — a dollar of it moves onto your
+      recovery phrase every few minutes the app is open. From there it can always come back, on any device.<br><br>
+      Your phrase is on paper. You can <b>also</b> keep it in your iPhone’s Keychain, synced through iCloud. It is
+      encrypted end to end: Apple stores it and cannot read it.<br><br>
+      <span style="color:var(--muted)">What Apple does learn: that a tokumai entry exists in the Keychain tied to your
+      Apple ID — that you use this app, not what you ask it.</span></div>
+    <div class="sheetbtns">
+      <button class="btn primary" data-click="askPhraseBackupYes">Keep it in Keychain</button>
+      <button class="btn" data-click="askPhraseBackupNo">No — paper only</button>
+    </div>
+  </div>
+</div>
+
 <div class="scrim" id="acctScrim" data-click="__backdrop__" data-close="closeAccount">
   <div class="modal">
     <div class="mh">
@@ -1776,6 +1797,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       if(gotModels.length) models = gotModels;
       tiers = s.tiers || tiers || [];
       account = s.account; balance = s.balance||0; held = s.held||0;
+      refreshPhraseBackup();
       fakePayments = s.fakePayments === true;    // only when the server SAYS so
       devBuild = s.devBuild === true;
       if(!devBuild) devCost = false;             // no diagnostics outside a debug build, whatever localStorage says
@@ -4820,7 +4842,32 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // Tauri webview, so everything is rendered inside the modal) ----------
   let acctPhrase = null;   // revealed 24 words to show, or null
   let acctView = null;     // null | "restore" | "confirmNew" | "confirmRestore" | ...
-  let acctPage = null;     // drill-in sub-page: null(landing) | server | phrase | restore | migrate | credit | danger
+  let acctPage = null;     // drill-in sub-page: null(landing) | server | phrase | restore | migrate | credit | danger | backup
+  // The opt-in phrase copy (iOS: iCloud Keychain, end to end). `available` is false
+  // elsewhere, and the row hides rather than offering a switch that does nothing.
+  let phraseBackup = { available:false, on:false };
+  const PHRASE_ASKED_KEY = "tokumai.phraseBackupAsked";
+  async function refreshPhraseBackup(){
+    try{ const r = await Backend.phraseBackupGet(); phraseBackup = { available: !!(r&&r.available), on: !!(r&&r.on) }; }
+    catch(_){ phraseBackup = { available:false, on:false }; }
+  }
+  async function setPhraseBackup(on){
+    try{
+      const r = await Backend.phraseBackupSet(!!on);
+      phraseBackup = { available: !!(r&&r.available), on: !!(r&&r.on) };
+      acctStatus(on ? "Phrase copied to iCloud Keychain." : "Phrase removed from iCloud Keychain.");
+    }catch(e){ acctStatus("Could not change the phrase backup: " + (e && e.message ? e.message : e), "bad"); }
+    renderAccount();
+  }
+  // The one-time ask. Only when credit has actually landed, only where the feature exists,
+  // only if they have not opted in already, and only once — a dismissed sheet is an answer.
+  function maybeAskPhraseBackup(collected){
+    if(!(Number(collected) > 0) || !phraseBackup.available || phraseBackup.on) return;
+    try{ if(localStorage.getItem(PHRASE_ASKED_KEY)) return; }catch(_){ return; }
+    openScrim("phraseScrim");
+  }
+  function askPhraseBackupYes(){ try{ localStorage.setItem(PHRASE_ASKED_KEY,"1"); }catch(_){} $("phraseScrim").classList.remove("open"); setPhraseBackup(true); }
+  function askPhraseBackupNo(){ try{ localStorage.setItem(PHRASE_ASKED_KEY,"1"); }catch(_){} $("phraseScrim").classList.remove("open"); }
   let pendingRestorePhrase = null;  // held across the "discard held credit?" restore confirm
   function openAccount(){ acctPhrase=null; acctView=null; acctPage=null; renderAccount(); openScrim("acctScrim"); }
   // Account drill-in: rows navigate into a sub-page, the back arrow returns to the landing.
@@ -5061,6 +5108,10 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         + row("server","c-net","🌐","Server","tokumai server rendezvous", server?`<span class="pill ok">set</span>`:`<span class="pill warn">not set</span>`)
         + `<div class="grouplbl">Keys &amp; devices</div>`
         + row("phrase","c-key","🔑","Recovery phrase","show &amp; copy the 24 words")
+        + (phraseBackup.available
+            ? row("backup","c-key","☁","Phrase in Keychain", phraseBackup.on ? "synced through iCloud, end to end" : "off · paper only",
+                  phraseBackup.on ? `<span class="pill ok">on</span>` : `<span class="pill">off</span>`)
+            : "")
         + row("restore","c-restore","📥","Restore account","from phrase or QR")
         + row("migrate","c-migrate","📲","Move to another device","redeem &amp; hand over")
         + `<div class="grouplbl dangergroup">Danger zone</div>`
@@ -5123,8 +5174,17 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
            <button class="btn" data-click="cancelAcctView">Cancel</button></div>`
       : `<p class="pagelead">Enter or scan a 24-word recovery phrase to restore that account on this device.</p>${restoreForm()}`;
 
+    const backupPage = phraseBackup.on
+      ? `<p class="pagelead">Your recovery phrase is in your iPhone’s Keychain, synced through iCloud — end to end, so Apple stores it and cannot read it. A new iPhone signed into the same Apple ID gets this account back on its own.</p>
+         <p class="hint">What comes back is what is on the phrase: your recoverable balance. Coins still on a lost phone do not — they are cash, and the split on your account card shows how much that is right now.</p>
+         <div class="btnrow"><button class="btn" data-click="setPhraseBackup" data-args="false">Remove from Keychain</button></div>`
+      : `<p class="pagelead">Keep a copy of your recovery phrase in your iPhone’s Keychain, synced through iCloud. End to end: Apple stores it and cannot read it. A lost phone is then not a lost balance.</p>
+         <p class="hint">What Apple does learn: that a tokumai entry exists in the Keychain tied to your Apple ID — that you use this app, not what you ask it. Off, the phrase exists only where you wrote it down.</p>
+         <div class="btnrow"><button class="btn primary" data-click="setPhraseBackup" data-args="true">Keep it in Keychain</button></div>`;
+
     const pages = {
       server:  { t:"Server",                 h:`<p class="pagelead">Pick the official server, or paste one from your own tokumai server.</p>${serverControls()}` },
+      backup:  { t:"Phrase in Keychain",      h:backupPage },
       phrase:  { t:"Recovery phrase",         h:phraseBlock },
       restore: { t:"Restore account",         h:restorePage },
       migrate: { t:"Move to another device",  h:migratePage },
@@ -5351,6 +5411,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     try{
       const r=await Backend.collect(); lastCredCheck = Date.now();
       await refreshState();
+      maybeAskPhraseBackup(r && r.collected);
       if(r && r.collected > 0) await sweepReceipts();
       credResult = r&&r.collected>0 ? `+${formatToku(r.collected)} TOKU collected` : "nothing outstanding";
       checking = false; renderAccount();
@@ -5580,6 +5641,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
                           : coll>0 ? `already redeemed — +${formatToku(coll)} TOKU collected`
                           : "already redeemed on this account");
         await refreshState(); renderBuyBal(); renderBal();
+        maybeAskPhraseBackup(coll);
       }
     }catch(e){
       inviteOk=false; inviteCode="";
@@ -6118,6 +6180,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         if(st.status==="paid"){
           stopPoll(); stopCountdown(); activeInvoice=null; removePending(inv.invoiceId); setPayStatus("collecting");
           const r=await Backend.collect(); await refreshState(); renderBuyBal(); showChooser(true); renderTiers(); renderPending();
+          maybeAskPhraseBackup(r && r.collected);
           // The receipt is written from what THIS device knows about the purchase, before
           // anything else can go wrong — the buyer is entitled to it either way.
           if(!inv.testnet) { rememberReceipt(inv, (inv.amountToku ?? inv.amountScrai) || r.collected); renderReceipts(); }
@@ -6296,7 +6359,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     openBuy, closeBuy, buyTier, buyOrInvoice, checkInvite, selectCoin, pickVariant, copyUri, copyTopupId, openTopupSheet, closeTopupSheet, confirmTopup, openAccount, closeAccount, doAccountNew, doAccountReveal, doAccountRestore, doAccountDelete, doMigrate, doRedeem, redeemSliderChanged, toggleRedeemPick, askCancelInvoice, dismissCancelAsk, confirmCancelInvoice, toggleConsent, downloadReceipt, startQrScan, stopQrScan,
     showRestore, askNew, redeemThen, cancelAcctView, saveServer, srvSelected, qNav, scrollToBottom, reopenGuard, checkCredit,
     openEntryPicker, showExitInfo, chooseGateway, closeGw, filterGw, toggleGwOpt,
-    acceptTerms, declineTerms, termsAgreeToggle, chooseModel, openLink, openSite, writeSupport, paymentSupport, toggleImgOvl, saveImgTap, liveNudgeUse, liveNudgeSkip, reconnectMix, runMixPing, resetMixPerf,
+    acceptTerms, declineTerms, termsAgreeToggle, chooseModel, openLink, openSite, writeSupport, paymentSupport, setPhraseBackup, askPhraseBackupYes, askPhraseBackupNo, toggleImgOvl, saveImgTap, liveNudgeUse, liveNudgeSkip, reconnectMix, runMixPing, resetMixPerf,
     pickImage, attachTap, pickNative, pickFile, closeAttachMenu, onImagePicked, clearImage, setMenuKind, toggleLatest, startMode, imgSettled,
     closeImport, decryptImport, selectMethod, copyMemo, openSettings, closeSettings,
     navPage, navBack, acctNav, acctBack, backFromRestore,

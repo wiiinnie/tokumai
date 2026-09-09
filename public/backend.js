@@ -96,6 +96,8 @@ const httpBackend = {
   invoiceStatus: (id) => jsonCall("GET", "/api/invoice/" + encodeURIComponent(id)),
   invoiceCancel: (id) => jsonCall("POST", "/api/invoice/cancel", { id }),
   voucherRedeem: () => Promise.reject(new Error("codes are redeemed in the app, not the dev bridge")),
+  phraseBackupGet: () => Promise.resolve({ available: false, on: false }),
+  phraseBackupSet: () => Promise.reject(new Error("the phrase backup is an app feature")),
   ocr: () => Promise.reject(new Error("no native OCR in dev")),   // dev browser → frontend falls back to WASM
   pdfText: () => Promise.reject(new Error("no native PDF in dev")), // dev browser → frontend falls back to pdf.js
   pdfOcr: () => Promise.reject(new Error("no native PDF-OCR in dev")),
@@ -174,6 +176,8 @@ const tauriBackend = (invoke) => ({
   invoiceStatus: (id) => invoke("invoice_status", { id }),
   invoiceCancel: (id) => invoke("invoice_cancel", { id }),
   voucherRedeem: (code) => invoke("voucher_redeem", { code }),
+  phraseBackupGet: () => invoke("phrase_backup_get"),
+  phraseBackupSet: (on) => invoke("phrase_backup_set", { on: !!on }),
   ocr: (image) => invoke("ocr_scan", { image }),   // native OS OCR (macOS: Apple Vision); errors → WASM fallback
   pdfText: (image) => invoke("pdf_text", { image }), // native PDF text extraction (Rust); errors/empty → pdf.js fallback
   pdfOcr: (image) => invoke("pdf_ocr", { image }),

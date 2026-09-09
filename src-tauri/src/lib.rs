@@ -13,6 +13,8 @@ mod nym;
 mod ocr;
 mod vault;
 mod wallet;
+#[cfg(target_os = "ios")]
+mod keychain_ios;
 
 use nym::Transport;
 use rand::RngCore;
@@ -265,8 +267,86 @@ fn dev_env(name: &str) -> Option<String> {
         .filter(|v| !v.trim().is_empty())
 }
 
+#[cfg(not(target_os = "windows"))]
 fn data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     app.path().app_data_dir().map_err(|e| e.to_string())
+}
+
+/// Windows: LOCAL app data, not Roaming. `app_data_dir` is `AppData\Roaming`, which a
+/// domain profile synchronises to the server — the encrypted wallet and the chat vault
+/// have no business travelling with a login. Same rule as the mobile backup exclusion:
+/// secrets stay on the machine they were made on. Restore is by recovery phrase.
+#[cfg(target_os = "windows")]
+fn data_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path().app_local_data_dir().map_err(|e| e.to_string())
+}
+
+/// Windows, once: an install that kept its data in Roaming moves it to Local. Runs after
+/// the pre-rebrand migration, so a Roaming dir under either name is a candidate.
+#[cfg(target_os = "windows")]
+fn migrate_roaming_to_local(app: &AppHandle) {
+    let (Ok(local), Ok(roaming)) = (app.path().app_local_data_dir(), app.path().app_data_dir()) else { return };
+    let legacy = roaming.parent().map(|p| p.join("com.scrambleai.app"));
+    let Some(from) = pick_migration_source(local.exists(), &[Some(roaming), legacy]) else { return };
+    match std::fs::rename(&from, &local) {
+        Ok(()) => log::info!("[migrate] moved the data directory out of Roaming: {}", from.display()),
+        Err(e) => eprintln!("[migrate] could not move {} to {}: {e}", from.display(), local.display()),
+    }
+}
+
+/// Which existing directory to adopt, if the target does not exist yet. Pure, so it can be
+/// tested without a Windows profile: first candidate that is a directory wins, none if the
+/// target already exists.
+#[cfg(any(target_os = "windows", test))]
+fn pick_migration_source(target_exists: bool, candidates: &[Option<PathBuf>]) -> Option<PathBuf> {
+    if target_exists {
+        return None;
+    }
+    candidates.iter().flatten().find(|p| p.is_dir()).cloned()
+}
+
+/// iOS: keep the whole data container out of iCloud and Finder backups. It holds the
+/// wallet (phrase + bearer coins) and the chat vault, and the default is to back all of
+/// that up to a store Apple can read. Recovery is by phrase — and, if the user opts in, by
+/// the phrase's own end-to-end Keychain copy — never by restoring this directory.
+#[cfg(target_os = "ios")]
+fn exclude_from_backup(dir: &Path) {
+    use objc2_foundation::{NSNumber, NSString, NSURL, NSURLIsExcludedFromBackupKey};
+    let _ = std::fs::create_dir_all(dir);
+    let path = NSString::from_str(&dir.to_string_lossy());
+    let url = NSURL::fileURLWithPath(&path);
+    let yes = NSNumber::numberWithBool(true);
+    // SAFETY: a file URL we just built, a boolean NSNumber, and a key the framework defines.
+    match unsafe { url.setResourceValue_forKey_error(Some(&yes), NSURLIsExcludedFromBackupKey) } {
+        Ok(()) => log::info!("[backup] data container excluded from iCloud/Finder backup"),
+        Err(e) => log::error!("[backup] could NOT exclude the data container from backup: {e}"),
+    }
+}
+
+/// iOS, at start: no wallet here, but the user's phrase is in iCloud Keychain (they opted in
+/// on a previous phone) → this IS the restore. The account comes back on its own; the
+/// coins that were still on the old phone do not, and the UI says so.
+#[cfg(target_os = "ios")]
+fn restore_from_synced_phrase(dir: &Path) {
+    let w = wallet::load(dir);
+    if w.mnemonic.is_some() {
+        return;
+    }
+    match wallet::synced_phrase() {
+        Ok(Some(m)) => match account::from_mnemonic(&m) {
+            Ok(a) => {
+                let w = wallet::Wallet { mnemonic: Some(a.mnemonic), server: w.server, entry_gateway: w.entry_gateway, ..Default::default() };
+                match wallet::save(dir, &w) {
+                    Ok(()) => log::info!("[restore] account restored from the iCloud Keychain copy"),
+                    Err(e) => log::error!("[restore] found a Keychain copy but could not save the wallet: {e}"),
+                }
+            }
+            // The parse error is not logged: a bip39 message can quote what it was given.
+            Err(_) => log::error!("[restore] the Keychain copy does not parse as an account"),
+        },
+        Ok(None) => {}
+        Err(e) => log::warn!("[restore] could not read iCloud Keychain: {e}"),
+    }
 }
 
 /// The app data directory is NAMED after the bundle identifier, so renaming
@@ -1187,6 +1267,44 @@ fn account_restore(app: AppHandle, mnemonic: String, force: Option<bool>) -> Res
     let w = wallet::Wallet { mnemonic: Some(a.mnemonic.clone()), server: prev.server, entry_gateway: prev.entry_gateway, ..Default::default() };
     wallet::save(&dir, &w)?;
     Ok(json!({ "fingerprint": account::fingerprint(&a.account_id), "balance": 0 }))
+}
+
+/// Is the phrase copied to iCloud Keychain? `available` is false off iOS, so the row can
+/// hide itself rather than offer a switch that does nothing.
+#[tauri::command]
+fn phrase_backup_get(_app: AppHandle) -> Result<Value, String> {
+    #[cfg(target_os = "ios")]
+    {
+        let on = wallet::synced_phrase()?.is_some();
+        return Ok(json!({ "available": true, "on": on }));
+    }
+    #[cfg(not(target_os = "ios"))]
+    Ok(json!({ "available": false, "on": false }))
+}
+
+/// Opt in or out. In: the phrase of THIS wallet goes to the synchronizable item. Out: the
+/// item is deleted — on every device that shares the Apple ID, once iCloud Keychain syncs
+/// the deletion.
+#[tauri::command]
+fn phrase_backup_set(app: AppHandle, on: bool) -> Result<Value, String> {
+    #[cfg(target_os = "ios")]
+    {
+        if on {
+            let w = wallet::load(&data_dir(&app)?);
+            let m = w.mnemonic.ok_or("no account — create one first")?;
+            wallet::set_synced_phrase(Some(&m))?;
+            log::info!("[backup] Keychain copy created (opt-in)");
+        } else {
+            wallet::set_synced_phrase(None)?;
+            log::info!("[backup] Keychain copy removed");
+        }
+        return Ok(json!({ "available": true, "on": on }));
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        let _ = (app, on);
+        Err("the phrase backup is an iOS feature".into())
+    }
 }
 
 #[tauri::command]
@@ -3165,6 +3283,13 @@ pub fn run() {
             // FIRST: nothing may touch the data directory before this — the first
             // create_dir_all would make the pre-rebrand data unreachable for good.
             migrate_pre_rebrand_data_dir(&app.handle().clone());
+            #[cfg(target_os = "windows")]
+            migrate_roaming_to_local(&app.handle().clone());
+            #[cfg(target_os = "ios")]
+            if let Ok(dir) = data_dir(&app.handle().clone()) {
+                exclude_from_backup(&dir);
+                restore_from_synced_phrase(&dir);
+            }
             let _ = APP_VER.set(app.package_info().version.to_string());
             // Android: TLS trust store for the Nym client's directory fetches (needs the Activity,
             // which exists by now — the mobile entry point runs from onCreate).
@@ -3203,6 +3328,8 @@ pub fn run() {
             invoice, invoice_status, invoice_cancel, invite_check, ocr_scan, pdf_text, pdf_ocr, pdf_pages, collect, redeem, chat,
             smart_available, smart_detect, coconut_redeem,
             mixnet_route, mixnet_ping, cancel_chat, app_resumed, app_hidden, resume_stats, list_entry_gateways, set_entry_gateway, set_mixnet_perf, open_external, save_image, save_file, voucher_redeem,
+            phrase_backup_get,
+            phrase_backup_set,
             share_text, upload_begin, upload_chunk, upload_pipeline, pick_image, open_account_security,
             vault_list, vault_load, vault_save, vault_remove, vault_purge_webdata, pending_load, pending_save
         ])
@@ -3214,6 +3341,35 @@ pub fn run() {
 // Regression tests for C3 (docs/security/audit-2026-08-20.md): the client-side
 // overcharge guard — independent fair-price recompute from the bundled table.
 #[cfg(test)]
+mod migration_tests {
+    use super::pick_migration_source;
+    use std::path::PathBuf;
+
+    /// Windows moves Roaming → Local once. The rule is small enough to state exactly: never
+    /// when Local already exists (a second run must not clobber it), otherwise the first
+    /// candidate that is a real directory, in the order given (new name before legacy).
+    #[test]
+    fn roaming_to_local_picks_the_first_existing_source_and_never_clobbers() {
+        let base = std::env::temp_dir().join(format!("tk-migr-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let newer = base.join("com.tokumai.app");
+        let legacy = base.join("com.scrambleai.app");
+        std::fs::create_dir_all(&legacy).unwrap();
+
+        // Only the legacy dir exists → it is the source.
+        assert_eq!(pick_migration_source(false, &[Some(newer.clone()), Some(legacy.clone())]), Some(legacy.clone()));
+        // Both exist → the newer name wins.
+        std::fs::create_dir_all(&newer).unwrap();
+        assert_eq!(pick_migration_source(false, &[Some(newer.clone()), Some(legacy.clone())]), Some(newer.clone()));
+        // Target already there → nothing, whatever else exists.
+        assert_eq!(pick_migration_source(true, &[Some(newer.clone()), Some(legacy.clone())]), None);
+        // Nothing exists → nothing.
+        assert_eq!(pick_migration_source(false, &[Some(base.join("nope")), None]), None);
+        assert_eq!(pick_migration_source(false, &[None, None]), None);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
 mod c3_tests {
     use super::*;
     use serde_json::json;

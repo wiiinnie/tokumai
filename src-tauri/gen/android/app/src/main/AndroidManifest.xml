@@ -5,7 +5,12 @@
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />
 
+    <!-- No Auto Backup. The app's private storage holds the wallet — recovery phrase and
+         bearer coins — as plaintext files, and Android would ship that to Google Drive by
+         default. Same rule as iOS: secrets never enter a backup the platform vendor holds.
+         Restore is by recovery phrase, not by device backup. -->
     <application
+        android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:theme="@style/Theme.scrambleai"

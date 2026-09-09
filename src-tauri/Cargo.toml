@@ -104,6 +104,9 @@ block2 = "0.6"
 # App Store storefront (country) — decides which top-up UI iOS may show (guideline 3.1.1):
 # US = link out, EU = link out under the external-purchase-link entitlement, rest = ID only.
 objc2-store-kit = { version = "0.3", features = ["SKPaymentQueue", "SKStorefront"] }
+# keychain_ios.rs: the Keychain directly, with the two attributes `keyring` cannot set —
+# ThisDeviceOnly protection for the wallet key, Synchronizable for the opt-in phrase copy.
+security-framework = "3"
 objc2-local-authentication = { version = "0.3", features = ["LAContext", "LAError"] }
 
 # --- on-device OCR for the privacy guard (macOS + iOS via Apple Vision;
