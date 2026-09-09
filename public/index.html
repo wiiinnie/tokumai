@@ -1292,6 +1292,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         <div class="catrow" data-click="navPage" data-click-pass="this" data-page="guard" data-title="Data Guard"><span class="ic c-guard"><svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg></span><span class="tx"><b>Data Guard</b><small>On-device sensitive-data checks</small></span><span class="chev">›</span></div>
         <div class="catrow" data-click="navPage" data-click-pass="this" data-page="eff" data-title="Efficiency"><span class="ic c-eff"><svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M20 4L8.5 15.5M20 20L8.5 8.5"></path></svg></span><span class="tx"><b>Efficiency</b><small>Trim tokens, save credit</small></span><span class="chev">›</span></div>
         <div class="catrow" data-click="navPage" data-click-pass="this" data-page="general" data-title="General"><span class="ic c-gen"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path></svg></span><span class="tx"><b>General</b><small>Typing, tutorial</small></span><span class="chev">›</span></div>
+        <div class="catrow" data-click="navPage" data-click-pass="this" data-page="about" data-title="About"><span class="ic c-net"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v5"></path><circle cx="12" cy="7.6" r=".9" fill="currentColor" stroke="none"></circle></svg></span><span class="tx"><b>About</b><small>Version, who runs this, support</small></span><span class="chev">›</span></div>
         <div class="catrow" id="devCatRow" data-click="navPage" data-click-pass="this" data-page="dev" data-title="Developer"><span class="ic c-dev"><svg viewBox="0 0 24 24"><path d="M9 3h6M10 3v6L4.5 19a1.5 1.5 0 0 0 1.3 2.2h12.4a1.5 1.5 0 0 0 1.3-2.2L14 9V3"></path><path d="M7 15h10"></path></svg></span><span class="tx"><b>Developer</b><small>Diagnostics · dev builds</small></span><span class="chev">›</span></div>
       </div>
       <div class="mpage" data-page="appearance">
@@ -1300,6 +1301,35 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         <button class="topt" data-theme-opt="A"><span class="sw"><i style="background:#141210"></i><i style="background:#7A5FFF"></i><i style="background:#ECE6DC"></i></span><span class="nm">Dark<small>ink · violet · bone</small></span></button>
         <button class="topt" data-theme-opt="F"><span class="sw"><i style="background:#ECE6DC"></i><i style="background:#5B45D6"></i><i style="background:#141210"></i></span><span class="nm">Light<small>bone · violet · ink</small></span></button>
       </div>
+
+      </div>
+      <div class="mpage" data-page="about">
+      <p class="pagelead">tokumai is anonymous AI over the Nym mixnet. Prepaid credit, no account to sign up for,
+         and nothing here that ties what you ask to who you are.</p>
+
+      <div class="grouplbl" style="margin-top:2px">This build</div>
+      <div class="setrow" style="cursor:default"><span><b id="abVer">tokumai</b><small id="abSrv">server —</small></span></div>
+
+      <div class="grouplbl">Support</div>
+      <div class="setrow" data-click="writeSupport" style="cursor:pointer"><span><b>Write to support</b><small>Opens your own e-mail app with the version details filled in. Nothing is sent until you press send, and the message never touches our server — so we do not learn your address from a page you had to load first.</small></span><span class="chev">›</span></div>
+
+      <div class="grouplbl">Who runs this</div>
+      <div class="setrow" style="cursor:default"><span><small id="abSeller"></small></span></div>
+
+      <div class="grouplbl">Read</div>
+      <div class="setrow" data-click="openSite" data-click-pass="this" data-path="/" style="cursor:pointer"><span><b>Website</b><small id="abSite">tokumai.com</small></span><span class="chev">↗</span></div>
+      <div class="setrow" data-click="openSite" data-click-pass="this" data-path="/terms" style="cursor:pointer"><span><b>Terms</b><small>What you buy, and what happens if something is wrong</small></span><span class="chev">↗</span></div>
+      <div class="setrow" data-click="openSite" data-click-pass="this" data-path="/privacy" style="cursor:pointer"><span><b>Privacy</b><small>What each part of this can and cannot see</small></span><span class="chev">↗</span></div>
+      <div class="setrow" data-click="openSite" data-click-pass="this" data-path="/imprint" style="cursor:pointer"><span><b>Imprint</b><small>Legal notice · § 5 DDG</small></span><span class="chev">↗</span></div>
+
+      <div class="grouplbl">With thanks to</div>
+      <p class="hint" style="margin:2px 6px 10px;line-height:1.65">
+        <b>Nym</b> — the mixnet that carries every message here, and the Coconut credentials that let credit
+        be spent without naming an account.<br>
+        <b>Google</b> and <b>OpenAI</b> — the models that answer. They see the question, never you.<br>
+        <b>Tauri</b>, <b>Rust</b> and <b>Tesseract</b> — the app, the server, and the on-device OCR that lets the
+        Data Guard read an attachment without it leaving your machine.
+      </p>
 
       </div>
       <div class="mpage" data-page="general">
@@ -1752,6 +1782,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       if(s.update && s.update.required) showUpdateGate(s.update);
       // Settings footer: app + server version (server absent on the web dev bridge / old servers).
       { const av=String(s.appVersion||"").slice(0,32), sv=String(s.serverVersion||"").slice(0,32);
+        srvVer = sv;
         $("verLine").textContent = av ? ("tokumai "+av+(sv?" · server "+sv:"")) : "";
         if(/^\d+\.\d+\.\d+/.test(av)){ APP_VERSION = versionLabel(av); const v=$("appVer"); if(v) v.textContent="v"+APP_VERSION; } }
       serverTestnet = s.testnet === true;          // the server's kill switch: absent/false → no toggle
@@ -2016,6 +2047,75 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     }catch(e){ fell(e); }
     return false;
   }
+  let srvVer = "";
+  // Where support mail goes. Still the pre-rebrand address because it is the one the imprint
+  // publishes, and § 5 DDG requires the published one to work — it moves when that page does.
+  const SUPPORT_MAIL = "hermes-stakepool@proton.me";
+  const SITE_FALLBACK = "https://tokumai.com";
+
+  function platformName(){
+    try{
+      const u = navigator.userAgent || "";
+      if(/iPhone|iPad|iPod/.test(u)) return "iOS";
+      if(/Android/.test(u)) return "Android";
+      if(/Windows/i.test(u)) return "Windows";
+      if(/Mac/i.test(u)) return "macOS";
+      if(/Linux/i.test(u)) return "Linux";
+    }catch(_){}
+    return "unknown";
+  }
+
+  // Open the writer's OWN mail app with the diagnostics already in the body.
+  //
+  // A mailto and not a web form on purpose: a form means loading a page from our server,
+  // which hands us the reader's IP for the privilege of asking a question. This way the
+  // message goes from their device through their mail provider, and we learn the address
+  // they chose to write from and nothing else. Attachments are not lost either — their
+  // compose window takes a screenshot the way it takes any other, and deliberately, which
+  // is the right amount of friction for a screenshot of this app.
+  //
+  // Only what saves a round trip goes in: build, platform, server, and the purchase they are
+  // asking about. Never the account fingerprint, the session, or anything from a chat —
+  // quietly assembled identity is the thing this app exists not to do, and they must be able
+  // to read every line before pressing send.
+  function supportMailto(subject, context){
+    const foot = ["--", `app ${APP_VERSION} · ${platformName()}${srvVer ? ` · server ${srvVer}` : ""}`];
+    if(context) foot.push(context);
+    const body = "\n\n" + foot.join("\n") + "\n";
+    return `mailto:${SUPPORT_MAIL}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  }
+  function writeSupport(){ openLink(supportMailto("tokumai support", "")); return false; }
+
+  // From the payment panel, where a stuck payment is actually being looked at. Carries the
+  // invoice id and the rail's own reference (a Mollie checkout, or the NYM memo) — between
+  // them the admin finds the purchase without the buyer having to know what a receipt
+  // number is, or still having the receipt.
+  function paymentSupport(){
+    const inv = activeInvoice;
+    if(!inv) return writeSupport();
+    const o = (inv.options||[])[0] || {};
+    const ref = o.memo || inv.checkout || "";
+    const ctx = [
+      `invoice ${inv.invoiceId}`,
+      `$${Number(inv.amountUsd||0).toFixed(2)} · ${coinOf(inv)}`,
+      ref ? `reference ${String(ref).slice(0,120)}` : "",
+    ].filter(Boolean).join("\n");
+    openLink(supportMailto("tokumai — problem with a payment", ctx));
+    return false;
+  }
+
+  function siteBase(){ return (siteUrl || SITE_FALLBACK).replace(/\/+$/, ""); }
+  function openSite(el){
+    const path = (el && el.getAttribute && el.getAttribute("data-path")) || "/";
+    return openLink(siteBase() + (path === "/" ? "" : path));
+  }
+  function renderAbout(){
+    const v = $("abVer"); if(v) v.textContent = `tokumai ${APP_VERSION}`;
+    const sv = $("abSrv"); if(sv) sv.textContent = srvVer ? `server ${srvVer}` : "server — not connected yet";
+    const se = $("abSeller"); if(se) se.innerHTML = SELLER.map(esc).join("<br>");
+    const st = $("abSite"); if(st) st.textContent = siteBase().replace(/^https:\/\//, "");
+  }
+
   // Consent is persisted per PROVIDER + terms version: every Google model shares
   // Google's terms, so once you've agreed for one, switching between Google models
   // won't re-prompt — and neither will an app restart. The stored value is a
@@ -4062,6 +4162,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     const mb=modal.querySelector(".mb"); if(mb) mb.scrollTop=0;
   }
   function openSettings(){
+    renderAbout();
     navReset("setScrim");
     const curTheme = (()=>{ try{ return localStorage.getItem("scrai.theme")||"A"; }catch(_){ return "A"; } })();
     document.querySelectorAll("#themePick .topt").forEach(b=>{
@@ -6173,6 +6274,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
                <button class="btn" data-click="dismissCancelAsk">Keep waiting</button></div>
            </div>`
         : `<div class="cancelrow"><span class="cancellink" data-click="askCancelInvoice">Cancel this invoice</span></div>`}
+      <div class="cancelrow"><span class="cancellink" data-click="paymentSupport">Something wrong with this payment? Write to us</span></div>
     </div>`;
   }
   function copyText(text, btn){
@@ -6194,7 +6296,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     openBuy, closeBuy, buyTier, buyOrInvoice, checkInvite, selectCoin, pickVariant, copyUri, copyTopupId, openTopupSheet, closeTopupSheet, confirmTopup, openAccount, closeAccount, doAccountNew, doAccountReveal, doAccountRestore, doAccountDelete, doMigrate, doRedeem, redeemSliderChanged, toggleRedeemPick, askCancelInvoice, dismissCancelAsk, confirmCancelInvoice, toggleConsent, downloadReceipt, startQrScan, stopQrScan,
     showRestore, askNew, redeemThen, cancelAcctView, saveServer, srvSelected, qNav, scrollToBottom, reopenGuard, checkCredit,
     openEntryPicker, showExitInfo, chooseGateway, closeGw, filterGw, toggleGwOpt,
-    acceptTerms, declineTerms, termsAgreeToggle, chooseModel, openLink, toggleImgOvl, saveImgTap, liveNudgeUse, liveNudgeSkip, reconnectMix, runMixPing, resetMixPerf,
+    acceptTerms, declineTerms, termsAgreeToggle, chooseModel, openLink, openSite, writeSupport, paymentSupport, toggleImgOvl, saveImgTap, liveNudgeUse, liveNudgeSkip, reconnectMix, runMixPing, resetMixPerf,
     pickImage, attachTap, pickNative, pickFile, closeAttachMenu, onImagePicked, clearImage, setMenuKind, toggleLatest, startMode, imgSettled,
     closeImport, decryptImport, selectMethod, copyMemo, openSettings, closeSettings,
     navPage, navBack, acctNav, acctBack, backFromRestore,
