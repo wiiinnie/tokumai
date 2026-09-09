@@ -72,6 +72,20 @@
   .models h3{margin:0 0 9px;font-family:var(--mono);font-size:10px;letter-spacing:.12em;
              text-transform:uppercase;color:var(--acc2)}
 
+  .codes{margin-top:16px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2);
+         padding:12px 14px}
+  .chead{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  .chead h3{margin:0;font-family:var(--mono);font-size:10px;letter-spacing:.12em;
+            text-transform:uppercase;color:var(--acc2)}
+  .chips{display:flex;gap:6px;flex-wrap:wrap}
+  .chip{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;padding:4px 10px;border-radius:999px;
+        border:1px solid var(--line);background:transparent;color:var(--muted);cursor:pointer}
+  .chip i{font-style:normal;color:var(--dim);margin-left:5px}
+  .chip.on{border-color:color-mix(in srgb,var(--acc) 55%,var(--line));color:#cdbcff;
+           background:color-mix(in srgb,var(--acc) 14%,transparent)}
+  .chip.on i{color:#cdbcff}
+  .kind{font-size:10px;letter-spacing:.06em;text-transform:uppercase;padding:2px 7px;border-radius:999px;
+        border:1px solid var(--line);color:var(--muted)}
   .bar{display:flex;gap:8px;align-items:center;margin-top:16px;flex-wrap:wrap}
   button{font-family:var(--mono);font-size:11.5px;letter-spacing:.04em;padding:7px 13px;border-radius:8px;
          border:1px solid var(--line);background:var(--surface-2);color:var(--muted);cursor:pointer}
@@ -172,8 +186,33 @@
     <div id="models"></div>
   </div>
 
+  <div class="codes" id="codesBox" hidden>
+    <div class="chead">
+      <h3>Issued codes</h3>
+      <span class="chips">
+        <button class="chip on" data-filter="all">all <i id="nAll">0</i></button>
+        <button class="chip" data-filter="open">outstanding <i id="nOpen">0</i></button>
+        <button class="chip" data-filter="done">redeemed <i id="nDone">0</i></button>
+        <button class="chip" id="chipVoid" data-filter="void" hidden>voided <i id="nVoid">0</i></button>
+      </span>
+    </div>
+    <div class="tw" style="margin-top:10px">
+      <table>
+        <thead><tr>
+          <th>code</th><th>kind</th><th>value</th><th>issued</th><th>state</th><th>redeemed</th><th>by</th><th>note</th>
+        </tr></thead>
+        <tbody id="codeRows"></tbody>
+      </table>
+    </div>
+    <p class="hint">WHEN a code was redeemed is known for both kinds. WHO is known for a voucher only while its
+       account link lives — fourteen days — and for an invite code never: the faucet ledger records a memo and an
+       invoice, and deliberately nothing about who typed the code. A voucher is listed by the first characters of
+       its fingerprint, because the code itself is not kept.</p>
+  </div>
+
   <div class="bar">
     <button class="pri" id="bRefund">Refund…</button>
+    <button id="bCodes">Codes…</button>
     <button id="bCode">Mint invite code</button>
     <button class="dgr" id="bNet">Toggle network</button>
     <span class="status" id="msg"></span>
@@ -353,6 +392,77 @@
     paintModels();
   });
 
+  // ---- issued codes ------------------------------------------------------------------
+  // Loaded on demand, not with the 1.5 s state poll: this list grows with the business and
+  // nobody needs it re-fetched every second and a half. Refreshed after minting one, since
+  // that is the moment it changed.
+  var codes = [], codeFilter = "all";
+
+  function loadCodes(){
+    return fetch("/api/codes").then(function(r){ return r.json(); }).then(function(j){
+      codes = j.codes || [];
+      paintCodes();
+    }).catch(function(){ say("could not read the codes", true); });
+  }
+
+  function codeState(c){
+    if (c.void) return { text: "voided " + c.void, cls: "r" };
+    if (c.kind === "invite" && c.maxUses > 1) {
+      return c.open ? { text: c.uses + " of " + c.maxUses + " used", cls: "s" }
+                    : { text: "used up", cls: "d" };
+    }
+    return c.open ? { text: "outstanding", cls: "s" } : { text: "redeemed", cls: "d" };
+  }
+
+  function paintCodes(){
+    // "redeemed" means somebody used it. A VOIDED voucher is neither outstanding nor
+    // redeemed — it was refunded — so it gets its own chip rather than being quietly
+    // counted as one of the two, which would make the numbers stop adding up.
+    var open  = codes.filter(function(c){ return c.open; });
+    var voided = codes.filter(function(c){ return !!c.void; });
+    var done  = codes.filter(function(c){ return !c.open && !c.void; });
+    $("nAll").textContent = codes.length;
+    $("nOpen").textContent = open.length;
+    $("nDone").textContent = done.length;
+    $("nVoid").textContent = voided.length;
+    $("chipVoid").hidden = voided.length === 0;
+    var list = codeFilter === "open" ? open
+             : codeFilter === "done" ? done
+             : codeFilter === "void" ? voided
+             : codes;
+    if (!list.length) {
+      $("codeRows").innerHTML = '<tr><td colspan="8" class="d">nothing here yet</td></tr>';
+      return;
+    }
+    $("codeRows").innerHTML = list.map(function(c){
+      var st = codeState(c);
+      return "<tr>" +
+        "<td>" + esc(c.label) + (c.kind === "voucher" ? '<span class="d"> …</span>' : "") + "</td>" +
+        '<td><span class="kind">' + esc(c.kind) + "</span></td>" +
+        '<td class="g">$' + c.usd + "</td>" +
+        '<td class="d">' + esc(c.issued) + "</td>" +
+        '<td class="' + st.cls + '">' + esc(st.text) + "</td>" +
+        '<td class="d">' + esc(c.redeemed || "—") + "</td>" +
+        '<td class="d">' + esc(c.who || "—") + "</td>" +
+        '<td class="d">' + esc(c.note || (c.invoice ? "from " + c.invoice.slice(0, 12) : "")) + "</td>" +
+        "</tr>";
+    }).join("");
+  }
+
+  $("bCodes").onclick = function(){
+    var box = $("codesBox");
+    box.hidden = !box.hidden;
+    if (!box.hidden) loadCodes();
+  };
+  document.querySelector(".chips").addEventListener("click", function(e){
+    var b = e.target.closest(".chip");
+    if (!b) return;
+    codeFilter = b.getAttribute("data-filter");
+    [].forEach.call(document.querySelectorAll(".chip"), function(x){ x.classList.remove("on"); });
+    b.classList.add("on");
+    paintCodes();
+  });
+
   // ---- the three writes -------------------------------------------------------------
   function say(text, bad){
     var el = $("msg");
@@ -365,7 +475,11 @@
                          body: JSON.stringify(body || {}) }).then(function(r){ return r.json(); });
   }
   $("bCode").onclick = function(){
-    post("/api/code").then(function(j){ say(j.message || "", /could not/.test(j.message || "")); poll(); });
+    post("/api/code").then(function(j){
+      say(j.message || "", /could not/.test(j.message || ""));
+      poll();
+      if (!$("codesBox").hidden) loadCodes();
+    });
   };
   $("bNet").onclick = function(){
     post("/api/network").then(function(j){ say(j.message || ""); poll(); });

@@ -200,6 +200,25 @@ async fn route(sock: &mut tokio::net::TcpStream, req: &Req, db: &PathBuf) {
             }
         }
         ("POST", "/api/code") => reply(sock, &json!({ "message": admin::mint_invite_code(db) })).await,
+
+        // Every code ever issued. Its own route rather than part of /api/state: this grows
+        // with the business and the state poll runs every 1.5 s.
+        ("GET", "/api/codes") => {
+            let items: Vec<Value> = admin::list_issued_codes(db)
+                .iter()
+                .map(|c| {
+                    json!({
+                        "kind": c.kind, "label": c.label, "note": c.note, "usd": c.usd,
+                        "issued": scrai_server::pay::utc_stamp(c.issued),
+                        "uses": c.uses, "maxUses": c.max_uses,
+                        "redeemed": if c.redeemed_at > 0 { scrai_server::pay::utc_stamp(c.redeemed_at) } else { String::new() },
+                        "void": if c.void_at > 0 { scrai_server::pay::utc_stamp(c.void_at) } else { String::new() },
+                        "invoice": c.invoice, "who": c.who, "open": c.open,
+                    })
+                })
+                .collect();
+            reply(sock, &json!({ "codes": items })).await
+        }
         ("POST", "/api/network") => reply(sock, &json!({ "message": admin::toggle_network() })).await,
 
         ("GET", _) => send(sock, 404, "text/plain", b"not found").await,

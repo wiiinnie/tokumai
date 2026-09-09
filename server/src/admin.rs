@@ -789,6 +789,118 @@ pub fn do_void(state_db: &Path, hit: &Hit, reason: &str, evidence: &str) -> Stri
     }
 }
 
+/// One issued code, of either kind, flattened for a list the operator can scan.
+pub struct CodeItem {
+    /// "invite" (a faucet code, worth $1, possibly multi-use) or "voucher" (bought on the
+    /// website, worth what was paid, single-use).
+    pub kind: &'static str,
+    /// The invite code itself — or, for a voucher, the first characters of its FINGERPRINT.
+    /// Never the voucher code: we do not have it. That is the design, and it is also why a
+    /// lost voucher cannot be read back to anybody, by us or by support.
+    pub label: String,
+    pub note: String,
+    pub usd: u32,
+    pub issued: u64,
+    pub uses: u32,
+    pub max_uses: u32,
+    pub redeemed_at: u64,
+    pub void_at: u64,
+    /// The invoice a voucher was minted from — the join to sales.csv, and to a refund.
+    pub invoice: String,
+    /// Who redeemed it, truncated. Only ever a voucher, only for the fourteen days the
+    /// account link survives, and never a person: it is an account's own public-key hash.
+    /// An invite code has none by construction — the faucet ledger records a memo and an
+    /// invoice, and deliberately nothing about who typed the code.
+    pub who: String,
+    pub open: bool,
+}
+
+/// Every code this server has issued, newest first: faucet invite codes and website
+/// vouchers in one list, because "is it still outstanding?" is the same question for both.
+///
+/// What the list can and cannot answer, since somebody will ask it of this screen: WHEN a
+/// code was redeemed is known for both kinds. WHO redeemed it is known for a voucher for
+/// fourteen days, as an account id, and for an invite code never.
+pub fn list_issued_codes(state_db: &Path) -> Vec<CodeItem> {
+    let ro = |p: &Path| {
+        Connection::open_with_flags(p, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX).ok()
+    };
+    let mut out: Vec<CodeItem> = Vec::new();
+
+    if let Some(conn) = ro(state_db) {
+        if let Ok(mut st) = conn.prepare(
+            "SELECT hash, toku, invoice, created_at, redeemed_at, void_at, account \
+             FROM vouchers ORDER BY created_at DESC",
+        ) {
+            if let Ok(rows) = st.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)?.max(0) as u64,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, i64>(3)?.max(0) as u64,
+                    r.get::<_, Option<i64>>(4)?.unwrap_or(0).max(0) as u64,
+                    r.get::<_, Option<i64>>(5)?.unwrap_or(0).max(0) as u64,
+                    r.get::<_, Option<String>>(6)?.unwrap_or_default(),
+                ))
+            }) {
+                for (hash, toku, invoice, created, redeemed, void, account) in rows.flatten() {
+                    out.push(CodeItem {
+                        kind: "voucher",
+                        label: hash.chars().take(12).collect(),
+                        note: String::new(),
+                        usd: (toku / TOKU_PER_USD) as u32,
+                        issued: created,
+                        uses: u32::from(redeemed > 0),
+                        max_uses: 1,
+                        redeemed_at: redeemed,
+                        void_at: void,
+                        invoice,
+                        who: account.chars().take(12).collect(),
+                        open: redeemed == 0 && void == 0,
+                    });
+                }
+            }
+        }
+    }
+
+    // Invite codes live in the faucet's own ledger next to state.db. Absent on a server
+    // that never ran the faucet, which is not an error.
+    let fdb = state_db.parent().map(|d| d.join("faucet.db")).unwrap_or_default();
+    if fdb.exists() {
+        if let Some(fc) = ro(&fdb) {
+            let claimed: HashMap<String, u64> = fc
+                .prepare("SELECT code, MAX(ts) FROM claims GROUP BY code")
+                .ok()
+                .and_then(|mut st| {
+                    st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?.max(0) as u64)))
+                        .ok()
+                        .map(|rows| rows.flatten().collect())
+                })
+                .unwrap_or_default();
+            for c in crate::faucet::list_codes(&fc).unwrap_or_default() {
+                out.push(CodeItem {
+                    kind: "invite",
+                    label: c.code.clone(),
+                    note: c.note,
+                    usd: crate::pay::TESTNET_USD,
+                    // faucet.db keeps SECONDS; everything else on this screen is milliseconds.
+                    issued: c.created.saturating_mul(1000),
+                    uses: c.uses,
+                    max_uses: c.max_uses,
+                    redeemed_at: claimed.get(&c.code).copied().unwrap_or(0).saturating_mul(1000),
+                    void_at: 0,
+                    invoice: String::new(),
+                    who: String::new(),
+                    open: c.max_uses.saturating_sub(c.uses) > 0,
+                });
+            }
+        }
+    }
+
+    out.sort_by(|a, b| b.issued.cmp(&a.issued));
+    out
+}
+
 pub fn mint_invite_code(state_db: &Path) -> String {
     let Some(dir) = state_db.parent() else { return "no data dir".into() };
     let fdb = dir.join("faucet.db");
