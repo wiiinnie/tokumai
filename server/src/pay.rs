@@ -699,13 +699,22 @@ impl Pay {
         picked
     }
 
+    /// Redeeming a code costs the same budget as checking one, and for the same reason.
+    /// `voucher.redeem` falls through to the invite ledger when it does not recognise a
+    /// code (the two look alike and share one field in the app), so without this it is an
+    /// UNTHROTTLED route to the oracle `invite.check` has always been throttled against —
+    /// the limit sat one handler away from being bypassed (audit 2026-09-08, M3).
+    pub fn admit_voucher(&mut self, account_id: &str) -> Result<(), String> {
+        self.admit_code_check(account_id)
+    }
+
     fn admit_code_check(&mut self, account_id: &str) -> Result<(), String> {
         let now = now_ms();
         let hits = self.code_hits.entry(account_id.to_string()).or_default();
         hits.retain(|t| now - t < INVOICE_ACCT_WINDOW_MS);
         if hits.len() >= CODE_CHECKS_PER_ACCT {
             let retry = (INVOICE_ACCT_WINDOW_MS - (now - hits[0])).div_ceil(1000).max(1);
-            return Err(format!("too many invite-code checks from this account — retry in ~{retry}s"));
+            return Err(format!("too many code attempts from this account — retry in ~{retry}s"));
         }
         hits.push(now);
         // Same opportunistic prune `admit_invoice` does for its two maps — without it every
@@ -902,7 +911,7 @@ impl Pay {
     /// be tied to an account, so repeat abuse is invisible. The money is gone either way —
     /// only the pattern would have been visible, and a permanent payment↔account link is
     /// too high a price for it.
-    const ACCOUNT_LINK_MS: u64 = 14 * 24 * 3_600_000;
+    pub const ACCOUNT_LINK_MS: u64 = 14 * 24 * 3_600_000;
 
     /// Drop the account from invoices that have been settled longer than that. The row
     /// stays — amount, currency, country, rail and timestamp are the bookkeeping record —
@@ -2967,6 +2976,23 @@ mod card_tests {
 
         // An amount we do not sell is still refused, consent or no consent.
         assert!(pay.begin_web_order("ord2", 7, "nyx", "2026-09-07").is_err());
+    }
+
+    /// Redeeming falls through to the invite ledger for a code it does not know, so it has
+    /// to spend the same budget `invite.check` spends — otherwise the older limit is one
+    /// handler away from being bypassed entirely.
+    #[test]
+    fn redeeming_spends_the_same_budget_as_checking_an_invite_code() {
+        let mut pay = Pay::default();
+        for i in 0..CODE_CHECKS_PER_ACCT {
+            assert!(pay.admit_voucher("acct-1").is_ok(), "attempt {i} is within the budget");
+        }
+        let refused = pay.admit_voucher("acct-1");
+        assert!(refused.is_err(), "the budget runs out");
+        assert!(refused.unwrap_err().contains("retry in"), "and says when to come back");
+
+        // Per account, not server-wide: one griefer must not lock out everyone else.
+        assert!(pay.admit_voucher("acct-2").is_ok());
     }
 
     #[test]

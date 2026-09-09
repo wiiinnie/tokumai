@@ -476,6 +476,15 @@ struct Faucet {
     salt: u64,
 }
 
+const BUCKET_CLAIM: u64 = 1;
+const BUCKET_ORDER: u64 = 2;
+/// Orders per hour per IP. A buyer makes one; somebody buying a few codes as gifts makes a
+/// handful. Anything past this is not a customer — and every accepted order becomes a REAL
+/// gateway call on the next tick (a Mollie payment object, an address and memo), on a path
+/// that has no account to throttle and does not go through `admit_invoice`, so the
+/// server-wide invoice brake never saw it either (audit 2026-09-08, M4).
+const ORDERS_PER_HOUR: usize = 8;
+
 fn valid_code(s: &str) -> bool {
     (8..=32).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'-')
 }
@@ -485,16 +494,27 @@ fn valid_memo(s: &str) -> bool {
 
 impl Faucet {
     fn ip_ok(&self, ip: &str) -> bool {
+        self.ip_ok_for(BUCKET_CLAIM, ip, IP_ATTEMPTS_PER_HOUR)
+    }
+
+    /// Per-hour budget for one hashed client IP in one bucket. Separate buckets on purpose:
+    /// somebody buying codes must not spend the budget a tester needs to claim an invite,
+    /// and neither must be able to exhaust the other's.
+    ///
+    /// The IP is only ever hashed, with a salt made at boot and never persisted — so this
+    /// limits without keeping a record of who was here.
+    fn ip_ok_for(&self, bucket: u64, ip: &str, limit: usize) -> bool {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
         self.salt.hash(&mut h);
+        bucket.hash(&mut h);
         ip.hash(&mut h);
         let key = h.finish();
         let mut map = self.attempts.lock().unwrap_or_else(|e| e.into_inner());
         let cutoff = Instant::now() - Duration::from_secs(3600);
         let v = map.entry(key).or_default();
         v.retain(|t| *t > cutoff);
-        if v.len() >= IP_ATTEMPTS_PER_HOUR {
+        if v.len() >= limit {
             return false;
         }
         v.push(Instant::now());
@@ -987,6 +1007,11 @@ async fn handle(f: Arc<Faucet>, mut sock: tokio::net::TcpStream, peer: SocketAdd
         // The faucet cannot raise an invoice (the rails live in the server), so it books an
         // order and the server answers it. See docs/vouchers.md.
         ("POST", "/api/order") => {
+            if !f.ip_ok_for(BUCKET_ORDER, &req.ip, ORDERS_PER_HOUR) {
+                respond(&mut sock, 429, "application/json",
+                    &json(&json!({"error": "too many orders from your connection — try again in an hour"}))).await;
+                return;
+            }
             let v: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
             let usd = v.get("usd").and_then(|u| u.as_u64()).unwrap_or(0) as u32;
             let method = match v.get("method").and_then(|m| m.as_str()) {

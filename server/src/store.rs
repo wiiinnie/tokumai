@@ -414,6 +414,25 @@ impl Store {
             .unwrap_or(0)
     }
 
+    /// Forget HOW an old order was to be paid: the address and the memo in `pay_json`, on
+    /// the same fourteen-day beat that strips the account off a settled invoice.
+    ///
+    /// The row stays — amount, rail, consent and timestamps are the order's own record, and
+    /// `sales.csv` is what accounting reads anyway. What goes is the payment detail, which
+    /// nothing needs once the invoice is settled or dead. Until this existed `web_orders`
+    /// was the one new table with no retention rule at all: it kept a payment address for
+    /// as long as the table existed, which is to say forever (audit 2026-09-08).
+    pub fn web_orders_forget_pay(&self, now: u64) -> usize {
+        let cutoff = now.saturating_sub(crate::pay::Pay::ACCOUNT_LINK_MS) as i64;
+        self.conn
+            .execute(
+                "UPDATE web_orders SET pay_json = NULL \
+                 WHERE pay_json IS NOT NULL AND created_at < ?1",
+                params![cutoff],
+            )
+            .unwrap_or(0)
+    }
+
     // ---- vouchers ---------------------------------------------------------------------
 
     /// Mint one, at SETTLEMENT of a paid web invoice — never at checkout, or an unpaid
@@ -709,6 +728,32 @@ mod tests {
         assert_eq!(s.web_order_code("ord2", past), None, "outside the window it is not handed out");
         assert_eq!(s.web_orders_forget_codes(past), 1);
         assert_eq!(s.web_orders_forget_codes(past), 0, "the sweep is idempotent");
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// `web_orders` was the one new table with no retention rule: it kept the payment
+    /// address and memo of every order ever placed, for as long as the table existed.
+    #[test]
+    fn an_old_web_order_forgets_how_it_was_to_be_paid_but_stays_a_record() {
+        let p = tmp("weborder-retention");
+        let s = Store::open(&p).unwrap();
+        let now = crate::pay::now_ms();
+        let old = now - crate::pay::Pay::ACCOUNT_LINK_MS - 1_000;
+
+        assert!(s.web_order_new("fresh", 10, "nyx", "2026-09-07", now));
+        assert!(s.web_order_new("stale", 10, "nyx", "2026-09-07", old));
+        s.web_order_answer("fresh", Some("fresh"), Some("{\"memo\":\"abc\"}"), None);
+        s.web_order_answer("stale", Some("stale"), Some("{\"memo\":\"xyz\"}"), None);
+
+        assert_eq!(s.web_orders_forget_pay(now), 1, "only the one past the window");
+        assert_eq!(s.web_orders_forget_pay(now), 0, "and only once");
+
+        // What went is the payment detail. What stays is the order.
+        let (inv, pay, _, _) = s.web_order("stale").expect("the row is still there");
+        assert_eq!(inv.as_deref(), Some("stale"));
+        assert_eq!(pay, None, "the address and memo are gone");
+        let (_, fresh_pay, _, _) = s.web_order("fresh").expect("the fresh row is untouched");
+        assert!(fresh_pay.is_some(), "a recent order still knows how to be paid");
         let _ = std::fs::remove_file(&p);
     }
 

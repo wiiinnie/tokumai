@@ -448,7 +448,12 @@ async fn main() {
     // Unkeyed, that fingerprint is a 2^60 search anyone holding a backup can finish; keyed,
     // it is nothing without the key. Say which of the two this box is running, at boot,
     // where it cannot be missed — the failure is silent by nature.
-    if pay::voucher_key().is_none() {
+    // Said BOTH ways round on purpose. A warning that only prints on failure means a silent
+    // log is ambiguous — it reads the same whether the key is fine or the deploy never
+    // arrived, which is exactly the question somebody asks after a deploy (2026-09-08).
+    if pay::voucher_key().is_some() {
+        println!("scrai-server: voucher codes — fingerprints are keyed (VOUCHER_KEY)");
+    } else {
         eprintln!(
             "scrai-server: VOUCHER_KEY is not set (or is under 32 chars) — code purchases on the \
              website are REFUSED. Existing codes still redeem. Set it in .env to enable them."
@@ -666,6 +671,12 @@ const ORDER_TICK_MS: u64 = 1000;
                 // the buyer's account. Cheap (a scan of a small map) and it must not depend
                 // on anyone happening to poll an invoice.
                 paywall.scrub_account_links();
+                // And the web half of the same purchase: the address and memo an old order
+                // was to be paid at. The row keeps what the order WAS, not how to pay it.
+                let dropped = db.web_orders_forget_pay(pay::now_ms());
+                if dropped > 0 {
+                    println!("scrai-server: dropped the payment details from {dropped} old web order(s)");
+                }
                 // The same rule for vouchers: a redeemed one stops naming its account after
                 // fourteen days, so the two halves of a purchase do not disagree about how
                 // long it stays attributable.
@@ -974,6 +985,9 @@ const ORDER_TICK_MS: u64 = 1000;
                 let reply = match paywall.voucher_claimant(&v) {
                     None => serde_json::json!({ "id": id, "kind": "error",
                         "error": "account signature does not check out, or the nonce was reused" }),
+                    Some(account) if paywall.admit_voucher(&account).is_err() => serde_json::json!({
+                        "id": id, "kind": "error",
+                        "error": "too many code attempts from this account — try again in a few minutes" }),
                     Some(account) => {
                         let now = pay::now_ms();
                         // The keyed fingerprint first, then the unkeyed one that preceded it:
