@@ -5877,7 +5877,12 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     // re-download, and says nothing about the buyer.
     const id=String(inv.invoiceId||"");
     const rec={
-      number: `TKM-${new Date().getUTCFullYear()}-${id.slice(0,8).toUpperCase()}`,
+      // 12, not 8: the receipt number is a PREFIX of the invoice id, so it lives under the
+      // birthday bound, not plain uniqueness — at 32 bits some pair of purchases shares one
+      // at around 1% by ten thousand sales, and then a receipt names two of them. The same
+      // constant is pay::RECEIPT_HEX on the server; change one and receipts stop matching
+      // the sales ledger.
+      number: `TKM-${new Date().getUTCFullYear()}-${id.slice(0,12).toUpperCase()}`,
       at: Date.now(),
       usd: Number(inv.amountUsd||0),
       toku: Number(toku||0),

@@ -394,12 +394,28 @@ pub fn utc_stamp(ms: u64) -> String {
 }
 
 /// The number printed on the buyer's receipt. Derived from OUR invoice id, so it is
-/// unique, reproducible, and says nothing about the buyer — and the app derives the very
-/// same string, which is what makes "quote your receipt number" work at all.
+/// reproducible and says nothing about the buyer — and the app derives the very same string
+/// (`public/index.html`, `id.slice(0, RECEIPT_HEX)`), which is what makes "quote your
+/// receipt number" work at all without a counter, a column, or a round trip.
+///
+/// Deliberately NOT a running number. A sequence is what invoicing normally does and what
+/// bookkeeping is used to — but it tells every customer how many sales we have made, and
+/// this is a product whose whole point is not leaking that. It would also need server state
+/// and could not be derived on the device, offline, which is where the receipt is written.
 pub fn receipt_number(inv_id: &str, paid_at: u64) -> String {
     let year = &utc_stamp(paid_at)[0..4];
-    format!("TKM-{year}-{}", inv_id.chars().take(8).collect::<String>().to_uppercase())
+    format!("TKM-{year}-{}", inv_id.chars().take(RECEIPT_HEX).collect::<String>().to_uppercase())
 }
+
+/// How much of the invoice id the receipt number carries. THE SAME CONSTANT LIVES IN THE
+/// APP — change one and receipts stop matching the ledger.
+///
+/// Eight was too few. Being a prefix, it is subject to the birthday bound rather than to
+/// plain uniqueness: at 32 bits some pair of purchases collides at around 1 % by ten
+/// thousand sales, and then a receipt number names two of them. Twelve makes that 0.0002 %
+/// at the same volume, for four more characters to read off a PDF. The lookup still accepts
+/// a shorter prefix, so receipts printed under the old length keep working.
+pub const RECEIPT_HEX: usize = 12;
 
 /// Append one settled sale. Failure is logged, never fatal: a disk problem must not stop
 /// the money path, but it must not pass unnoticed either.
@@ -3039,10 +3055,11 @@ mod card_tests {
 
     #[test]
     fn the_receipt_number_matches_what_the_app_prints() {
-        // app: `TKM-${year}-${invoiceId.slice(0,8).toUpperCase()}`
+        // app: `TKM-${year}-${invoiceId.slice(0, 12).toUpperCase()}` — public/index.html
         let at = 1_788_000_000_000; // 2026-09-27
         assert!(utc_stamp(at).starts_with("2026-"));
-        assert_eq!(receipt_number("fa57043ac2a52be28bd787c527deb025", at), "TKM-2026-FA57043A");
+        assert_eq!(receipt_number("fa57043ac2a52be28bd787c527deb025", at), "TKM-2026-FA57043AC2A5");
+        assert_eq!(RECEIPT_HEX, 12, "the app slices the same number of characters");
     }
 
     #[test]

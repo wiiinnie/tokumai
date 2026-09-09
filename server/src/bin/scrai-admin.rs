@@ -1236,14 +1236,17 @@ fn find_purchase(state_db: &Path, q: &str) -> Vec<Hit> {
             }
         }
     }
-    // A receipt number carries only the first 8 hex of the invoice id — 32 bits, so over
-    // enough sales two purchases WILL share a prefix. Never act on the first match: collect
-    // them all and make the operator choose.
+    // A receipt number carries a PREFIX of the invoice id, so it lives under the birthday
+    // bound: two purchases can share one. Twelve hex makes that vanishingly unlikely, eight
+    // (the old length, still in circulation) did not. Either way, never act on the first
+    // match — collect them all and make the operator choose.
+    // Any length from the old eight up to a whole id: receipts printed before the number was
+    // widened must keep working, and a longer one simply matches more precisely.
     let prefix = up
         .strip_prefix("TKM-")
         .and_then(|r| r.split_once('-'))
         .map(|(_, p)| p.to_ascii_lowercase())
-        .filter(|p| p.len() == 8 && p.chars().all(|c| c.is_ascii_hexdigit()));
+        .filter(|p| (8..=32).contains(&p.len()) && p.chars().all(|c| c.is_ascii_hexdigit()));
 
     let mut out: Vec<Hit> = Vec::new();
     for (id, inv) in pay.invoices.iter() {
