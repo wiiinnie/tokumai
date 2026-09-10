@@ -1,0 +1,280 @@
+<title>tokumai vs Duck.ai</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Hanken+Grotesk:wght@400;600&family=JetBrains+Mono:wght@500&display=swap">
+<style>
+  /* ---- the site's own tokens (server/site/index.html), dark first, light via the switch ---- */
+  :root{
+    --ink:#141210; --surface:#1C1917; --surface-2:#262220; --line:#332E2A; --bone:#ECE6DC; --muted:#9C938A;
+    --acc:#7A5FFF; --acc2:#B9A3FF; --rust:#C15A43; --ok:#3FC98A; --amber:#F0912F;
+    --tint1:rgba(122,95,255,.07); --tint2:rgba(122,95,255,.04); --page:#141210; --card:#1C1917;
+    --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace; --body:'Hanken Grotesk',system-ui,-apple-system,sans-serif; --display:'Fraunces',Georgia,serif;
+  }
+  body[data-mode="light"]{
+    --ink:#ECE6DC; --surface:#F4F0E8; --surface-2:#E4DDD1; --line:#D6CEC0; --bone:#141210; --muted:#6F6A62;
+    --acc:#5B45D6; --acc2:#4636B0; --rust:#B8503A; --ok:#1F8F5F; --amber:#B8650F;
+    --tint1:rgba(91,69,214,.08); --tint2:rgba(91,69,214,.05); --page:#ECE6DC; --card:#F4F0E8;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{background:var(--page);color:var(--bone);font:15px/1.6 var(--body);-webkit-font-smoothing:antialiased}
+  a{color:var(--acc);text-decoration:none} a:hover{color:var(--bone)}
+
+  /* ---- mockup chrome (not part of the page) ---- */
+  .mock{position:sticky;top:0;z-index:9;display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:10px 20px;
+        background:#0c0b0a;color:#9C938A;font:500 11.5px var(--mono);border-bottom:1px solid #2a2521}
+  .mock b{color:#B9A3FF;font-weight:500}
+  .mock .grp{display:flex;gap:4px;background:#1C1917;border:1px solid #332E2A;border-radius:9px;padding:3px;margin-left:auto}
+  .mock button{font:600 11.5px var(--body);color:#9C938A;background:none;border:none;padding:6px 12px;border-radius:7px;cursor:pointer}
+  .mock button.on{background:#262220;color:#ECE6DC}
+  .mock button:focus-visible{outline:2px solid #B9A3FF;outline-offset:1px}
+
+  /* ---- page ---- */
+  .page{background:radial-gradient(1200px 600px at 80% -10%, var(--tint1), transparent 60%), radial-gradient(900px 500px at -10% 110%, var(--tint2), transparent 55%), var(--page)}
+  .site{max-width:1080px;margin:0 auto;padding:0 32px 60px}
+  .nav{position:sticky;top:41px;z-index:5;display:flex;align-items:center;gap:22px;padding:16px 0;background:color-mix(in srgb,var(--page) 86%,transparent);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+  .nav .logo{font-family:var(--display);font-weight:600;font-size:22px;color:var(--bone);display:flex;align-items:center;gap:10px} .nav .logo b{font-weight:600;color:var(--acc)}
+  .nav .mark{width:28px;height:28px;border-radius:6px;flex-shrink:0;background:radial-gradient(120% 120% at 30% 18%,#1A1816,#141210);border:1px solid #2A2521;display:flex;align-items:center;justify-content:center}
+  .nav .links{display:flex;gap:10px;margin-left:8px;flex-wrap:wrap}
+  .nav .links a{font-size:13.5px;color:var(--muted);padding:6px 12px;border:1px solid color-mix(in srgb,var(--acc) 42%,transparent);border-radius:999px}
+  .nav .links a.on{color:var(--bone);border-color:var(--acc)}
+  .sw{margin-left:auto;display:flex;gap:4px;background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:3px}
+  .sw button{font:600 12px var(--body);color:var(--muted);background:none;border:none;padding:7px 14px;border-radius:8px;cursor:pointer}
+  .sw button.on{background:var(--surface);color:var(--bone);box-shadow:0 1px 2px rgba(0,0,0,.2)}
+
+  .crumb{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin:26px 0 0}
+  .crumb a{color:var(--muted)} .crumb a:hover{color:var(--acc)}
+  .hero{padding:18px 0 34px;max-width:820px}
+  .hero h1{font-family:var(--display);font-weight:600;font-size:48px;line-height:1.06;margin:0 0 18px;text-wrap:balance} .hero h1 b{font-weight:600;color:var(--acc)}
+  .hero .lead{font-size:17px;color:var(--muted);margin:0 0 10px;max-width:66ch} .hero .lead b{color:var(--bone);font-weight:600}
+  .hero .note{font-size:14.5px;color:var(--muted);margin:0}
+
+  .eyebrow{font-family:var(--mono);font-size:10.5px;letter-spacing:.2em;text-transform:uppercase;color:var(--acc);margin-bottom:10px}
+  .sec{padding:40px 0;border-top:1px solid var(--line)}
+  .sec h2{font-family:var(--display);font-weight:600;font-size:30px;line-height:1.12;margin:0 0 14px;text-wrap:balance} .sec h2 b{font-weight:600;color:var(--acc)}
+  .sec p{max-width:70ch;color:var(--muted);margin:0 0 14px} .sec p b{color:var(--bone);font-weight:600}
+  .sec p.in{color:var(--bone)}
+
+  .pick{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:8px}
+  .card{border:1px solid var(--line);border-radius:18px;background:var(--surface);padding:22px 24px}
+  .card .k{font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:8px}
+  .card.us{border-color:color-mix(in srgb,var(--acc) 55%,var(--line));background:linear-gradient(180deg,color-mix(in srgb,var(--acc) 10%,var(--surface)),var(--surface))}
+  .card.us .k{color:var(--acc)}
+  .card h3{font-family:var(--display);font-size:22px;margin:0 0 8px;font-weight:600}
+  .card p{font-size:14.5px;margin:0;max-width:none}
+
+  .letter{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:6px}
+  .letter .card h3{font-size:19px}
+  .letter .who{display:inline-block;font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;padding:3px 9px;border-radius:999px;border:1px solid var(--line);color:var(--muted);margin-bottom:12px}
+  .letter .card.us .who{border-color:var(--acc);color:var(--acc)}
+
+  .tw{overflow-x:auto;border:1px solid var(--line);border-radius:16px;background:var(--surface);margin-top:8px}
+  table{width:100%;border-collapse:collapse;font-size:14px;line-height:1.5;min-width:640px}
+  th{text-align:left;font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);font-weight:500;padding:14px 18px;border-bottom:1px solid var(--line)}
+  th.us{color:var(--acc)}
+  td{padding:14px 18px;border-bottom:1px solid var(--line);vertical-align:top;color:var(--muted)}
+  tr:last-child td{border-bottom:none}
+  td.row{color:var(--bone);font-weight:600;white-space:nowrap;width:1%}
+  td.us{color:var(--bone);background:color-mix(in srgb,var(--acc) 6%,transparent)} td:not(.us):not(.row){color:var(--muted)}
+  td b{color:var(--bone)} td .m{font-family:var(--mono);font-size:12.5px}
+
+  .pts{margin:0;padding:0;list-style:none;max-width:70ch}
+  .pts li{position:relative;padding-left:26px;margin:0 0 12px;color:var(--muted)}
+  .pts li b{color:var(--bone);font-weight:600}
+  .pts li::before{content:"";position:absolute;left:0;top:.55em;width:12px;height:12px;border-radius:50%;background:var(--acc)}
+  .pts.them li::before{background:var(--muted)}
+  .pts.limits li::before{background:var(--rust)}
+  .pts li.ok::before{background:var(--ok)}
+
+  .faq{max-width:70ch}
+  .faq details{border-top:1px solid var(--line);padding:14px 0}
+  .faq details:last-child{border-bottom:1px solid var(--line)}
+  .faq summary{cursor:pointer;font-weight:600;font-size:15.5px;color:var(--bone);list-style:none;display:flex;justify-content:space-between;gap:12px}
+  .faq summary::-webkit-details-marker{display:none}
+  .faq summary::after{content:"+";font-family:var(--mono);color:var(--acc);flex:none}
+  .faq details[open] summary::after{content:"–"}
+  .faq details p{margin:10px 0 0}
+
+  .ctarow{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px}
+  .btn{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 20px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2);color:var(--bone);font:600 14px var(--body);text-decoration:none;cursor:pointer}
+  .btn.primary{background:var(--acc);border-color:var(--acc);color:#fff}
+  .btn:focus-visible{outline:2px solid var(--acc2);outline-offset:2px}
+  .also{font-family:var(--mono);font-size:11.5px;color:var(--muted);margin:14px 0 0} .also a{color:var(--acc2)}
+  .fine{font-family:var(--mono);font-size:11.5px;color:var(--muted);margin-top:34px;max-width:80ch;line-height:1.7}
+  .foot{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;padding:26px 0 0;border-top:1px solid var(--line);font-family:var(--mono);font-size:11.5px;color:var(--muted);margin-top:20px}
+
+  /* ---- SEO notes panel (mockup only) ---- */
+  .seo{max-width:1080px;margin:0 auto;padding:28px 32px 60px;font:13px/1.6 var(--body);color:#9C938A;border-top:1px dashed #332E2A;background:#0f0e0d}
+  .seo h4{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#B9A3FF;margin:0 0 10px}
+  .seo dl{display:grid;grid-template-columns:max-content 1fr;gap:6px 18px;margin:0 0 18px} .seo dt{font-family:var(--mono);font-size:11.5px;color:#6F675E} .seo dd{margin:0;color:#ECE6DC}
+  .seo pre{margin:0;padding:14px;border:1px solid #332E2A;border-radius:10px;background:#141210;color:#9C938A;font:11.5px/1.5 var(--mono);overflow-x:auto}
+
+  /* ---- mobile preview: the same page in a phone-width frame ---- */
+  body[data-view="mobile"] .page{max-width:392px;margin:24px auto;border:8px solid #0c0b0a;border-radius:38px;box-shadow:0 0 0 1px #332E2A, 0 30px 60px rgba(0,0,0,.5);overflow:hidden}
+  body[data-view="mobile"] .site{padding:0 18px 40px}
+  body[data-view="mobile"] .nav{top:0;position:relative;gap:10px}
+  body[data-view="mobile"] .nav .links{display:none} body[data-view="mobile"] .sw{margin-left:auto}
+  body[data-view="mobile"] .hero h1{font-size:32px} body[data-view="mobile"] .hero .lead{font-size:15.5px}
+  body[data-view="mobile"] .sec{padding:28px 0} body[data-view="mobile"] .sec h2{font-size:24px}
+  body[data-view="mobile"] .pick,body[data-view="mobile"] .letter{grid-template-columns:1fr}
+  body[data-view="mobile"] table{min-width:560px}
+  body[data-view="mobile"] .foot{flex-direction:column;gap:6px}
+  body[data-view="mobile"] .seo{display:none}
+  @media (max-width:760px){
+    .site{padding:0 18px 40px} .nav .links{display:none}
+    .hero h1{font-size:34px} .sec h2{font-size:24px} .sec{padding:28px 0}
+    .pick,.letter{grid-template-columns:1fr} .foot{flex-direction:column;gap:6px}
+    .seo{padding:22px 18px 40px} .seo dl{grid-template-columns:1fr}
+  }
+  @media (prefers-reduced-motion:reduce){ *{transition:none!important} }
+</style>
+
+<div class="mock">
+  <span>MOCKUP · <b>tokumai.com/vs/duck-ai</b> · from the SEO &amp; competitor analysis, 2026-09-10</span>
+  <span class="grp" role="group" aria-label="View"><button type="button" id="vDesk" class="on">Desktop</button><button type="button" id="vMob">Mobile</button></span>
+</div>
+
+<div class="page">
+<div class="site">
+  <div class="nav">
+    <span class="logo"><span class="mark"><svg viewBox="0 0 100 100" width="78%" height="78%" aria-hidden="true"><rect x="19" y="28" width="27" height="9" rx="4.5" fill="#ECE6DC"/><rect x="49" y="28" width="31" height="9" rx="4.5" fill="#7A5FFF"/><rect x="25" y="40" width="17" height="9" rx="4.5" fill="#ECE6DC"/><rect x="45" y="40" width="30" height="9" rx="4.5" fill="#7A5FFF"/><rect x="19" y="52" width="36" height="9" rx="4.5" fill="#ECE6DC"/><rect x="58" y="52" width="20" height="9" rx="4.5" fill="#7A5FFF"/><rect x="28" y="64" width="22" height="9" rx="4.5" fill="#ECE6DC"/><rect x="54" y="64" width="26" height="9" rx="4.5" fill="#7A5FFF"/></svg></span><span>tokum<b>ai</b></span></span>
+    <span class="links"><a href="#">How it works</a><a href="#">Buy TOKU</a><a href="#">Download</a><a href="#" class="on">Compare</a></span>
+    <div class="sw" role="group" aria-label="Theme"><button type="button" id="bDark" class="on">Dark</button><button type="button" id="bLight">Light</button></div>
+  </div>
+
+  <p class="crumb"><a href="#">tokumai</a> · <a href="#">Compare</a> · Duck.ai</p>
+
+  <div class="hero">
+    <h1>Duck.ai promises not to keep your IP address. tokumai <b>never gets it</b>.</h1>
+    <p class="lead">Both let you talk to leading AI models without handing over your identity. The difference is how. <b>Duck.ai asks you to trust a company. tokumai is built so that there is nothing to trust us with.</b></p>
+    <p class="note">Here is an honest look at both, including where Duck.ai is the better choice.</p>
+  </div>
+
+  <div class="sec">
+    <div class="eyebrow">The short version</div>
+    <div class="pick">
+      <div class="card us">
+        <div class="k">Choose tokumai if</div>
+        <h3>You don't want to rely on anyone's promise</h3>
+        <p>You'd rather not pay a monthly subscription, and you want your questions to stay disconnected from you even if a server were compromised, subpoenaed or sold.</p>
+      </div>
+      <div class="card">
+        <div class="k">Choose Duck.ai if</div>
+        <h3>You want a free AI chat from a well-known brand</h3>
+        <p>…and you trust that company to keep its word.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="sec">
+    <div class="eyebrow">An everyday picture</div>
+    <h2>Imagine sending a <b>letter</b></h2>
+    <div class="letter">
+      <div class="card us">
+        <span class="who">tokumai</span>
+        <h3>No return address, five hands</h3>
+        <p>Your letter has no return address and is passed through five different hands before it arrives. Nobody along the way knows both who sent it and what it says. We can't write down who you are, because we never find out.</p>
+      </div>
+      <div class="card">
+        <span class="who">A relay service</span>
+        <h3>A clerk who promises</h3>
+        <p>You hand your letter to a post office clerk. The clerk can see your face and read the envelope, and promises not to write down who you are before passing it on. It's a good post office with a good reputation. But it is a promise.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="sec">
+    <div class="eyebrow">Side by side</div>
+    <h2>What each one <b>knows</b> about you</h2>
+    <div class="tw"><table>
+      <thead><tr><th></th><th class="us">tokumai</th><th>Duck.ai</th></tr></thead>
+      <tbody>
+        <tr><td class="row">Who sees your IP address together with your prompt</td><td class="us"><b>Nobody.</b> Prompts travel through the Nym mixnet; the tokumai server never sees an IP address</td><td>DuckDuckGo's relay servers, which promise not to store it</td></tr>
+        <tr><td class="row">How privacy is guaranteed</td><td class="us">Network design and cryptography</td><td>Company policy</td></tr>
+        <tr><td class="row">Account</td><td class="us"><b>None.</b> No e-mail, no phone number, no password. Your account is a recovery phrase only you hold</td><td>Not needed for the free version; the subscription runs through your Apple or Google account</td></tr>
+        <tr><td class="row">Payment and prompts linked?</td><td class="us"><b>No.</b> Credit is spent as blind-signed coins, so no payment can be matched to a single question</td><td>Subscription is tied to your store account</td></tr>
+        <tr><td class="row">Pricing</td><td class="us">No subscription. Prepaid credit of <span class="m">$5 · $10 · $20 · $50</span>. A text prompt costs a few hundredths of a cent, so $5 lasts for thousands of questions</td><td>Free tier; paid plans around <span class="m">$9.99</span> or <span class="m">$19.99</span> a month (bundled with a VPN and other services)</td></tr>
+        <tr><td class="row">Models</td><td class="us">GPT and Gemini for text, Imagen for pictures</td><td>Several models from OpenAI, Anthropic and others</td></tr>
+        <tr><td class="row">Where chats are stored</td><td class="us">Locally on your device, encrypted with a key kept in your operating system's keystore</td><td>Locally on your device</td></tr>
+        <tr><td class="row">Apps</td><td class="us">macOS, Windows, Linux, Android, iPhone (public beta)</td><td>iPhone, Android, Mac, browser extensions, web</td></tr>
+        <tr><td class="row">Attachments</td><td class="us">Images, PDFs and text files — <b>metadata is stripped automatically</b> (camera model, location, author, timestamps) before a file leaves your device</td><td>File upload</td></tr>
+        <tr><td class="row">Before a prompt leaves</td><td class="us"><b>A guard on your device</b> spots names, addresses, account numbers and the like in what you typed or attached, and can redact them before anything is sent</td><td>—</td></tr>
+        <tr><td class="row">Images</td><td class="us">Image generation up to 4K</td><td>Image generation</td></tr>
+      </tbody>
+    </table></div>
+    <p class="also">Also compared: <a href="#">Venice</a> · <a href="#">nilGPT</a> · <a href="#">Lumo</a> · <a href="#">Brave Leo</a></p>
+  </div>
+
+  <div class="sec">
+    <div class="eyebrow">Where tokumai is different</div>
+    <h2>Privacy that doesn't depend on <b>our good behaviour</b></h2>
+    <ul class="pts">
+      <li><b>No promise required.</b> A relay's privacy depends on the company running it doing what it says, today and in the future. tokumai's privacy doesn't depend on our good behaviour: our servers have no way of learning where a request came from.</li>
+      <li><b>No VPN needed.</b> A relay server sees your real IP address unless you hide it yourself. With tokumai, hiding it is built in.</li>
+      <li><b>No subscription, no store account.</b> You buy a small amount of credit once and use it whenever you like. There is no monthly bill and no account that ties your purchase to your questions.</li>
+      <li><b>What you didn't mean to share stays home.</b> Before a prompt leaves your device, tokumai checks it for personal data — names, addresses, IDs, also inside attached images and documents — and offers to redact it. Attached files lose their metadata on the way out: camera model, GPS position, author name, timestamps. Nothing about that check ever leaves the device.</li>
+      <li><b>Your questions never add up to a profile.</b> Without an identity, an IP address or a traceable payment, there is nothing to build a picture of you from. Ask about your health, your finances or your relationship, and it stays a question, not a data point about you.</li>
+    </ul>
+    <div class="ctarow"><a class="btn primary" href="#">Download tokumai</a><a class="btn" href="#">How it works</a></div>
+  </div>
+
+  <div class="sec">
+    <div class="eyebrow">Frequently asked questions</div>
+    <div class="faq">
+      <details open><summary>Is Duck.ai really private?</summary><p>Duck.ai removes identifying information before passing your prompt to the AI provider, and the providers are not allowed to train on your chats. The weak point is DuckDuckGo's own relay: it sees your IP address and your prompt together and promises not to keep them. Whether that's enough depends on how much you trust one company.</p></details>
+      <details><summary>Is tokumai a Duck.ai alternative?</summary><p>Yes. Both give you private access to leading AI models. tokumai is for people who want privacy that doesn't depend on trusting the provider.</p></details>
+      <details><summary>Do I need a VPN with tokumai?</summary><p>No. Every request already travels through the Nym mixnet, which hides where it came from.</p></details>
+      <details><summary>Can tokumai see my prompts?</summary><p>Our server passes your prompt on to the AI model, so it handles the text, but it never learns who sent it. Nothing you ask is stored on our servers; your conversation history lives only on your device.</p></details>
+      <details><summary>Why pay for tokumai when Duck.ai is free?</summary><p>Because a free service has to be paid for somehow, and because tokumai's protection comes from its design rather than a policy. Most people spend a few dollars and use it for months.</p></details>
+    </div>
+    <p class="fine">Comparison based on publicly available information as of September 2026. Duck.ai and DuckDuckGo are trademarks of DuckDuckGo, Inc. tokumai is not affiliated with DuckDuckGo.</p>
+  </div>
+
+  <div class="foot">
+    <span>© 2026 Hermes Blockchain Ventures · prepaid credit $5 · $10 · $20 · $50 — see <a href="#">Terms</a></span>
+    <span><a href="#">Imprint</a> · <a href="#">Terms</a> · <a href="#">Privacy</a> · <a href="#">Contact</a></span>
+  </div>
+</div>
+</div>
+
+<div class="seo">
+  <h4>Not on the page — what goes in the &lt;head&gt; and the router</h4>
+  <dl>
+    <dt>URL</dt><dd>tokumai.com/vs/duck-ai (new route in scrai-faucet.rs, page file server/site/vs-duck-ai.html)</dd>
+    <dt>Title</dt><dd>tokumai vs Duck.ai: Private AI Chat Compared (2026)</dd>
+    <dt>Meta description</dt><dd>Duck.ai promises not to store your IP. tokumai never receives it. An honest comparison of two private AI chats: privacy model, pricing, apps and features.</dd>
+    <dt>Primary keywords</dt><dd>duck.ai alternative · duck.ai vs · private AI chat · anonymous ChatGPT alternative</dd>
+    <dt>Internal links</dt><dd>Home · /how-it-works · /pricing · /download (the last three exist today as anchors on the home page — either add routes that redirect to the anchors, or link the anchors)</dd>
+    <dt>Nav</dt><dd>a "Compare" entry, so the page is reachable and the crumb has a parent; later /vs/… pages hang off the same entry</dd>
+    <dt>Changed after review</dt><dd>tokumai now sits LEFT in every pairing and FIRST in the table; "Where Duck.ai is ahead" and "What tokumai can't do" are gone; the competitor is named only where the SEO needs it (title, hero, table header, FAQ); the "also compared" row is the hook for /vs/venice, /vs/nilgpt, /vs/lumo, /vs/brave-leo from the same template. Duck.ai's "ahead" list no longer claims app-store presence or voice chat (we are in the App Store once 1.0 is live; voice is not a topic); attachments (with automatic metadata stripping) and the on-device guard with redaction are now rows of their own and a bullet under "different".</dd>
+    <dt>Open questions</dt><dd>"iPhone (public beta)" — say "iPhone" once 1.0 is approved · the price row names $9.99 / $19.99 for Duck.ai: re-check the day it goes live · Imagen naming vs "Nano Banana" in the app</dd>
+  </dl>
+  <h4>FAQ schema, verbatim from the analysis</h4>
+  <pre>&lt;script type="application/ld+json"&gt;
+{ "@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [
+  { "@type": "Question", "name": "Is Duck.ai really private?",
+    "acceptedAnswer": { "@type": "Answer", "text": "Duck.ai removes identifying information before passing your prompt to the AI provider, and the providers are not allowed to train on your chats. The weak point is DuckDuckGo's own relay: it sees your IP address and your prompt together and promises not to keep them." } },
+  { "@type": "Question", "name": "Is tokumai a Duck.ai alternative?",
+    "acceptedAnswer": { "@type": "Answer", "text": "Yes. Both give you private access to leading AI models. tokumai is for people who want privacy that doesn't depend on trusting the provider." } },
+  { "@type": "Question", "name": "Do I need a VPN with tokumai?",
+    "acceptedAnswer": { "@type": "Answer", "text": "No. Every request already travels through the Nym mixnet, which hides where it came from." } },
+  { "@type": "Question", "name": "Can tokumai see my prompts?",
+    "acceptedAnswer": { "@type": "Answer", "text": "Our server passes your prompt on to the AI model, so it handles the text, but it never learns who sent it. Nothing you ask is stored on our servers; your conversation history lives only on your device." } },
+  { "@type": "Question", "name": "Why pay for tokumai when Duck.ai is free?",
+    "acceptedAnswer": { "@type": "Answer", "text": "Because a free service has to be paid for somehow, and because tokumai's protection comes from its design rather than a policy. Most people spend a few dollars and use it for months." } }
+] }
+&lt;/script&gt;</pre>
+</div>
+
+<script>
+(function(){
+  var body=document.body, bD=document.getElementById('bDark'), bL=document.getElementById('bLight');
+  function mode(m){ body.setAttribute('data-mode', m); bD.classList.toggle('on', m==='dark'); bL.classList.toggle('on', m==='light'); }
+  var pref='dark'; try{ if(window.matchMedia('(prefers-color-scheme: light)').matches) pref='light'; }catch(e){}
+  mode(pref);
+  bD.onclick=function(){ mode('dark'); }; bL.onclick=function(){ mode('light'); };
+  var vD=document.getElementById('vDesk'), vM=document.getElementById('vMob');
+  function view(v){ body.setAttribute('data-view', v); vD.classList.toggle('on', v==='desktop'); vM.classList.toggle('on', v==='mobile'); }
+  vD.onclick=function(){ view('desktop'); }; vM.onclick=function(){ view('mobile'); };
+  view('desktop');
+})();
+</script>
