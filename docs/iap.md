@@ -65,6 +65,11 @@ exactly those. The boot log prints the products and whether sandbox is accepted.
 
 ## Testing on a device
 
+First sandbox purchase went through end to end on 2026-09-10 (1M TOKU, DE sandbox storefront 14,99 €):
+Apple sheet → server credit → finish → collect → Keychain prompt. The grid placeholder icon in Apple's
+sheet is normal until a build has been uploaded to App Store Connect.
+
+
 1. App Store Connect → Users and Access → Sandbox → Test Accounts: create a tester
    (a fresh Apple ID that does not exist yet; country Germany to see EU prices).
 2. On the iPhone: Settings → App Store → Sandbox Account → sign in with it.
