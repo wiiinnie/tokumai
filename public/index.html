@@ -5779,7 +5779,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     const tiles = iapList.map(iapTile).join("");
     const sel = iapList.find(p => p.id===iapSel);
     const ready = !!sel && iapConsent && !iapBusy;
-    const label = iapBusy ? "Waiting for the App Store…" : sel ? `Buy ${esc(iapToku(sel.id))} TOKU for ${esc(String(sel.displayPrice||""))}` : "Pick an amount above";
+    const label = iapBusy ? "Buying — the App Store first, then our server confirms (up to two minutes)…" : sel ? `Buy ${esc(iapToku(sel.id))} TOKU for ${esc(String(sel.displayPrice||""))}` : "Pick an amount above";
     box.innerHTML = `<div class="grouplbl" style="margin-top:2px">Amount</div><div class="tiles">${tiles}</div>
       <div class="consent" style="margin-top:10px"><div class="ck${iapConsent?" on":""}" data-click="toggleIapConsent"><span class="box">✓</span><span class="cktx">I understand that this credit is tied to my <b>recovery phrase</b> and to this device: the phrase brings back what has moved onto it, coins still on the device are lost with the device. Nobody — including tokumai — can restore either.</span></div></div>
       <div style="margin-top:10px"><button class="btn primary${iapBusy?" busy":""}" style="width:100%${ready?"":";opacity:.5;cursor:not-allowed"}"${ready?"":" disabled"} data-click="buyIap">${label}</button></div>
@@ -5818,7 +5818,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   }
   async function restoreIap(){
     if(iapBusy) return;
-    iapBusy = true; iapMsg = "Checking with the App Store…"; renderIosStore();
+    iapBusy = true; iapMsg = "Checking with the App Store, then with our server…"; renderIosStore();
     try{
       const r = await Backend.iapRestore();
       const claimed = Number(r && r.claimed)||0, found = Number(r && r.found)||0, toku = Number(r && r.toku)||0;
