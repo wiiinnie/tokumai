@@ -118,6 +118,7 @@ const httpBackend = {
   resumeStats: () => Promise.resolve({ count: 0, alive: 0, dead: 0, rebuilt: 0, longest_alive_ms: 0, shortest_dead_ms: null, log: "", path: "" }),
   onMixnetPhase: async () => () => {},
   listEntryGateways: () => Promise.resolve([]),
+  serverIdentities: () => Promise.resolve([]),
   setEntryGateway: () => Promise.resolve({ entry_gateway: null }),
   setMixnetPerf: () => Promise.resolve({}), // dev backend has no mixnet
   // nosemgrep: scrai-js-window-open -- dev bridge only; the app routes through open_external
@@ -203,6 +204,7 @@ const tauriBackend = (invoke) => ({
   // Rust emits mixnet-phase {step, detail} during every (re)connect — keys · client · gateway · cover · ready · failed · check.
   onMixnetPhase: async (cb) => { const ev = window.__TAURI__ && window.__TAURI__.event; if (ev && ev.listen) return ev.listen("mixnet-phase", (e) => { try { cb(e.payload); } catch (_) {} }); return () => {}; },
   listEntryGateways: () => invoke("list_entry_gateways"),
+  serverIdentities: () => invoke("server_identities"),
   setEntryGateway: (id) => invoke("set_entry_gateway", { id }),
   setMixnetPerf: (coverMs, mixMs, sendMs, continuous) => invoke("set_mixnet_perf", { coverMs, mixMs, sendMs, continuous }),
   openExternal: (url) => invoke("open_external", { url }),
@@ -303,6 +305,7 @@ export const Backend = {
   resumeStats: () => pick("resumeStats"),
   onMixnetPhase: (...a) => pick("onMixnetPhase", ...a),
   listEntryGateways: () => pick("listEntryGateways"),
+  serverIdentities: () => pick("serverIdentities"),
   setEntryGateway: (id) => pick("setEntryGateway", id),
   setMixnetPerf: (coverMs, mixMs, sendMs, continuous) => pick("setMixnetPerf", coverMs, mixMs, sendMs, continuous),
   openExternal: (url) => pick("openExternal", url),

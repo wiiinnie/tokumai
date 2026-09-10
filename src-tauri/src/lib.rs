@@ -2517,6 +2517,34 @@ async fn list_entry_gateways(transport: State<'_, Arc<Transport>>) -> Result<Val
     Ok(json!(list))
 }
 
+/// The server's identities (every address from its catalog reply, plus the one in
+/// use) with each exit gateway's self-reported country, for the picker under
+/// Account → Server. Same server behind every entry — picking one only changes the
+/// exit hop.
+#[tauri::command]
+async fn server_identities(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<Value, String> {
+    let w = wallet::load(&data_dir(&app)?);
+    let current = w.server.clone().unwrap_or_default();
+    let mut addrs = w.server_alternates.clone();
+    if !current.is_empty() && !addrs.contains(&current) {
+        addrs.insert(0, current.clone());
+    }
+    let mut out = Vec::with_capacity(addrs.len());
+    for addr in addrs {
+        let Some(gw) = Transport::gateway_of(&addr) else { continue };
+        let info = transport.gateway_info(&gw).await;
+        let (country, host) = info.map(|g| (g.country, g.host)).unwrap_or_default();
+        out.push(json!({
+            "address": addr,
+            "gateway": gw,
+            "country": country,
+            "host": host,
+            "current": addr == current,
+        }));
+    }
+    Ok(json!(out))
+}
+
 /// Choose (or clear, with null) the entry gateway. Persists it and drops the
 /// live client so the next request re-attaches through the chosen gateway.
 #[tauri::command]
@@ -3372,7 +3400,7 @@ pub fn run() {
             state, local_state, set_server, account_new, account_reveal, account_restore, account_delete, account_migrate_qr,
             invoice, invoice_status, invoice_cancel, invite_check, ocr_scan, pdf_text, pdf_ocr, pdf_pages, collect, redeem, chat,
             smart_available, smart_detect, coconut_redeem,
-            mixnet_route, mixnet_ping, cancel_chat, app_resumed, app_hidden, resume_stats, list_entry_gateways, set_entry_gateway, set_mixnet_perf, open_external, save_image, save_file, voucher_redeem,
+            mixnet_route, mixnet_ping, cancel_chat, app_resumed, app_hidden, resume_stats, list_entry_gateways, server_identities, set_entry_gateway, set_mixnet_perf, open_external, save_image, save_file, voucher_redeem,
             phrase_backup_get,
             phrase_check_start,
             phrase_check_verify,

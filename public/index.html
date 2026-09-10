@@ -2293,7 +2293,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       // nosemgrep: scrai-taint-untrusted-to-html -- reviewed 2026-08-30: only formatted numbers + static copy
       $("heldText").innerHTML = `${esc(formatToku(Math.max(0,balance-held)))} recoverable from your phrase · <span style="color:var(--rust)">${esc(formatToku(held))} on this device only</span>${trickleOn() ? ` · ${esc(trickleEta())}` : ` · staying here (moving to phrase is off)`}
         <details class="why"><summary><span class="chev">›</span> What this means</summary>
-          <div class="body">Coins on this device are blind-signed <b>cash</b>: not linked to your account, and a recovery phrase does not bring them back. ${trickleOn() ? `A dollar of them moves onto your phrase every ${esc(String(trickleMinutes))} minutes the app is open — the same pace as everyone, so it cannot be told apart. Lose the phone before then and the part still on it is gone, like cash.` : `Moving them onto your phrase is switched off (Account → Move credit onto my phrase), so they stay cash until spent.`} Chatting never waits for this.</div>
+          <div class="body">Coins on this device are blind-signed <b>cash</b>: not linked to your account, and a recovery phrase does not bring them back. ${trickleOn() ? `A dollar of them moves onto your phrase every ${esc(String(trickleMinutes))} minutes the app is open — the same pace as everyone, so it cannot be told apart. Lose this device or the recovery phrase before then and the part still on it is gone, like cash.` : `Moving them onto your phrase is switched off (Account → Move credit onto my phrase), so they stay cash until spent.`} Chatting never waits for this.</div>
         </details>`;
     }
     else $("heldLine").style.display="none";
@@ -3274,7 +3274,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       if(xf) xf.textContent = flagOf(r.exit && r.exit.country) || "🛰";
       const eh=$("entryHop"), xh=$("exitHop");
       if(eh) eh.title = edgeTitle("entry", r.entry) + "  (click to choose)";
-      if(xh) xh.title = edgeTitle("exit", r.exit) + "  (fixed — the server's gateway)";
+      if(xh) xh.title = edgeTitle("exit", r.exit) + (serverAlternates.length > 1 ? "  (the server's gateway — pick another of its identities under Account → Server)" : "  (fixed — the server's gateway)");
       // Connected once the client is actually LIVE on an entry gateway — the
       // `live` flag distinguishes a real connection from a merely chosen
       // gateway (a dead client must not keep the route showing green).
@@ -3391,8 +3391,9 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     $("gwTitle").innerHTML = "Exit <b>gateway</b>";
     openScrim("gwScrim");
     $("gwBody").innerHTML = `<p>The <b>exit</b> hop is the gateway the tokumai server itself is attached to —
-      it is read from the server's Nym address, not chosen by this app. To change it,
-      the server operator would move the server to a different gateway.</p>
+      it is read from the server's Nym address. ${serverAlternates.length>1
+        ? `This server answers under ${esc(String(serverAlternates.length))} identities, each on its own gateway — pick one under <b>Account → Server</b>.`
+        : `To change it, the server operator would move the server to a different gateway.`}</p>
       ${e&&e.id?`<div class="gwrow sel" style="cursor:default">
         <span class="fl">${flagOf(e.country)||'🏳️'}</span>
         <span class="cc">${esc(e.country||'??')}</span>
@@ -4907,6 +4908,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   let trickleMinutes = 5, trickleTimer = null;
   const TRICKLE_KEY = "tokumai.trickle";
   function trickleOn(){ try{ return localStorage.getItem(TRICKLE_KEY) !== "0"; }catch(_){ return true; } }
+  function trickleToggle(){ const el=$("trickleChk"); setTrickle(!!(el && el.checked)); }
   function setTrickle(on){ try{ localStorage.setItem(TRICKLE_KEY, on ? "1" : "0"); }catch(_){} if(on) startTrickle(); else stopTrickle(); renderAccount(); renderBal(); }
   function trickleDelayMs(){ const base = Math.max(1, trickleMinutes) * 60000; return Math.round(base * (0.5 + Math.random())); }
   function startTrickle(){ if(trickleTimer || !isTauri()) return; trickleTimer = setTimeout(trickleTick, Math.round(Math.random() * Math.max(1, trickleMinutes) * 60000)); }
@@ -5027,6 +5029,36 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     if(!KNOWN_SERVERS.length) return;
     routeClose(); mixState="ok";           // let the new check re-open the overlay cleanly
     saveServerAddr(KNOWN_SERVERS[0].address);
+  }
+  // The server's identities (its exit gateways, one per country) — the catalog reply
+  // lists them, the Rust side resolves each gateway's self-reported country. Picking
+  // one just saves that address: same server, same balance, a different exit hop.
+  let identsAll = [];
+  async function fillServerIdentities(){
+    const box=$("srvIdents"); if(!box || !isTauri() || !server) return;
+    try{ const r = await Backend.serverIdentities(); identsAll = Array.isArray(r) ? r : []; }catch(_){ identsAll=[]; }
+    renderServerIdentities();
+  }
+  function renderServerIdentities(){
+    const box=$("srvIdents"); if(!box) return;
+    const list = identsAll;
+    if(list.length < 2){ box.innerHTML=""; return; }
+    const rows = list.map(identityRow).join("");
+    box.innerHTML = `<div class="hint" style="margin-top:14px">Exit hop · this server answers under ${esc(String(list.length))} identities. Pick the one whose gateway you prefer — same server, same balance.</div>${rows}
+      <p class="hint">If the chosen address goes silent, the app falls back to another identity of the same server on its own.</p>`;
+  }
+  // One identity row — every field escaped here (a catalog reply is server data).
+  function identityRow(g){
+    const cc = String(g.country||"").toUpperCase();
+    const cur = !!g.current;
+    const gw = String(g.gateway||""); const short = gw.length>12 ? gw.slice(0,6)+"…"+gw.slice(-5) : gw;
+    return `<div class="setrow" data-click="pickServerIdentity" data-click-pass="id" data-id="${escAttr(String(g.address||""))}" style="cursor:${cur?"default":"pointer"}">
+      <span><b>${esc(flagOf(cc)||"🛰")} ${esc(cc||"unknown location")}</b><small>exit gateway ${esc(short)}${g.host?` · ${esc(String(g.host))}`:``}</small></span>
+      ${cur?`<span class="pill ok">current</span>`:``}</div>`;
+  }
+  function pickServerIdentity(addr){
+    if(!addr || addr===server || !serverAlternates.includes(addr)) return;
+    saveServerAddr(addr);
   }
   function serverBlock(){
     if(!isTauri()) return "";
@@ -5272,16 +5304,17 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         <button class="btn" data-click="showPhraseAgain">Show the phrase again</button></div>
       <p class="hint">Until this is done, the account cannot buy credit. A phrase that was only ever looked at is one that gets screenshotted — and the screenshot lands in every cloud the photos sync to.</p>`;
 
+    const trickleRow = `<label class="setrow"><input type="checkbox" id="trickleChk" data-change="trickleToggle"${trickleOn()?" checked":""}><span><b>Move credit onto my phrase</b><small>${trickleOn()?`On · a dollar every ${esc(String(trickleMinutes))} minutes the app is open`:`Off · the coins stay cash on this device`}</small></span></label>`;
     const tricklePage = trickleOn()
       ? `<p class="pagelead">A dollar of the coins on this device moves onto your recovery phrase every <b>${esc(String(trickleMinutes))} minutes</b> the app is open — at the same pace as everyone else, so it cannot be told apart. From the phrase, credit can always come back.</p>
-         <p class="hint">Until it has moved, it is cash: lose the phone and that part is gone. Chatting never waits for this. The pace is set by the server, the same for every app.</p>
-         <div class="btnrow"><button class="btn" data-click="setTrickle" data-args="false">Switch off — keep everything as cash here</button></div>`
+         ${trickleRow}
+         <p class="hint">Until it has moved, it is cash: lose this device or the recovery phrase and that part is gone. Chatting never waits for this. The pace is set by the server, the same for every app.</p>`
       : `<p class="pagelead">Switched off. The coins on this device stay cash until you spend them — nothing moves onto your recovery phrase on its own.</p>
-         <p class="hint" style="color:var(--rust)">Off, the phrase restores only what you had already used — which is nothing. Lose the phone, lose the credit.</p>
-         <div class="btnrow"><button class="btn primary" data-click="setTrickle" data-args="true">Switch on</button></div>`;
+         ${trickleRow}
+         <p class="hint" style="color:var(--rust)">Off, the phrase restores only what you had already used — which is nothing. Lose this device or the recovery phrase, and the credit is gone.</p>`;
 
     const pages = {
-      server:  { t:"Server",                 h:`<p class="pagelead">Pick the official server, or paste one from your own tokumai server.</p>${serverControls()}` },
+      server:  { t:"Server",                 h:`<p class="pagelead">Pick the official server, or paste one from your own tokumai server.</p>${serverControls()}<div id="srvIdents"></div>` },
       backup:  { t:"Phrase in Keychain",      h:backupPage },
       check:   { t:"Confirm your phrase",     h:checkPage },
       trickle: { t:"Move credit onto my phrase", h:tricklePage },
@@ -5295,6 +5328,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     b.innerHTML = pg.h;
     paintFlat($("redeemSlider"));
     focusRestore();
+    if(acctPage==="server") fillServerIdentities();
   }
   // Stroke icons for the account landing rows (16px grid, currentColor).
   const ACCT_ICON = {
