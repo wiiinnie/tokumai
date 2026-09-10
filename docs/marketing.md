@@ -152,3 +152,21 @@ vault and guard, no rate limits, unlinkable paid tier.
 
 Possible moat: an open-model tier inside a TEE reached over the mixnet would
 cover both axes at once. Nobody offers that today.
+
+---
+
+## App Store Connect fields, as entered 2026-09-10 (version 1.0, build 0.6.2)
+
+- Name: tokumai · Subtitle: Private AI. No identity.
+- Category: Productivity (secondary Utilities) · Copyright: 2026 Matthias Winter, Hermes Blockchain Ventures
+- URLs: support https://tokumai.com/ · marketing https://tokumai.com/ · privacy https://tokumai.com/privacy
+- Keywords (≤100): private,anonymous,ai,chat,assistant,privacy,mixnet,nym,untraceable,no account,chatbot,llm
+- Promotional text and description: the App Store (EN) block above, description extended with
+  the feature list (models, images, on-device guard and vault, prepaid credit, recovery phrase)
+  and the "model still reads your question" line.
+- App Privacy: data collected = User Content (prompts, for app functionality, not linked to
+  identity, no tracking) and Purchases (transaction fingerprint, app functionality, not linked);
+  no analytics, no identifiers, no location, no contacts, no tracking.
+- Screenshots: taken on the iPhone (6.1", 1179×2556) and scaled to 6.5" 1284×2778 with sips —
+  same 19.5:9 ratio, Apple accepts the scaled set.
+- IAPs credit.10/20/50 go in the same submission (first IAP needs an app version). Manual release.
