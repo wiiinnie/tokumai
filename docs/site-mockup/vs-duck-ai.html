@@ -11,9 +11,11 @@
   }
   body[data-mode="light"]{
     --ink:#ECE6DC; --surface:#F4F0E8; --surface-2:#E4DDD1; --line:#D6CEC0; --bone:#141210; --muted:#6F6A62;
-    --acc:#5B45D6; --acc2:#4636B0; --rust:#B8503A; --ok:#1F8F5F; --amber:#B8650F;
-    --tint1:rgba(91,69,214,.08); --tint2:rgba(91,69,214,.05); --page:#ECE6DC; --card:#F4F0E8;
+    --acc:#4B33DB; --acc2:#3A27B8; --rust:#B8503A; --ok:#1F8F5F; --amber:#B8650F;
+    --tint1:rgba(75,51,219,.10); --tint2:rgba(75,51,219,.06); --page:#ECE6DC; --card:#F4F0E8;
   }
+  body[data-mode="light"] .card.us{border-color:var(--acc);background:color-mix(in srgb,var(--acc) 14%,var(--surface))}
+  body[data-mode="light"] td.us{background:color-mix(in srgb,var(--acc) 12%,transparent)}
   *{box-sizing:border-box}
   html,body{margin:0}
   body{background:var(--page);color:var(--bone);font:15px/1.6 var(--body);-webkit-font-smoothing:antialiased}

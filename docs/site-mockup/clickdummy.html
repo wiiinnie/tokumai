@@ -11,9 +11,13 @@
   }
   body[data-mode="light"]{
     --ink:#ECE6DC; --surface:#F4F0E8; --surface-2:#E4DDD1; --line:#D6CEC0; --bone:#141210; --muted:#6F6A62;
-    --acc:#5B45D6; --acc2:#4636B0; --rust:#B8503A; --ok:#1F8F5F; --amber:#B8650F;
-    --tint1:rgba(91,69,214,.08); --tint2:rgba(91,69,214,.05); --page:#ECE6DC; --card:#F4F0E8;
+    --acc:#4B33DB; --acc2:#3A27B8; --rust:#B8503A; --ok:#1F8F5F; --amber:#B8650F;
+    --tint1:rgba(75,51,219,.10); --tint2:rgba(75,51,219,.06); --page:#ECE6DC; --card:#F4F0E8;
   }
+  body[data-mode="light"] .card.us{border-color:var(--acc);background:color-mix(in srgb,var(--acc) 14%,var(--surface))}
+  body[data-mode="light"] td.us{background:color-mix(in srgb,var(--acc) 12%,transparent)}
+  body[data-mode="light"] .nav .links a{border-color:color-mix(in srgb,var(--acc) 60%,transparent)}
+  body[data-mode="light"] .pillar .n,body[data-mode="light"] .step .n,body[data-mode="light"] .eyebrow{color:var(--acc)}
   *{box-sizing:border-box}
   html,body{margin:0}
   body{background:var(--page);color:var(--bone);font:15px/1.6 var(--body);-webkit-font-smoothing:antialiased}
@@ -76,6 +80,8 @@
   .step h3{font-family:var(--display);font-size:26px;margin:0 0 10px;font-weight:600;line-height:1.15}
   .step p{margin:0 0 10px;color:var(--muted);max-width:none} .step p:last-child{margin:0}
   .step .shot{box-shadow:none;max-width:420px;margin:0 auto}
+  .ph{aspect-ratio:4/3;border:1.5px dashed color-mix(in srgb,var(--acc) 55%,var(--line));border-radius:16px;background:color-mix(in srgb,var(--acc) 5%,var(--surface));display:flex;align-items:center;justify-content:center;text-align:center;padding:20px}
+  .ph span{font-family:var(--mono);font-size:11.5px;line-height:1.6;color:var(--muted);max-width:26ch} .ph b{display:block;color:var(--acc);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;margin-bottom:6px}
   .kv{display:grid;grid-template-columns:max-content 1fr;gap:8px 16px;font-size:14px;margin:12px 0 0}
   .kv dt{font-family:var(--mono);font-size:11.5px;color:var(--muted);padding-top:2px} .kv dd{margin:0;color:var(--bone)}
 
@@ -111,6 +117,9 @@
   .faq summary{cursor:pointer;font-weight:600;font-size:15.5px;color:var(--bone);list-style:none;display:flex;justify-content:space-between;gap:12px}
   .faq summary::-webkit-details-marker{display:none} .faq summary::after{content:"+";font-family:var(--mono);color:var(--acc);flex:none} .faq details[open] summary::after{content:"–"}
   .faq details p{margin:10px 0 0}
+  .matrix{min-width:820px} .matrix td,.matrix th{text-align:center;padding:12px 10px} .matrix td.row,.matrix th:first-child{text-align:left}
+  .matrix i{font-style:normal;font-size:16px;display:block;line-height:1} .matrix i.y{color:var(--ok)} .matrix i.p{color:var(--amber)} .matrix i.n{color:var(--muted);opacity:.7}
+  .matrix small{display:block;font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:4px;line-height:1.3}
   .also{font-family:var(--mono);font-size:11.5px;color:var(--muted);margin:14px 0 0} .also a{color:var(--acc2)}
   .fine{font-family:var(--mono);font-size:11.5px;color:var(--muted);margin-top:30px;max-width:80ch;line-height:1.7}
 
@@ -203,26 +212,26 @@
         <div class="txt"><div class="n">01 · IDENTITY</div><h3>No identity is ever created</h3>
           <p>There is no sign-up. The app generates a 24-word recovery phrase on your device, and that phrase <b>is</b> the account. No e-mail, no phone number, no password, nothing that names a person.</p>
           <p>Lose the phrase and nobody can restore your credit, not even us. That is the price of an account that knows nothing about you.</p></div>
-        <div class="shot"><img src="{{IMG:flow-account-dark}}" alt="Creating an anonymous account: the 24-word phrase"></div>
+        <div class="ph"><span><b>Screenshot to come</b>Creating the account: the 24-word phrase, nothing else asked</span></div>
       </div>
       <div class="step">
         <div class="txt"><div class="n">02 · NETWORK</div><h3>Your IP address never reaches us</h3>
           <p>The app talks to the tokumai server only through the <b>Nym mixnet</b>: five hops, Sphinx packets of one fixed size, cover traffic. The server has no public address at all; it, too, sits behind the mixnet.</p>
           <p>No hop knows both where a packet came from and where it is going. We could not log your IP if we wanted to, because we never receive it.</p>
           <dl class="kv"><dt>Entry hop</dt><dd>you can pick the country</dd><dt>Exit hop</dt><dd>the server's gateway; several identities to choose from</dd><dt>Cost</dt><dd>about a second per answer</dd></dl></div>
-        <div class="shot"><img src="{{IMG:how-phone-network-dark}}" alt="The route: entry and exit gateway"></div>
+        <div class="ph"><span><b>Screenshot to come</b>The route: entry hop → mixnet → exit hop, no IP at the server</span></div>
       </div>
       <div class="step">
         <div class="txt"><div class="n">03 · PAYMENT</div><h3>A payment can't be matched to a question</h3>
           <p>You buy credit in fixed amounts — $5, $10, $20 or $50 — with NYM, Bitcoin, a card, or on iPhone through the App Store. The credit is then withdrawn as <b>blind-signed coins</b>: the server signs them without seeing them, and cannot recognise them when they come back to pay for a prompt.</p>
           <p>A coin purchase sees a wallet address; a card payment sees a name and a card. Neither sees your account, and neither can be connected to what you ask. Fixed amounts mean a purchase reveals no per-user fingerprint.</p></div>
-        <div class="shot"><img src="{{IMG:flow-topup-dark}}" alt="Buying credit in the app"></div>
+        <div class="ph"><span><b>Screenshot to come</b>Buying credit: fixed amounts, coins withdrawn blind</span></div>
       </div>
       <div class="step">
         <div class="txt"><div class="n">04 · YOUR DEVICE</div><h3>What shouldn't leave, doesn't</h3>
           <p>Before a prompt is sent, a <b>guard on your device</b> checks it for personal data — names, addresses, IDs, also in attached images and PDFs — and offers to redact it. Attached files lose their metadata: camera model, GPS position, author, timestamps.</p>
           <p>Your conversations are stored only on your device, encrypted, with the key in your operating system's keystore. Our servers keep no prompts and no answers; a reply is held in memory only until it has reached you.</p></div>
-        <div class="shot"><img src="{{IMG:how-phone-chat-dark}}" alt="A chat on the phone"></div>
+        <div class="ph"><span><b>Screenshot to come</b>The guard flagging personal data before a prompt leaves</span></div>
       </div>
     </div>
 
@@ -317,13 +326,22 @@
       <p>Most private AI chats protect <b>what</b> you say and ask you to trust them with <b>who</b> you are. tokumai protects the who: no identity, no IP at the server, no payment that points at a question. The pages below take one product at a time.</p>
     </div>
     <div class="sec">
-      <div class="cards">
-        <div class="card us"><div class="k">Relay</div><h3>tokumai vs Duck.ai</h3><p>Duck.ai promises not to keep your IP address. tokumai never gets it.</p><a class="go" href="#/vs/duck-ai">Read the comparison →</a></div>
-        <div class="card"><div class="k">Proxy · coming</div><h3>tokumai vs Venice</h3><p>Venice says it doesn't log. Its servers still see your IP and your wallet.</p><span class="go" style="opacity:.5">In preparation</span></div>
-        <div class="card"><div class="k">TEE · coming</div><h3>tokumai vs nilGPT</h3><p>nilGPT hides the content in a secure enclave and knows who paid. Different axis, open-weight models.</p><span class="go" style="opacity:.5">In preparation</span></div>
-        <div class="card"><div class="k">Proton · coming</div><h3>tokumai vs Lumo</h3><p>Lumo needs a Proton account. The account is the point of difference.</p><span class="go" style="opacity:.5">In preparation</span></div>
-        <div class="card"><div class="k">Browser · coming</div><h3>tokumai vs Brave Leo</h3><p>Leo's proxy sees your IP. Free, built into the browser, a promise.</p><span class="go" style="opacity:.5">In preparation</span></div>
-      </div>
+      <div class="eyebrow">At a glance</div>
+      <div class="tw"><table class="matrix">
+        <thead><tr><th></th><th class="us">tokumai</th><th>Duck.ai</th><th>Venice</th><th>nilGPT</th><th>Lumo</th><th>Brave Leo</th></tr></thead>
+        <tbody>
+          <tr><td class="row">No real-world identity needed</td><td class="us"><i class="y">✓</i></td><td><i class="p">◐</i><small>free tier only</small></td><td><i class="p">◐</i><small>optional account</small></td><td><i class="n">✗</i><small>e-mail or wallet</small></td><td><i class="n">✗</i><small>Proton account</small></td><td><i class="y">✓</i></td></tr>
+          <tr><td class="row">Operator never sees your IP</td><td class="us"><i class="y">✓</i><small>mixnet, by design</small></td><td><i class="n">✗</i><small>relay, by promise</small></td><td><i class="n">✗</i></td><td><i class="n">✗</i></td><td><i class="n">✗</i></td><td><i class="n">✗</i><small>proxy</small></td></tr>
+          <tr><td class="row">Payment can't be linked to a prompt</td><td class="us"><i class="y">✓</i><small>blind-signed coins</small></td><td><i class="n">✗</i><small>store account</small></td><td><i class="p">◐</i><small>on-chain, pseudonymous</small></td><td><i class="n">✗</i></td><td><i class="n">✗</i></td><td><i class="n">✗</i></td></tr>
+          <tr><td class="row">No subscription</td><td class="us"><i class="y">✓</i><small>prepaid, buy once</small></td><td><i class="p">◐</i><small>free tier, paid plans monthly</small></td><td><i class="n">✗</i></td><td><i class="n">✗</i></td><td><i class="n">✗</i></td><td><i class="n">✗</i></td></tr>
+          <tr><td class="row">Leading (frontier) models</td><td class="us"><i class="y">✓</i></td><td><i class="y">✓</i></td><td><i class="y">✓</i></td><td><i class="n">✗</i><small>open-weight only</small></td><td><i class="n">✗</i></td><td><i class="y">✓</i></td></tr>
+          <tr><td class="row">Guard for personal data, on device</td><td class="us"><i class="y">✓</i><small>flag + redact</small></td><td><i class="n">✗</i></td><td><i class="n">✗</i></td><td><i class="n">✗</i></td><td><i class="n">✗</i></td><td><i class="n">✗</i></td></tr>
+          <tr><td class="row">Attachment metadata stripped</td><td class="us"><i class="y">✓</i></td><td><i class="n">✗</i></td><td><i class="n">✗</i></td><td><i class="n">✗</i></td><td><i class="n">✗</i></td><td><i class="n">✗</i></td></tr>
+          <tr><td class="row">History only on your device, encrypted</td><td class="us"><i class="y">✓</i></td><td><i class="p">◐</i><small>local, not encrypted</small></td><td><i class="p">◐</i></td><td><i class="p">◐</i></td><td><i class="p">◐</i><small>encrypted, on their servers</small></td><td><i class="p">◐</i><small>local</small></td></tr>
+          <tr><td class="row">Image generation</td><td class="us"><i class="y">✓</i><small>up to 4K</small></td><td><i class="y">✓</i></td><td><i class="y">✓</i></td><td><i class="n">✗</i></td><td><i class="n">✗</i></td><td><i class="n">✗</i></td></tr>
+        </tbody>
+      </table></div>
+      <p class="also">✓ yes · ◐ partly · ✗ no — publicly available information as of September 2026. One page per product: <a href="#/vs/duck-ai">Duck.ai</a> · Venice · nilGPT · Lumo · Brave Leo (in preparation). All names are trademarks of their owners; tokumai is not affiliated with any of them.</p>
     </div>
   </section>
 
