@@ -5,7 +5,7 @@
   SEO bar showing each route's title / description / keywords. Images are referenced as
   `{{IMG:name}}` → `server/site/img/name.jpg`; `build.sh` inlines them for the artifact.
 - `vs-duck-ai.html` — the standalone comparison page mockup with the head/SEO notes.
-- Artifacts: click-dummy https://claude.ai/code/artifact/… (see the session), comparison page
+- Artifacts: click-dummy https://claude.ai/code/artifact/1e87dcfd-1b97-4e68-98b5-585c0e6045cf, comparison page
   https://claude.ai/code/artifact/22c67378-c1e5-43d2-a65c-f2ff1236d0db
 
 Structure decided for SEO: one URL per topic instead of anchors on the home page —
