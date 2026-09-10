@@ -3021,6 +3021,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       if(st==="ok" && (mixState==="reconnecting"||mixState==="checking") && routeStart) lastRebuildSecs = routeSecs();
       mixState = st;
       if(st==="reconnecting") routeOpen();
+      if(st==="ok"){ try{ iapRetryNow("reconnected"); }catch(_){} }
     }
     if((st==="reconnecting"||st==="checking") && !routeTicker) routeTicker=setInterval(updateRouteUI, 1000);
     if(st==="ok"||st==="offline"){ if(routeTicker){ clearInterval(routeTicker); routeTicker=null; } }
@@ -5811,7 +5812,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       }
       else if(st==="cancelled"){ iapMsg = ""; }
       else if(st==="pending"){ iapMsg = "Waiting for approval (Ask to Buy). The credit arrives once it is approved — open this sheet again then."; }
-      else if(st==="unclaimed"){ iapMsg = `Paid — but the server has not confirmed the credit yet: ${String((r && r.error)||"no answer")}. Nothing is lost: tap Restore purchases in a moment.`; }
+      else if(st==="unclaimed"){ iapMsg = `Paid — but the server has not confirmed the credit yet: ${String((r && r.error)||"no answer")}. Nothing is lost: the app keeps trying on its own, or tap Restore purchases.`; armIapRetry(); }
       else { iapMsg = "The App Store gave an unexpected answer."; }
     }catch(e){ iapMsg = "Failed: " + String((e && e.message) || e); }
     iapBusy = false; renderIosStore();
@@ -5822,9 +5823,9 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     try{
       const r = await Backend.iapRestore();
       const claimed = Number(r && r.claimed)||0, found = Number(r && r.found)||0, toku = Number(r && r.toku)||0;
-      if(claimed>0){ iapMsg = `✓ ${formatToku(toku)} TOKU from ${claimed} purchase${claimed>1?"s":""} credited.`; await collectAfterIap(); }
-      else if(found===0){ iapMsg = "Nothing to restore — every purchase has been credited."; }
-      else { iapMsg = `${found} paid purchase${found>1?"s":""} still unclaimed: ${String((r && r.error)||"the server did not answer")}.`; }
+      if(claimed>0){ iapMsg = `✓ ${formatToku(toku)} TOKU from ${claimed} purchase${claimed>1?"s":""} credited.`; disarmIapRetry(); await collectAfterIap(); }
+      else if(found===0){ iapMsg = "Nothing to restore — every purchase has been credited."; disarmIapRetry(); }
+      else { iapMsg = `${found} paid purchase${found>1?"s":""} still unclaimed: ${String((r && r.error)||"the server did not answer")}. The app keeps trying.`; armIapRetry(); }
     }catch(e){ iapMsg = "Failed: " + String((e && e.message) || e); }
     iapBusy = false; renderIosStore();
   }
@@ -5836,7 +5837,31 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     try{
       const r = await Backend.iapRestore();
       if(r && Number(r.claimed)>0){ await collectAfterIap(); setStatus(`${formatToku(Number(r.toku)||0)} TOKU from an App Store purchase credited`); }
+      if(r && Number(r.found)>Number(r.claimed||0)) armIapRetry();
     }catch(_){}
+  }
+  // A paid transaction the server has not confirmed (it was down, the route was dead) is
+  // re-sent on its own: every minute while the app runs, and the moment the connection
+  // comes back — so nobody has to know about "Restore purchases" or restart the app.
+  let iapRetryTimer = null, iapRetryBusy = false, iapRetryLeft = 0;
+  function armIapRetry(){ iapRetryLeft = 60; if(!iapRetryTimer) iapRetryTimer = setInterval(()=>iapRetryNow("timer"), 60000); }
+  function disarmIapRetry(){ iapRetryLeft = 0; if(iapRetryTimer){ clearInterval(iapRetryTimer); iapRetryTimer = null; } }
+  async function iapRetryNow(why){
+    if(!iapRetryTimer || iapRetryBusy || iapBusy || !isIOSNative() || !account) return;
+    if(--iapRetryLeft <= 0){ disarmIapRetry(); return; }
+    iapRetryBusy = true;
+    try{
+      const r = await Backend.iapRestore();
+      const claimed = Number(r && r.claimed)||0, found = Number(r && r.found)||0;
+      if(claimed>0){
+        disarmIapRetry();
+        iapMsg = `✓ ${formatToku(Number(r.toku)||0)} TOKU credited — the server has confirmed your purchase.`;
+        renderIosStore();
+        await collectAfterIap();
+        setStatus(`${formatToku(Number(r.toku)||0)} TOKU from an App Store purchase credited`);
+      } else if(found===0){ disarmIapRetry(); }
+    }catch(_){ /* still down — the next tick tries again */ }
+    iapRetryBusy = false;
   }
   // Ask the SERVER whether the code is good. It answers from the faucet's own ledger; an
   // answer of "valid" only decides which tiles we show — the code is checked again when
