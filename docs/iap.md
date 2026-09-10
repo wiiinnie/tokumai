@@ -79,7 +79,8 @@ sheet is normal until a build has been uploaded to App Store Connect.
    shows `[Environment: Sandbox]`. After the sheet: "✓ 1,000,000 TOKU credited", then the
    balance updates through the usual collect.
 5. Lost-reply drill: switch the server off, buy, see "Paid — but the server has not
-   confirmed…", switch it on, tap "Restore purchases" (or relaunch the app).
+   confirmed…", switch it on, do nothing: the app re-sends every minute and on reconnect
+   (passed 2026-09-10 — credited within a minute). "Restore purchases" is the manual way.
 
 ## Apple refunds
 
