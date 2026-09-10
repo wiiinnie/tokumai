@@ -27,6 +27,19 @@ use std::collections::HashMap;
 /// skipped), and the map is capped so it can never grow without bound.
 const MAX_CACHED_REPLY: usize = 256 * 1024;
 const MAX_CACHED_SESSIONS: usize = 64;
+/// How long a reply stays cached for a lost-reply retry. The retry needs minutes — the
+/// client's own timeout is about two — not hours: an idle session's last ANSWER used to sit
+/// in memory until that session spoke again or sixty-three others pushed it out, which for
+/// a quiet account is indefinitely. Ten minutes is the retry window with room, and after it
+/// nothing of a conversation exists on this machine.
+pub const REPLY_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+/// Drop cached replies past `REPLY_CACHE_TTL`. Called on the server's housekeeping beat.
+pub fn sweep_replies(replies: &mut HashMap<String, (u64, Vec<u8>, std::time::Instant)>) -> usize {
+    let before = replies.len();
+    replies.retain(|_, (_, _, at)| at.elapsed() < REPLY_CACHE_TTL);
+    before - replies.len()
+}
 
 /// A request that reached the provider is never free, even if it rounds to sub-1 TOKU.
 /// Default 1 TOKU ($0.00001); override per-operator with the `MIN_CHARGE_TOKU` env var
@@ -302,7 +315,7 @@ pub async fn handle(
     uploads: &mut crate::uploads::UploadStore,
     pricing: &PricingTable,
     margin: f64,
-    replies: &mut HashMap<String, (u64, Vec<u8>)>,
+    replies: &mut HashMap<String, (u64, Vec<u8>, std::time::Instant)>,
     // Grounding queries still free this UTC month (Gemini's 5,000/mo allowance minus
     // what's been used). Queries beyond it bill at $14/1k; within it they cost $0.
     grounding_free: u64,
@@ -380,7 +393,7 @@ pub fn reserve(
     uploads: &mut crate::uploads::UploadStore,
     pricing: &PricingTable,
     margin: f64,
-    replies: &mut HashMap<String, (u64, Vec<u8>)>,
+    replies: &mut HashMap<String, (u64, Vec<u8>, std::time::Instant)>,
     grounding_free: u64,
 ) -> Reserved {
     let v: Value = serde_json::from_slice(request).unwrap_or(Value::Null);
@@ -489,7 +502,7 @@ pub fn reserve(
             // this exact counter is the one the server last processed and we still hold
             // its reply, hand it back — same answer, no second charge.
             if counter == server_counter {
-                if let Some((c, bytes)) = replies.get(&session_id) {
+                if let Some((c, bytes, _)) = replies.get(&session_id) {
                     if *c == counter {
                         return Reserved::Reply(bytes.clone());
                     }
@@ -536,7 +549,7 @@ pub fn settle(
     p: PendingChat,
     result: Result<(String, TokenUsage, Images), String>,
     sessions: &mut scrai_core::session::SessionStore,
-    replies: &mut HashMap<String, (u64, Vec<u8>)>,
+    replies: &mut HashMap<String, (u64, Vec<u8>, std::time::Instant)>,
 ) -> Settled {
     let id = p.id;
     let mut provider_cost: Option<f64> = None;
@@ -665,7 +678,7 @@ pub fn settle(
                 replies.remove(&k);
             }
         }
-        replies.insert(paid.session_id.clone(), (paid.counter, out.clone()));
+        replies.insert(paid.session_id.clone(), (paid.counter, out.clone(), std::time::Instant::now()));
     }
     Settled { reply: out, provider_cost }
 }
@@ -1386,7 +1399,7 @@ mod tests {
         let (sk, pem, sid) = session_keypair();
         let mut sessions = scrai_core::session::SessionStore::default();
         let mut uploads = crate::uploads::UploadStore::default();
-        let mut replies: std::collections::HashMap<String, (u64, Vec<u8>)> = std::collections::HashMap::new();
+        let mut replies: std::collections::HashMap<String, (u64, Vec<u8>, std::time::Instant)> = std::collections::HashMap::new();
         let pricing = PricingTable::parse(
             r#"{"version":"t","default":{"in":1.0,"out":4.0,"fallback":true},
                 "models":{"gemini-m":{"in":1.0,"out":4.0},"gemini-m2":{"in":1.0,"out":4.0}}}"#,
@@ -1441,7 +1454,7 @@ mod tests {
         let (sk, pem, sid) = session_keypair();
         let mut sessions = scrai_core::session::SessionStore::default();
         let mut uploads = crate::uploads::UploadStore::default();
-        let mut replies: std::collections::HashMap<String, (u64, Vec<u8>)> = std::collections::HashMap::new();
+        let mut replies: std::collections::HashMap<String, (u64, Vec<u8>, std::time::Instant)> = std::collections::HashMap::new();
         let pricing = PricingTable::parse(
             r#"{"version":"t","default":{"in":1.0,"out":4.0,"fallback":true},"models":{"gemini-b":{"in":1.0,"out":4.0}}}"#,
         )
@@ -1470,7 +1483,7 @@ mod tests {
         let (sk, pem, sid) = session_keypair();
         let mut sessions = scrai_core::session::SessionStore::default();
         let mut uploads = crate::uploads::UploadStore::default();
-        let mut replies: std::collections::HashMap<String, (u64, Vec<u8>)> = std::collections::HashMap::new();
+        let mut replies: std::collections::HashMap<String, (u64, Vec<u8>, std::time::Instant)> = std::collections::HashMap::new();
         let pricing = PricingTable::parse(
             r#"{"version":"t","default":{"in":1.0,"out":4.0,"fallback":true},"models":{"gpt-5.6-luna":{"in":0.2,"out":1.20}}}"#,
         )
@@ -1499,7 +1512,7 @@ mod tests {
         let (sk, pem, sid) = session_keypair();
         let mut sessions = scrai_core::session::SessionStore::default();
         let mut uploads = crate::uploads::UploadStore::default();
-        let mut replies: std::collections::HashMap<String, (u64, Vec<u8>)> = std::collections::HashMap::new();
+        let mut replies: std::collections::HashMap<String, (u64, Vec<u8>, std::time::Instant)> = std::collections::HashMap::new();
         let pricing = PricingTable::parse(
             r#"{"version":"t","default":{"in":1.0,"out":4.0,"fallback":true},"models":{"gemini-m":{"in":1.0,"out":4.0}}}"#,
         )
@@ -1544,7 +1557,7 @@ mod tests {
         let (sk, pem, sid) = session_keypair();
         let mut sessions = scrai_core::session::SessionStore::default();
         let mut uploads = crate::uploads::UploadStore::default();
-        let mut replies: std::collections::HashMap<String, (u64, Vec<u8>)> = std::collections::HashMap::new();
+        let mut replies: std::collections::HashMap<String, (u64, Vec<u8>, std::time::Instant)> = std::collections::HashMap::new();
         let pricing = PricingTable::parse(
             r#"{"version":"t","default":{"in":1.0,"out":4.0,"fallback":true},"models":{"gemini-m":{"in":1.0,"out":4.0}}}"#,
         )
@@ -1594,7 +1607,7 @@ mod tests {
     async fn unpriced_models_are_rejected_and_every_priced_model_needs_a_session() {
         let mut sessions = scrai_core::session::SessionStore::default();
         let mut uploads = crate::uploads::UploadStore::default();
-        let mut replies: std::collections::HashMap<String, (u64, Vec<u8>)> = std::collections::HashMap::new();
+        let mut replies: std::collections::HashMap<String, (u64, Vec<u8>, std::time::Instant)> = std::collections::HashMap::new();
         let pricing = PricingTable::parse(
             r#"{"version":"t","default":{"in":1.0,"out":4.0,"fallback":true},
                 "models":{"gemini-3.5-flash":{"in":0.3,"out":2.5},"free-thing":{"in":0.0,"out":0.0,"tier":"free"}}}"#,

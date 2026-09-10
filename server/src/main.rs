@@ -412,7 +412,7 @@ async fn main() {
     // In-memory idempotent-retry cache: session_id → (counter, reply bytes). Lets a
     // client whose reply was lost resend the SAME counter and get the SAME answer back
     // instead of a second charge. Not persisted — a restart just re-syncs the counter.
-    let mut chat_replies: std::collections::HashMap<String, (u64, Vec<u8>)> =
+    let mut chat_replies: std::collections::HashMap<String, (u64, Vec<u8>, std::time::Instant)> =
         std::collections::HashMap::new();
 
     // The paywall: invoices + entitlements + burned nonces (durable), and the
@@ -671,6 +671,10 @@ const ORDER_TICK_MS: u64 = 1000;
                 // the buyer's account. Cheap (a scan of a small map) and it must not depend
                 // on anyone happening to poll an invoice.
                 paywall.scrub_account_links();
+                // Cached replies past their retry window go too. This is the only place an
+                // ANSWER lives on this machine, and only so a lost reply can be re-sent
+                // without a second charge; after ten minutes there is nothing to re-send.
+                chat::sweep_replies(&mut chat_replies);
                 // And the web half of the same purchase: the address and memo an old order
                 // was to be paid at. The row keeps what the order WAS, not how to pay it.
                 let dropped = db.web_orders_forget_pay(pay::now_ms());

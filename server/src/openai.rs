@@ -352,7 +352,9 @@ pub async fn chat(
         let msg = j.pointer("/error/message").and_then(|m| m.as_str()).unwrap_or("unknown error");
         return Err(match status.as_u16() {
             429 | 502 | 503 | 504 => {
-                eprintln!("scrai-server: openai {status} (retry-after {retry_after:?}): {}", msg.chars().take(200).collect::<String>());
+                // Status and error code only. A provider's error message can quote what it was
+                // sent, and the journal is on disk: nothing that might carry a prompt goes there.
+                eprintln!("scrai-server: openai {status} code={code:?} (retry-after {retry_after:?})");
                 match retry_after {
                     Some(n) => format!("OpenAI is limiting requests right now — please try again in about {n} seconds"),
                     None => "OpenAI is busy right now — please try again in a minute".into(),
