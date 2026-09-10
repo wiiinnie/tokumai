@@ -5265,7 +5265,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
 
     const dangerPage = acctView==="confirmNew"
       ? `<p class="hint" style="color:var(--rust)">A new account ABANDONS any balance on the current one. Sure?</p>
-         ${held>0?`<p class="hint">This device still holds <b>${formatToku(held)} TOKU</b> as coins. Redeeming moves them to your recoverable balance first — they are gone otherwise.</p>
+         ${redeeming ? redeemingBlock("the new account is created") : held>0?`<p class="hint">This device still holds <b>${formatToku(held)} TOKU</b> as coins. Redeeming moves them to your recoverable balance first — they are gone otherwise.</p>
          <div class="btnrow"><button class="btn primary" data-click="redeemThen" data-args="&quot;new&quot;">Redeem ${formatToku(held)}, then create</button></div>
          <div class="btnrow"><button class="btn danger" data-click="doAccountNew" data-args="true">Discard and create</button>
            <button class="btn" data-click="cancelAcctView">Cancel</button></div>`
@@ -5273,7 +5273,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
            <button class="btn" data-click="cancelAcctView">Cancel</button></div>`}`
       : acctView==="confirmDelete"
       ? `<p class="hint" style="color:var(--rust)">Deleting wipes the recovery phrase AND any coins still held on this device (bearer money — not recoverable). Sure?</p>
-         ${held>0?`<p class="hint">Held here: <b>${formatToku(held)} TOKU</b>. Redeeming moves it to your recoverable balance first, where the phrase can bring it back.</p>
+         ${redeeming ? redeemingBlock("the account is deleted") : held>0?`<p class="hint">Held here: <b>${formatToku(held)} TOKU</b>. Redeeming moves it to your recoverable balance first, where the phrase can bring it back.</p>
          <div class="btnrow"><button class="btn primary" data-click="redeemThen" data-args="&quot;delete&quot;">Redeem ${formatToku(held)}, then delete</button></div>
          <div class="btnrow"><button class="btn danger" data-click="doAccountDelete" data-args="true">Discard and delete</button>
            <button class="btn" data-click="cancelAcctView">Cancel</button></div>`
@@ -5285,10 +5285,10 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
 
     const restorePage = acctView==="confirmRestore"
       ? `<p class="hint" style="color:var(--rust)">This device holds <b>${formatToku(held)} TOKU</b> as un-redeemed coins. They are bearer money: a recovery phrase cannot bring them back, and restoring another account here discards them.</p>
-         <p class="hint">Redeeming first moves them onto this account’s recoverable balance — then the restore costs you nothing.</p>
+         ${redeeming ? redeemingBlock("the other account is restored") : `<p class="hint">Redeeming first moves them onto this account’s recoverable balance — then the restore costs you nothing.</p>
          <div class="btnrow"><button class="btn primary" data-click="redeemThen" data-args="&quot;restore&quot;">Redeem ${formatToku(held)}, then restore</button></div>
          <div class="btnrow"><button class="btn danger" data-click="doAccountRestore" data-args="true">Discard and restore</button>
-           <button class="btn" data-click="cancelAcctView">Cancel</button></div>`
+           <button class="btn" data-click="cancelAcctView">Cancel</button></div>`}`
       : `<p class="pagelead">Enter or scan a 24-word recovery phrase to restore that account on this device.</p>${restoreForm()}`;
 
     const backupPage = phraseBackup.on
@@ -5410,6 +5410,15 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // "Redeem it first" has to be an ACTION, not advice. Held coins are bearer money and the
   // three destructive paths (new / delete / restore) each offered only "discard" — the app
   // named the safe way out and then did not offer it (2026-09-06).
+  // While redeemThen() runs, the confirm page shows what is happening — before, only the
+  // number in the button ticked down, book by book, and it looked like nothing was
+  // happening (2026-09-10).
+  function redeemingBlock(next){
+    return `<div class="heldbox" style="margin-top:4px"><div class="hh"><span class="amt">${esc(formatToku(held))} TOKU</span><span class="where">still on this device</span></div>
+      <p>Redeeming onto your recoverable balance, one $1 book at a time over the mixnet — then ${esc(next)}. Keep the app open.</p>
+      <div class="act"><button class="rbtn busy" disabled>Redeeming<span class="dots"></span></button><span class="rsmall">${esc(redeemStep)}</span></div>
+      <div class="prog"><i style="width:${Math.max(0, Math.min(100, Number(redeemPct)||0))}%"></i></div></div>`;
+  }
   async function redeemThen(what){
     redeemDollars = null;                 // everything, not whatever the slider last held
     await doRedeem();
