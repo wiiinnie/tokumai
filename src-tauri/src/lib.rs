@@ -1320,8 +1320,15 @@ fn phrase_check_verify(app: AppHandle, positions: Vec<u32>, words: Vec<String>) 
 fn phrase_backup_get(_app: AppHandle) -> Result<Value, String> {
     #[cfg(target_os = "ios")]
     {
-        let on = wallet::synced_phrase()?.is_some();
-        return Ok(json!({ "available": true, "on": on }));
+        // A failed READ must not hide the switch: the row then shows the error, and the
+        // opt-in button retries the write — which is where the real cause surfaces.
+        return Ok(match wallet::synced_phrase() {
+            Ok(p) => json!({ "available": true, "on": p.is_some() }),
+            Err(e) => {
+                log::warn!("[keychain-copy] synchronizable item read failed: {e}");
+                json!({ "available": true, "on": false, "error": e })
+            }
+        });
     }
     #[cfg(not(target_os = "ios"))]
     Ok(json!({ "available": false, "on": false }))

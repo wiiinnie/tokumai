@@ -4928,16 +4928,16 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   function trickleEta(){ const books = Math.ceil(held / 100000); if(books <= 0) return ""; const h = books * trickleMinutes / 60; return h < 1 ? `about ${Math.max(5, Math.round(h*60/5)*5)} minutes of use to go` : `about ${h < 10 ? h.toFixed(1).replace(/\.0$/,"") : Math.round(h)} hours of use to go`; }
   // The opt-in phrase copy (iOS: iCloud Keychain, end to end). `available` is false
   // elsewhere, and the row hides rather than offering a switch that does nothing.
-  let phraseBackup = { available:false, on:false };
+  let phraseBackup = { available:false, on:false, error:"" };
   const PHRASE_ASKED_KEY = "tokumai.phraseBackupAsked";
   async function refreshPhraseBackup(){
-    try{ const r = await Backend.phraseBackupGet(); phraseBackup = { available: !!(r&&r.available), on: !!(r&&r.on) }; }
-    catch(_){ phraseBackup = { available:false, on:false }; }
+    try{ const r = await Backend.phraseBackupGet(); phraseBackup = { available: !!(r&&r.available), on: !!(r&&r.on), error: String((r&&r.error)||"").slice(0,200) }; }
+    catch(_){ phraseBackup = { available:false, on:false, error:"" }; }
   }
   async function setPhraseBackup(on){
     try{
       const r = await Backend.phraseBackupSet(!!on);
-      phraseBackup = { available: !!(r&&r.available), on: !!(r&&r.on) };
+      phraseBackup = { available: !!(r&&r.available), on: !!(r&&r.on), error:"" };
       acctStatus(on ? "Phrase copied to iCloud Keychain." : "Phrase removed from iCloud Keychain.");
     }catch(e){ acctStatus("Could not change the phrase backup: " + (e && e.message ? e.message : e), "bad"); }
     renderAccount();
@@ -5224,7 +5224,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         + row("phrase","c-key","🔑","Recovery phrase","show &amp; copy the 24 words")
         + row("trickle","c-migrate","⇢","Move credit onto my phrase", trickleOn() ? `a dollar every ${esc(String(trickleMinutes))} min the app is open` : "off · coins stay as cash on this device", trickleOn() ? `<span class="pill ok">on</span>` : `<span class="pill">off</span>`)
         + (phraseBackup.available
-            ? row("backup","c-key","☁","Phrase in Keychain", phraseBackup.on ? "synced through iCloud, end to end" : "off · paper only",
+            ? row("backup","c-key","☁","Phrase in Keychain", phraseBackup.on ? "synced through iCloud, end to end" : (phraseBackup.error ? "off · the Keychain did not answer" : "off · paper only"),
                   phraseBackup.on ? `<span class="pill ok">on</span>` : `<span class="pill">off</span>`)
             : "")
         + row("restore","c-restore","📥","Restore account","from phrase or QR")
@@ -5295,7 +5295,8 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
          <div class="btnrow"><button class="btn" data-click="setPhraseBackup" data-args="false">Remove from Keychain</button></div>`
       : `<p class="pagelead">Keep a copy of your recovery phrase in your iPhone’s Keychain, synced through iCloud. End to end: Apple stores it and cannot read it. A lost phone is then not a lost balance.</p>
          <p class="hint">What Apple does learn: that a tokumai entry exists in the Keychain tied to your Apple ID — that you use this app, not what you ask it. Off, the phrase exists only where you wrote it down.</p>
-         <div class="btnrow"><button class="btn primary" data-click="setPhraseBackup" data-args="true">Keep it in Keychain</button></div>`;
+         <div class="btnrow"><button class="btn primary" data-click="setPhraseBackup" data-args="true">Keep it in Keychain</button></div>
+         ${phraseBackup.error ? `<p class="hint" style="color:var(--rust)">The Keychain did not answer when the app looked for a copy: ${esc(phraseBackup.error)}. Turning it on tries again.</p>` : ``}`;
 
     const checkPage = `<p class="pagelead">From your notes, not from memory — that is the point. Type word ${checkPositions.map(p=>`<b>${esc(String(p))}</b>`).join(", word ")} of your recovery phrase.</p>
       ${checkPositions.map((p,i)=>`<div class="mprow" style="margin-bottom:8px"><div class="mptop"><b>Word ${esc(String(p))}</b></div><input type="text" id="chk${i}" class="chkin" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" data-keydown="__enter__" data-fn="submitPhraseCheck"></div>`).join("")}
