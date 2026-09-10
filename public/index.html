@@ -268,10 +268,10 @@
   /* Chain picker: the chain belongs to the coin, so it hangs off the tile row rather than
      becoming a fifth tile. */
   .caret{font-size:9px;color:var(--acc2);margin-left:3px}
-  .vmenu{border:1px solid var(--acc);border-radius:12px;background:var(--panel,var(--surface-2));padding:6px;margin:8px 0 0}
+  .vmenu{border:1px solid var(--mix);border-radius:12px;background:var(--panel,var(--surface-2));padding:6px;margin:8px 0 0}
   .vrow{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:9px;cursor:pointer}
-  .vrow:hover{background:color-mix(in srgb,var(--acc) 8%,transparent)}
-  .vrow.on{background:color-mix(in srgb,var(--acc) 14%,transparent)}
+  .vrow:hover{background:color-mix(in srgb,var(--mix) 8%,transparent)}
+  .vrow.on{background:color-mix(in srgb,var(--mix) 14%,transparent)}
   .vrow.off{opacity:.4;cursor:not-allowed}
   .vdot{width:14px;height:14px;border-radius:50%;border:1px solid var(--muted);flex:none}
   .vrow.on .vdot{border-color:var(--acc2);background:radial-gradient(circle,var(--acc2) 45%,transparent 47%)}
@@ -279,8 +279,8 @@
   .vnote{font-family:var(--mono);font-size:9.5px;color:var(--muted);margin-left:auto;text-align:right}
   .vrow.on .vnote{color:var(--acc2)}
   /* Payment screen: which network this address lives on. For USDC it is the whole risk. */
-  .netbar{display:flex;align-items:center;gap:10px;border:1px solid var(--acc);border-radius:11px;
-    padding:9px 11px;margin:0 0 12px;background:color-mix(in srgb,var(--acc) 10%,transparent)}
+  .netbar{display:flex;align-items:center;gap:10px;border:1px solid var(--mix);border-radius:11px;
+    padding:9px 11px;margin:0 0 12px;background:color-mix(in srgb,var(--mix) 10%,transparent)}
   .netbar .nl{font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);display:block}
   .netbar .nv{font-size:13px;font-weight:600;color:var(--bone)}
   .netbar .nw{font-family:var(--mono);font-size:9.5px;color:var(--acc2);margin-left:auto;text-align:right;line-height:1.4}
@@ -332,6 +332,8 @@
   .balline{font-family:var(--mono);font-size:11.5px;color:var(--muted);margin:0 0 14px;line-height:1.55}
   .balline b{color:var(--bone)}
   #tierRow.tiles,#iosStore .tiles{display:flex;gap:9px;margin-bottom:2px}
+  #iosStore .tiletier .a{color:var(--mix)}
+  .codepre{flex:none;align-self:center;font:500 13px var(--mono);letter-spacing:.05em;color:var(--muted);padding-left:2px}
   .setrow.dis{opacity:.4;pointer-events:none}
   .tiletier{flex:1;border:1px solid var(--line);border-radius:12px;padding:12px 6px;text-align:center;background:var(--surface-2);cursor:pointer;transition:border-color .15s,background .15s}
   .tiletier.sel{border-color:var(--signal);background:color-mix(in srgb,var(--signal) 11%,var(--surface-2))}
@@ -347,10 +349,10 @@
   .ck{display:flex;gap:10px;align-items:flex-start;padding:9px 11px;border:1px solid var(--line);
       border-radius:11px;background:var(--surface-2);margin-bottom:7px;cursor:pointer}
   .ck:hover{border-color:#463f3a}
-  .ck.on{border-color:var(--acc);background:color-mix(in srgb,var(--acc) 9%,var(--surface-2))}
+  .ck.on{border-color:var(--mix);background:color-mix(in srgb,var(--mix) 9%,var(--surface-2))}
   .ck .box{flex:0 0 17px;width:17px;height:17px;margin-top:1px;border-radius:5px;border:1.5px solid #554d47;
            display:grid;place-items:center;font-size:11px;line-height:1;color:transparent;background:#151312}
-  .ck.on .box{border-color:var(--acc);background:var(--acc);color:#fff}
+  .ck.on .box{border-color:var(--mix);background:var(--mix);color:#fff}
   .ck .cktx{font-size:12.5px;line-height:1.5}
   .btnhint{font-family:var(--mono);font-size:10.5px;color:var(--muted);text-align:center;margin:7px 0 0}
   .paypanel{border:1px solid var(--line);border-radius:16px;padding:16px;background:var(--surface-2);margin-top:4px}
@@ -1200,7 +1202,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       <!-- One field for every kind of code — invites, vouchers, gifts. It names no place to get
      one, deliberately: outside the US and the EU, App Store rule 3.1.1 forbids the app from
      pointing at an outside purchase, and a helpful sentence here would be exactly that.
-     See docs/vouchers.md. --><label class="setrow" id="testnetRow" style="display:none;cursor:default"><span><b><span id="redeemLbl">Have a code?</span></b><small id="redeemHint">Enter it here.</small><span class="inviteline"><input id="inviteInput" type="text" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" maxlength="34" value="TOKU-" placeholder="TOKU-XXXX-XXXX-XXXX"><button type="button" class="ibtn" data-click="checkInvite">Redeem</button></span><small id="inviteMsg"></small></span></label>
+     See docs/vouchers.md. --><label class="setrow" id="testnetRow" style="display:none;cursor:default"><span><b><span id="redeemLbl">Have a code?</span></b><small id="redeemHint">Enter it here.</small><span class="inviteline"><span class="codepre">TOKU-</span><input id="inviteInput" type="text" inputmode="latin" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" maxlength="14" value="" placeholder="XXXX-XXXX-XXXX"><button type="button" class="ibtn" data-click="checkInvite">Redeem</button></span><small id="inviteMsg"></small></span></label>
       <div class="grouplbl" id="amountLbl" style="margin-top:2px">Amount</div>
       <div id="tierRow" class="tiles"></div>
 
@@ -4218,7 +4220,6 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       if(inp){
         inp.onkeydown = e => { if(e.key==="Enter"){ e.preventDefault(); checkInvite(); } };
         inp.oninput = () => { formatCodeInput(inp); if(inviteOk){ inviteOk=false; inviteCode=""; setInviteMsg("",""); syncBuyMode(); renderTiers(); renderContinue(); } };
-        inp.onfocus = () => { if(!inp.value) inp.value = CODE_PREFIX; };
       } }
     $("tutChk").checked = tutorialEnabled();
     $("tutChk").onchange = ()=>{ try{ localStorage.setItem(TUT_KEY, $("tutChk").checked?"1":"0"); }catch(_){}; $("setStatus").textContent = "tutorial "+($("tutChk").checked?"on":"off"); };
@@ -5787,7 +5788,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     const ready = !!sel && iapConsent && !iapBusy;
     const label = iapBusy ? "Waiting for the App Store…" : sel ? `Buy ${esc(iapToku(sel.id))} TOKU for ${esc(String(sel.displayPrice||""))}` : "Pick an amount above";
     box.innerHTML = `<div class="grouplbl" style="margin-top:2px">Amount</div><div class="tiles">${tiles}</div>
-      <div class="consent" style="margin-top:10px"><div class="ck${iapConsent?" on":""}" data-click="toggleIapConsent"><span class="box">✓</span><span class="cktx">I understand that credit lives on my <b>recovery phrase</b>. If I lose the phrase, nobody — including tokumai — can restore it.</span></div></div>
+      <div class="consent" style="margin-top:10px"><div class="ck${iapConsent?" on":""}" data-click="toggleIapConsent"><span class="box">✓</span><span class="cktx">I understand that this credit is tied to my <b>recovery phrase</b> and to this device: the phrase brings back what has moved onto it, coins still on the device are lost with the device. Nobody — including tokumai — can restore either.</span></div></div>
       <div style="margin-top:10px"><button class="btn primary${iapBusy?" busy":""}" style="width:100%${ready?"":";opacity:.5;cursor:not-allowed"}"${ready?"":" disabled"} data-click="buyIap">${label}</button></div>
       ${iapMsg ? `<p class="hint" style="margin:10px 0 0">${esc(iapMsg)}</p>` : ``}
       <p class="hint" style="text-align:center;margin:10px 0 14px"><span data-click="restoreIap" style="cursor:pointer;text-decoration:underline">Restore purchases</span></p>`;
@@ -5854,18 +5855,23 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // here can make a valid code invalid. Groups of four, as many as were typed: the usual
   // code is three, a longer legacy invite code simply gets more.
   const CODE_PREFIX = "TOKU-";
+  // The field holds the groups only — "TOKU-" is a fixed label in front of it, so it cannot
+  // be deleted or duplicated. A pasted full code ("TOKU-…") loses its prefix here. Codes
+  // are 4-character groups: invites TOKU-XXXX-XXXX, vouchers TOKU-XXXX-XXXX-XXXX (12).
+  const CODE_MAX = 12;
   function formatCodeInput(el){
     let raw = String(el.value||"").toUpperCase().replace(/[^A-Z0-9]/g, "");
     if(raw.startsWith("TOKU")) raw = raw.slice(4);
-    raw = raw.slice(0, 28);
+    raw = raw.slice(0, CODE_MAX);
     const groups = raw.match(/.{1,4}/g) || [];
-    const next = CODE_PREFIX + groups.join("-");
+    const next = groups.join("-");
     if(el.value !== next){ el.value = next; try{ el.setSelectionRange(next.length, next.length); }catch(_){} }
   }
+  // The full code as the server expects it, or "" when the field is empty.
+  function codeFieldValue(el){ formatCodeInput(el); return el.value ? CODE_PREFIX + el.value : ""; }
   async function checkInvite(){
     const el=$("inviteInput"); if(!el) return;
-    formatCodeInput(el);
-    const code = el.value === CODE_PREFIX ? "" : el.value;
+    const code = codeFieldValue(el);
     abandonInvoice();
     if(!code){
       inviteOk=false; inviteCode=""; setInviteMsg("","");
@@ -5888,7 +5894,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         inviteOk=true; inviteCode=code;
         setInviteMsg("good", `valid — $${TESTNET_USD} credit, paid by the faucet`);
       }else{
-        inviteOk=false; inviteCode=""; el.value=CODE_PREFIX;
+        inviteOk=false; inviteCode=""; el.value="";
         const got=Number(r&&r.toku)||0;
         // Redeeming only puts the credit on the ACCOUNT, as an entitlement. What the
         // balance line reads is the SESSION, and collect() is the only thing that moves
@@ -6062,7 +6068,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     inviteOk = false; inviteCode = "";
     // Never carried over from a previous purchase — consent must be given per contract.
     consentImmediate = false; consentWaiver = false;
-    { const i=$("inviteInput"); if(i) i.value=CODE_PREFIX; setInviteMsg("",""); }
+    { const i=$("inviteInput"); if(i) i.value=""; setInviteMsg("",""); }
     iapSel = null; iapConsent = false; iapMsg = "";
     syncBuyMode();
     renderBuyBal(); showChooser(true); renderTiers(); renderContinue(); renderRailNote(); renderPending(); renderReceipts();
