@@ -124,6 +124,7 @@
   .faq details p{margin:10px 0 0}
   .matrix{min-width:820px} .matrix td,.matrix th{text-align:center;padding:12px 10px} .matrix td.row,.matrix th:first-child{text-align:left}
   .matrix i{font-style:normal;font-size:16px;display:block;line-height:1} .matrix i.y{color:var(--ok)} .matrix i.n{color:var(--rust)}
+  .matrix td.us i.y{font-weight:700;font-size:19px;-webkit-text-stroke:.6px var(--ok)}
   .matrix i.p{color:var(--amber)}
   body[data-partly="B"] .matrix i.p::before{content:"~";font-family:var(--mono);font-weight:700} body[data-partly="B"] .matrix i.p{font-size:0} body[data-partly="B"] .matrix i.p::before{font-size:16px}
   body[data-partly="C"] .matrix i.p{font-size:0} body[data-partly="C"] .matrix i.p::before{content:"";display:inline-block;width:12px;height:12px;border-radius:50%;border:2px solid var(--acc);background:linear-gradient(90deg,var(--acc) 50%,transparent 50%)}
@@ -347,8 +348,7 @@
     </div>
     <div class="sec">
       <div class="eyebrow">At a glance</div>
-      <p class="lead" style="margin-bottom:12px"><span style="color:var(--ok)">✓</span> yes &nbsp;·&nbsp; <span style="color:var(--amber);font-family:var(--mono);font-size:11px;letter-spacing:.08em">PARTLY</span> — the small print says how &nbsp;·&nbsp; <span style="color:var(--rust)">✗</span> no</p>
-      <div class="pick-partly">MOCKUP · "partly" mark: <button type="button" data-partly="A">A · ◐</button><button type="button" data-partly="B">B · ~</button><button type="button" data-partly="C">C · half dot, violet</button><button type="button" data-partly="D" class="on">D · "partly" pill (chosen)</button><button type="button" data-partly="E">E · faint ✓</button></div>
+      <p class="lead" style="margin-bottom:12px"><span style="color:var(--ok)">✓</span> yes &nbsp;·&nbsp; <span style="color:var(--amber)">◐</span> partly — the small print says how &nbsp;·&nbsp; <span style="color:var(--rust)">✗</span> no</p>
       <div class="tw"><table class="matrix">
         <thead><tr><th></th><th class="us">tokumai</th><th>Duck.ai</th><th>Venice</th><th>nilGPT</th><th>Lumo</th><th>Brave Leo</th></tr></thead>
         <tbody>
@@ -453,7 +453,7 @@
   vD.onclick=function(){ view('desktop'); }; vM.onclick=function(){ view('mobile'); }; view('desktop');
   var pb=document.querySelectorAll('.pick-partly button[data-partly]');
   for(var k=0;k<pb.length;k++){ pb[k].onclick=function(){ body.setAttribute('data-partly', this.getAttribute('data-partly')); for(var q=0;q<pb.length;q++) pb[q].classList.toggle('on', pb[q]===this); }; }
-  body.setAttribute('data-partly','D');
+  body.setAttribute('data-partly','A');
   vS.onclick=function(){ var off=body.getAttribute('data-seo')==='off'; body.setAttribute('data-seo', off?'on':'off'); vS.classList.toggle('on', off); };
   // hash router: #/path → the section with that data-route; the SEO bar shows its head
   var views=document.querySelectorAll('.view'), links=document.querySelectorAll('.nav .links a');
