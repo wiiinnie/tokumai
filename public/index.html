@@ -78,7 +78,8 @@
   .titlebar .env.wake .cdot{background:var(--signal);box-shadow:0 0 7px rgba(185,163,255,.7);animation:blink 1.2s ease-in-out infinite}
   /* route overlay: the whole app dims (like an upload) and the reconnect narrates itself
      with the boot animation's typewriter + ✓ per step + the green success mark */
-  #routeScrim{position:fixed;inset:0;z-index:55;background:rgba(10,8,6,.72);display:none;align-items:center;justify-content:center;padding:24px}
+  /* Above the phone rail (60) and the attach sheet (60): a reconnect must never sit BEHIND an open menu (iOS, 2026-09-10). */
+  #routeScrim{position:fixed;inset:0;z-index:65;background:rgba(10,8,6,.72);display:none;align-items:center;justify-content:center;padding:24px}
   #routeScrim.open{display:flex}
   .routebox{width:min(440px,100%);background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:20px 22px 18px;box-shadow:0 30px 70px rgba(0,0,0,.6)}
   .routebox .t{font-family:var(--display);font-weight:700;font-size:17px;display:flex;justify-content:space-between;align-items:baseline;gap:10px}
@@ -3032,6 +3033,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     rt.timers.forEach(clearTimeout); rt = { lines:[], timers:[], seq:rt.seq+1 };
     if(routeQuiet) return;                        // user closed it — retry in the background
     const box=$("routeBox"); if(!box) return;
+    toggleRail(false);                            // an open hamburger menu would hide the overlay and could not be closed under it
     box.className="routebox";
     box.innerHTML = `<div class="t"><span>${esc(routeTitle||"Reconnecting to the mixnet")}</span><span class="el" id="routeEl">${routeSecs()} s</span></div>
       <div class="why" id="routeWhy">${esc(routeWhy||"The route was dropped. A fresh one takes about 10 s.")}</div>
