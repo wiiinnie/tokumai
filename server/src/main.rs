@@ -14,7 +14,7 @@
 
 // The request handlers live in the library crate (server/src/lib.rs) so the fuzz targets
 // under server/fuzz/ can drive the same parsers the mixnet loop feeds.
-use scrai_server::{catalog, chat, http, inflight, pay, replies, store, uploads};
+use scrai_server::{catalog, chat, http, iap, inflight, pay, replies, store, uploads};
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -451,6 +451,11 @@ async fn main() {
     // Said BOTH ways round on purpose. A warning that only prints on failure means a silent
     // log is ambiguous — it reads the same whether the key is fine or the deploy never
     // arrived, which is exactly the question somebody asks after a deploy (2026-09-08).
+    println!(
+        "scrai-server: App Store purchases — products {:?}, sandbox transactions {}",
+        iap::product_ids(),
+        if iap::allow_sandbox() { "ACCEPTED (IAP_ALLOW_SANDBOX=1)" } else { "refused" }
+    );
     if pay::voucher_key().is_some() {
         println!("scrai-server: voucher codes — fingerprints are keyed (VOUCHER_KEY)");
     } else {
@@ -688,6 +693,12 @@ const ORDER_TICK_MS: u64 = 1000;
                 if !stale.is_empty() {
                     let n = db.voucher_forget_account(&stale);
                     println!("scrai-server: dropped the account link from {n} redeemed voucher(s)");
+                }
+                // App Store purchases follow the same clock.
+                let stale = paywall.voucher_links_expired(&db.iap_links());
+                if !stale.is_empty() {
+                    let n = db.iap_forget_account(&stale);
+                    println!("scrai-server: dropped the account link from {n} App Store purchase(s)");
                 }
                 // And the purchase link, on the same clock: after ACCOUNT_LINK_DAYS (seven by default) a voucher no
                 // longer says which payment it came from — like an invoice no longer says
@@ -981,6 +992,52 @@ const ORDER_TICK_MS: u64 = 1000;
                             let _ = tx.send(HttpDone { pending: *pending, result, to, _guard: guard }).await;
                         });
                     }
+                }
+                continue;
+            }
+            // An App Store purchase, verified here against Apple's pinned root (iap.rs) and
+            // then credited exactly like a voucher: claim in SQL first, credit in the
+            // snapshot second, the same crash argument as below. The app keeps Apple's
+            // transaction unfinished until this reply arrives, so a lost reply is a retry —
+            // and a retry by the same account is a success with nothing more to credit.
+            if kind == iap::IAP_KIND {
+                let v: serde_json::Value = serde_json::from_slice(&m.message).unwrap_or(serde_json::Value::Null);
+                let id = v.get("id").cloned().unwrap_or(serde_json::Value::Null);
+                let jws = v.get("jws").and_then(|j| j.as_str()).unwrap_or("");
+                let reply = match paywall.iap_claimant(&v) {
+                    None => serde_json::json!({ "id": id, "kind": "error",
+                        "error": "account signature does not check out, or the nonce was reused" }),
+                    Some(account) if paywall.admit_voucher(&account).is_err() => serde_json::json!({
+                        "id": id, "kind": "error",
+                        "error": "too many purchase checks from this account — try again in a few minutes" }),
+                    Some(account) => {
+                        let now = pay::now_ms();
+                        match iap::verify_jws(jws, now).and_then(|tx| iap::credit_for(&tx).map(|toku| (tx, toku))) {
+                            Err(e) => serde_json::json!({ "id": id, "kind": "error", "error": e }),
+                            Ok((tx, toku)) => {
+                                let hash = iap::tx_hash(&tx.transaction_id);
+                                match db.iap_claim(&hash, &tx.product_id, toku, &tx.environment, &tx.storefront,
+                                                   &account, tx.purchased_at_ms, now) {
+                                    store::IapClaim::New => {
+                                        paywall.credit_voucher(&account, toku);
+                                        db.iap_credited(&hash, now);
+                                        println!("scrai-server: App Store purchase credited — {toku} TOKU ({})", tx.environment);
+                                        serde_json::json!({ "id": id, "kind": "iap.ok", "toku": toku,
+                                            "entitlement": paywall.entitlement(&account) })
+                                    }
+                                    store::IapClaim::AlreadyYours => serde_json::json!({ "id": id, "kind": "iap.ok",
+                                        "toku": 0, "entitlement": paywall.entitlement(&account) }),
+                                    store::IapClaim::AlreadyOther => serde_json::json!({ "id": id, "kind": "error",
+                                        "error": "this purchase has already been credited" }),
+                                }
+                            }
+                        }
+                    }
+                };
+                persist_changed(&mut db, &sessions, &quorum, &paywall, &mut saved);
+                let out = serde_json::to_vec(&reply).unwrap_or_default();
+                if let Err(e) = senders[to.idx].read().await.send_reply(to.tag, out).await {
+                    eprintln!("scrai-server: purchase reply failed: {e}");
                 }
                 continue;
             }
@@ -1327,11 +1384,20 @@ fn persist_changed(
 /// firing at all means a crash or a failed write happened, which is worth knowing about.
 /// Returns true when something changed, so the caller persists.
 fn credit_pending_vouchers(db: &store::Store, paywall: &mut pay::Pay) -> bool {
+    let now = pay::now_ms();
+    // App Store purchases have the same two-store shape and the same repair.
+    let iap = db.iap_to_credit();
+    for (hash, account, toku) in &iap {
+        paywall.credit_voucher(account, *toku);
+        db.iap_credited(hash, now);
+    }
+    if !iap.is_empty() {
+        println!("scrai-server: repaired {} App Store purchase(s) that were claimed but never credited", iap.len());
+    }
     let pending = db.vouchers_to_credit();
     if pending.is_empty() {
-        return false;
+        return !iap.is_empty();
     }
-    let now = pay::now_ms();
     for (hash, account, toku) in &pending {
         paywall.credit_voucher(account, *toku);
         db.voucher_credited(hash, now);

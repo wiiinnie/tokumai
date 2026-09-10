@@ -57,6 +57,8 @@ hex = "0.4"
 # scrai-admin: terminal dashboard (htop-style). Only used by that binary.
 ratatui = "0.28"
 crossterm = "0.28"
+x509-parser = { version = "0.16", features = ["verify"] }
+ring = "0.17"
 
 [dev-dependencies]
 # pay.rs / chat.rs tests sign requests the way the real client does.

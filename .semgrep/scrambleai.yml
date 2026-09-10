@@ -78,14 +78,14 @@ rules:
   # ---------------------------------------------------------------- unsafe only where FFI lives
   - id: scrai-unsafe-outside-ffi
     message: >-
-      `unsafe` outside the native-FFI modules (ocr.rs, the objc2 picker in lib.rs). Keep unsafe
-      confined to the files that already carry the safety comments.
+      `unsafe` outside the native-FFI modules (ocr.rs, the objc2 picker in lib.rs, the StoreKit
+      bridge iap_ios.rs). Keep unsafe confined to the files that already carry the safety comments.
     severity: WARNING
     languages: [rust]
     pattern: unsafe { ... }
     paths:
       include: [core/src, server/src, src-tauri/src]
-      exclude: [src-tauri/src/ocr.rs, src-tauri/src/lib.rs]
+      exclude: [src-tauri/src/ocr.rs, src-tauri/src/lib.rs, src-tauri/src/iap_ios.rs]
 
   # ---------------------------------------------------------------- webview: dangerous sinks
   - id: scrai-js-dangerous-sink

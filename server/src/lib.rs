@@ -7,6 +7,7 @@ pub mod catalog;
 pub mod chat;
 pub mod faucet;
 pub mod http;
+pub mod iap;
 pub mod inflight;
 pub mod nyx;
 pub mod openai;

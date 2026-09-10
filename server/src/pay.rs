@@ -926,6 +926,12 @@ impl Pay {
         self.account_owns(v, "voucher")
     }
 
+    /// Same for an App Store transaction: the credit goes to the account that signed the
+    /// request, and "iap" is its own purpose so a voucher signature cannot stand in.
+    pub fn iap_claimant(&mut self, v: &Value) -> Option<String> {
+        self.account_owns(v, "iap")
+    }
+
     /// Deduct entitlement for a coconut issuance. Called BEFORE the (off-loop) issuance
     /// runs, so two withdraws of the same account in flight can't both pass the gate;
     /// `restore_entitlement` gives it back when issuance fails.

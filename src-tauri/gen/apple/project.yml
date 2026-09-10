@@ -62,8 +62,8 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        CFBundleShortVersionString: 0.1.0
-        CFBundleVersion: "0.1.0"
+        CFBundleShortVersionString: 0.6.2
+        CFBundleVersion: "0.6.2"
     entitlements:
       path: scrambleai_iOS/scrambleai_iOS.entitlements
     scheme:
@@ -73,6 +73,8 @@ targets:
     settings:
       base:
         ENABLE_BITCODE: false
+        # StoreKitShim.swift (App Store purchases) — Swift 5 mode; the shim is not Swift-6 strict.
+        SWIFT_VERSION: "5.0"
         # Signing baked into project.yml so `xcodegen generate` / `tauri ios build` keep it
         # (setting the team only in the Xcode UI gets wiped on the next regeneration).
         DEVELOPMENT_TEAM: T23Z4LDMGV
@@ -98,6 +100,7 @@ targets:
       - sdk: CoreFoundation.framework
       - sdk: UIKit.framework
       - sdk: WebKit.framework
+      - sdk: StoreKit.framework
     preBuildScripts:
       - script: |
           # Xcode's build env finds the old Intel node (/usr/local/bin, x86_64) first,

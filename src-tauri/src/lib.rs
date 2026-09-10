@@ -15,6 +15,8 @@ mod vault;
 mod wallet;
 #[cfg(target_os = "ios")]
 mod keychain_ios;
+#[cfg(target_os = "ios")]
+mod iap_ios;
 
 use nym::Transport;
 use rand::RngCore;
@@ -47,6 +49,9 @@ static SERVER_VERSION: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(
 /// The server's update notice (`update` on the catalogue reply) — set with the model list,
 /// shown by the UI as a blocking "Update available" gate.
 static SERVER_UPDATE: std::sync::Mutex<Option<Value>> = std::sync::Mutex::new(None);
+/// Product ids the server sells through the App Store (catalog `iapProducts`), remembered
+/// with the models so the buy sheet has them without another round trip.
+static IAP_PRODUCTS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 /// tauri.conf.json's version, read once at launch; goes out as `app` on every request so
 /// the server's release gate (MIN_APP) can tell an outdated build apart.
 static APP_VER: std::sync::OnceLock<String> = std::sync::OnceLock::new();
@@ -987,6 +992,23 @@ async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<V
                         }
                     }
                     {
+                        // App Store product ids: plain reverse-DNS strings, a handful at most.
+                        let ids: Vec<String> = resp
+                            .get("iapProducts")
+                            .and_then(|p| p.as_array())
+                            .map(|a| {
+                                a.iter()
+                                    .filter_map(|x| x.as_str())
+                                    .filter(|s| !s.is_empty() && s.len() <= 120
+                                        && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_'))
+                                    .map(str::to_string)
+                                    .take(8)
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        *IAP_PRODUCTS.lock().unwrap_or_else(|e| e.into_inner()) = ids;
+                    }
+                    {
                         let mut u = SERVER_UPDATE.lock().unwrap_or_else(|e| e.into_inner());
                         *u = resp.get("update").filter(|u| u.get("required").and_then(|r| r.as_bool()) == Some(true)).cloned();
                     }
@@ -1074,6 +1096,7 @@ async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<V
         "models": models,
         "server": server,
         "serverAlternates": w.server_alternates,
+        "iapProducts": IAP_PRODUCTS.lock().unwrap_or_else(|e| e.into_inner()).clone(),
     });
     diag(&app, &format!(
         "state: about to respond, {} bytes total (models {} bytes)",
@@ -3339,6 +3362,134 @@ fn init_android_tls_verifier() {
     });
 }
 
+// ---------- App Store purchases (iOS, StoreKit 2 via iap_ios.rs) ----------
+//
+// The flow is: Apple's sheet → Apple's signed transaction → the server verifies it against
+// Apple's root and credits the account → only then is the transaction finished with
+// Apple. Until that reply, the transaction stays unfinished on the device, so a lost reply
+// or a crash costs nothing: `iap_restore` re-sends whatever is unfinished, and the server
+// answers a retry by the same account with "credited, nothing more to add".
+
+#[cfg(target_os = "ios")]
+async fn iap_verify_on_server(app: &AppHandle, transport: &Transport, jws: &str) -> Result<(u64, u64), String> {
+    let w = wallet::load(&data_dir(app)?);
+    let srv = server_addr(&w)?;
+    let m = w.mnemonic.ok_or("no account — create one first")?;
+    let a = account::from_mnemonic(&m)?;
+    let nonce = rand_hex(16);
+    let sig = a.sign("iap", &nonce);
+    let resp = transport
+        .round_trip(
+            &srv,
+            &json!({"v":PROTO,"kind":"iap.verify","id":rand_hex(16),"jws":jws,
+                    "publicKey":a.public_key_pem,"nonce":nonce,"sig":sig}),
+            SURBS_SMALL,
+            TIMEOUT_MS,
+        )
+        .await?;
+    if let Some(e) = resp.get("error").and_then(|e| e.as_str()) {
+        return Err(e.to_string());
+    }
+    Ok((
+        resp.get("toku").and_then(|t| t.as_u64()).unwrap_or(0),
+        resp.get("entitlement").and_then(|t| t.as_u64()).unwrap_or(0),
+    ))
+}
+
+#[cfg(target_os = "ios")]
+fn iap_product_ids() -> Vec<String> {
+    IAP_PRODUCTS.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// The App Store's products for the ids the server sells, with localized prices.
+#[cfg(target_os = "ios")]
+#[tauri::command]
+async fn iap_products() -> Result<Value, String> {
+    let ids = iap_product_ids();
+    if ids.is_empty() {
+        return Err("this server sells nothing through the App Store".into());
+    }
+    Box::pin(iap_ios::products(&ids)).await
+}
+
+#[cfg(target_os = "ios")]
+async fn iap_purchase_impl(app: AppHandle, transport: Arc<Transport>, product_id: String) -> Result<Value, String> {
+    if !iap_product_ids().contains(&product_id) {
+        return Err("that product is not on sale here".into());
+    }
+    let r = iap_ios::purchase(&product_id).await?;
+    let status = r.get("status").and_then(|s| s.as_str()).unwrap_or("").to_string();
+    if status != "ok" {
+        return Ok(json!({ "status": status }));
+    }
+    let jws = r.get("jws").and_then(|j| j.as_str()).unwrap_or("").to_string();
+    let tx = r.get("transactionId").and_then(|t| t.as_str()).unwrap_or("").to_string();
+    match iap_verify_on_server(&app, &transport, &jws).await {
+        Ok((toku, entitlement)) => {
+            if let Err(e) = iap_ios::finish(&tx).await {
+                log::warn!("[iap] credited, but the transaction could not be finished yet: {e}");
+            }
+            Ok(json!({ "status": "credited", "toku": toku, "entitlement": entitlement }))
+        }
+        // Paid, not yet credited: the transaction stays unfinished and iap_restore retries.
+        Err(e) => Ok(json!({ "status": "unclaimed", "error": e })),
+    }
+}
+
+/// Buy one product through Apple's sheet and have the server credit it.
+/// `status`: credited (toku, entitlement) | cancelled | pending | unclaimed (error).
+#[cfg(target_os = "ios")]
+#[tauri::command]
+async fn iap_purchase(app: AppHandle, transport: State<'_, Arc<Transport>>, product_id: String) -> Result<Value, String> {
+    Box::pin(iap_purchase_impl(app, transport.inner().clone(), product_id)).await
+}
+
+#[cfg(target_os = "ios")]
+async fn iap_restore_impl(app: AppHandle, transport: Arc<Transport>) -> Result<Value, String> {
+    let list = iap_ios::unfinished().await?;
+    let (mut claimed, mut toku_sum, mut errors) = (0u32, 0u64, Vec::<String>::new());
+    for t in list.iter().take(20) {
+        let jws = t.get("jws").and_then(|j| j.as_str()).unwrap_or("");
+        let tx = t.get("transactionId").and_then(|x| x.as_str()).unwrap_or("");
+        if jws.is_empty() || tx.is_empty() {
+            continue;
+        }
+        match iap_verify_on_server(&app, &transport, jws).await {
+            Ok((toku, _)) => {
+                let _ = iap_ios::finish(tx).await;
+                claimed += 1;
+                toku_sum += toku;
+            }
+            Err(e) => errors.push(e),
+        }
+    }
+    Ok(json!({ "found": list.len(), "claimed": claimed, "toku": toku_sum,
+               "pending": errors.len(), "error": errors.first() }))
+}
+
+/// Re-send every unfinished transaction — on launch, and behind "Restore purchases".
+#[cfg(target_os = "ios")]
+#[tauri::command]
+async fn iap_restore(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<Value, String> {
+    Box::pin(iap_restore_impl(app, transport.inner().clone())).await
+}
+
+#[cfg(not(target_os = "ios"))]
+#[tauri::command]
+async fn iap_products() -> Result<Value, String> {
+    Err("App Store purchases exist only in the iPhone app".into())
+}
+#[cfg(not(target_os = "ios"))]
+#[tauri::command]
+async fn iap_purchase(_product_id: String) -> Result<Value, String> {
+    Err("App Store purchases exist only in the iPhone app".into())
+}
+#[cfg(not(target_os = "ios"))]
+#[tauri::command]
+async fn iap_restore() -> Result<Value, String> {
+    Err("App Store purchases exist only in the iPhone app".into())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // iOS gives worker/main threads far smaller stacks than macOS (main ≈1 MB vs 8 MB;
@@ -3408,7 +3559,7 @@ pub fn run() {
             invoice, invoice_status, invoice_cancel, invite_check, ocr_scan, pdf_text, pdf_ocr, pdf_pages, collect, redeem, chat,
             smart_available, smart_detect, coconut_redeem,
             mixnet_route, mixnet_ping, cancel_chat, app_resumed, app_hidden, resume_stats, list_entry_gateways, server_identities, set_entry_gateway, set_mixnet_perf, open_external, save_image, save_file, voucher_redeem,
-            phrase_backup_get,
+            phrase_backup_get, iap_products, iap_purchase, iap_restore,
             phrase_check_start,
             phrase_check_verify,
             phrase_backup_set,

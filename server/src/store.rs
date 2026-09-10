@@ -13,6 +13,14 @@ use rusqlite::{params, Connection, OpenFlags};
 use std::path::Path;
 
 /// What `voucher_burn` did. Each case is a different sentence to the buyer.
+/// Outcome of `Store::iap_claim`.
+#[derive(Debug, PartialEq)]
+pub enum IapClaim {
+    New,
+    AlreadyYours,
+    AlreadyOther,
+}
+
 pub enum VoucherBurn {
     Burned { toku: u64 },
     /// Already redeemed by THIS account — a retry after a lost reply. Success.
@@ -115,6 +123,25 @@ impl Store {
         // UNIQUE, not just an index: one voucher per invoice. A reloaded page must not be
         // able to mint a second code for money that was paid once.
         let _ = conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS vouchers_by_invoice ON vouchers (invoice)", []);
+
+        // App Store purchases (iap.rs). One row per Apple transaction, keyed by its
+        // fingerprint: the INSERT is what makes "credit this once" atomic. `account` is the
+        // purchase link and follows ACCOUNT_LINK_DAYS like a voucher's; `credited_at` NULL
+        // after a claim is the crash window `credit_pending_vouchers` repairs.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS iap_transactions (\
+               hash TEXT PRIMARY KEY,\
+               product TEXT NOT NULL,\
+               toku INTEGER NOT NULL,\
+               env TEXT NOT NULL,\
+               storefront TEXT NOT NULL,\
+               account TEXT,\
+               purchased_at INTEGER NOT NULL,\
+               claimed_at INTEGER NOT NULL,\
+               credited_at INTEGER)",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
 
         // The channel between the faucet (clearnet, serves /pay) and the server (mixnet only,
         // owns the payment rails). A table rather than a port: no new listener on the box
@@ -568,6 +595,95 @@ impl Store {
         n
     }
 
+    // ---- App Store transactions ----
+
+    /// Burn an Apple transaction for `account`. The INSERT either lands (New) or the row
+    /// exists — then it is the same account retrying after a lost reply (AlreadyYours) or
+    /// somebody else's, which includes a row whose account link has already been dropped.
+    #[allow(clippy::too_many_arguments)]
+    pub fn iap_claim(
+        &self, hash: &str, product: &str, toku: u64, env: &str, storefront: &str, account: &str,
+        purchased_at: u64, now: u64,
+    ) -> IapClaim {
+        let inserted = self
+            .conn
+            .execute(
+                "INSERT OR IGNORE INTO iap_transactions \
+                 (hash, product, toku, env, storefront, account, purchased_at, claimed_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![hash, product, toku as i64, env, storefront, account, purchased_at as i64, now as i64],
+            )
+            .unwrap_or(0);
+        if inserted > 0 {
+            return IapClaim::New;
+        }
+        let who: Option<Option<String>> = self
+            .conn
+            .query_row("SELECT account FROM iap_transactions WHERE hash = ?1", params![hash], |r| r.get(0))
+            .ok();
+        match who {
+            Some(Some(a)) if a == account => IapClaim::AlreadyYours,
+            _ => IapClaim::AlreadyOther,
+        }
+    }
+
+    pub fn iap_credited(&self, hash: &str, now: u64) {
+        let _ = self.conn.execute(
+            "UPDATE iap_transactions SET credited_at = ?2 WHERE hash = ?1 AND credited_at IS NULL",
+            params![hash, now as i64],
+        );
+    }
+
+    /// Claimed but never credited — the same crash window a voucher has.
+    pub fn iap_to_credit(&self) -> Vec<(String, String, u64)> {
+        let mut out = Vec::new();
+        if let Ok(mut st) = self.conn.prepare(
+            "SELECT hash, account, toku FROM iap_transactions WHERE credited_at IS NULL AND account IS NOT NULL",
+        ) {
+            if let Ok(rows) = st.query_map([], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)? as u64))
+            }) {
+                out = rows.flatten().collect();
+            }
+        }
+        out
+    }
+
+    /// (hash, claimed_at) of credited transactions that still name their account.
+    pub fn iap_links(&self) -> Vec<(String, u64)> {
+        let mut out = Vec::new();
+        if let Ok(mut st) = self.conn.prepare(
+            "SELECT hash, claimed_at FROM iap_transactions WHERE account IS NOT NULL AND credited_at IS NOT NULL",
+        ) {
+            if let Ok(rows) = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64))) {
+                out = rows.flatten().collect();
+            }
+        }
+        out
+    }
+
+    pub fn iap_forget_account(&self, hashes: &[String]) -> usize {
+        let mut n = 0;
+        for h in hashes {
+            n += self
+                .conn
+                .execute("UPDATE iap_transactions SET account = NULL WHERE hash = ?1", params![h])
+                .unwrap_or(0);
+        }
+        n
+    }
+
+    /// (transactions, TOKU) credited since `since_ms`, for the admin.
+    pub fn iap_since(&self, since_ms: u64) -> (u64, u64) {
+        self.conn
+            .query_row(
+                "SELECT COUNT(*), COALESCE(SUM(toku), 0) FROM iap_transactions WHERE claimed_at >= ?1",
+                params![since_ms as i64],
+                |r| Ok((r.get::<_, i64>(0)? as u64, r.get::<_, i64>(1)? as u64)),
+            )
+            .unwrap_or((0, 0))
+    }
+
     /// Refund path: void every unredeemed voucher of one invoice. Refuses a redeemed one —
     /// spent credit cannot be clawed back, the same rule the app follows.
     pub fn voucher_void_by_invoice(&self, invoice: &str, now: u64) -> VoucherVoid {
@@ -756,6 +872,27 @@ pub fn void_voucher(db: &std::path::Path, invoice: &str, now: u64) -> Result<Vou
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_apple_transaction_credits_once_and_forgets_its_account_like_a_voucher() {
+        let p = std::env::temp_dir().join(format!("scrai-iap-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let s = Store::open(&p).unwrap();
+        let claim = |acct: &str| s.iap_claim("h1", "com.tokumai.app.credit.10", 1_000_000, "Production", "DEU", acct, 5, 10);
+        assert_eq!(claim("alice"), IapClaim::New);
+        assert_eq!(s.iap_to_credit(), vec![("h1".to_string(), "alice".to_string(), 1_000_000)], "claimed, not yet credited");
+        s.iap_credited("h1", 11);
+        assert!(s.iap_to_credit().is_empty());
+        assert_eq!(claim("alice"), IapClaim::AlreadyYours, "a retry after a lost reply");
+        assert_eq!(claim("bob"), IapClaim::AlreadyOther);
+        assert_eq!(s.iap_links(), vec![("h1".to_string(), 10)]);
+        assert_eq!(s.iap_forget_account(&["h1".to_string()]), 1);
+        assert!(s.iap_links().is_empty());
+        assert_eq!(claim("alice"), IapClaim::AlreadyOther, "past the link window nobody owns it");
+        assert_eq!(s.iap_since(0), (1, 1_000_000));
+        assert_eq!(s.iap_since(11), (0, 0));
+        let _ = std::fs::remove_file(&p);
+    }
 
     #[test]
     fn save_many_commits_all_keys_atomically() {

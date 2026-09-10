@@ -331,7 +331,8 @@
   /* buy: amount tiles + coin brand colours + pay panel (Buy Credit mockup) */
   .balline{font-family:var(--mono);font-size:11.5px;color:var(--muted);margin:0 0 14px;line-height:1.55}
   .balline b{color:var(--bone)}
-  #tierRow.tiles{display:flex;gap:9px;margin-bottom:2px}
+  #tierRow.tiles,#iosStore .tiles{display:flex;gap:9px;margin-bottom:2px}
+  .setrow.dis{opacity:.4;pointer-events:none}
   .tiletier{flex:1;border:1px solid var(--line);border-radius:12px;padding:12px 6px;text-align:center;background:var(--surface-2);cursor:pointer;transition:border-color .15s,background .15s}
   .tiletier.sel{border-color:var(--signal);background:color-mix(in srgb,var(--signal) 11%,var(--surface-2))}
   .tiletier.sel .s{color:var(--signal)}
@@ -1195,6 +1196,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     <div class="mb">
       <p class="balline" id="buyBal"></p>
       <div id="iosTopup" style="display:none"></div>
+      <div id="iosStore" style="display:none"></div>
       <!-- One field for every kind of code — invites, vouchers, gifts. It names no place to get
      one, deliberately: outside the US and the EU, App Store rule 3.1.1 forbids the app from
      pointing at an outside purchase, and a helpful sentence here would be exactly that.
@@ -1809,6 +1811,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         if(l){ const b=$("redeemLbl"); if(b) b.textContent = l; }
         if(h){ const m=$("redeemHint"); if(m) m.textContent = h; } }
       refreshPhraseBackup();
+      maybeRestoreIap();
       startTrickle();
       fakePayments = s.fakePayments === true;    // only when the server SAYS so
       devBuild = s.devBuild === true;
@@ -5734,7 +5737,112 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     $("amountLbl").style.display = legacy ? "" : "none";
     $("tierRow").style.display   = legacy ? "" : "none";
     $("chooser").style.display   = legacy ? "" : "none";
+    ["continueRow","railNote","receiptList"].forEach(id=>{ const e=$(id); if(e) e.style.display = legacy ? "" : "none"; });
     syncCardRow();
+    // iOS: the App Store tiles take the chooser's place (StoreKit 2, see iap_ios.rs).
+    if(iosStoreOn()) loadIap(false); else renderIosStore();
+  }
+
+  // ---------- App Store purchases (iOS) ----------
+  // Tiles come from StoreKit (localized price), the credit amount from the product id's
+  // tile (`…credit.10` = $10 = 1,000,000 TOKU — the same buckets as every other rail). A
+  // purchase is credited by the server on Apple's signed transaction; the app then collects
+  // the entitlement like after any other purchase. Nothing here names another way to buy.
+  let iapList = null, iapErr = "", iapLoading = false, iapSel = null, iapBusy = false, iapMsg = "", iapConsent = false;
+  const iapUsd = id => { const m = /\.(\d{1,3})$/.exec(String(id||"")); return m ? Math.max(0, parseInt(m[1],10)) : 0; };
+  const iapToku = id => { const scr = iapUsd(id)*100000; return scr>=1e6 ? (scr/1e6).toFixed(1).replace(/\.0$/,"")+"M" : Math.round(scr/1e3)+"k"; };
+  function iosStoreOn(){ return isIOSNative() && !testnetBuy; }
+  async function loadIap(force){
+    if(!iosStoreOn()) return;
+    if(iapList && !force){ renderIosStore(); return; }
+    iapLoading = true; iapErr = ""; renderIosStore();
+    try{
+      const r = await Backend.iapProducts();
+      const list = Array.isArray(r && r.products) ? r.products : [];
+      iapList = list.filter(p => p && typeof p.id === "string" && iapUsd(p.id) > 0);
+      if(!iapList.length){ iapList = null; iapErr = "The App Store returned no products for this app."; }
+    }catch(e){ iapList = null; iapErr = String((e && e.message) || e || "The App Store is not answering right now."); }
+    iapLoading = false; renderIosStore();
+  }
+  function iapTile(p){
+    return `<div class="tiletier${iapSel===p.id?' sel':''}" data-click="selectIap" data-click-pass="id" data-id="${escAttr(String(p.id))}"><div class="a">${esc(iapToku(p.id))}</div><div class="s">${esc(String(p.displayPrice||""))}</div></div>`;
+  }
+  function renderIosStore(){
+    const box=$("iosStore"); if(!box) return;
+    if(!iosStoreOn()){ box.style.display = "none"; box.innerHTML = ""; return; }
+    box.style.display = "";
+    const codeRow=$("testnetRow");
+    if(iapLoading){ box.innerHTML = `<p class="hint">Loading App Store prices…</p>`; return; }
+    if(iapErr || !iapList){
+      // The code field must not stand alone as the only way to buy (3.1.3(b) inverted):
+      // when the App Store is down, it dims with the same error.
+      if(codeRow) codeRow.classList.add("dis");
+      box.innerHTML = `<div class="setrow" style="cursor:default;border-color:var(--rust)"><span><b style="color:var(--rust)">The App Store is not answering right now.</b><small>${esc(iapErr)} Try again in a moment. Your balance and everything you have already bought are unaffected.</small></span></div>
+        <div class="btnrow"><button class="btn" data-click="loadIap" data-args="true">Try again</button></div>`;
+      return;
+    }
+    if(codeRow) codeRow.classList.remove("dis");
+    const tiles = iapList.map(iapTile).join("");
+    const sel = iapList.find(p => p.id===iapSel);
+    const ready = !!sel && iapConsent && !iapBusy;
+    const label = iapBusy ? "Waiting for the App Store…" : sel ? `Buy ${esc(iapToku(sel.id))} TOKU for ${esc(String(sel.displayPrice||""))}` : "Pick an amount above";
+    box.innerHTML = `<div class="grouplbl" style="margin-top:2px">Amount</div><div class="tiles">${tiles}</div>
+      <div class="consent" style="margin-top:10px"><div class="ck${iapConsent?" on":""}" data-click="toggleIapConsent"><span class="box">✓</span><span class="cktx">I understand that credit lives on my <b>recovery phrase</b>. If I lose the phrase, nobody — including tokumai — can restore it.</span></div></div>
+      <div style="margin-top:10px"><button class="btn primary${iapBusy?" busy":""}" style="width:100%${ready?"":";opacity:.5;cursor:not-allowed"}"${ready?"":" disabled"} data-click="buyIap">${label}</button></div>
+      ${iapMsg ? `<p class="hint" style="margin:10px 0 0">${esc(iapMsg)}</p>` : ``}
+      <p class="hint" style="text-align:center;margin:10px 0 0"><span data-click="restoreIap" style="cursor:pointer;text-decoration:underline">Restore purchases</span></p>`;
+  }
+  function selectIap(id){ if(!iapList || !iapList.some(p => p.id===id)) return; iapSel = id; iapMsg = ""; renderIosStore(); }
+  function toggleIapConsent(){ iapConsent = !iapConsent; renderIosStore(); }
+  // After the server credited a purchase: pull the entitlement down like any other credit.
+  async function collectAfterIap(){
+    try{
+      const r = await Backend.collect();
+      await refreshState(); renderBuyBal();
+      maybeAskPhraseBackup(r && r.collected);
+    }catch(_){ /* the next "Check for credit" collects it */ }
+  }
+  async function buyIap(){
+    const sel = iapList && iapList.find(p => p.id===iapSel);
+    if(!sel || !iapConsent || iapBusy) return;
+    iapBusy = true; iapMsg = ""; renderIosStore();
+    try{
+      const r = await Backend.iapPurchase(sel.id);
+      const st = String((r && r.status) || "");
+      if(st==="credited"){
+        const toku = Number(r.toku)||0;
+        iapMsg = toku>0 ? `✓ ${formatToku(toku)} TOKU credited.` : "✓ This purchase had already been credited.";
+        iapSel = null; iapConsent = false;
+        await collectAfterIap();
+      }
+      else if(st==="cancelled"){ iapMsg = ""; }
+      else if(st==="pending"){ iapMsg = "Waiting for approval (Ask to Buy). The credit arrives once it is approved — open this sheet again then."; }
+      else if(st==="unclaimed"){ iapMsg = `Paid — but the server has not confirmed the credit yet: ${String((r && r.error)||"no answer")}. Nothing is lost: tap Restore purchases in a moment.`; }
+      else { iapMsg = "The App Store gave an unexpected answer."; }
+    }catch(e){ iapMsg = "Failed: " + String((e && e.message) || e); }
+    iapBusy = false; renderIosStore();
+  }
+  async function restoreIap(){
+    if(iapBusy) return;
+    iapBusy = true; iapMsg = "Checking with the App Store…"; renderIosStore();
+    try{
+      const r = await Backend.iapRestore();
+      const claimed = Number(r && r.claimed)||0, found = Number(r && r.found)||0, toku = Number(r && r.toku)||0;
+      if(claimed>0){ iapMsg = `✓ ${formatToku(toku)} TOKU from ${claimed} purchase${claimed>1?"s":""} credited.`; await collectAfterIap(); }
+      else if(found===0){ iapMsg = "Nothing to restore — every purchase has been credited."; }
+      else { iapMsg = `${found} paid purchase${found>1?"s":""} still unclaimed: ${String((r && r.error)||"the server did not answer")}.`; }
+    }catch(e){ iapMsg = "Failed: " + String((e && e.message) || e); }
+    iapBusy = false; renderIosStore();
+  }
+  // On launch (once the server answered): claim anything paid while a reply was lost.
+  let iapRestoredOnce = false;
+  async function maybeRestoreIap(){
+    if(iapRestoredOnce || !isIOSNative() || !account) return;
+    iapRestoredOnce = true;
+    try{
+      const r = await Backend.iapRestore();
+      if(r && Number(r.claimed)>0){ await collectAfterIap(); setStatus(`${formatToku(Number(r.toku)||0)} TOKU from an App Store purchase credited`); }
+    }catch(_){}
   }
   // Ask the SERVER whether the code is good. It answers from the faucet's own ledger; an
   // answer of "valid" only decides which tiles we show — the code is checked again when
@@ -5955,6 +6063,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     // Never carried over from a previous purchase — consent must be given per contract.
     consentImmediate = false; consentWaiver = false;
     { const i=$("inviteInput"); if(i) i.value=CODE_PREFIX; setInviteMsg("",""); }
+    iapSel = null; iapConsent = false; iapMsg = "";
     syncBuyMode();
     renderBuyBal(); showChooser(true); renderTiers(); renderContinue(); renderRailNote(); renderPending(); renderReceipts();
     $("payPanel").innerHTML="";
