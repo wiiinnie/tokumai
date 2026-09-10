@@ -370,6 +370,25 @@ pub fn toggle_network() -> String {
     }
 }
 
+/// App Store purchases: (today's count, today's TOKU, lifetime count, lifetime TOKU).
+/// Zeros on a database that predates the table — the console must not fail on it.
+pub fn iap_stats(path: &PathBuf) -> (u64, u64, u64, u64) {
+    let Ok(conn) = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY) else { return (0, 0, 0, 0) };
+    let now = crate::pay::now_ms();
+    let midnight = now - now % 86_400_000;
+    let q = |since: u64| -> (u64, u64) {
+        conn.query_row(
+            "SELECT COUNT(*), COALESCE(SUM(toku), 0) FROM iap_transactions WHERE claimed_at >= ?1",
+            [since as i64],
+            |r| Ok((r.get::<_, i64>(0)? as u64, r.get::<_, i64>(1)? as u64)),
+        )
+        .unwrap_or((0, 0))
+    };
+    let (tn, tt) = q(midnight);
+    let (an, at) = q(0);
+    (tn, tt, an, at)
+}
+
 pub fn read_metrics(path: &PathBuf) -> Metrics {
     let mut m = Metrics::default();
     let conn = match Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY) {

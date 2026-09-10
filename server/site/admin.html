@@ -153,6 +153,7 @@
       <div class="row"><span>purchased</span><b class="g" id="ePurchased">–</b></div>
       <div class="row"><span>entitlement open</span><b id="eEnt">–</b></div>
       <div class="row"><span>→ withdrawn ecash</span><b id="eWith">–</b></div>
+      <div class="row"><span>App Store today · all</span><b id="eIap">–</b></div>
       <div class="row tot"><span>revenue − cost</span><b id="eProfit">–</b></div>
     </div>
     <div class="card">
@@ -308,6 +309,8 @@
     $("ePurchased").textContent = usd(s.economy.purchased);
     $("eEnt").textContent = usd(s.economy.entitlement);
     $("eWith").textContent = usd(s.economy.withdrawn);
+    var ap = s.appStore || {};
+    $("eIap").textContent = grp(ap.today || 0) + " · " + grp(ap.total || 0) + " (" + usd(ap.totalToku || 0) + ")";
     var profit = (Number(s.economy.revenue) || 0) - (Number(s.economy.cost) || 0);
     var p = $("eProfit");
     p.textContent = (profit < 0 ? "−" : "+") + usd(Math.abs(profit)).slice(1);

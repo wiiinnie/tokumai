@@ -278,6 +278,7 @@ fn access(db: &PathBuf) -> Value {
 
 fn state_json(db: &PathBuf) -> Value {
     let m = admin::read_metrics(db);
+    let iap = admin::iap_stats(db);
     let days: Vec<Value> = m
         .daily
         .iter()
@@ -313,6 +314,7 @@ fn state_json(db: &PathBuf) -> Value {
             "purchased": m.total_purchased, "entitlement": m.entitlement_out,
             "withdrawn": m.withdrawn_toku, "revenue": m.total_spent, "cost": m.total_cost,
         },
+        "appStore": { "today": iap.0, "todayToku": iap.1, "total": iap.2, "totalToku": iap.3 },
         "integrity": {
             "burned": m.coins_redeemed, "offenders": m.offenders, "blacklisted": m.blacklisted,
             "lifetimeBuys": m.total_purchases,
