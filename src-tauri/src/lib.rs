@@ -991,23 +991,7 @@ async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<V
                             }
                         }
                     }
-                    {
-                        // App Store product ids: plain reverse-DNS strings, a handful at most.
-                        let ids: Vec<String> = resp
-                            .get("iapProducts")
-                            .and_then(|p| p.as_array())
-                            .map(|a| {
-                                a.iter()
-                                    .filter_map(|x| x.as_str())
-                                    .filter(|s| !s.is_empty() && s.len() <= 120
-                                        && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_'))
-                                    .map(str::to_string)
-                                    .take(8)
-                                    .collect()
-                            })
-                            .unwrap_or_default();
-                        *IAP_PRODUCTS.lock().unwrap_or_else(|e| e.into_inner()) = ids;
-                    }
+                    remember_iap_products(&resp);
                     {
                         let mut u = SERVER_UPDATE.lock().unwrap_or_else(|e| e.into_inner());
                         *u = resp.get("update").filter(|u| u.get("required").and_then(|r| r.as_bool()) == Some(true)).cloned();
@@ -3396,16 +3380,52 @@ async fn iap_verify_on_server(app: &AppHandle, transport: &Transport, jws: &str)
     ))
 }
 
+/// App Store product ids from a catalog reply: plain reverse-DNS strings, a handful at most.
+fn remember_iap_products(resp: &Value) {
+    let ids: Vec<String> = resp
+        .get("iapProducts")
+        .and_then(|p| p.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str())
+                .filter(|s| !s.is_empty() && s.len() <= 120
+                    && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_'))
+                .map(str::to_string)
+                .take(8)
+                .collect()
+        })
+        .unwrap_or_default();
+    *IAP_PRODUCTS.lock().unwrap_or_else(|e| e.into_inner()) = ids;
+}
+
+/// The remembered ids — or, when the catalog was cached before the server learned to
+/// sell through the App Store (a deploy while the app was open), one fresh catalog fetch.
 #[cfg(target_os = "ios")]
-fn iap_product_ids() -> Vec<String> {
+async fn iap_product_ids(app: &AppHandle, transport: &Transport) -> Vec<String> {
+    let ids = IAP_PRODUCTS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    if !ids.is_empty() {
+        return ids;
+    }
+    let Ok(dir) = data_dir(app) else { return ids };
+    let w = wallet::load(&dir);
+    let Ok(srv) = server_addr(&w) else { return ids };
+    if let Ok(resp) = transport
+        .round_trip(&srv, &json!({"v":PROTO,"kind":"models","id":rand_hex(16)}), SURBS_META, META_TIMEOUT_MS)
+        .await
+    {
+        remember_iap_products(&resp);
+        if let Some(m) = resp.get("models") {
+            transport.set_cached_models(m.clone()).await;
+        }
+    }
     IAP_PRODUCTS.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
 /// The App Store's products for the ids the server sells, with localized prices.
 #[cfg(target_os = "ios")]
 #[tauri::command]
-async fn iap_products() -> Result<Value, String> {
-    let ids = iap_product_ids();
+async fn iap_products(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<Value, String> {
+    let ids = Box::pin(iap_product_ids(&app, &transport)).await;
     if ids.is_empty() {
         return Err("this server sells nothing through the App Store".into());
     }
@@ -3414,7 +3434,7 @@ async fn iap_products() -> Result<Value, String> {
 
 #[cfg(target_os = "ios")]
 async fn iap_purchase_impl(app: AppHandle, transport: Arc<Transport>, product_id: String) -> Result<Value, String> {
-    if !iap_product_ids().contains(&product_id) {
+    if !iap_product_ids(&app, &transport).await.contains(&product_id) {
         return Err("that product is not on sale here".into());
     }
     let r = iap_ios::purchase(&product_id).await?;

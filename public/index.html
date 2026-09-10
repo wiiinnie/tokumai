@@ -5778,7 +5778,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       // when the App Store is down, it dims with the same error.
       if(codeRow) codeRow.classList.add("dis");
       box.innerHTML = `<div class="setrow" style="cursor:default;border-color:var(--rust)"><span><b style="color:var(--rust)">The App Store is not answering right now.</b><small>${esc(iapErr)} Try again in a moment. Your balance and everything you have already bought are unaffected.</small></span></div>
-        <div class="btnrow"><button class="btn" data-click="loadIap" data-args="true">Try again</button></div>`;
+        <div class="btnrow" style="margin-bottom:14px"><button class="btn" data-click="loadIap" data-args="true">Try again</button></div>`;
       return;
     }
     if(codeRow) codeRow.classList.remove("dis");
@@ -5790,7 +5790,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       <div class="consent" style="margin-top:10px"><div class="ck${iapConsent?" on":""}" data-click="toggleIapConsent"><span class="box">✓</span><span class="cktx">I understand that credit lives on my <b>recovery phrase</b>. If I lose the phrase, nobody — including tokumai — can restore it.</span></div></div>
       <div style="margin-top:10px"><button class="btn primary${iapBusy?" busy":""}" style="width:100%${ready?"":";opacity:.5;cursor:not-allowed"}"${ready?"":" disabled"} data-click="buyIap">${label}</button></div>
       ${iapMsg ? `<p class="hint" style="margin:10px 0 0">${esc(iapMsg)}</p>` : ``}
-      <p class="hint" style="text-align:center;margin:10px 0 0"><span data-click="restoreIap" style="cursor:pointer;text-decoration:underline">Restore purchases</span></p>`;
+      <p class="hint" style="text-align:center;margin:10px 0 14px"><span data-click="restoreIap" style="cursor:pointer;text-decoration:underline">Restore purchases</span></p>`;
   }
   function selectIap(id){ if(!iapList || !iapList.some(p => p.id===id)) return; iapSel = id; iapMsg = ""; renderIosStore(); }
   function toggleIapConsent(){ iapConsent = !iapConsent; renderIosStore(); }
