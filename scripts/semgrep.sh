@@ -45,6 +45,9 @@ semgrep scan --metrics=off --no-git-ignore ${PRO[@]+"${PRO[@]}"} "${PACKS[@]}" -
   ${OUT:+--json -o "$OUT/results.json"} \
   core server src-tauri/src src public scripts .github "$TMP" || STATUS=$?
 
+echo "── backend.js facade"
+node "$(dirname "$0")/check-backend-facade.mjs" || STATUS=1
+
 echo "── cargo audit"
 if command -v cargo-audit >/dev/null; then
   if [ -n "$OUT" ]; then cargo audit --json > "$OUT/audit.json" || true; fi
