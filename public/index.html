@@ -348,7 +348,7 @@
   .legalline a:hover{color:var(--bone)}
   .ck{display:flex;gap:10px;align-items:flex-start;padding:9px 11px;border:1px solid var(--line);
       border-radius:11px;background:var(--surface-2);margin-bottom:7px;cursor:pointer}
-  .ck:hover{border-color:#463f3a}
+  .ck:hover{border-color:var(--mix)}
   .ck.on{border-color:var(--mix);background:color-mix(in srgb,var(--mix) 9%,var(--surface-2))}
   .ck .box{flex:0 0 17px;width:17px;height:17px;margin-top:1px;border-radius:5px;border:1.5px solid #554d47;
            display:grid;place-items:center;font-size:11px;line-height:1;color:transparent;background:#151312}
@@ -1202,7 +1202,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       <!-- One field for every kind of code — invites, vouchers, gifts. It names no place to get
      one, deliberately: outside the US and the EU, App Store rule 3.1.1 forbids the app from
      pointing at an outside purchase, and a helpful sentence here would be exactly that.
-     See docs/vouchers.md. --><label class="setrow" id="testnetRow" style="display:none;cursor:default"><span><b><span id="redeemLbl">Have a code?</span></b><small id="redeemHint">Enter it here.</small><span class="inviteline"><span class="codepre">TOKU-</span><input id="inviteInput" type="text" inputmode="latin" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" maxlength="14" value="" placeholder="XXXX-XXXX-XXXX"><button type="button" class="ibtn" data-click="checkInvite">Redeem</button></span><small id="inviteMsg"></small></span></label>
+     See docs/vouchers.md. --><label class="setrow" id="testnetRow" style="display:none;cursor:default"><span><b><span id="redeemLbl">Have a code?</span></b><small id="redeemHint">Enter it here.</small><span class="inviteline"><span class="codepre">TOKU-</span><input id="inviteInput" type="text" inputmode="latin" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" maxlength="14" value="" placeholder="XXXX-XXXX-XXXX" data-input="codeTyped" data-input-pass="this" data-keydown="__enter__" data-fn="checkInvite"><button type="button" class="ibtn" data-click="checkInvite">Redeem</button></span><small id="inviteMsg"></small></span></label>
       <div class="grouplbl" id="amountLbl" style="margin-top:2px">Amount</div>
       <div id="tierRow" class="tiles"></div>
 
@@ -4214,13 +4214,6 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       b.classList.toggle("sel", b.dataset.themeOpt===curTheme);
       b.onclick = ()=>{ applyTheme(b.dataset.themeOpt); $("setStatus").textContent = "theme saved"; };
     });
-    // Enter in the invite field = pressing Check; typing invalidates a previous answer,
-    // so the $1 tile can never belong to a code other than the one on screen.
-    { const inp=$("inviteInput");
-      if(inp){
-        inp.onkeydown = e => { if(e.key==="Enter"){ e.preventDefault(); checkInvite(); } };
-        inp.oninput = () => { formatCodeInput(inp); if(inviteOk){ inviteOk=false; inviteCode=""; setInviteMsg("",""); syncBuyMode(); renderTiers(); renderContinue(); } };
-      } }
     $("tutChk").checked = tutorialEnabled();
     $("tutChk").onchange = ()=>{ try{ localStorage.setItem(TUT_KEY, $("tutChk").checked?"1":"0"); }catch(_){}; $("setStatus").textContent = "tutorial "+($("tutChk").checked?"on":"off"); };
     $("inpAssist").checked = inputAssistOn();
@@ -5867,6 +5860,13 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     const next = groups.join("-");
     if(el.value !== next){ el.value = next; try{ el.setSelectionRange(next.length, next.length); }catch(_){} }
   }
+  // Typing: group as you go; a previously validated invite is void the moment the code changes,
+  // so the $1 tile can never belong to a code other than the one on screen. (Was wired inside
+  // openSettings() — so it only worked after the settings sheet had been opened once, 2026-09-10.)
+  function codeTyped(el){
+    formatCodeInput(el);
+    if(inviteOk){ inviteOk=false; inviteCode=""; setInviteMsg("",""); syncBuyMode(); renderTiers(); renderContinue(); }
+  }
   // The full code as the server expects it, or "" when the field is empty.
   function codeFieldValue(el){ formatCodeInput(el); return el.value ? CODE_PREFIX + el.value : ""; }
   async function checkInvite(){
@@ -6625,7 +6625,8 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   function pickModel(i){ selectModelIdx(i); toggleMenu(); }
 
   // expose for inline handlers
-  Object.assign(window,{ pickModel, copyPhrase, newChat, openSession, deleteSession, exportSession, toggleMenu, selectModelIdx,
+  Object.assign(window,{ pickServerIdentity, trickleToggle, selectIap, loadIap, toggleIapConsent, buyIap, restoreIap, codeTyped,
+    pickModel, copyPhrase, newChat, openSession, deleteSession, exportSession, toggleMenu, selectModelIdx,
     autogrow, onKey, sendMsg, retryMsg, showHandover, downloadHandover, closeHandover, pickImport, importHandover,
     cancelMsg, resendMsg, showDismissed, retrieveMsg, openConnSheet, closeConnSheet, rebuildRoute, rebuildRouteFromSheet, copyResumeLog, routeDismiss, useOfficialServer, iterateImg,
     openBuy, closeBuy, buyTier, buyOrInvoice, checkInvite, selectCoin, pickVariant, copyUri, copyTopupId, openTopupSheet, closeTopupSheet, confirmTopup, openAccount, closeAccount, doAccountNew, doAccountReveal, doAccountRestore, doAccountDelete, doMigrate, doRedeem, redeemSliderChanged, toggleRedeemPick, askCancelInvoice, dismissCancelAsk, confirmCancelInvoice, toggleConsent, downloadReceipt, startQrScan, stopQrScan,

@@ -47,6 +47,7 @@ semgrep scan --metrics=off --no-git-ignore ${PRO[@]+"${PRO[@]}"} "${PACKS[@]}" -
 
 echo "── backend.js facade"
 node "$(dirname "$0")/check-backend-facade.mjs" || STATUS=1
+node "$(dirname "$0")/check-handlers.mjs" || STATUS=1
 
 echo "── cargo audit"
 if command -v cargo-audit >/dev/null; then
