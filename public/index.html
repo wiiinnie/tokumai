@@ -5823,7 +5823,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     try{
       const r = await Backend.iapRestore();
       const claimed = Number(r && r.claimed)||0, found = Number(r && r.found)||0, toku = Number(r && r.toku)||0;
-      if(claimed>0){ iapMsg = `✓ ${formatToku(toku)} TOKU from ${claimed} purchase${claimed>1?"s":""} credited.`; disarmIapRetry(); await collectAfterIap(); }
+      if(claimed>0){ iapMsg = "✓ " + iapCreditedLine(r); disarmIapRetry(); await collectAfterIap(); }
       else if(found===0){ iapMsg = "Nothing to restore — every purchase has been credited."; disarmIapRetry(); }
       else { iapMsg = `${found} paid purchase${found>1?"s":""} still unclaimed: ${String((r && r.error)||"the server did not answer")}. The app keeps trying.`; armIapRetry(); }
     }catch(e){ iapMsg = "Failed: " + String((e && e.message) || e); }
@@ -5836,9 +5836,17 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     iapRestoredOnce = true;
     try{
       const r = await Backend.iapRestore();
-      if(r && Number(r.claimed)>0){ await collectAfterIap(); setStatus(`${formatToku(Number(r.toku)||0)} TOKU from an App Store purchase credited`); }
+      if(r && Number(r.claimed)>0){ await collectAfterIap(); setStatus(iapCreditedLine(r)); }
       if(r && Number(r.found)>Number(r.claimed||0)) armIapRetry();
     }catch(_){}
+  }
+  // What a confirmed restore means in words. toku 0 = the server had credited it already
+  // (the first reply was lost — e.g. the request waited at the gateway until the server was
+  // back, and the app had stopped waiting by then); the credit is there, not new.
+  function iapCreditedLine(r){
+    const toku = Number(r && r.toku)||0, n = Number(r && r.claimed)||0;
+    if(toku>0) return `${formatToku(toku)} TOKU from ${n>1?n+" App Store purchases":"an App Store purchase"} credited`;
+    return `App Store purchase confirmed — it had been credited already`;
   }
   // A paid transaction the server has not confirmed (it was down, the route was dead) is
   // re-sent on its own: every minute while the app runs, and the moment the connection
@@ -5855,10 +5863,10 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       const claimed = Number(r && r.claimed)||0, found = Number(r && r.found)||0;
       if(claimed>0){
         disarmIapRetry();
-        iapMsg = `✓ ${formatToku(Number(r.toku)||0)} TOKU credited — the server has confirmed your purchase.`;
+        iapMsg = "✓ " + iapCreditedLine(r);
         renderIosStore();
         await collectAfterIap();
-        setStatus(`${formatToku(Number(r.toku)||0)} TOKU from an App Store purchase credited`);
+        setStatus(iapCreditedLine(r));
       } else if(found===0){ disarmIapRetry(); }
     }catch(_){ /* still down — the next tick tries again */ }
     iapRetryBusy = false;
