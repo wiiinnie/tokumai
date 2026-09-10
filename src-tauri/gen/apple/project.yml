@@ -57,11 +57,6 @@ targets:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        UISupportedInterfaceOrientations~ipad:
-          - UIInterfaceOrientationPortrait
-          - UIInterfaceOrientationPortraitUpsideDown
-          - UIInterfaceOrientationLandscapeLeft
-          - UIInterfaceOrientationLandscapeRight
         CFBundleShortVersionString: 0.6.2
         CFBundleVersion: "0.6.2"
     entitlements:
@@ -73,6 +68,11 @@ targets:
     settings:
       base:
         ENABLE_BITCODE: false
+        # iPhone only for the first App Store submission: the layout is phone-first and
+        # untested on iPad, and an iPad target makes 13" iPad screenshots mandatory. iPhone
+        # apps still run on iPad in compatibility mode. Widen to "1,2" once the iPad layout
+        # has been looked at.
+        TARGETED_DEVICE_FAMILY: "1"
         # StoreKitShim.swift (App Store purchases) — Swift 5 mode; the shim is not Swift-6 strict.
         SWIFT_VERSION: "5.0"
         # Signing baked into project.yml so `xcodegen generate` / `tauri ios build` keep it
