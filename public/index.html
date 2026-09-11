@@ -4957,7 +4957,11 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   let pendingRestorePhrase = null;  // held across the "discard held credit?" restore confirm
   function openAccount(){ acctPhrase=null; acctView=null; acctPage=null; renderAccount(); openScrim("acctScrim"); }
   // Account drill-in: rows navigate into a sub-page, the back arrow returns to the landing.
-  function acctNav(el){ acctPage=el.dataset.page; acctView=null; acctPhrase=null; renderAccount(); const mb=$("acctScrim").querySelector(".mb"); if(mb) mb.scrollTop=0; }
+  function acctNav(el){
+    // The check page needs its three positions from Rust first — navigating straight to it
+    // rendered a page with no inputs (2026-09-11).
+    if(el.dataset.page==="check"){ startPhraseCheck(); return; }
+    acctPage=el.dataset.page; acctView=null; acctPhrase=null; renderAccount(); const mb=$("acctScrim").querySelector(".mb"); if(mb) mb.scrollTop=0; }
   function acctBack(){ acctPage=null; acctView=null; acctPhrase=null; renderAccount(); const mb=$("acctScrim").querySelector(".mb"); if(mb) mb.scrollTop=0; }
   // M-fe-2: don't leave the revealed mnemonic (or a captured restore phrase) sitting in
   // a JS variable after the modal is dismissed.
@@ -5399,9 +5403,12 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       // iOS (H1): the phrase is not returned to the webview — it is shown on the native,
       // biometric-gated screen instead, exactly as "Reveal recovery phrase" does.
       if(r && r.native){
-        acctView=null; acctPhrase=null; acctPage=null; renderAccount();
+        // Straight into the three-word check: it is the next and only step, and the native
+        // phrase screen closes onto it (no skip — the landing's "to do" row remains as the
+        // way back in if the sheet is closed first).
         phraseVerified = false;
-        acctStatus("New account created — the recovery phrase is on the screen in front of you. Write it down, then confirm three words of it below.");
+        acctStatus("New account created — the recovery phrase is on the screen in front of you. Write it down, then confirm three words of it.");
+        await startPhraseCheck();
         return;
       }
       acctView=null; acctPhrase=r.mnemonic;
