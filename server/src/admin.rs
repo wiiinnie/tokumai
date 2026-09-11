@@ -389,6 +389,75 @@ pub fn iap_stats(path: &PathBuf) -> (u64, u64, u64, u64) {
     (tn, tt, an, at)
 }
 
+/// Website numbers for the console, from the counters the faucet keeps (`web_stats`,
+/// `web_uniques` — per UTC day, no IPs, no per-person rows). Four windows: today, 7 days,
+/// 30 days, lifetime. "Unique visitors" over more than one day is the SUM of the daily
+/// uniques — the fingerprint salt changes every day on purpose, so one person on two days
+/// counts twice; the console says so. Empty on a database that predates the tables.
+pub fn web_stats(path: &PathBuf) -> serde_json::Value {
+    use serde_json::json;
+    let Ok(conn) = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY) else { return json!({"ok": false}) };
+    let now = (crate::pay::now_ms() / 1000) as i64;
+    let today = civil_day_utc(now);
+    let since = |days: i64| civil_day_utc(now - (days - 1) * 86_400);
+    // key → n over a window; the pre-computed views/orders/… come from the same rows
+    let sums = |from: &str| -> HashMap<String, i64> {
+        let mut m = HashMap::new();
+        let Ok(mut st) = conn.prepare("SELECT key, SUM(n) FROM web_stats WHERE day >= ?1 GROUP BY key") else { return m };
+        let Ok(rows) = st.query_map([from], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))) else { return m };
+        for (k, n) in rows.flatten() {
+            m.insert(k, n);
+        }
+        m
+    };
+    let uniques = |from: &str| -> i64 {
+        conn.query_row("SELECT COUNT(*) FROM web_uniques WHERE day >= ?1", [from], |r| r.get::<_, i64>(0)).unwrap_or(0)
+    };
+    let window = |from: &str| -> serde_json::Value {
+        let m = sums(from);
+        let by = |prefix: &str| -> i64 { m.iter().filter(|(k, _)| k.starts_with(prefix)).map(|(_, n)| *n).sum() };
+        let views = by("view:");
+        let downloads = by("dl:");
+        let orders = *m.get("order").unwrap_or(&0);
+        let codes = *m.get("code").unwrap_or(&0);
+        let claims = *m.get("claim").unwrap_or(&0);
+        let mut pages: Vec<(String, i64)> = m.iter().filter(|(k, _)| k.starts_with("view:")).map(|(k, n)| (k[5..].to_string(), *n)).collect();
+        pages.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        let mut dls: Vec<(String, i64)> = m.iter().filter(|(k, _)| k.starts_with("dl:")).map(|(k, n)| (k[3..].to_string(), *n)).collect();
+        dls.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        let mut methods: Vec<(String, i64)> = m
+            .iter()
+            .filter(|(k, _)| k.starts_with("order:") && !k.starts_with("order:usd:"))
+            .map(|(k, n)| (k[6..].to_string(), *n))
+            .collect();
+        methods.sort();
+        let mut amounts: Vec<(i64, i64)> = m
+            .iter()
+            .filter_map(|(k, n)| k.strip_prefix("order:usd:").and_then(|u| u.parse::<i64>().ok()).map(|u| (u, *n)))
+            .collect();
+        amounts.sort();
+        json!({
+            "views": views, "uniques": uniques(from), "downloads": downloads,
+            "orders": orders, "codes": codes, "claims": claims,
+            "pages": pages.iter().map(|(k, n)| json!({"page": k, "n": n})).collect::<Vec<_>>(),
+            "platforms": dls.iter().map(|(k, n)| json!({"platform": k, "n": n})).collect::<Vec<_>>(),
+            "methods": methods.iter().map(|(k, n)| json!({"method": k, "n": n})).collect::<Vec<_>>(),
+            "amounts": amounts.iter().map(|(u, n)| json!({"usd": u, "n": n})).collect::<Vec<_>>(),
+        })
+    };
+    let has = conn
+        .query_row("SELECT COUNT(*) FROM sqlite_master WHERE name IN ('web_stats','web_uniques')", [], |r| r.get::<_, i64>(0))
+        .unwrap_or(0)
+        == 2;
+    json!({
+        "ok": has,
+        "today": window(&today),
+        "d7": window(&since(7)),
+        "d30": window(&since(30)),
+        "all": window("0000-00-00"),
+    })
+}
+
 pub fn read_metrics(path: &PathBuf) -> Metrics {
     let mut m = Metrics::default();
     let conn = match Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY) {

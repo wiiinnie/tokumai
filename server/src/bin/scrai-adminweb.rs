@@ -315,6 +315,7 @@ fn state_json(db: &PathBuf) -> Value {
             "withdrawn": m.withdrawn_toku, "revenue": m.total_spent, "cost": m.total_cost,
         },
         "appStore": { "today": iap.0, "todayToku": iap.1, "total": iap.2, "totalToku": iap.3 },
+        "web": admin::web_stats(db),
         "integrity": {
             "burned": m.coins_redeemed, "offenders": m.offenders, "blacklisted": m.blacklisted,
             "lifetimeBuys": m.total_purchases,

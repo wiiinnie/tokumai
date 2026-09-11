@@ -400,7 +400,8 @@ fn web_order(state_db: &Path, id: &str) -> Option<(Option<String>, Option<String
 /// dropped response becomes a retry, and a buyer who closed the tab can reopen `#order=…`.
 /// It is dropped the moment they confirm they have written it down (`/api/order/ack`), and
 /// swept unconditionally after the window whether they confirm or not.
-fn mint_voucher(state_db: &Path, order: &str, invoice: &str, toku: u64) -> Result<String, String> {
+/// Ok((code, fresh)): `fresh` is false on the retry path, where the held code is shown again.
+fn mint_voucher(state_db: &Path, order: &str, invoice: &str, toku: u64) -> Result<(String, bool), String> {
     let now = scrai_server::pay::now_ms();
     let conn = state_rw(state_db)?;
 
@@ -413,7 +414,7 @@ fn mint_voucher(state_db: &Path, order: &str, invoice: &str, toku: u64) -> Resul
         )
         .ok();
     if let Some(code) = held {
-        return Ok(code);
+        return Ok((code, false));
     }
 
     // Issued before, and the plaintext is gone: never a second code for the same money. The
@@ -449,7 +450,7 @@ fn mint_voucher(state_db: &Path, order: &str, invoice: &str, toku: u64) -> Resul
         rusqlite::params![order, code, now as i64],
     )
     .map_err(|e| format!("could not hold the code: {e}"))?;
-    Ok(code)
+    Ok((code, true))
 }
 
 fn server_invite_invoices(state_db: &Path) -> Result<Vec<TestnetInv>, String> {
@@ -537,6 +538,9 @@ struct Faucet {
     /// attempts per hashed client IP (salted per boot; never persisted)
     attempts: Mutex<HashMap<u64, Vec<Instant>>>,
     salt: u64,
+    /// (UTC day, salt) for the day's visitor fingerprints — a fresh salt every day and on
+    /// every boot, never persisted, so yesterday's rows cannot be joined to anyone
+    stats_salt: Mutex<(String, u64)>,
 }
 
 const BUCKET_CLAIM: u64 = 1;
@@ -585,6 +589,48 @@ impl Faucet {
             map.clear(); // never let the map grow unbounded; a flood just resets everyone's window
         }
         true
+    }
+
+    /// The day's visitor fingerprint: sha256(day salt ‖ ip ‖ user agent), 16 hex chars. The
+    /// salt lives only in memory and changes daily, so the stored value identifies nobody —
+    /// it can only say "seen today already".
+    fn visitor(&self, day: &str, req: &Req) -> String {
+        use sha2::{Digest, Sha256};
+        let salt = {
+            let mut g = self.stats_salt.lock().unwrap_or_else(|e| e.into_inner());
+            if g.0 != day {
+                *g = (day.to_string(), rand::random());
+            }
+            g.1
+        };
+        let mut h = Sha256::new();
+        h.update(salt.to_le_bytes());
+        h.update(req.ip.as_bytes());
+        h.update(b"\0");
+        h.update(req.ua.as_bytes());
+        hex::encode(&h.finalize()[..8])
+    }
+
+    /// Counts one event for the admin console — `view:<page>`, `dl:<platform>`, `order`,
+    /// `order:<method>`, `code`, `claim`. With a request it also marks the day's visitor
+    /// (page views only; a download or an order comes from someone already counted).
+    /// Crawlers are skipped for views so "unique visitors" means people.
+    /// Off the request path: a slow disk must never delay a page.
+    fn track(self: &Arc<Self>, key: &str, visitor_of: Option<&Req>) {
+        if let Some(r) = visitor_of {
+            if is_crawler(&r.ua) {
+                return;
+            }
+        }
+        let day = utc_day();
+        let h = visitor_of.map(|r| self.visitor(&day, r));
+        let key = key.to_string();
+        let db = self.cfg.state_db();
+        tokio::task::spawn_blocking(move || {
+            if let Err(e) = web_stats_bump(&db, &day, &key, h.as_deref()) {
+                eprintln!("scrai-faucet: web stats: {e}");
+            }
+        });
     }
 
     /// The whole claim, start to finish. Every refusal is a plain sentence for the tester.
@@ -901,7 +947,7 @@ fn site_page(dl_dir: &Path, page: &str) -> String {
     ] {
         let cls = if primary { "btn primary" } else { "btn" };
         let html = match files.get(key) {
-            Some(f) => format!(r#"<a class="{cls}" href="/dl/{}">{label}</a>"#, html_escape(&f.name)),
+            Some(f) => format!(r#"<a class="{cls}" href="/get/{}">{label}</a>"#, html_escape(&f.name)),
             None => off(label),
         };
         s = s.replace(ph, &html);
@@ -913,6 +959,8 @@ fn site_page(dl_dir: &Path, page: &str) -> String {
     ] {
         let cls = if primary { "btn primary" } else { "btn" };
         let html = match env_link(var) {
+            // the join link is served as a redirect so the click can be counted (see /go/ios)
+            Some(_) if var == "DL_IOS" => format!(r#"<a class="{cls}" href="/go/ios">{label}</a>"#),
             Some(u) => format!(r#"<a class="{cls}" href="{u}">{label}</a>"#),
             // The guide is optional: with no link there is nothing to say, and a dead
             // "not published yet" button would wrap the mobile row onto a second line —
@@ -978,12 +1026,70 @@ fn site_page(dl_dir: &Path, page: &str) -> String {
 // HTTP/1.1, minimal: GET / · GET /api/status · GET /api/claim?memo= · POST /api/claim
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Website statistics for the admin console — counters per UTC day, nothing per person.
+// `web_stats(day, key, n)` and `web_uniques(day, h)`; the latter is pruned after
+// WEB_UNIQUES_DAYS so even the salted fingerprints do not pile up.
+// ---------------------------------------------------------------------------
+
+const WEB_UNIQUES_DAYS: i64 = 35;
+
+fn utc_day() -> String {
+    scrai_server::admin::civil_day_utc((scrai_server::pay::now_ms() / 1000) as i64)
+}
+
+fn is_crawler(ua: &str) -> bool {
+    let u = ua.to_ascii_lowercase();
+    u.is_empty()
+        || ["bot", "crawl", "spider", "slurp", "curl/", "wget/", "python-", "go-http", "headless", "preview", "facebookexternalhit"]
+            .iter()
+            .any(|m| u.contains(m))
+}
+
+fn web_stats_init(state_db: &Path) -> Result<(), String> {
+    let conn = state_rw(state_db)?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS web_stats (day TEXT NOT NULL, key TEXT NOT NULL, n INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, key));\n\
+         CREATE TABLE IF NOT EXISTS web_uniques (day TEXT NOT NULL, h TEXT NOT NULL, PRIMARY KEY (day, h));",
+    )
+    .map_err(|e| format!("web stats tables: {e}"))?;
+    let cutoff = scrai_server::admin::civil_day_utc((scrai_server::pay::now_ms() / 1000) as i64 - WEB_UNIQUES_DAYS * 86_400);
+    conn.execute("DELETE FROM web_uniques WHERE day < ?1", [cutoff]).map_err(|e| format!("web stats prune: {e}"))?;
+    Ok(())
+}
+
+fn web_stats_bump(state_db: &Path, day: &str, key: &str, visitor: Option<&str>) -> Result<(), String> {
+    let conn = state_rw(state_db)?;
+    conn.execute(
+        "INSERT INTO web_stats (day, key, n) VALUES (?1, ?2, 1) ON CONFLICT(day, key) DO UPDATE SET n = n + 1",
+        params![day, key],
+    )
+    .map_err(|e| e.to_string())?;
+    if let Some(h) = visitor {
+        conn.execute("INSERT OR IGNORE INTO web_uniques (day, h) VALUES (?1, ?2)", params![day, h]).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Which bundle a published file name is (manifest key), by its extension.
+fn dl_platform(name: &str) -> &'static str {
+    let n = name.to_ascii_lowercase();
+    if n.ends_with(".dmg") { "macos" }
+    else if n.ends_with(".exe") || n.ends_with(".msi") { "windows" }
+    else if n.ends_with(".deb") { "deb" }
+    else if n.ends_with(".appimage") { "appimage" }
+    else if n.ends_with(".apk") { "android" }
+    else { "other" }
+}
+
 struct Req {
     method: String,
     path: String,
     query: String,
     body: Vec<u8>,
     ip: String,
+    /// only ever hashed into the day's visitor fingerprint (see `Faucet::track`)
+    ua: String,
 }
 
 async fn read_request(sock: &mut tokio::net::TcpStream, peer: SocketAddr) -> Option<Req> {
@@ -1010,12 +1116,15 @@ async fn read_request(sock: &mut tokio::net::TcpStream, peer: SocketAddr) -> Opt
     let (path, query) = target.split_once('?').map(|(p, q)| (p.to_string(), q.to_string())).unwrap_or((target.to_string(), String::new()));
     let mut len = 0usize;
     let mut fwd: Option<String> = None;
+    let mut ua = String::new();
     for l in lines {
         if let Some((k, v)) = l.split_once(':') {
             let k = k.trim().to_ascii_lowercase();
             let v = v.trim();
             if k == "content-length" {
                 len = v.parse().unwrap_or(0);
+            } else if k == "user-agent" {
+                ua = v.chars().take(200).collect();
             } else if k == "x-forwarded-for" {
                 // The LAST element, not the first. Caddy APPENDS the peer it saw to
                 // whatever the client sent, so `X-Forwarded-For: 9.9.9.9` arrives as
@@ -1044,7 +1153,7 @@ async fn read_request(sock: &mut tokio::net::TcpStream, peer: SocketAddr) -> Opt
         Some(f) if peer.ip().is_loopback() => f,
         _ => peer.ip().to_string(),
     };
-    Some(Req { method, path, query, body, ip })
+    Some(Req { method, path, query, body, ip, ua })
 }
 
 fn query_param(q: &str, key: &str) -> Option<String> {
@@ -1052,6 +1161,16 @@ fn query_param(q: &str, key: &str) -> Option<String> {
         let (k, v) = kv.split_once('=')?;
         (k == key).then(|| urlencoding::decode(v).map(|c| c.into_owned()).unwrap_or_default())
     })
+}
+
+/// 302 with the same hardening headers as every other reply.
+async fn redirect(sock: &mut tokio::net::TcpStream, location: &str) {
+    let head = format!(
+        "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nCache-Control: no-store\r\n\
+         X-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\nConnection: close\r\n\r\n"
+    );
+    let _ = sock.write_all(head.as_bytes()).await;
+    let _ = sock.shutdown().await;
 }
 
 async fn respond(sock: &mut tokio::net::TcpStream, status: u16, ctype: &str, body: &[u8]) {
@@ -1089,22 +1208,64 @@ async fn handle(f: Arc<Faucet>, mut sock: tokio::net::TcpStream, peer: SocketAdd
     };
     let json = |v: &Value| serde_json::to_vec(v).unwrap_or_default();
     match (req.method.as_str(), req.path.as_str()) {
-        ("GET", "/index.html") => respond(&mut sock, 200, "text/html; charset=utf-8", site_page(&f.cfg.dl_dir, "home").as_bytes()).await,
+        ("GET", "/index.html") => {
+            f.track("view:home", Some(&req));
+            respond(&mut sock, 200, "text/html; charset=utf-8", site_page(&f.cfg.dl_dir, "home").as_bytes()).await
+        }
         ("GET", p) if page_for_path(p).is_some() => {
+            f.track(&format!("view:{}", page_for_path(p).unwrap_or("home")), Some(&req));
             let page = page_for_path(p).unwrap_or("home");
             respond(&mut sock, 200, "text/html; charset=utf-8", site_page(&f.cfg.dl_dir, page).as_bytes()).await
         }
         ("GET", "/sitemap.xml") => respond(&mut sock, 200, "application/xml; charset=utf-8", sitemap_xml().as_bytes()).await,
         ("GET", "/robots.txt") => respond(&mut sock, 200, "text/plain; charset=utf-8", b"User-agent: *\nAllow: /\nDisallow: /api/\nDisallow: /paid\nDisallow: /admin\nSitemap: https://tokumai.com/sitemap.xml\n").await,
         ("GET", "/health") => respond(&mut sock, 200, "text/plain", b"ok").await,
-        ("GET", "/imprint") | ("GET", "/impressum") => respond(&mut sock, 200, "text/html; charset=utf-8", PAGE_IMPRINT.as_bytes()).await,
-        ("GET", "/terms") | ("GET", "/agb") => respond(&mut sock, 200, "text/html; charset=utf-8", PAGE_TERMS.as_bytes()).await,
-        ("GET", "/privacy") | ("GET", "/datenschutz") => respond(&mut sock, 200, "text/html; charset=utf-8", PAGE_PRIVACY.as_bytes()).await,
-        ("GET", "/pay") => respond(&mut sock, 200, "text/html; charset=utf-8", PAGE_PAY.as_bytes()).await,
-        ("GET", "/claim") | ("GET", "/redeem") => respond(&mut sock, 200, "text/html; charset=utf-8", PAGE_CLAIM.as_bytes()).await,
+        ("GET", "/imprint") | ("GET", "/impressum") => {
+            f.track("view:legal", Some(&req));
+            respond(&mut sock, 200, "text/html; charset=utf-8", PAGE_IMPRINT.as_bytes()).await
+        }
+        ("GET", "/terms") | ("GET", "/agb") => {
+            f.track("view:legal", Some(&req));
+            respond(&mut sock, 200, "text/html; charset=utf-8", PAGE_TERMS.as_bytes()).await
+        }
+        ("GET", "/privacy") | ("GET", "/datenschutz") => {
+            f.track("view:legal", Some(&req));
+            respond(&mut sock, 200, "text/html; charset=utf-8", PAGE_PRIVACY.as_bytes()).await
+        }
+        ("GET", "/pay") => {
+            f.track("view:pay", Some(&req));
+            respond(&mut sock, 200, "text/html; charset=utf-8", PAGE_PAY.as_bytes()).await
+        }
+        ("GET", "/claim") | ("GET", "/redeem") => {
+            f.track("view:claim", Some(&req));
+            respond(&mut sock, 200, "text/html; charset=utf-8", PAGE_CLAIM.as_bytes()).await
+        }
+        // A download click: counted, then sent to the file Caddy serves from disk. Only names
+        // the manifest lists — this is not a way to probe the directory.
+        ("GET", p) if p.starts_with("/get/") => {
+            let name = &p[5..];
+            let (_, files) = read_manifest(&f.cfg.dl_dir);
+            match files.values().find(|df| df.name == name) {
+                Some(df) => {
+                    f.track(&format!("dl:{}", dl_platform(&df.name)), None);
+                    redirect(&mut sock, &format!("/dl/{}", df.name)).await
+                }
+                None => respond(&mut sock, 404, "text/plain", b"not found").await,
+            }
+        }
+        ("GET", "/go/ios") => match std::env::var("DL_IOS").ok().filter(|u| publishable_link(u)) {
+            Some(u) => {
+                f.track("dl:ios", None);
+                redirect(&mut sock, u.trim()).await
+            }
+            None => respond(&mut sock, 404, "text/plain", b"not found").await,
+        },
         // Mollie's redirect target after a card checkout (see PAID_HTML). Any query string
         // is ignored — nothing on this page depends on it.
-        ("GET", "/paid") => respond(&mut sock, 200, "text/html; charset=utf-8", PAID_HTML.as_bytes()).await,
+        ("GET", "/paid") => {
+            f.track("view:paid", Some(&req));
+            respond(&mut sock, 200, "text/html; charset=utf-8", PAID_HTML.as_bytes()).await
+        }
         ("GET", p) if p.starts_with("/img/") => {
             // exact-name lookup in the baked-in list — no filesystem, so no traversal to worry about
             match IMAGES.iter().find(|(n, _)| *n == &p[5..]) {
@@ -1126,7 +1287,10 @@ async fn handle(f: Arc<Faucet>, mut sock: tokio::net::TcpStream, peer: SocketAdd
             let code = v.get("code").and_then(|c| c.as_str()).unwrap_or("").trim().to_uppercase();
             let memo = v.get("memo").and_then(|c| c.as_str()).unwrap_or("").trim().to_string();
             match f.claim(&code, &memo, &req.ip).await {
-                Ok(r) => respond(&mut sock, 200, "application/json", &json(&r)).await,
+                Ok(r) => {
+                    f.track("claim", None);
+                    respond(&mut sock, 200, "application/json", &json(&r)).await
+                }
                 Err(e) => {
                     let status = if e.starts_with("too many") { 429 } else { 400 };
                     respond(&mut sock, status, "application/json", &json(&json!({"error": e}))).await
@@ -1168,7 +1332,12 @@ async fn handle(f: Arc<Faucet>, mut sock: tokio::net::TcpStream, peer: SocketAdd
             }
             let id = format!("{:032x}", rand::random::<u128>());
             match web_order_new(&f.cfg.state_db(), &id, usd, method, version) {
-                Ok(()) => respond(&mut sock, 200, "application/json", &json(&json!({"id": id}))).await,
+                Ok(()) => {
+                    f.track("order", None);
+                    f.track(&format!("order:{method}"), None);
+                    f.track(&format!("order:usd:{usd}"), None);
+                    respond(&mut sock, 200, "application/json", &json(&json!({"id": id}))).await
+                }
                 Err(e) => respond(&mut sock, 500, "application/json", &json(&json!({"error": e}))).await,
             }
         }
@@ -1214,8 +1383,13 @@ async fn handle(f: Arc<Faucet>, mut sock: tokio::net::TcpStream, peer: SocketAdd
                         .and_then(|p| p.get("amountToku").or(p.get("amountScrai")).and_then(|t| t.as_u64()))
                         .unwrap_or(0);
                     match mint_voucher(&f.cfg.state_db(), id, &inv, toku) {
-                        Ok(code) => respond(&mut sock, 200, "application/json",
-                            &json(&json!({"code": code, "toku": toku}))).await,
+                        Ok((code, fresh)) => {
+                            if fresh {
+                                f.track("code", None);
+                            }
+                            respond(&mut sock, 200, "application/json",
+                                &json(&json!({"code": code, "toku": toku}))).await
+                        }
                         Err(e) => respond(&mut sock, 409, "application/json", &json(&json!({"error": e}))).await,
                     }
                 }
@@ -1292,12 +1466,16 @@ async fn serve(cfg: Cfg) -> Result<(), String> {
         (None, true) => eprintln!("scrai-faucet: no faucet wallet configured (FAUCET_MNEMONIC) — site only, claims refused"),
         (_, false) => println!("scrai-faucet: faucet disabled (FAUCET_ENABLED=0) — serving the site only"),
     }
+    if let Err(e) = web_stats_init(&cfg.state_db()) {
+        eprintln!("scrai-faucet: {e} — the site works, the admin console's website numbers will not");
+    }
     let faucet = Arc::new(Faucet {
         cfg,
         wallet,
         claim_lock: tokio::sync::Mutex::new(()),
         attempts: Mutex::new(HashMap::new()),
         salt: rand::random(),
+        stats_salt: Mutex::new((String::new(), 0)),
     });
     let listener = TcpListener::bind(addr).await.map_err(|e| format!("bind {addr}: {e}"))?;
     println!("scrai-faucet: listening on http://{addr}");
@@ -1390,6 +1568,73 @@ mod tests {
         // anything else is taken as given (a self-hosted node, FAUCET_RPC overrides anyway)
         assert_eq!(rpc_from_lcd(Some("https://node.example.org:26657")), "https://node.example.org:26657");
         assert_eq!(rpc_from_lcd(None), "");
+    }
+}
+
+#[cfg(test)]
+mod web_stats {
+    use super::*;
+
+    /// The counters the faucet writes are what the console reads: one round trip through
+    /// a real state.db, no IP anywhere in the file.
+    #[test]
+    fn counters_round_trip_into_the_admin_reader_and_store_no_ip() {
+        let dir = std::env::temp_dir().join(format!("tokumai-webstats-{}", rand::random::<u64>()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("state.db");
+        Connection::open(&db).unwrap(); // the server normally creates the file
+        web_stats_init(&db).unwrap();
+        web_stats_init(&db).unwrap(); // idempotent
+        let day = utc_day();
+        web_stats_bump(&db, &day, "view:home", Some("aaaa")).unwrap();
+        web_stats_bump(&db, &day, "view:home", Some("aaaa")).unwrap(); // same visitor twice
+        web_stats_bump(&db, &day, "view:pricing", Some("bbbb")).unwrap();
+        web_stats_bump(&db, &day, "dl:macos", None).unwrap();
+        web_stats_bump(&db, &day, "order", None).unwrap();
+        web_stats_bump(&db, &day, "order:card", None).unwrap();
+        web_stats_bump(&db, &day, "order:usd:20", None).unwrap();
+        web_stats_bump(&db, "2001-01-01", "view:home", Some("old")).unwrap();
+
+        let w = scrai_server::admin::web_stats(&db);
+        assert_eq!(w["ok"], true);
+        assert_eq!(w["today"]["views"], 3);
+        assert_eq!(w["today"]["uniques"], 2);
+        assert_eq!(w["today"]["downloads"], 1);
+        assert_eq!(w["today"]["orders"], 1);
+        assert_eq!(w["today"]["codes"], 0);
+        assert_eq!(w["today"]["pages"][0]["page"], "home");
+        assert_eq!(w["today"]["pages"][0]["n"], 2);
+        assert_eq!(w["today"]["methods"][0]["method"], "card");
+        assert_eq!(w["today"]["amounts"][0]["usd"], 20);
+        assert_eq!(w["all"]["views"], 4, "lifetime includes the old day");
+        assert_eq!(w["all"]["uniques"], 3, "uniques over many days are summed per day");
+
+        // the prune drops old fingerprints but keeps the aggregate
+        web_stats_init(&db).unwrap();
+        let w = scrai_server::admin::web_stats(&db);
+        assert_eq!(w["all"]["uniques"], 2);
+        assert_eq!(w["all"]["views"], 4);
+
+        let raw = std::fs::read(&db).unwrap();
+        assert!(!raw.windows(7).any(|w| w == b"9.9.9.9"), "no address is ever written");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn crawlers_and_empty_agents_are_not_visitors() {
+        assert!(is_crawler(""));
+        assert!(is_crawler("Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"));
+        assert!(is_crawler("curl/8.4.0"));
+        assert!(!is_crawler("Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15"));
+    }
+
+    #[test]
+    fn a_download_is_filed_under_its_platform() {
+        assert_eq!(dl_platform("tokumai_0.6.2_aarch64.dmg"), "macos");
+        assert_eq!(dl_platform("tokumai_0.6.2_x64-setup.exe"), "windows");
+        assert_eq!(dl_platform("tokumai_0.6.2_amd64.deb"), "deb");
+        assert_eq!(dl_platform("tokumai_0.6.2_amd64.AppImage"), "appimage");
+        assert_eq!(dl_platform("tokumai_0.6.2_universal.apk"), "android");
     }
 }
 

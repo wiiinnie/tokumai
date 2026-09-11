@@ -111,6 +111,21 @@
   label.lbl{display:block;font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;
             text-transform:uppercase;color:var(--dim);margin:0 0 6px}
   .hint{font-family:var(--mono);font-size:10.5px;color:var(--dim);line-height:1.65;margin:9px 0 0}
+  .web{margin-top:16px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2);padding:13px 14px}
+  .web h3{margin:0;font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim)}
+  .webgrid{display:grid;grid-template-columns:repeat(8,1fr);gap:10px;margin-top:12px}
+  .kpi{border:1px solid var(--line);border-radius:8px;padding:9px 10px;background:var(--surface)}
+  .kpi span{display:block;font-family:var(--mono);font-size:10px;color:var(--dim);letter-spacing:.04em}
+  .kpi b{display:block;margin-top:4px;font-family:var(--mono);font-size:17px;font-weight:600;font-variant-numeric:tabular-nums}
+  .kpi b.g{color:var(--ok)}
+  .webcols{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:12px}
+  .webcols h4{margin:0 0 6px;font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);font-weight:500}
+  .mini{font-family:var(--mono);font-size:11.5px;font-variant-numeric:tabular-nums}
+  .mini div{display:flex;justify-content:space-between;gap:10px;padding:3px 0;border-bottom:1px solid var(--line)}
+  .mini div:last-child{border-bottom:none} .mini i{font-style:normal;color:var(--muted)} .mini b{font-weight:600}
+  .mini .bar{flex:1;height:5px;align-self:center;background:var(--line);border-radius:3px;overflow:hidden}
+  .mini .bar u{display:block;height:100%;background:var(--acc)}
+  @media (max-width:980px){ .webgrid{grid-template-columns:repeat(4,1fr)} .webcols{grid-template-columns:1fr} }
   .verdict{font-family:var(--mono);font-size:12px;line-height:1.55;border-left:2px solid var(--ok);
            padding:7px 0 7px 11px;color:var(--ok);margin:12px 0}
   .verdict.bad{border-left-color:var(--rust);color:var(--rust)}
@@ -180,6 +195,38 @@
       </tr></thead>
       <tbody id="days"></tbody>
     </table>
+  </div>
+
+  <div class="web" id="webBox">
+    <div class="chead">
+      <h3>Website · tokumai.com</h3>
+      <span class="chips" id="webChips">
+        <button class="chip on" data-win="today">today</button>
+        <button class="chip" data-win="d7">7 days</button>
+        <button class="chip" data-win="d30">30 days</button>
+        <button class="chip" data-win="all">all</button>
+      </span>
+    </div>
+    <div class="webgrid">
+      <div class="kpi"><span>page views</span><b id="wViews">–</b></div>
+      <div class="kpi"><span>unique visitors</span><b id="wUniq">–</b></div>
+      <div class="kpi"><span>downloads</span><b id="wDl">–</b></div>
+      <div class="kpi"><span>payments opened</span><b id="wOrders">–</b></div>
+      <div class="kpi"><span>paid · code shown</span><b class="g" id="wCodes">–</b></div>
+      <div class="kpi"><span>visitor → payment</span><b id="wConv">–</b></div>
+      <div class="kpi"><span>opened → paid</span><b id="wPaid">–</b></div>
+      <div class="kpi"><span>invite claims</span><b id="wClaims">–</b></div>
+    </div>
+    <div class="webcols">
+      <div><h4>pages</h4><div class="mini" id="wPages"></div></div>
+      <div><h4>downloads</h4><div class="mini" id="wPlat"></div></div>
+      <div><h4>payments opened</h4><div class="mini" id="wMeth"></div></div>
+    </div>
+    <p class="hint" id="wHint">Counted by the site itself, per UTC day: no IP address is stored. A visitor is a
+       salted fingerprint that changes daily and is dropped after 35 days, so over more than one day the
+       unique count is the sum of the days. Crawlers are left out of views and visitors. "Payments opened"
+       is a checkout started on /pay; "paid" is a code actually shown. Downloads count clicks on this site,
+       not App Store or TestFlight installs (the TestFlight link click is counted as "ios").</p>
   </div>
 
   <div class="models" id="modelsBox" hidden>
@@ -287,6 +334,44 @@
       .catch(function(){ $("hClock").textContent = "server not answering"; });
   }
 
+  var web = null, webWin = "today";
+  function pct(a, b){ return b > 0 ? (100 * a / b).toFixed(a >= b ? 0 : 1) + " %" : "–"; }
+  function miniList(el, rows, keyName){
+    var max = rows.reduce(function(m, r){ return Math.max(m, r.n); }, 0);
+    el.innerHTML = rows.length ? rows.map(function(r){
+      return '<div><i>' + esc(String(r[keyName])) + '</i><span class="bar"><u style="width:' +
+        (max ? (100 * r.n / max) : 0) + '%"></u></span><b>' + grp(r.n) + '</b></div>';
+    }).join("") : '<div><i>nothing yet</i></div>';
+  }
+  function paintWeb(){
+    var box = $("webBox");
+    if (!web || !web.ok) {
+      ["wViews","wUniq","wDl","wOrders","wCodes","wConv","wPaid","wClaims"].forEach(function(id){ $(id).textContent = "–"; });
+      $("wHint").textContent = "No website counters yet — they appear once the site has served its first page after this deploy.";
+      return;
+    }
+    var w = web[webWin] || {};
+    $("wViews").textContent = grp(w.views || 0);
+    $("wUniq").textContent = grp(w.uniques || 0);
+    $("wDl").textContent = grp(w.downloads || 0);
+    $("wOrders").textContent = grp(w.orders || 0);
+    $("wCodes").textContent = grp(w.codes || 0);
+    $("wConv").textContent = pct(w.orders || 0, w.uniques || 0);
+    $("wPaid").textContent = pct(w.codes || 0, w.orders || 0);
+    $("wClaims").textContent = grp(w.claims || 0);
+    miniList($("wPages"), w.pages || [], "page");
+    miniList($("wPlat"), w.platforms || [], "platform");
+    var meth = (w.methods || []).map(function(m){ return { method: m.method, n: m.n }; })
+      .concat((w.amounts || []).map(function(a){ return { method: "$" + a.usd, n: a.n }; }));
+    miniList($("wMeth"), meth, "method");
+  }
+  document.querySelectorAll("#webChips .chip").forEach(function(c){
+    c.onclick = function(){
+      document.querySelectorAll("#webChips .chip").forEach(function(x){ x.className = "chip"; });
+      c.className = "chip on"; webWin = c.getAttribute("data-win"); paintWeb();
+    };
+  });
+
   function paint(s){
     $("hVer").textContent = "admin · v" + s.version;
     marginTarget = Number(s.margin) > 1 ? Number(s.margin) : 1.3;
@@ -329,6 +414,8 @@
     } else {
       ["fFunded","fToday","fOpen","fCodes"].forEach(function(id){ $(id).textContent = "off"; });
     }
+
+    web = s.web || null; paintWeb();
 
     days = s.days || [];
     $("days").innerHTML = days.map(function(d, i){
