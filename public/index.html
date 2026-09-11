@@ -1411,10 +1411,16 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         <div class="mpticks" id="prCtxTicks"><span>last 2</span><span>last 4</span><span>last 8</span><span>everything</span></div>
       </div>
       <div class="mprow">
-        <div class="mptop"><b>Reasoning depth</b></div>
-        <div class="mpdesc" id="mpThinkDesc">How long the model “thinks” before it answers. Thinking bills as output tokens, so less = <b>faster and cheaper</b>; more = better on hard problems. The stops are the ones the selected model offers: Gemini takes a token budget (Off · Low · Balanced · Deep), OpenAI three effort levels (Low · Medium · High). Pictures are unaffected. The per-answer estimate in the model list follows this setting.</div>
-        <input type="range" id="mpThink" min="0" max="3" step="1" class="mpslider flat">
-        <div class="mpticks" id="mpThinkTicks"><span>Off · fastest</span><span>Low</span><span>Balanced</span><span>Deep</span></div>
+        <div class="mptop"><b>Reasoning depth · Gemini models</b></div>
+        <div class="mpdesc">How long a Gemini model “thinks” before it answers — a token budget, “Off” is snappiest for chat and simple tasks. Thinking bills as output tokens, so less = <b>faster and cheaper</b>; more = better on hard problems. The per-answer estimate in the model list follows this setting. Pictures are unaffected.</div>
+        <input type="range" id="mpThinkG" min="0" max="3" step="1" class="mpslider flat">
+        <div class="mpticks" id="mpThinkGTicks"><span>Off · fastest</span><span>Low</span><span>Balanced</span><span>Deep</span></div>
+      </div>
+      <div class="mprow">
+        <div class="mptop"><b>Reasoning depth · OpenAI models</b></div>
+        <div class="mpdesc">The three effort levels an OpenAI model offers; there is no “off”. Same trade-off: lower = faster and cheaper, higher = better on hard problems, billed as output tokens.</div>
+        <input type="range" id="mpThinkO" min="0" max="2" step="1" class="mpslider flat">
+        <div class="mpticks" id="mpThinkOTicks"><span>Low</span><span>Medium</span><span>High</span></div>
       </div>
       <div class="mprow">
         <div class="mptop"><b>Image size</b></div>
@@ -4279,22 +4285,24 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     $("liveChk").checked = liveDataOn();
     $("liveRow").classList.toggle("on", liveDataOn());
     $("liveChk").onchange = ()=>{ const on=$("liveChk").checked; try{ localStorage.setItem("scrai.liveData", on?"1":"0"); }catch(_){}; $("liveRow").classList.toggle("on", on); $("setStatus").textContent = "live web search "+(on?"on":"off"); };
-    // Reasoning-depth slider: the stops of the current model's provider, persisted per
-    // provider as the token budget the server understands.
-    { const t = thinkStops();
-      $("mpThink").max = String(t.steps.length-1);
-      $("mpThinkTicks").innerHTML = t.labels.map(l=>`<span>${esc(l)}</span>`).join("");
-      $("mpThink").value = String(thinkIndex());
-      markTicks("mpThink", +$("mpThink").value);
-      $("mpThink").oninput = ()=>{
-        const i = +$("mpThink").value, b = t.steps[i] ?? t.steps[t.dflt];
+    // Reasoning-depth sliders: one per provider, both always shown, each persisted as the
+    // token budget the server understands for that provider. The request uses the one of
+    // the model being asked (thinkingBudget()).
+    const setupThink = (inputId, vendor, who) => {
+      const t = THINK_STOPS[vendor];
+      const idx = (()=>{ try{ const v=parseInt(localStorage.getItem(t.key),10); const i=t.steps.indexOf(v); return i<0?t.dflt:i; }catch(_){ return t.dflt; } })();
+      $(inputId).value = String(idx);
+      markTicks(inputId, idx);
+      $(inputId).oninput = ()=>{
+        const i = +$(inputId).value, b = t.steps[i] ?? t.steps[t.dflt];
         try{ localStorage.setItem(t.key, String(b)); }catch(_){}
-        markTicks("mpThink", i);
-        const who = provKey(modelVendor)==='openai' ? 'OpenAI' : 'Gemini';
-        $("setStatus").textContent = `reasoning depth for ${who} models: ${thinkLabel(b)}` + (provKey(modelVendor)==='openai' ? "" : (b>0?` (up to ${b} thinking tokens)`:""));
+        markTicks(inputId, i);
+        $("setStatus").textContent = `reasoning depth for ${who} models: ${t.labels[i].replace(/ ·.*$/,"")}` + (vendor==='google' && b>0 ? ` (up to ${b} thinking tokens)` : "");
         renderMenu();                                // the per-answer estimates follow the depth
       };
-    }
+    };
+    setupThink("mpThinkG", "google", "Gemini");
+    setupThink("mpThinkO", "openai", "OpenAI");
     // Generated-picture size: persisted as the server's imageSize token ("1K" default).
     $("imgSize").value = String(Math.max(0, IMAGE_SIZES.indexOf(imageSize())));
     markTicks("imgSize", +$("imgSize").value);
