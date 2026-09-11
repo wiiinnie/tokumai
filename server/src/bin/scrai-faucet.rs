@@ -100,7 +100,7 @@ const PAID_HTML: &str = r##"<!doctype html>
   <div class="card">
     <div class="eyebrow">Card checkout</div>
     <h1>You can close this tab</h1>
-    <p><b>The app takes it from here.</b> If the payment went through, it is picked up on its own and your credit is collected — usually within a few seconds, no further steps.</p>
+    <p><b><b>Bought a code on tokumai.com?</b> Go back to the tab you ordered from: the code appears there by itself, usually within seconds. <b>Paid from the app?</b> The app takes it from here.</b> If the payment went through, it is picked up on its own and your credit is collected — usually within a few seconds, no further steps.</p>
     <p>If you cancelled, or the payment failed, nothing was charged; pick an amount in the app again.</p>
     <div class="fine">This page holds no order details and sets no cookie. Once collected, the credit is unlinkable to this payment. If a payment went through and no credit arrived, quote your receipt number and we will credit you.</div>
   </div>
