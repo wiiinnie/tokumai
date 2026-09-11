@@ -18,6 +18,17 @@
 use security_framework::access_control::{ProtectionMode, SecAccessControl};
 use security_framework::passwords::{delete_generic_password_options, generic_password, set_generic_password_options};
 use security_framework::passwords_options::PasswordOptions;
+use core_foundation::base::TCFType;
+use core_foundation::string::CFString;
+use security_framework_sys::access_control::kSecAttrAccessibleAfterFirstUnlock;
+use core_foundation::string::CFStringRef as SysCFStringRef;
+
+// The attribute KEY is not exported by security-framework-sys; the Security framework
+// defines it, and the app already links that framework for everything else in this file.
+#[link(name = "Security", kind = "framework")]
+extern "C" {
+    static kSecAttrAccessible: SysCFStringRef;
+}
 
 const SERVICE: &str = "com.tokumai.app";
 const ERR_NOT_FOUND: i32 = -25300; // errSecItemNotFound
@@ -43,15 +54,24 @@ pub fn get(account: &str, sync: bool) -> Result<Option<Vec<u8>>, String> {
 /// wallet key; ThisDeviceOnly unless the item is meant to travel.
 pub fn set(account: &str, value: &[u8], sync: bool) -> Result<(), String> {
     let _ = delete(account, sync);
-    let protection = if sync {
-        ProtectionMode::AccessibleAfterFirstUnlock
-    } else {
-        ProtectionMode::AccessibleAfterFirstUnlockThisDeviceOnly
-    };
-    let ac = SecAccessControl::create_with_protection(Some(protection), 0)
-        .map_err(|e| format!("keychain access control: {e}"))?;
     let mut o = query(account, sync);
-    o.set_access_control(ac);
+    if sync {
+        // A synchronizable item may NOT carry a SecAccessControl object (those are bound to
+        // this device's Secure Enclave) — SecItemAdd answers errSecParam, "one or more
+        // parameters … not valid" (2026-09-11). The plain accessibility attribute is what
+        // an iCloud-Keychain item takes.
+        #[allow(deprecated)]
+        unsafe {
+            o.query.push((
+                CFString::wrap_under_get_rule(kSecAttrAccessible),
+                CFString::wrap_under_get_rule(kSecAttrAccessibleAfterFirstUnlock).into_CFType(),
+            ));
+        }
+    } else {
+        let ac = SecAccessControl::create_with_protection(Some(ProtectionMode::AccessibleAfterFirstUnlockThisDeviceOnly), 0)
+            .map_err(|e| format!("keychain access control: {e}"))?;
+        o.set_access_control(ac);
+    }
     set_generic_password_options(value, o).map_err(|e| format!("keychain write ({account}): {e}"))
 }
 

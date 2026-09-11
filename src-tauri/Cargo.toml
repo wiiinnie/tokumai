@@ -107,6 +107,8 @@ objc2-store-kit = { version = "0.3", features = ["SKPaymentQueue", "SKStorefront
 # keychain_ios.rs: the Keychain directly, with the two attributes `keyring` cannot set —
 # ThisDeviceOnly protection for the wallet key, Synchronizable for the opt-in phrase copy.
 security-framework = "3"
+security-framework-sys = { version = "2.17", default-features = false }
+core-foundation = "0.10"
 objc2-local-authentication = { version = "0.3", features = ["LAContext", "LAError"] }
 
 # --- on-device OCR for the privacy guard (macOS + iOS via Apple Vision;

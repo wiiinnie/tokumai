@@ -85,7 +85,7 @@ rules:
     pattern: unsafe { ... }
     paths:
       include: [core/src, server/src, src-tauri/src]
-      exclude: [src-tauri/src/ocr.rs, src-tauri/src/lib.rs, src-tauri/src/iap_ios.rs]
+      exclude: [src-tauri/src/ocr.rs, src-tauri/src/lib.rs, src-tauri/src/iap_ios.rs, src-tauri/src/keychain_ios.rs]
 
   # ---------------------------------------------------------------- webview: dangerous sinks
   - id: scrai-js-dangerous-sink
