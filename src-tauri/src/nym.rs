@@ -34,6 +34,47 @@ const NYM_DIRECTORY: &str = "https://validator.nymtech.net/api/v1/nym-nodes/desc
 /// without it the picker simply shows hostnames, as before.
 const NYM_MONIKERS: &str = "https://mainnet-node-status-api.nymtech.cc/dvpn/v1/directory/gateways/entry";
 
+/// The default ENTRY pool: the operator's own gateways ("Hermes Stakepool … XX0n" in the
+/// directory), identity keys as of 2026-09-11. A fresh install used to take a random
+/// directory node and now and then landed on a slow or dead one; these are run by the
+/// same hands as the server, so a new install starts on one that is known to work. DE01
+/// (38zcSs…) is deliberately NOT here — it is the official server's own gateway, i.e. the
+/// exit hop, and entry and exit should not be the same node.
+/// The user can pick any directory gateway instead, or switch to fully random.
+pub const HERMES_ENTRY_GATEWAYS: &[(&str, &str)] = &[
+    ("AT01", "98FmUvDdQYEeV1ioi5NpFK7DoeHphVECndaG7fkRUsaF"),
+    ("AT02", "FmbUngD26tUGvJN8QqL78iK96bZYV2bWkjWZU7fDwBN1"),
+    ("BE01", "2JAVMSBKVvV5DAw8fsdsUjtaaTcwjzPvm4jMzaLGVzJJ"),
+    ("BG01", "89emNaGyaPFKzwLhVeh6wa75umdKfyQRBTa6ZPbUUPv2"),
+    ("CZ01", "7ntzmDZRvG4a1pnDBU4Bg1RiAmLwmqXV5sZGNw68Ce14"),
+    ("FI01", "4mDXCAFNbHxhvayffcgvpRUTwjxTDy9AFZ3neQjNb8po"),
+    ("FI02", "4CmEWNXVKVAaY7Y5848fgmBTxwNTvkYwgnVitksPSnWY"),
+    ("FR01", "C3LSzGfG1gxhCShdijUgYdxo1BUGcUX1yP9YTkaQWwhp"),
+    ("DE02", "6sL9w3iRYaf599rQ5QzGfecG8yoH9zci1BsbMqR6uyQP"),
+    ("HU01", "Hb8A6xoAKazBRWTGZ7eaCDZdR1eciaKWKrNqmydn4Bbw"),
+    ("HU02", "8h489z12rHrbXDZ25H7fEcbeSFusdQ8xD4jkntWyGEqr"),
+    ("IT01", "3JcdMZAHGrp3QbGh78SKQHuq1Bfq6x6yzCgvi5pqBniZ"),
+    ("IT02", "AcN3TJBpfHEtUo3qhrf1yELTeTgZfCFJt1xnyo4jnPwW"),
+    ("NL01", "2zHiExNRKiCXVKS35SNKtK4apGfZELMpA1jJ2gVevJoz"),
+    ("NO01", "EQBb3hW12n1XKM44peDfHLuT8XHPjZZdAFfMd5jF3XEa"),
+    ("PL01", "5txfqzqVFKACYzsC3cezvKKr1F4toN73wcq1hd365aJ"),
+    ("PL02", "YEFrKYaP1eAgs5xe1LfTiYmWALsWnAx44TfLscQoMkU"),
+    ("RO01", "FE6qX4c57NqjCnRtTcESkdC3oEUfZbv9Z3ATTHKKnA3b"),
+    ("ES01", "CWkVgyxmhjZgjw5azYAoqNzqaGCQEWhhQf5bfiiDyede"),
+    ("SE01", "Ht23soQt6NQXFNVGv2SHtb161XScgxrDgn7AF9ofET9L"),
+    ("CH01", "6KZ96sPW6BBcgmghYb7c7BtCXgAEr1nmwnJzzRsszyhe"),
+    ("CH02", "64LaDQefP7dbC8F37HhCnXGP2KstcfqM3hmPiw1KwezA"),
+];
+
+/// One of the operator's entry gateways, at random — the default for a fresh install.
+pub fn random_hermes_gateway() -> String {
+    use rand::seq::SliceRandom;
+    HERMES_ENTRY_GATEWAYS
+        .choose(&mut rand::thread_rng())
+        .map(|(_, id)| id.to_string())
+        .unwrap_or_default()
+}
+
 /// Build the mixnet `DebugConfig` for a performance/privacy setting. Extracted as a
 /// free function so the mapping is unit-testable without a live mixnet, and so the
 /// standalone `mixbench` diagnostic uses the EXACT same knobs the app does.

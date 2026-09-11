@@ -59,9 +59,15 @@ pub struct Wallet {
     /// Nym address of the scrai-server this wallet talks to.
     #[serde(default)]
     pub server: Option<String>,
-    /// User-chosen entry gateway identity (base58). None = let the SDK pick one.
+    /// The entry gateway identity (base58) this device connects through. Set by the user in
+    /// the picker, or by the app itself on first start (a random one of the operator's own
+    /// gateways, see nym::HERMES_ENTRY_GATEWAYS). None only while `entry_random` is on.
     #[serde(default)]
     pub entry_gateway: Option<String>,
+    /// "Use random gateway": a random directory gateway on every connect, nothing remembered.
+    /// Off (default): the app keeps `entry_gateway`.
+    #[serde(default)]
+    pub entry_random: bool,
     #[serde(default)]
     pub session_index: u32,
     /// Held coconut credentials, each a persisted `scrai_core::purse::Purse`

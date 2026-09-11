@@ -2521,7 +2521,7 @@ async fn mixnet_route(app: AppHandle, transport: State<'_, Arc<Transport>>) -> R
         None => Value::Null,
     };
     diag(&app, &format!("mixnet_route: about to respond (live={live})"));
-    Ok(json!({ "entry": entry, "exit": exit, "chosen": w.entry_gateway, "live": live }))
+    Ok(json!({ "entry": entry, "exit": exit, "chosen": w.entry_gateway, "random": w.entry_random, "live": live }))
 }
 
 /// Directory nodes usable as an entry gateway, for the picker.
@@ -2573,10 +2573,25 @@ async fn set_entry_gateway(
         let t = s.trim().to_string();
         if t.is_empty() { None } else { Some(t) }
     });
+    // Picking a gateway is a choice to keep it; clearing (null) means random mode.
+    w.entry_random = id.is_none();
     w.entry_gateway = id.clone();
     wallet::save(&dir, &w)?;
     transport.set_entry_gateway(id.clone()).await;
-    Ok(json!({ "entry_gateway": id }))
+    Ok(json!({ "entry_gateway": id, "entry_random": w.entry_random }))
+}
+
+/// "Use random gateway" on/off. On: forget the pinned gateway, a random directory node on
+/// every connect. Off: pin one of the operator's gateways again (the picker can change it).
+#[tauri::command]
+async fn set_entry_random(app: AppHandle, transport: State<'_, Arc<Transport>>, on: bool) -> Result<Value, String> {
+    let dir = data_dir(&app)?;
+    let mut w = wallet::load(&dir);
+    w.entry_random = on;
+    w.entry_gateway = if on { None } else { Some(nym::random_hermes_gateway()) };
+    wallet::save(&dir, &w)?;
+    transport.set_entry_gateway(w.entry_gateway.clone()).await;
+    Ok(json!({ "entry_gateway": w.entry_gateway, "entry_random": w.entry_random }))
 }
 
 /// Save a base64 image to a user-chosen path via a native "save as…" dialog.
@@ -3566,7 +3581,17 @@ pub fn run() {
             let transport = app.state::<Arc<Transport>>().inner().clone();
             tauri::async_runtime::spawn(async move {
                 if let Ok(dir) = data_dir(&handle) {
-                    let w = wallet::load(&dir);
+                    let mut w = wallet::load(&dir);
+                    // Fresh install (nothing chosen, random mode off): start on one of the
+                    // operator's own gateways and remember it — a random directory node was
+                    // slow or dead too often on first contact (2026-09-11).
+                    if w.entry_gateway.is_none() && !w.entry_random {
+                        w.entry_gateway = Some(nym::random_hermes_gateway());
+                        if let Err(e) = wallet::save(&dir, &w) {
+                            log::warn!("[nym] could not persist the default entry gateway: {e}");
+                        }
+                        log::info!("[nym] default entry gateway picked from the operator's pool");
+                    }
                     if w.entry_gateway.is_some() {
                         transport.set_entry_gateway(w.entry_gateway).await;
                     }
@@ -3578,7 +3603,7 @@ pub fn run() {
             state, local_state, set_server, account_new, account_reveal, account_restore, account_delete, account_migrate_qr,
             invoice, invoice_status, invoice_cancel, invite_check, ocr_scan, pdf_text, pdf_ocr, pdf_pages, collect, redeem, chat,
             smart_available, smart_detect, coconut_redeem,
-            mixnet_route, mixnet_ping, cancel_chat, app_resumed, app_hidden, resume_stats, list_entry_gateways, server_identities, set_entry_gateway, set_mixnet_perf, open_external, save_image, save_file, voucher_redeem,
+            mixnet_route, mixnet_ping, cancel_chat, app_resumed, app_hidden, resume_stats, list_entry_gateways, server_identities, set_entry_gateway, set_entry_random, set_mixnet_perf, open_external, save_image, save_file, voucher_redeem,
             phrase_backup_get, iap_products, iap_purchase, iap_restore,
             phrase_check_start,
             phrase_check_verify,

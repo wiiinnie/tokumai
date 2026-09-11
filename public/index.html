@@ -3253,7 +3253,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // entry = this client's gateway (selectable); exit = the tokumai server's
   // gateway (fixed). The two middle mix hops are re-randomised per packet by the
   // Rust core, so they are deliberately not shown as fixed nodes.
-  let routeCache = { entry:null, exit:null, chosen:null };
+  let routeCache = { entry:null, exit:null, chosen:null, random:false };
   function flagOf(cc){
     if(!cc || cc.length!==2) return "";
     return cc.toUpperCase().replace(/./g, c => String.fromCodePoint(0x1F1E6 + c.charCodeAt(0) - 65));
@@ -3340,7 +3340,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     const pool = gwAll.filter(g => (!o.loc || gwHasLocation(g)) && (!o.host || gwHasHostname(g)));
     const list = f ? pool.filter(g=>gwMatches(g, needles)) : pool;
     const rows = list.slice(0,300).map(g=>{
-      const sel = g.id===chosen;
+      const sel = g.id===chosen && !routeCache.random;
       const ip = (g.ips||[]).find(x=>x && x!==g.host) || "";
       return `<button class="gwrow${sel?' sel':''}" data-click="chooseGateway" data-id="${escAttr(g.id)}" data-click-pass="id">
         <span class="fl">${flagOf(g.country)||'🏳️'}</span>
@@ -3350,12 +3350,8 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         ${sel?'<span class="on">● active</span>':''}
       </button>`;
     }).join("");
-    const auto = `<button class="gwrow${!chosen?' sel':''}" data-click="chooseGateway" data-id="" data-click-pass="id">
-        <span class="fl">🎲</span><span class="cc">AUTO</span>
-        <span class="hn">let the network pick a gateway</span><span class="idc"></span>
-        ${!chosen?'<span class="on">● active</span>':''}
-      </button>`;
-    $("gwList").innerHTML = auto + rows;
+    // The AUTO row is gone: random mode is the switch above the list (toggleGwRandom).
+    $("gwList").innerHTML = rows;
     const shown = Math.min(list.length,300);
     const hidden = gwAll.length - pool.length;
     $("gwStatus").textContent = `${gwAll.length} entry gateways${hidden?` · ${hidden} hidden`:""}${f?` · ${list.length} match “${filter}”${alt?` (read as “${alt}”)`:""}`:""}${list.length>300?` · showing first ${shown}`:""}`;
@@ -3370,6 +3366,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       The <b>exit</b> hop is the server's own gateway and can't be chosen here.</p>
       <input id="gwFilter" placeholder="filter by name, country (CH), host, IP address, or identity key…" data-input="filterGw" data-input-pass="value"
         style="width:100%;padding:9px 12px;border:1px solid var(--line);border-radius:9px;background:var(--surface-2);color:var(--bone);font:inherit;margin-bottom:8px">
+      <label class="setrow" style="margin:0 0 10px"><input type="checkbox" id="gwRandom" data-change="toggleGwRandom" data-change-pass="this" ${routeCache.random?"checked":""}><span><b>Use random gateway</b><small>On: a random gateway from the whole Nym directory on every connect, nothing remembered. Off: the app keeps the gateway marked below — a fresh install starts on one of the operator's own gateways (Hermes Stakepool), and you can pick any other here.</small></span></label>
       <div class="gwopts">
         <label><input type="checkbox" data-opt="loc" ${getGwOpts().loc?"checked":""} data-input="toggleGwOpt" data-input-pass="this"> hide nodes without a location (??)</label>
         <label><input type="checkbox" data-opt="host" ${getGwOpts().host?"checked":""} data-input="toggleGwOpt" data-input-pass="this"> hide nodes without a hostname (IP only)</label>
@@ -3384,11 +3381,22 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     }
   }
   function filterGw(v){ renderGwList(v); }
+  async function toggleGwRandom(el){
+    const on = !!el.checked;
+    const st=$("gwStatus"); if(st) st.textContent = on ? "switching to random…" : "pinning one of the operator's gateways…";
+    try{
+      const r = await Backend.setEntryRandom(on);
+      routeCache.random = !!(r && r.entry_random); routeCache.chosen = (r && r.entry_gateway) || null;
+      const f=$("gwFilter"); renderGwList(f?f.value:"");
+      await refreshRoute();
+      setStatus(on ? "entry gateway: random on every connect" : "entry gateway pinned — reconnects on next message");
+    }catch(e){ el.checked = !on; if(st) st.textContent = "failed: "+(e.message||e); }
+  }
   async function chooseGateway(id){
     const st=$("gwStatus"); if(st) st.textContent = id?("switching to "+shortId(id)+"…"):"switching to automatic…";
     try{
       await Backend.setEntryGateway(id||null);
-      routeCache.chosen = id||null;
+      routeCache.chosen = id||null; routeCache.random = !id;
       closeGw();
       // The client reconnects on the next request; reflect the choice now and
       // refresh the real gateway once a request has re-established the route.
@@ -6687,7 +6695,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   function pickModel(i){ selectModelIdx(i); toggleMenu(); }
 
   // expose for inline handlers
-  Object.assign(window,{ pickServerIdentity, trickleToggle, selectIap, loadIap, toggleIapConsent, buyIap, restoreIap, codeTyped,
+  Object.assign(window,{ toggleGwRandom, pickServerIdentity, trickleToggle, selectIap, loadIap, toggleIapConsent, buyIap, restoreIap, codeTyped,
     pickModel, copyPhrase, newChat, openSession, deleteSession, exportSession, toggleMenu, selectModelIdx,
     autogrow, onKey, sendMsg, retryMsg, showHandover, downloadHandover, closeHandover, pickImport, importHandover,
     cancelMsg, resendMsg, showDismissed, retrieveMsg, openConnSheet, closeConnSheet, rebuildRoute, rebuildRouteFromSheet, copyResumeLog, routeDismiss, useOfficialServer, iterateImg,
