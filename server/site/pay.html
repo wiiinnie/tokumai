@@ -347,7 +347,9 @@
         // Details are on screen now; polling can drop back to a chain-sized pace.
         clearInterval(timer);
         timer = setInterval(poll, 2500);
-        var opts = (p.options || []).map(function(o){
+        // The card option carries a checkout link and no address — an empty "CARD" box with a
+        // copy button explained nothing (2026-09-11). Address rows only for rails that have one.
+        var opts = (p.options || []).filter(function(o){ return String(o.destination || "").length > 0; }).map(function(o){
           var m = String(o.memo || "");
           // The memo is not decoration: a Nyx transfer without it CANNOT be credited, which
           // is why it gets its own labelled row rather than sitting inside the address.
@@ -358,7 +360,9 @@
         out.innerHTML = '<div class="card"><h1>Pay $' + pick + '</h1>' +
           '<p class="lead">' + esc(p.instruction || "") + '</p>' + opts +
           (checkout && /^https:\/\/([a-z0-9-]+\.)*mollie\.com\//.test(checkout)
-            ? '<a class="go" href="' + esc(checkout) + '">Open the checkout \u2192</a>' : "") +
+            ? '<p class="lead">Card, Apple Pay or Google Pay, processed by Mollie. The checkout opens in a new tab; ' +
+              'this page keeps waiting and shows your code the moment the payment is confirmed.</p>' +
+              '<a class="go" href="' + esc(checkout) + '" target="_blank" rel="noopener">Open the checkout \u2192</a>' : "") +
           '<div class="watch"><span class="wd"></span><span id="wtx">checking\u2026</span></div>' +
           '<p class="fine danger">Your code appears here by itself. <b>Do not close this tab</b> \u2014 ' +
           'the code is shown once and cannot be sent to you afterwards.</p>' +
