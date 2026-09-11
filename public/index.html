@@ -1412,7 +1412,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       </div>
       <div class="mprow">
         <div class="mptop"><b>Reasoning depth</b></div>
-        <div class="mpdesc">How long the model “thinks” before it answers. Thinking bills as output tokens, so less = <b>faster and cheaper</b>; more = better on hard problems. “Off” is snappiest for chat and simple tasks. Applies to Gemini models.</div>
+        <div class="mpdesc">How long the model “thinks” before it answers. Applies to every text model — Gemini’s thinking budget, OpenAI’s reasoning effort; pictures are unaffected. Thinking bills as output tokens, so less = <b>faster and cheaper</b>; more = better on hard problems. “Off” is snappiest for chat and simple tasks (on OpenAI models it means the lightest effort the model allows). The per-answer estimate in the model list follows this setting.</div>
         <input type="range" id="mpThink" min="0" max="3" step="1" class="mpslider flat">
         <div class="mpticks" id="mpThinkTicks"><span>Off · fastest</span><span>Low</span><span>Balanced</span><span>Deep</span></div>
       </div>
@@ -1979,10 +1979,20 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // ---- how much a model costs, in the unit people think in ----------------------
   // A typical question is ~2,000 tokens in and ~800 out; an image is priced per picture.
   // `rate.in` / `rate.out` are TOKU per MILLION tokens, as the catalog sends them.
+  // Thinking tokens a typical answer actually uses at each depth — a fraction of the budget,
+  // not the cap: models rarely exhaust it, and this is an estimate for a typical answer, not a
+  // reservation (the server reserves the cap and settles the real usage).
+  // Reasoning depth: slider index → thinking budget in tokens (Gemini thinkingBudget; the
+  // server maps it to OpenAI's reasoning.effort). Default "Balanced" (2048).
+  const THINK_STEPS = [0, 512, 2048, 4096];   // Off · Low · Balanced · Deep
+  const THINK_TYPICAL = [0, 256, 800, 1400];   // typical thinking tokens actually used
+  function thinkTokens(){ const i = THINK_STEPS.indexOf(thinkingBudget()); return THINK_TYPICAL[i<0?2:i]; }
+  // ~2000 input tokens (the context sent along) + 800 output tokens + the thinking tokens
+  // of the current depth, at the model's per-1M rates.
   function answerCost(m){
     const r=m&&m.rate; if(!r) return Infinity;
     if((m.kind||'text')==='image') return Number(r.image)||Number(r.out)||Infinity;
-    return (Number(r.in)||0)/500 + (Number(r.out)||0)/1250;
+    return (Number(r.in)||0)/500 + (Number(r.out)||0)*(800+thinkTokens())/1e6;
   }
   function costLabel(m){
     const toku=answerCost(m);
@@ -4270,7 +4280,8 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       const b = THINK_STEPS[+$("mpThink").value] ?? 2048;
       try{ localStorage.setItem("scrai.thinkingBudget", String(b)); }catch(_){}
       markTicks("mpThink", +$("mpThink").value);
-      $("setStatus").textContent = "reasoning depth: "+thinkLabel(b)+(b>0?` (${b} thinking tokens)`:"");
+      $("setStatus").textContent = "reasoning depth: "+thinkLabel(b)+(b>0?` (up to ${b} thinking tokens)`:"");
+      renderMenu();                                  // the per-answer estimates follow the depth
     };
     // Generated-picture size: persisted as the server's imageSize token ("1K" default).
     $("imgSize").value = String(Math.max(0, IMAGE_SIZES.indexOf(imageSize())));
@@ -4387,9 +4398,8 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // to Google Search). When on, Gemini requests carry the google_search tool and the
   // model itself decides whether a given prompt actually needs a search.
   function liveDataOn(){ try{ return localStorage.getItem("scrai.liveData")!=="0"; }catch(_){ return true; } }
-  // Reasoning depth (Gemini thinking budget, in tokens). Slider index → budget; default
-  // "Balanced" (2048). Lower = faster + cheaper (thinking bills as output).
-  const THINK_STEPS = [0, 512, 2048, 4096];   // Off · Low · Balanced · Deep
+  // THINK_STEPS (the reasoning-depth slider stops) is declared next to answerCost() above —
+  // it is read there, and a const must be declared before its first call.
   // Conversation-memory slider stops (pairs always sent as context); 999 ≈ everything.
   const CTX_STEPS = [2, 4, 8, 999];
   // Stepped sliders name their value in the tick labels: highlight the active one.
