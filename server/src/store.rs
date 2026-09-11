@@ -184,6 +184,11 @@ impl Store {
         // one's address on screen pays a memo the invoice no longer expects. See
         // `web_orders_pending`.
         add_column(&conn, "ALTER TABLE web_orders ADD COLUMN raising_at INTEGER")?;
+        // A buyer's cancel (pay.html "cancel this order", 2026-09-09). The column went into
+        // CREATE TABLE only — on a database from before that day it was missing, the
+        // server's order query named it and failed quietly, and no web order was raised
+        // between 2026-09-09 and 2026-09-11. Every column a query names needs this line.
+        add_column(&conn, "ALTER TABLE web_orders ADD COLUMN cancelled_at INTEGER")?;
         // The voucher code IN THE CLEAR, from minting until the buyer confirms they have
         // written it down (or until `web_orders_forget_codes` sweeps it). We used to keep
         // only the fingerprint and hand the plaintext to exactly one HTTP response — which
@@ -912,6 +917,23 @@ mod tests {
         assert_eq!(claim("alice"), IapClaim::AlreadyOther, "past the link window nobody owns it");
         assert_eq!(s.iap_since(0), (1, 1_000_000));
         assert_eq!(s.iap_since(11), (0, 0));
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn a_web_orders_table_from_before_cancel_and_claim_is_migrated_on_open() {
+        let p = std::env::temp_dir().join(format!("scrai-migrate-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        {
+            let c = rusqlite::Connection::open(&p).unwrap();
+            c.execute("CREATE TABLE web_orders (id TEXT PRIMARY KEY, usd INTEGER NOT NULL, method TEXT NOT NULL, \
+                       consent TEXT NOT NULL, created_at INTEGER NOT NULL, invoice TEXT, pay_json TEXT, paid_at INTEGER, error TEXT)", []).unwrap();
+            c.execute("INSERT INTO web_orders (id, usd, method, consent, created_at) VALUES ('old1', 10, 'nyx', 'v', 5)", []).unwrap();
+        }
+        let s = Store::open(&p).unwrap();
+        let pending = s.web_orders_pending(10);
+        assert_eq!(pending.len(), 1, "an order booked before the new columns existed must still be raised");
+        assert_eq!(pending[0].0, "old1");
         let _ = std::fs::remove_file(&p);
     }
 
