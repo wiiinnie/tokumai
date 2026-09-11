@@ -793,6 +793,7 @@ fn site_html(dl_dir: &Path) -> String {
     s = s.replace("{{RAILS}}", &rails_html());
     s = s.replace("{{PRICES}}", &prices_html());
     s = s.replace("{{COIN_DISCOUNT_PCT}}", &scrai_server::pay::coin_discount_pct().to_string());
+    s = s.replace("{{CARD_MIN_USD}}", &scrai_server::pay::card_min_usd().to_string());
     // The macOS buy-sheet capture, when one exists. No drawn placeholder: every other picture
     // on this page is a real screenshot, and a fake would show.
     s = s.replace(

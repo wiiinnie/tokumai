@@ -51,6 +51,8 @@
   .rail.sel{border-color:var(--acc);background:color-mix(in srgb,var(--acc) 10%,var(--surface-2))}
   .rail .rn{flex:1;text-align:left;font-weight:600;font-size:14px}
   .rail .rt{font-family:var(--mono);font-size:9.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+  .rail{position:relative} .rail .ribbon{position:absolute;top:-8px;right:10px;font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:.06em;color:#fff;background:var(--acc);border-radius:999px;padding:3px 9px}
+  .tile.dis{opacity:.4;pointer-events:none} .tile.dis span{color:var(--muted)}
   .ck{display:flex;gap:10px;align-items:flex-start;border:1px solid var(--line);border-radius:11px;
       background:var(--surface-2);padding:10px 12px;margin-bottom:7px;font-size:12.5px;line-height:1.5;cursor:pointer}
   .ck.on{border-color:var(--acc);background:color-mix(in srgb,var(--acc) 9%,var(--surface-2))}
@@ -229,17 +231,20 @@
     // Coins are cheaper by this much — a lower PRICE for the same credit, because a coin
     // payment cannot be charged back. Server-set; 0 means no difference.
     var COIN_OFF = Math.max(0, Math.min(50, Number("{{COIN_DISCOUNT_PCT}}") || 0));
+    // Cards sell the larger tiles only (fee + chargeback exposure) — same floor the server enforces.
+    var CARD_MIN = Math.max(0, Number("{{CARD_MIN_USD}}") || 10);
     function priceOf(n){ return rail === "card" ? n : Math.round(n * (100 - COIN_OFF)) / 100; }
     function money(x){ return "$" + (Number.isInteger(x) ? x : x.toFixed(2)); }
 
     function tile(n){
-      var p = priceOf(n), off = COIN_OFF > 0 && rail !== "card";
-      return '<button type="button" class="tile' + (n === pick ? " sel" : "") + '" data-tier="' + n + '">' +
-             '<b>' + money(p) + '</b><span>' + (n * 100000).toLocaleString("en-US") + ' TOKU' + (off ? ' \u00b7 $' + n + ' by card' : '') + '</span></button>';
+      var p = priceOf(n), off = COIN_OFF > 0 && rail !== "card", small = rail === "card" && n < CARD_MIN;
+      return '<button type="button" class="tile' + (n === pick ? " sel" : "") + (small ? " dis" : "") + '" data-tier="' + n + '">' +
+             '<b>' + money(p) + '</b><span>' + (n * 100000).toLocaleString("en-US") + ' TOKU' + (small ? ' \u00b7 coins only' : (off ? ' \u00b7 $' + n + ' by card' : '')) + '</span></button>';
     }
-    function railRow(id, name, tag){
+    function railRow(id, name, tag, ribbon){
       return '<button type="button" class="rail' + (id === rail ? " sel" : "") + '" data-rail="' + id + '">' +
-             '<span class="rn">' + esc(name) + '</span><span class="rt">' + esc(tag) + '</span></button>';
+             '<span class="rn">' + esc(name) + '</span><span class="rt">' + esc(tag) + '</span>' +
+             (ribbon ? '<span class="ribbon">' + esc(ribbon) + '</span>' : '') + '</button>';
     }
     function draw(){
       var ready = c1 && c2;
@@ -249,7 +254,7 @@
         'you get a code, not an account.</p>' +
         '<div class="tiles">' + TIERS.map(tile).join("") + '</div>' +
         '<div class="lbl">Pay with</div>' +
-        railRow("nyx", "NYM", "native \u00b7 Nyx" + (COIN_OFF > 0 ? " \u00b7 " + COIN_OFF + "% less" : "")) +
+        railRow("nyx", "NYM", "native \u00b7 Nyx", COIN_OFF > 0 ? "\u2212" + COIN_OFF + "% \u00b7 coins cost less" : "") +
         railRow("card", "Card \u00b7 Apple Pay \u00b7 Google Pay", "Mollie") +
         '<p class="fine">Sold under our <a href="/terms">Terms</a>. Please read the ' +
         '<a href="/terms#withdrawal">right of withdrawal</a> and the <a href="/privacy">privacy notice</a> first. ' +
@@ -265,7 +270,7 @@
         b.onclick = function(){ pick = +b.getAttribute("data-tier"); draw(); };
       });
       [].forEach.call(out.querySelectorAll("[data-rail]"), function(b){
-        b.onclick = function(){ rail = b.getAttribute("data-rail"); draw(); };
+        b.onclick = function(){ rail = b.getAttribute("data-rail"); if(rail === "card" && pick < CARD_MIN) pick = CARD_MIN; draw(); };
       });
       var k1 = document.getElementById("k1"), k2 = document.getElementById("k2");
       if (k1) k1.onchange = function(){ c1 = k1.checked; draw(); };

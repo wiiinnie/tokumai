@@ -252,8 +252,10 @@
   ul.terms li a:hover{color:var(--bone);text-decoration:underline}
   .pmlabel{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:16px 0 8px}
   .paymethods{display:flex;gap:10px;flex-wrap:wrap}
-  .pm{display:flex;flex-direction:column;align-items:center;gap:6px;flex:1 1 92px;min-width:92px;cursor:pointer;
+  .pm{position:relative;display:flex;flex-direction:column;align-items:center;gap:6px;flex:1 1 92px;min-width:92px;cursor:pointer;
     padding:13px 8px;border:1px solid var(--line);border-radius:12px;background:var(--surface-2);transition:border-color .15s,background .15s}
+  /* "10% off" banderole on the coin rails: a lower PRICE for the same credit (coins cannot be charged back). */
+  .pm .ribbon{position:absolute;top:-8px;right:-6px;font-family:var(--mono);font-size:9px;font-weight:700;letter-spacing:.06em;color:#fff;background:var(--mix);border-radius:999px;padding:3px 8px;box-shadow:0 1px 3px rgba(0,0,0,.35)}
   .pm:not(.soon):hover{border-color:var(--signal)}
   .pm .pmlogo{width:26px;height:26px;display:flex;align-items:center;justify-content:center}
   .pm .pmname{font-size:12.5px;font-weight:600;color:var(--bone)}
@@ -5766,7 +5768,14 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     }
     renderCoinTiles();
     const nym = document.querySelector('#chooser .pm[data-method="nyx"]');
-    if(nym) nym.classList.toggle("dis", !rails.nyx && !testnetBuy);
+    if(nym){
+      nym.classList.toggle("dis", !rails.nyx && !testnetBuy);
+      // The discount banderole follows the server's percentage; none in testnet (nothing is charged).
+      let rb = nym.querySelector(".ribbon");
+      const show = coinDiscountPct > 0 && !testnetBuy;
+      if(show){ if(!rb){ rb=document.createElement("span"); rb.className="ribbon"; nym.appendChild(rb); } rb.textContent = `−${coinDiscountPct}%`; }
+      else if(rb) rb.remove();
+    }
     { const pm=document.querySelector('#chooser .paymethods'), lbl=document.querySelector('#chooser .grouplbl');
       if(pm) pm.style.display = testnetBuy ? "none" : ""; if(lbl) lbl.style.display = testnetBuy ? "none" : ""; }
     syncCardRow();                                      // card row: same rule, greyed in testnet
