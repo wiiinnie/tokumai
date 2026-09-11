@@ -120,7 +120,23 @@ const SHOT_PH_NETWORK: &[u8] = include_bytes!("../../site/img/how-phone-network-
 const SHOT_PH_START: &[u8] = include_bytes!("../../site/img/how-phone-start-dark.jpg");
 const SHOT_FLOW_READY: &[u8] = include_bytes!("../../site/img/flow-ready-dark.jpg");
 
+const SHOT_HERO_APP: &[u8] = include_bytes!("../../site/img/hero-app-imagegen-dark.jpg");
+const SHOT_HOW_IDENTITY: &[u8] = include_bytes!("../../site/img/how-identity-dark.jpg");
+const SHOT_HOW_ROUTE: &[u8] = include_bytes!("../../site/img/how-route-dark.jpg");
+const SHOT_HOW_PAYMENT: &[u8] = include_bytes!("../../site/img/how-payment-dark.jpg");
+const SHOT_HOW_GUARD: &[u8] = include_bytes!("../../site/img/how-guard-dark.jpg");
+
 const IMAGES: &[(&str, &[u8])] = &[
+    ("hero-app-imagegen-dark.jpg", SHOT_HERO_APP),
+    ("hero-app-imagegen-light.jpg", SHOT_HERO_APP),
+    ("how-identity-dark.jpg", SHOT_HOW_IDENTITY),
+    ("how-identity-light.jpg", SHOT_HOW_IDENTITY),
+    ("how-route-dark.jpg", SHOT_HOW_ROUTE),
+    ("how-route-light.jpg", SHOT_HOW_ROUTE),
+    ("how-payment-dark.jpg", SHOT_HOW_PAYMENT),
+    ("how-payment-light.jpg", SHOT_HOW_PAYMENT),
+    ("how-guard-dark.jpg", SHOT_HOW_GUARD),
+    ("how-guard-light.jpg", SHOT_HOW_GUARD),
     ("flow-account-dark.jpg", include_bytes!("../../site/img/flow-account-dark.jpg")),
     ("flow-account-light.jpg", include_bytes!("../../site/img/flow-account-light.jpg")),
     ("flow-ready-dark.jpg", SHOT_FLOW_READY),
@@ -792,7 +808,65 @@ fn human_mb(bytes: u64) -> String {
     if bytes == 0 { String::new() } else { format!("{:.0} MB", bytes as f64 / 1e6) }
 }
 
-fn site_html(dl_dir: &Path) -> String {
+/// One URL per topic (2026-09-11). The template carries every page as a
+/// `<!--@page:ID-->…<!--@end-->` block; a request keeps its own block and drops the rest,
+/// so each page is a complete document with its own title, description and canonical.
+const PAGES: &[(&str, &str, &str, &str)] = &[
+    ("home", "/", "tokumai — Private AI chat. No identity attached.",
+     "Ask leading AI models anything over the Nym mixnet. No e-mail, no phone number, no IP, no traceable payment: nothing your questions can be tied to."),
+    ("how", "/how-it-works", "How tokumai works: AI chat with no identity, no IP, no traceable payment",
+     "Four things that never meet: your identity, your IP address, your payment and your questions. How the Nym mixnet, blind-signed coins and an on-device guard keep them apart."),
+    ("pricing", "/pricing", "tokumai pricing: prepaid AI credit, no subscription",
+     "Buy $5 to $50 of TOKU credit once with NYM, Bitcoin, card or the App Store. Coins cost 10 % less. A text answer costs a fraction of a cent; there is no monthly plan."),
+    ("download", "/download", "Download tokumai for macOS, Windows, Linux, Android and iPhone",
+     "Native apps for every platform. Desktop builds are direct downloads with checksums; iPhone through TestFlight; Android as an .apk."),
+    ("compare", "/compare", "tokumai compared with other private AI chats",
+     "How tokumai differs from Duck.ai, Venice, nilGPT, Lumo and Brave Leo: who sees your IP, whether a payment can be linked to a prompt, and what is a promise versus a design."),
+    ("vs-duck-ai", "/vs/duck-ai", "tokumai vs Duck.ai: Private AI Chat Compared (2026)",
+     "Duck.ai promises not to store your IP. tokumai never receives it. An honest comparison of two private AI chats: privacy model, pricing, apps and features."),
+];
+
+fn page_for_path(path: &str) -> Option<&'static str> {
+    PAGES.iter().find(|(_, p, _, _)| *p == path).map(|(id, _, _, _)| *id)
+}
+
+/// Keep `page`'s block, drop the other blocks, fill the head. Unknown page → home.
+fn select_page(html: String, page: &str) -> String {
+    let (id, path, title, desc) = PAGES.iter().find(|(id, _, _, _)| *id == page).copied().unwrap_or(PAGES[0]);
+    let mut out = String::with_capacity(html.len());
+    let mut rest = html.as_str();
+    while let Some(start) = rest.find("<!--@page:") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + "<!--@page:".len()..];
+        let Some(name_end) = after.find("-->") else { break };
+        let name = &after[..name_end];
+        let block_start = &after[name_end + 3..];
+        let Some(end) = block_start.find("<!--@end-->") else { break };
+        if name == id {
+            out.push_str(&block_start[..end]);
+        }
+        rest = &block_start[end + "<!--@end-->".len()..];
+    }
+    out.push_str(rest);
+    out.replace("{{PAGE}}", id)
+        .replace("{{CANON}}", path)
+        .replace("{{TITLE}}", &html_escape(title))
+        .replace("{{DESC}}", &html_escape(desc))
+}
+
+fn sitemap_xml() -> String {
+    let mut x = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n");
+    for (_, p, _, _) in PAGES {
+        x.push_str(&format!("  <url><loc>https://tokumai.com{p}</loc></url>\n"));
+    }
+    for p in ["/pay", "/terms", "/privacy", "/imprint"] {
+        x.push_str(&format!("  <url><loc>https://tokumai.com{p}</loc></url>\n"));
+    }
+    x.push_str("</urlset>\n");
+    x
+}
+
+fn site_page(dl_dir: &Path, page: &str) -> String {
     let env_link = |var: &str| std::env::var(var).ok().filter(|u| publishable_link(u)).map(|u| html_escape(u.trim()));
     let (mver, files) = read_manifest(dl_dir);
     let mut s = SITE.to_string();
@@ -897,7 +971,7 @@ fn site_html(dl_dir: &Path) -> String {
         .unwrap_or_else(|| env_or("SITE_VERSION", if testnet_on() { "testnet build" } else { "build" }));
     s = s.replace("{{VERSION}}", &html_escape(&version));
     s = s.replace("{{TESTNET}}", if testnet_on() { "on" } else { "off" });
-    s
+    select_page(s, page)
 }
 
 // ---------------------------------------------------------------------------
@@ -1015,7 +1089,13 @@ async fn handle(f: Arc<Faucet>, mut sock: tokio::net::TcpStream, peer: SocketAdd
     };
     let json = |v: &Value| serde_json::to_vec(v).unwrap_or_default();
     match (req.method.as_str(), req.path.as_str()) {
-        ("GET", "/") | ("GET", "/index.html") => respond(&mut sock, 200, "text/html; charset=utf-8", site_html(&f.cfg.dl_dir).as_bytes()).await,
+        ("GET", "/index.html") => respond(&mut sock, 200, "text/html; charset=utf-8", site_page(&f.cfg.dl_dir, "home").as_bytes()).await,
+        ("GET", p) if page_for_path(p).is_some() => {
+            let page = page_for_path(p).unwrap_or("home");
+            respond(&mut sock, 200, "text/html; charset=utf-8", site_page(&f.cfg.dl_dir, page).as_bytes()).await
+        }
+        ("GET", "/sitemap.xml") => respond(&mut sock, 200, "application/xml; charset=utf-8", sitemap_xml().as_bytes()).await,
+        ("GET", "/robots.txt") => respond(&mut sock, 200, "text/plain; charset=utf-8", b"User-agent: *\nAllow: /\nDisallow: /api/\nDisallow: /paid\nDisallow: /admin\nSitemap: https://tokumai.com/sitemap.xml\n").await,
         ("GET", "/health") => respond(&mut sock, 200, "text/plain", b"ok").await,
         ("GET", "/imprint") | ("GET", "/impressum") => respond(&mut sock, 200, "text/html; charset=utf-8", PAGE_IMPRINT.as_bytes()).await,
         ("GET", "/terms") | ("GET", "/agb") => respond(&mut sock, 200, "text/html; charset=utf-8", PAGE_TERMS.as_bytes()).await,
@@ -1310,5 +1390,50 @@ mod tests {
         // anything else is taken as given (a self-hosted node, FAUCET_RPC overrides anyway)
         assert_eq!(rpc_from_lcd(Some("https://node.example.org:26657")), "https://node.example.org:26657");
         assert_eq!(rpc_from_lcd(None), "");
+    }
+}
+
+#[cfg(test)]
+mod site_pages {
+    use super::*;
+
+    #[test]
+    fn every_page_renders_only_its_own_block_and_leaves_no_token_behind() {
+        let tmp = std::env::temp_dir().join(format!("tokumai-site-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&tmp);
+        for (id, path, title, _) in PAGES {
+            let html = site_page(&tmp, id);
+            assert!(html.contains(&format!("data-page=\"{id}\"")), "{id}: body marks the page");
+            assert!(html.contains(&format!("<link rel=\"canonical\" href=\"https://tokumai.com{path}\">")), "{id}: canonical");
+            assert!(html.contains(&html_escape(title)), "{id}: title");
+            assert!(!html.contains("<!--@page:"), "{id}: no block markers survive");
+            assert!(!html.contains("{{"), "{id}: unfilled token in\n{}", html.lines().filter(|l| l.contains("{{")).take(3).collect::<Vec<_>>().join("\n"));
+        }
+        // Each page carries its own content and not the others'.
+        let home = site_page(&tmp, "home");
+        assert!(home.contains("There is nothing to <b>trust us with</b>"));
+        assert!(!home.contains("Four things that <b>never meet</b>"));
+        let how = site_page(&tmp, "how");
+        assert!(how.contains("Four things that <b>never meet</b>") && !how.contains("Runs on your <b>machine</b>"));
+        let dl = site_page(&tmp, "download");
+        assert!(dl.contains("Runs on your <b>machine</b>") && dl.contains("Verify a download"));
+        let vs = site_page(&tmp, "vs-duck-ai");
+        assert!(vs.contains("FAQPage") && vs.contains("never gets it"));
+        assert_eq!(page_for_path("/vs/duck-ai"), Some("vs-duck-ai"));
+        assert_eq!(page_for_path("/nope"), None);
+        assert!(sitemap_xml().contains("<loc>https://tokumai.com/how-it-works</loc>"));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// `TOKUMAI_DUMP_PAGES=<dir> cargo test --bin scrai-faucet dump_pages` writes every page as
+    /// a file for a look in a browser before a deploy. Does nothing without the variable.
+    #[test]
+    fn dump_pages() {
+        let Ok(dir) = std::env::var("TOKUMAI_DUMP_PAGES") else { return };
+        let dir = std::path::PathBuf::from(dir);
+        let _ = std::fs::create_dir_all(&dir);
+        for (id, _, _, _) in PAGES {
+            std::fs::write(dir.join(format!("{id}.html")), site_page(&dir, id)).unwrap();
+        }
     }
 }
