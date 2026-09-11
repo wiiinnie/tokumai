@@ -2760,12 +2760,15 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // scramble path holds the finished wordmark 2s, the direct path fades in
   // quickly. First scheduled end wins; a 20s backstop means a dead backend
   // can never strand the user on the splash.
-  let bootTimer=null, bootEnded=false;
+  let bootTimer=null, bootEnded=false, accountDeferred=false;
   function endBoot(delay){
     if(bootEnded || bootTimer) return;
     bootTimer=setTimeout(()=>{
       bootEnded=true; document.documentElement.classList.remove("boot");
       if(termsDeferred){ termsDeferred=false; armTermsGate(); }   // terms were waiting for the splash
+      // The first-run account sheet waits for the splash too — and is re-checked: the state
+      // may simply not have arrived yet when init ran (a slow mixnet), and by now it has.
+      if(accountDeferred){ accountDeferred=false; if(isTauri() && !account && !tutorialEnabled()) openAccount(); }
     }, delay);
   }
   // Absolute safety net only: normally endBoot fires when the mixnet connects (finishLogo).
@@ -6836,7 +6839,9 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     // finishLogo/maybeShowTutorial), so it never overlaps the bootup. Only when it's
     // off do we surface the account modal on a first run. If we're already connected
     // (no connecting animation), arm the tutorial now.
-    if(!tutorialEnabled() && isTauri() && !account){ openAccount(); }
+    // Never over the boot animation: while the splash runs, the sheet waits for endBoot
+    // (it used to open at once — unnoticed for a while because opening threw, 2026-09-11).
+    if(!tutorialEnabled() && isTauri() && !account){ if(bootEnded) openAccount(); else accountDeferred=true; }
     if(mixConnected) maybeShowTutorial();
     // Sweep any settled-but-uncollected payment into held credit on startup.
     if(isTauri() && account){
