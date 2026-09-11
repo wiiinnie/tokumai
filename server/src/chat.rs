@@ -89,7 +89,10 @@ fn thinking_budget() -> u64 {
 /// cost (billed as their output), so this is just a sanity bound — and, crucially,
 /// the SAME value drives both the request and the reserve, so settle never exceeds
 /// the reservation regardless of what the client asked for.
-const MAX_THINKING_BUDGET: u64 = 8192;
+// 16384 so the app's OpenAI "High" stop (a budget above 8192 → reasoning.effort "high",
+// see openai::effort_for) is reachable; Gemini Flash models accept budgets this size too.
+// The reserve grows with it (output rate × budget) and is settled to the real usage.
+const MAX_THINKING_BUDGET: u64 = 16384;
 
 /// Google's published output tokens per generated image, by requested size
 /// (`generationConfig.imageConfig.imageSize` on Gemini 3.x image models). The

@@ -75,7 +75,8 @@ pub fn prefilter_enabled() -> bool {
 
 /// The app's thinking budget (tokens) → `reasoning.effort`. Every current model accepts
 /// low/medium/high; the newer "minimal"/"none" values are not universal, so the floor
-/// stays "low".
+/// stays "low". The app's OpenAI slider sends 512 / 2048 / 16384 for its three stops,
+/// which land on low / medium / high here (MAX_THINKING_BUDGET is 16384 for that).
 pub fn effort_for(thinking: u64) -> &'static str {
     if thinking <= 1024 {
         "low"

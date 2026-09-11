@@ -1412,7 +1412,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       </div>
       <div class="mprow">
         <div class="mptop"><b>Reasoning depth</b></div>
-        <div class="mpdesc">How long the model “thinks” before it answers. Applies to every text model — Gemini’s thinking budget, OpenAI’s reasoning effort; pictures are unaffected. Thinking bills as output tokens, so less = <b>faster and cheaper</b>; more = better on hard problems. “Off” is snappiest for chat and simple tasks (on OpenAI models it means the lightest effort the model allows). The per-answer estimate in the model list follows this setting.</div>
+        <div class="mpdesc" id="mpThinkDesc">How long the model “thinks” before it answers. Thinking bills as output tokens, so less = <b>faster and cheaper</b>; more = better on hard problems. The stops are the ones the selected model offers: Gemini takes a token budget (Off · Low · Balanced · Deep), OpenAI three effort levels (Low · Medium · High). Pictures are unaffected. The per-answer estimate in the model list follows this setting.</div>
         <input type="range" id="mpThink" min="0" max="3" step="1" class="mpslider flat">
         <div class="mpticks" id="mpThinkTicks"><span>Off · fastest</span><span>Low</span><span>Balanced</span><span>Deep</span></div>
       </div>
@@ -1982,11 +1982,18 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // Thinking tokens a typical answer actually uses at each depth — a fraction of the budget,
   // not the cap: models rarely exhaust it, and this is an estimate for a typical answer, not a
   // reservation (the server reserves the cap and settles the real usage).
-  // Reasoning depth: slider index → thinking budget in tokens (Gemini thinkingBudget; the
-  // server maps it to OpenAI's reasoning.effort). Default "Balanced" (2048).
-  const THINK_STEPS = [0, 512, 2048, 4096];   // Off · Low · Balanced · Deep
-  const THINK_TYPICAL = [0, 256, 800, 1400];   // typical thinking tokens actually used
-  function thinkTokens(){ const i = THINK_STEPS.indexOf(thinkingBudget()); return THINK_TYPICAL[i<0?2:i]; }
+  // Reasoning depth, per provider — the slider offers exactly the stops the model has.
+  // Gemini: a token budget (0 = no thinking). OpenAI: three effort levels; the server maps
+  // the budget to reasoning.effort (≤1024 low, ≤8192 medium, above high), so the three
+  // OpenAI stops are budgets that land on those levels. `typical` = thinking tokens a
+  // typical answer actually uses at that stop (an estimate, not the cap the server reserves).
+  const THINK_STOPS = {
+    google: { key:"scrai.thinkingBudget",       steps:[0, 512, 2048, 4096], labels:["Off · fastest","Low","Balanced","Deep"], typical:[0, 256, 800, 1400], dflt:2 },
+    openai: { key:"scrai.thinkingBudgetOpenai", steps:[512, 2048, 16384],   labels:["Low","Medium","High"],                    typical:[300, 1200, 3000], dflt:1 },
+  };
+  function thinkStops(vendor){ return THINK_STOPS[provKey(vendor===undefined ? modelVendor : vendor)] || THINK_STOPS.google; }
+  function thinkIndex(){ const t=thinkStops(); const i=t.steps.indexOf(thinkingBudget()); return i<0 ? t.dflt : i; }
+  function thinkTokens(){ const t=thinkStops(); return t.typical[thinkIndex()]; }
   // ~2000 input tokens (the context sent along) + 800 output tokens + the thinking tokens
   // of the current depth, at the model's per-1M rates.
   function answerCost(m){
@@ -4272,17 +4279,22 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     $("liveChk").checked = liveDataOn();
     $("liveRow").classList.toggle("on", liveDataOn());
     $("liveChk").onchange = ()=>{ const on=$("liveChk").checked; try{ localStorage.setItem("scrai.liveData", on?"1":"0"); }catch(_){}; $("liveRow").classList.toggle("on", on); $("setStatus").textContent = "live web search "+(on?"on":"off"); };
-    // Reasoning-depth slider: index into THINK_STEPS, persisted as the token budget.
-    const thinkIdx = Math.max(0, THINK_STEPS.indexOf(thinkingBudget()));
-    $("mpThink").value = String(thinkIdx<0?2:thinkIdx);
-    markTicks("mpThink", +$("mpThink").value);
-    $("mpThink").oninput = ()=>{
-      const b = THINK_STEPS[+$("mpThink").value] ?? 2048;
-      try{ localStorage.setItem("scrai.thinkingBudget", String(b)); }catch(_){}
+    // Reasoning-depth slider: the stops of the current model's provider, persisted per
+    // provider as the token budget the server understands.
+    { const t = thinkStops();
+      $("mpThink").max = String(t.steps.length-1);
+      $("mpThinkTicks").innerHTML = t.labels.map(l=>`<span>${esc(l)}</span>`).join("");
+      $("mpThink").value = String(thinkIndex());
       markTicks("mpThink", +$("mpThink").value);
-      $("setStatus").textContent = "reasoning depth: "+thinkLabel(b)+(b>0?` (up to ${b} thinking tokens)`:"");
-      renderMenu();                                  // the per-answer estimates follow the depth
-    };
+      $("mpThink").oninput = ()=>{
+        const i = +$("mpThink").value, b = t.steps[i] ?? t.steps[t.dflt];
+        try{ localStorage.setItem(t.key, String(b)); }catch(_){}
+        markTicks("mpThink", i);
+        const who = provKey(modelVendor)==='openai' ? 'OpenAI' : 'Gemini';
+        $("setStatus").textContent = `reasoning depth for ${who} models: ${thinkLabel(b)}` + (provKey(modelVendor)==='openai' ? "" : (b>0?` (up to ${b} thinking tokens)`:""));
+        renderMenu();                                // the per-answer estimates follow the depth
+      };
+    }
     // Generated-picture size: persisted as the server's imageSize token ("1K" default).
     $("imgSize").value = String(Math.max(0, IMAGE_SIZES.indexOf(imageSize())));
     markTicks("imgSize", +$("imgSize").value);
@@ -4398,7 +4410,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // to Google Search). When on, Gemini requests carry the google_search tool and the
   // model itself decides whether a given prompt actually needs a search.
   function liveDataOn(){ try{ return localStorage.getItem("scrai.liveData")!=="0"; }catch(_){ return true; } }
-  // THINK_STEPS (the reasoning-depth slider stops) is declared next to answerCost() above —
+  // THINK_STOPS (the reasoning-depth slider stops, per provider) is declared next to answerCost() above —
   // it is read there, and a const must be declared before its first call.
   // Conversation-memory slider stops (pairs always sent as context); 999 ≈ everything.
   const CTX_STEPS = [2, 4, 8, 999];
@@ -4425,9 +4437,10 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     const cb=e.target; if(cb && cb.matches && cb.matches(".setrow input[type=checkbox]")){ const row=cb.closest(".setrow"); if(row) row.classList.toggle("on", cb.checked); }
   });
   function thinkingBudget(){
-    try{ const v=parseInt(localStorage.getItem("scrai.thinkingBudget"),10); return Number.isFinite(v)?v:2048; }catch(_){ return 2048; }
+    const t=thinkStops();
+    try{ const v=parseInt(localStorage.getItem(t.key),10); return t.steps.includes(v) ? v : t.steps[t.dflt]; }catch(_){ return t.steps[t.dflt]; }
   }
-  function thinkLabel(b){ return b<=0?"Off":(b<=512?"Low":(b<=2048?"Balanced":"Deep")); }
+  function thinkLabel(b){ const t=thinkStops(); const i=t.steps.indexOf(b); return (i<0 ? t.labels[t.dflt] : t.labels[i]).replace(/ ·.*$/,""); }
   // Generated-picture size for Nano Banana 2 models: "512" | "1K" | "2K" | "4K". 1K unless
   // the user chose otherwise; the server validates and sizes its reserve to it.
   const IMAGE_SIZES = ["512","1K","2K","4K"];
