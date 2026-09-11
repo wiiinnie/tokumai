@@ -328,8 +328,12 @@ fn rails_html() -> String {
 }
 
 fn state_rw(state_db: &Path) -> Result<Connection, String> {
-    Connection::open_with_flags(state_db, OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX)
-        .map_err(|e| format!("state.db: {e}"))
+    let c = Connection::open_with_flags(state_db, OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX)
+        .map_err(|e| format!("state.db: {e}"))?;
+    // The server holds this file open and writes on its ticks; wait for it instead of failing
+    // a buyer's order with "database is locked" (2026-09-11).
+    c.busy_timeout(std::time::Duration::from_secs(5)).map_err(|e| format!("state.db: {e}"))?;
+    Ok(c)
 }
 
 /// Book an order. The server raises the invoice on its next tick.
@@ -351,6 +355,7 @@ fn web_order(state_db: &Path, id: &str) -> Option<(Option<String>, Option<String
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .ok()?;
+    conn.busy_timeout(std::time::Duration::from_secs(5)).ok()?;
     conn.query_row(
         "SELECT invoice, pay_json, paid_at, error FROM web_orders WHERE id = ?1",
         rusqlite::params![id],
@@ -434,6 +439,7 @@ fn mint_voucher(state_db: &Path, order: &str, invoice: &str, toku: u64) -> Resul
 fn server_invite_invoices(state_db: &Path) -> Result<Vec<TestnetInv>, String> {
     let conn = Connection::open_with_flags(state_db, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)
         .map_err(|e| format!("state.db: {e}"))?;
+    conn.busy_timeout(std::time::Duration::from_secs(5)).map_err(|e| format!("state.db: {e}"))?;
     let blob: String = match conn.query_row("SELECT v FROM kv WHERE k = 'pay'", [], |r| r.get(0)) {
         Ok(b) => b,
         Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(Vec::new()),

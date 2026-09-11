@@ -43,6 +43,17 @@ pub struct Store {
     conn: Connection,
 }
 
+/// One schema migration. "duplicate column" means it ran before and is fine; anything else
+/// (a lock, a corrupt file) is a reason NOT to start — a silently missing column is worse than
+/// a refused start, because every query that names the column then fails quietly.
+fn add_column(conn: &Connection, sql: &str) -> Result<(), String> {
+    match conn.execute(sql, []) {
+        Ok(_) => Ok(()),
+        Err(e) if e.to_string().contains("duplicate column") => Ok(()),
+        Err(e) => Err(format!("schema migration failed ({sql}): {e}")),
+    }
+}
+
 impl Store {
     /// Open (creating if needed) the state database.
     pub fn open(path: &Path) -> Result<Store, String> {
@@ -50,6 +61,11 @@ impl Store {
             let _ = std::fs::create_dir_all(dir);
         }
         let conn = Connection::open(path).map_err(|e| e.to_string())?;
+        // The faucet writes to this file too (web orders, code hand-over). Without a busy
+        // timeout a write that meets the other process mid-transaction fails at once with
+        // "database is locked" — and a migration that failed that way at start-up left
+        // `raising_at` missing, so every web order sat unraised (2026-09-11).
+        conn.busy_timeout(std::time::Duration::from_secs(5)).map_err(|e| e.to_string())?;
         conn.execute(
             "CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL)",
             [],
@@ -82,19 +98,19 @@ impl Store {
         // Migration for tables created before the provider-cost column existed. `spent` is
         // retail (what users chatted); `cost` is the raw provider price we paid (no margin),
         // so profit = spent − cost. Ignore the error when the column is already there.
-        let _ = conn.execute("ALTER TABLE daily ADD COLUMN cost INTEGER NOT NULL DEFAULT 0", []);
+        add_column(&conn, "ALTER TABLE daily ADD COLUMN cost INTEGER NOT NULL DEFAULT 0")?;
         // Peak number of distinct clients served in parallel that day (a MAX, not a sum) —
         // the capacity signal for the single Nym client / provider slots (inflight.rs).
-        let _ = conn.execute("ALTER TABLE daily ADD COLUMN peak_clients INTEGER NOT NULL DEFAULT 0", []);
+        add_column(&conn, "ALTER TABLE daily ADD COLUMN peak_clients INTEGER NOT NULL DEFAULT 0")?;
         // Kept so old rows still parse; no longer written or shown (2026-09-07). It counted
         // distinct SURB reply TAGS in a 60-second window, which is not a count of people: one
         // app gets several tags, and every catalog fetch, ping and invoice poll carried one
         // while never being a user. It regularly read higher than the day's user count.
-        let _ = conn.execute("ALTER TABLE daily ADD COLUMN peak_1m INTEGER NOT NULL DEFAULT 0", []);
+        add_column(&conn, "ALTER TABLE daily ADD COLUMN peak_1m INTEGER NOT NULL DEFAULT 0")?;
         // Most DIFFERENT paying SESSIONS seen within the same hour that day — the same
         // identity `users` counts, so the two are comparable by construction: `peak_1h` can
         // never exceed the day's `users`. This is "how busy was the busiest hour".
-        let _ = conn.execute("ALTER TABLE daily ADD COLUMN peak_1h INTEGER NOT NULL DEFAULT 0", []);
+        add_column(&conn, "ALTER TABLE daily ADD COLUMN peak_1h INTEGER NOT NULL DEFAULT 0")?;
         // Vouchers: credit bought on the website and carried into an app as a code.
         //
         // A REAL TABLE, not part of the pay snapshot, and for a specific reason: the snapshot
@@ -167,7 +183,7 @@ impl Store {
         // LAST raise to answer overwrites the row — so a buyer who already had the FIRST
         // one's address on screen pays a memo the invoice no longer expects. See
         // `web_orders_pending`.
-        let _ = conn.execute("ALTER TABLE web_orders ADD COLUMN raising_at INTEGER", []);
+        add_column(&conn, "ALTER TABLE web_orders ADD COLUMN raising_at INTEGER")?;
         // The voucher code IN THE CLEAR, from minting until the buyer confirms they have
         // written it down (or until `web_orders_forget_codes` sweeps it). We used to keep
         // only the fingerprint and hand the plaintext to exactly one HTTP response — which
@@ -175,8 +191,8 @@ impl Store {
         // paid and nothing on earth could produce their code again. Holding it for minutes
         // trades "the customer loses their money" for "we held a bearer code briefly", and
         // that is the better trade in every direction (audit 2026-09-08, H2).
-        let _ = conn.execute("ALTER TABLE web_orders ADD COLUMN code TEXT", []);
-        let _ = conn.execute("ALTER TABLE web_orders ADD COLUMN code_at INTEGER", []);
+        add_column(&conn, "ALTER TABLE web_orders ADD COLUMN code TEXT")?;
+        add_column(&conn, "ALTER TABLE web_orders ADD COLUMN code_at INTEGER")?;
 
         // Distinct paying sessions per UTC day ("users"): one row per (day, hashed session
         // id), so COUNT(*) per day is the number of different sessions that chatted. The
@@ -303,22 +319,27 @@ impl Store {
         let mut out: Vec<(String, u32, String, String)> = Vec::new();
         let now = crate::pay::now_ms();
         let cutoff = now.saturating_sub(Self::RAISE_CLAIM_MS) as i64;
-        if let Ok(mut st) = self.conn.prepare(
+        match self.conn.prepare(
             "SELECT id, usd, method, consent FROM web_orders \
              WHERE invoice IS NULL AND error IS NULL AND cancelled_at IS NULL \
                AND (raising_at IS NULL OR raising_at < ?2) \
              ORDER BY created_at LIMIT ?1",
         ) {
-            if let Ok(rows) = st.query_map(params![max as i64, cutoff], |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, i64>(1)? as u32,
-                    r.get::<_, String>(2)?,
-                    r.get::<_, String>(3)?,
-                ))
-            }) {
-                out = rows.flatten().collect();
+            Ok(mut st) => {
+                if let Ok(rows) = st.query_map(params![max as i64, cutoff], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, i64>(1)? as u32,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, String>(3)?,
+                    ))
+                }) {
+                    out = rows.flatten().collect();
+                }
             }
+            // Say so: this query failing quietly is exactly how three buyers watched a spinner
+            // for two minutes each (2026-09-11).
+            Err(e) => eprintln!("scrai-server: web_orders query failed — orders are NOT being raised: {e}"),
         }
         for (id, _, _, _) in &out {
             let _ = self

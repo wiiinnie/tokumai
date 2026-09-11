@@ -18,6 +18,7 @@ fn now() -> u64 {
 /// Open (creating if needed) the faucet ledger with its schema.
 pub fn open_db(path: &Path) -> Result<Connection, String> {
     let conn = Connection::open(path).map_err(|e| format!("faucet.db: {e}"))?;
+    conn.busy_timeout(std::time::Duration::from_secs(5)).map_err(|e| format!("faucet.db: {e}"))?;
     conn.execute_batch(
         "PRAGMA journal_mode=WAL;
          CREATE TABLE IF NOT EXISTS codes (
