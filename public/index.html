@@ -5138,7 +5138,11 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       // No account (first run, or just deleted): this is the landing, whatever sub-page was
       // open before — after a delete the header still read "Danger zone" over the setup
       // steps (2026-09-10).
-      acctPage=null; setNav(null);
+      // (setNav is a const declared further down this function — using it here was a
+      // temporal-dead-zone ReferenceError that broke opening Account and Buy credit whenever
+      // there was no account yet, 2026-09-11.)
+      acctPage=null;
+      { const m=$("acctScrim") ? $("acctScrim").querySelector(".modal") : null; if(m) m.classList.remove("subopen"); }
       // First run — make the TWO required steps explicit and ordered.
       const acctButtons = `<div class="btnrow">
           <button class="btn primary" data-click="doAccountNew">Create new account</button>
