@@ -12,6 +12,11 @@ name: Build Windows (x86_64)
 
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Draft release (tag) to attach the bundles to — release assets do not count against the Actions storage quota, artifacts do"
+        required: false
+        default: ""
   push:
     tags: ["v*"]
 
@@ -38,7 +43,19 @@ jobs:
       - name: Build installer
         run: cargo tauri build --bundles nsis
 
+      # Second way out: attach the bundles to a draft release when a tag is given. The
+      # artifact upload below fails for hours once the account's storage quota is hit
+      # (2026-09-12: "Artifact storage quota has been hit", recalculated every 6-12 h),
+      # while release assets are not counted at all.
+      - name: Attach to draft release
+        if: ${{ inputs.release_tag != '' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ inputs.release_tag }}" target/release/bundle/nsis/*.exe --clobber
+
       - name: Upload artifacts
+        continue-on-error: true
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: scrambleai-windows-x86_64
