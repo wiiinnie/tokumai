@@ -2288,6 +2288,7 @@ fn collect_later(app: AppHandle) -> Result<Value, String> {
 
 /// The body of `collect`, callable from the background top-up as well.
 async fn collect_now(app: AppHandle, main: Arc<Transport>) -> Result<Value, String> {
+    use scrai_core::federation::FedResponse;
     diag(&app, "collect: begin");
     let _op = main.begin_op().await;
     let transport = buy_transport(&app, &main).await;
@@ -2307,13 +2308,22 @@ async fn collect_now(app: AppHandle, main: Arc<Transport>) -> Result<Value, Stri
     // Top the device UP to the working amount rather than drawing everything: what a lost
     // device can cost is then bounded by that amount, and the rest stays on the account
     // where the recovery phrase reaches it (docs/unlinkability.md, block D).
-    let book_toku = books_size_toku(&w0, &dir, &srv);
+    let mut book_toku = books_size_toku(&w0, &dir, &srv);
+    if book_toku == 0 {
+        // Nothing on this device knows the size yet — so ASK, do not guess. The guess used
+        // to be "request the whole room and let the server refuse what the account cannot
+        // pay for", which on a device with no books put a hundred withdrawals through the
+        // mixnet to get nine (seen in the server log 2026-09-14). One Keys call settles it,
+        // and it is cached on disk for every later start anyway.
+        if let Ok(FedResponse::Keys { total_coins, .. }) = federation_keys(&transport, &srv, &dir).await {
+            book_toku = total_coins * scrai_core::coconut::COIN_TOKU;
+        }
+    }
     let have = books_on_device(&wallet::load(&dir));
     let room = WORKING_BOOKS.saturating_sub(have);
-    // Not knowing the size yet is not a reason to draw nothing: ask for the room and let
-    // the server refuse what the account cannot pay for. A refusal costs one round trip
-    // and is handled per book.
-    let want = if book_toku > 0 { room.min((owed / book_toku) as usize) } else { room };
+    // If the size is STILL unknown the keys call failed; draw a single book rather than
+    // nothing, which both makes progress and teaches the device the size for next time.
+    let want = if book_toku > 0 { room.min((owed / book_toku) as usize) } else { room.min(1) };
     // An interrupted withdrawal is finished even when the device is otherwise full — the
     // server may already have charged for it.
     let outstanding = wallet::load(&dir).pending_withdraws.iter().filter(|p| p.server == srv).count();
