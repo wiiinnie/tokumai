@@ -86,6 +86,9 @@ const PROTO: u64 = 1;
 // (one extra round trip), so a budget is a fast path, never a hard limit.
 /// One-packet replies: status, invoice.*, entitlement, withdraw, redeem, upload acks, ping.
 const SURBS_SMALL: u32 = 8;
+/// For a reply that is certainly one packet (a withdrawal's blinded signature), sent in
+/// batches of a hundred: eight each would make the SURBs bigger than everything else.
+const SURBS_ONE_PACKET: u32 = 3;
 /// The catalogue (a few KB).
 const SURBS_META: u32 = 16;
 /// Coconut `Keys` — the epoch material, ~207 KB at a thousand coins per book (measured
@@ -777,12 +780,12 @@ fn forget_keys_on_disk(dir: &Path, srv: &str) {
 /// Full credential withdrawal: fetch keys → blind-withdraw at each authority →
 /// aggregate into a `Purse`. The Withdraw itself is ACCOUNT-SIGNED: the server
 /// only issues a ticketbook against paid entitlement, and the account signature
-/// Coins per ticketbook the app expects to keep on the device ($0.10 each, so ten books
-/// is one dollar). It is a CAP, not an increment: a top-up fills up to this many, so the
-/// most a lost device can cost is this much, and the app can say so.
-const WORKING_BOOKS: usize = 10;
-/// …and the point at which it goes and fetches more.
-const LOW_WATER_BOOKS: usize = 3;
+/// How many ticketbooks the app keeps on the device: a hundred one-cent books, so one
+/// dollar. It is a CAP, not an increment — a top-up fills up to this many — so the most a
+/// lost device can cost is that dollar, and the app can say so plainly.
+const WORKING_BOOKS: usize = 100;
+/// …and the point at which it goes and fetches more, a third of the way down.
+const LOW_WATER_BOOKS: usize = 30;
 
 /// Draw up to `want` ticketbooks in ONE round trip.
 ///
@@ -892,7 +895,9 @@ async fn withdraw_books(
             route.push((id, slot, k));
         }
     }
-    let replies = t.round_trip_many(srv, requests, SURBS_SMALL, TIMEOUT_MS).await?;
+    // One reply per book is a single small packet, and a hundred books go out together —
+    // so the SURBs that ride along are the bulk of the request, not the requests.
+    let replies = t.round_trip_many(srv, requests, SURBS_ONE_PACKET, TIMEOUT_MS).await?;
 
     // Group the answers per book, then aggregate the ones that came back complete.
     let mut collected = 0u64;
