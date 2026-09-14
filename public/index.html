@@ -334,6 +334,8 @@
   /* buy: amount tiles + coin brand colours + pay panel (Buy Credit mockup) */
   .balline{font-family:var(--mono);font-size:11.5px;color:var(--muted);margin:0 0 14px;line-height:1.55}
   .buylink{font-family:var(--mono);font-size:11px;color:var(--mix);margin:-6px 0 12px;line-height:1.5} .buylink.bad{color:var(--rust)}
+  .retbar{height:6px;border-radius:3px;background:var(--line);overflow:hidden;margin:2px 0 8px}
+  .retbar i{display:block;height:100%;background:var(--mix);transition:width .3s ease}
   .balline b{color:var(--bone)}
   #tierRow.tiles,#iosStore .tiles{display:flex;gap:9px;margin-bottom:2px}
   #iosStore .tiletier .a{color:var(--mix)}
@@ -5008,14 +5010,14 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     renderBal();
   }
 
-  let returning = false;
+  let returning = false, returnPct = 0, returnDone = 0;
   async function returnCoins(){
     if(returning || !account) return;
     if(!(held > 0)){ acctStatus("Nothing on this device to return.", ""); return; }
-    returning = true; renderAccount();
-    acctStatus("Handing the coins back to your account\u2026", "");
+    returning = true; returnPct = 0; returnDone = 0; renderAccount();
     try{
       const r = await Backend.coinsReturn();
+      returnPct = 100; renderAccount();
       await refreshState(); renderBal();
       acctStatus(`${formatToku(r && r.credited || 0)} TOKU are back on your account.`, "ok");
     }catch(e){
@@ -5417,7 +5419,9 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       <p class="hint">Until this is done, the account cannot buy credit. A phrase that was only ever looked at is one that gets screenshotted — and the screenshot lands in every cloud the photos sync to.</p>`;
 
     const givebackPage = `<p class="pagelead">Coins on this device are cash. They are not on your account and a recovery phrase does not bring them back — so before you give this device away, or move to another one, hand them back. Their value returns to your account as credit, and from there any device of yours can draw it again.</p>
-      <div class="btnrow"><button class="btn primary" data-click="returnCoins"${(returning || !(held>0))?" disabled":""}>${returning ? "Handing them back…" : `Hand back ${esc(formatToku(held))} TOKU`}</button></div>
+      <div class="btnrow"><button class="btn primary" data-click="returnCoins"${(returning || !(held>0))?" disabled":""}>${returning ? `Handing them back… ${returnPct}%` : `Hand back ${esc(formatToku(held))} TOKU`}</button></div>
+      ${returning ? `<div class="retbar"><i style="width:${returnPct}%"></i></div>
+         <p class="hint">${esc(formatToku(returnDone))} TOKU back so far. Each batch is a round trip through the mixnet, so a full device takes a moment.</p>` : ""}
       <p class="hint">It goes in batches, because a payment carries its coins with it. Nothing is lost if it is interrupted: an unanswered batch is re-sent exactly as it was, never made afresh.</p>`;
 
     const pages = {
@@ -7000,7 +7004,8 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       }
     });
     // Connect progress from Rust (every reconnect after the first): drives the chip + card.
-    if(isTauri()){ try{ Backend.onMixnetPhase(onMixnetPhase); }catch(_){} try{ Backend.onBuyPhase(onBuyPhase); }catch(_){} }
+    if(isTauri()){ try{ Backend.onMixnetPhase(onMixnetPhase); }catch(_){} try{ Backend.onBuyPhase(onBuyPhase); }catch(_){}
+      try{ Backend.onCoinsReturn(p=>{ if(!p) return; returnPct = Math.max(returnPct, Number(p.percent)||0); returnDone = Number(p.credited)||returnDone; if(returning) renderAccount(); }); }catch(_){} }
     // Drag & drop files anywhere in the chat column (alternative to the "+").
     const mainEl=$("main");
     if(mainEl){

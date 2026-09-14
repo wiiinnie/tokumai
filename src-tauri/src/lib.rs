@@ -1155,6 +1155,19 @@ async fn coins_return(app: AppHandle, transport: State<'_, Arc<Transport>>) -> R
     let t = buy_transport(&app, &transport).await;
     let mut credited_total = 0u64;
     let mut entitlement = 0u64;
+    // What this will take, in coins, so the app can show how far along it is: each batch
+    // is a mixnet round trip plus ~4 ms of server pairings per coin, so a full device can
+    // take half a minute and must not look frozen.
+    let total_coins = coins_on_device(&wallet::load(&dir)).max(1);
+    let mut done_coins = 0u64;
+    let progress = |done: u64, credited: u64| {
+        let _ = app.emit(
+            "coins-return",
+            json!({ "coins": done, "total": total_coins, "credited": credited,
+                    "percent": (done.saturating_mul(100) / total_coins).min(100) }),
+        );
+    };
+    progress(0, 0);
     loop {
         let mut w = wallet::load(&dir);
         // Finish an unanswered batch before building another one.
@@ -1203,7 +1216,8 @@ async fn coins_return(app: AppHandle, transport: State<'_, Arc<Transport>>) -> R
         wallet::save(&dir, &w)?;
         credited_total += reply.get("credited").and_then(|c| c.as_u64()).unwrap_or(0);
         entitlement = reply.get("entitlement").and_then(|c| c.as_u64()).unwrap_or(entitlement);
-        let _ = app.emit("coins-returned", json!({ "credited": credited_total }));
+        done_coins += notes.iter().map(|n| n.coins).sum::<u64>();
+        progress(done_coins, credited_total);
     }
     drop(t);
     close_buy_link(&app).await;

@@ -128,6 +128,7 @@ const httpBackend = {
   setEntryRandom: (on) => Promise.resolve({ entry_gateway: null, entry_random: !!on }),
   setCoinChat: (on) => Promise.resolve({ coinChat: !!on }),
   coinsReturn: () => Promise.resolve({ credited: 0, entitlement: 0, held: 0 }),
+  onCoinsReturn: async () => () => {},
   setMixnetPerf: () => Promise.resolve({}), // dev backend has no mixnet
   // nosemgrep: scrai-js-window-open -- dev bridge only; the app routes through open_external
   openExternal: (url) => { window.open(url, "_blank", "noopener"); return Promise.resolve(); },
@@ -223,6 +224,8 @@ const tauriBackend = (invoke) => ({
   setEntryRandom: (on) => invoke("set_entry_random", { on: !!on }),
   setCoinChat: (on) => invoke("set_coin_chat", { on: !!on }),
   coinsReturn: () => invoke("coins_return"),
+  // Progress while coins go home — one event per batch, so a long return does not look frozen.
+  onCoinsReturn: async (cb) => { const ev = window.__TAURI__ && window.__TAURI__.event; if (ev && ev.listen) return ev.listen("coins-return", (e) => { try { cb(e.payload); } catch (_) {} }); return () => {}; },
   setMixnetPerf: (coverMs, mixMs, sendMs, continuous) => invoke("set_mixnet_perf", { coverMs, mixMs, sendMs, continuous }),
   openExternal: (url) => invoke("open_external", { url }),
   saveImage: (dataB64, filename) => invoke("save_image", { data: dataB64, filename }),
@@ -336,6 +339,7 @@ export const Backend = {
   setEntryRandom: (on) => pick("setEntryRandom", on),
   setCoinChat: (on) => pick("setCoinChat", on),
   coinsReturn: () => pick("coinsReturn"),
+  onCoinsReturn: (...a) => pick("onCoinsReturn", ...a),
   setMixnetPerf: (coverMs, mixMs, sendMs, continuous) => pick("setMixnetPerf", coverMs, mixMs, sendMs, continuous),
   openExternal: (url) => pick("openExternal", url),
   vaultList: () => pick("vaultList"),
