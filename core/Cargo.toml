@@ -19,6 +19,8 @@ nym-compact-ecash = "=1.21.4"
 nym-bls12_381-fork = "=0.8.0-forked"
 # The Ledger seam is async so a future mixnet-backed ledger drops in without a refactor.
 async-trait = "0.1"
+# purse.rs: a fresh pay_info per tender note.
+rand = "0.8"
 
 [dev-dependencies]
 # block_on for the sync tests that drive the now-async gateway handlers.

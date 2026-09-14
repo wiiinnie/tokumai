@@ -74,6 +74,37 @@ impl Purse {
         )
     }
 
+    /// Spend a tender plan: one payment per face value, each with its own random
+    /// `pay_info`. Same durability contract as `spend` — the counter has advanced inside
+    /// `self`, so persist BEFORE anything leaves the device, and re-send an uncertain
+    /// tender verbatim rather than building a fresh one.
+    ///
+    /// All-or-nothing: if any payment fails to build, the purse is left untouched (the
+    /// caller drops this copy), so a half-advanced counter never reaches disk.
+    pub fn spend_tender(
+        &mut self,
+        values: &[u64],
+        spend_date: u32,
+    ) -> Result<Vec<crate::tender::Note>, String> {
+        use rand::RngCore;
+        let mut probe = Purse::restore(&self.persist()?)?;
+        let mut notes = Vec::with_capacity(values.len());
+        for coins in values {
+            let mut bytes = [0u8; 72];
+            rand::thread_rng().fill_bytes(&mut bytes);
+            let pi = PayInfo { pay_info_bytes: bytes };
+            let payment = probe.spend(*coins, &pi, spend_date)?;
+            notes.push(crate::tender::Note {
+                coins: *coins,
+                payment,
+                pay_info: bytes.to_vec(),
+                spend_date,
+            });
+        }
+        *self = probe;
+        Ok(notes)
+    }
+
     /// Serialise the purse (incl. the advanced counter) for durable on-device storage.
     pub fn persist(&self) -> Result<String, String> {
         serde_json::to_string(self).map_err(|e| e.to_string())
@@ -132,6 +163,59 @@ mod tests {
     use super::*;
     use crate::coconut::testkit;
     use crate::quorum::{QuorumStore, Verdict};
+
+    /// A tender: several payments out of one purse, exact subset sums, and only the
+    /// selected notes are burned — the rest stay good and are tendered again later.
+    #[test]
+    fn a_tender_pays_the_exact_cost_and_the_unburned_notes_stay_spendable() {
+        use crate::tender::{plan_coins, Tender};
+        let fk = testkit::funded();
+        let sd = fk.spend_date();
+        let mut purse = fk.new_purse();
+        let mut store = QuorumStore::default();
+
+        // ceiling 7 coins → notes 1,2,4; the answer turns out to cost 3
+        let values = plan_coins(7);
+        assert_eq!(values, vec![1, 2, 4]);
+        let notes = purse.spend_tender(&values, sd).unwrap();
+        let tender = Tender { notes };
+        tender.well_formed().unwrap();
+        assert_eq!(tender.total_coins(), 7);
+        assert_eq!(purse.remaining_coins(), fk_total(&purse) - 7);
+
+        let picked = tender.select(3).unwrap();
+        assert_eq!(picked.iter().map(|i| tender.notes[*i].coins).sum::<u64>(), 3);
+        for i in &picked {
+            let n = &tender.notes[*i];
+            assert_eq!(store.submit(&n.payment, n.pay_info().unwrap(), 1), Verdict::Accepted);
+        }
+        // the note that was NOT burned is still fresh — it pays for the next request
+        let left: Vec<usize> = (0..tender.notes.len()).filter(|i| !picked.contains(i)).collect();
+        assert_eq!(left.len(), 1);
+        let n = &tender.notes[left[0]];
+        assert_eq!(n.coins, 4);
+        assert_eq!(store.submit(&n.payment, n.pay_info().unwrap(), 1), Verdict::Accepted);
+        // …and re-sending an already burned note verbatim is a benign replay, never a ban
+        let b = &tender.notes[picked[0]];
+        assert_eq!(store.submit(&b.payment, b.pay_info().unwrap(), 1), Verdict::Replay);
+    }
+
+    /// A failed tender must leave the purse untouched — a half-advanced counter that
+    /// reached disk would strand the coins in between.
+    #[test]
+    fn a_tender_that_cannot_be_built_does_not_advance_the_purse() {
+        let fk = testkit::funded();
+        let sd = fk.spend_date();
+        let mut purse = fk.new_purse();
+        let before = purse.remaining_coins();
+        // more coins than the purse holds → the whole tender fails
+        assert!(purse.spend_tender(&[before, 1], sd).is_err());
+        assert_eq!(purse.remaining_coins(), before);
+    }
+
+    fn fk_total(p: &Purse) -> u64 {
+        p.total_coins()
+    }
 
     /// Persisting AFTER a spend and restoring must CONTINUE the counter — the next
     /// spend uses fresh coins, so the quorum accepts it (no double-spend).

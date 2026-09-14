@@ -14,3 +14,4 @@ pub mod pricing;
 pub mod purse;
 pub mod quorum;
 pub mod session;
+pub mod tender;

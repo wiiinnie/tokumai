@@ -172,6 +172,11 @@ pub struct QuorumStore {
     pending_serials: HashMap<String, u64>,
     offenses: HashMap<String, Offense>, // offender base58 → offense
     blacklist: HashSet<String>,         // offender base58
+    /// Serials of tenders that are being served RIGHT NOW. A coin-paid request is checked
+    /// for freshness before the provider is called and burned only after, so without this
+    /// two concurrent requests could tender the same coin and both be served. Never
+    /// persisted: a restart drops every in-flight request anyway.
+    in_flight: HashSet<String>,
     /// Lifetime coins recorded as spent — survives pruning of the rows (admin "burned").
     burned: u64,
     /// Monotonic mutation counter (change-detection for persistence). Bumped only when
@@ -216,6 +221,7 @@ impl QuorumStore {
             pending_serials: HashMap::new(),
             offenses: HashMap::new(),
             blacklist: HashSet::new(),
+            in_flight: HashSet::new(),
             burned: 0,
             rev: 0,
             meta_rev: 0,
@@ -234,6 +240,7 @@ impl QuorumStore {
             pending_serials: HashMap::new(),
             offenses: m.offenses,
             blacklist: m.blacklist,
+            in_flight: HashSet::new(),
             burned: m.burned,
             rev: m.rev,
             meta_rev: m.meta_rev,
@@ -380,6 +387,53 @@ impl QuorumStore {
         self.rev += 1; // fresh record — durable state changed
         self.meta_rev += 1; // `burned` moved
         Verdict::Accepted
+    }
+
+    /// Take the serials of `payments` off the table for the duration of one request:
+    /// every serial must be unspent AND not already in flight. All or nothing — on
+    /// refusal nothing is marked, so the caller can answer and move on.
+    ///
+    /// This is the coin-paid equivalent of reserving a session balance: it runs on the
+    /// dispatch loop before the provider call, `release` runs after it.
+    pub fn hold(&mut self, payments: &[&Payment]) -> Result<(), String> {
+        let mut keys: Vec<String> = Vec::new();
+        for p in payments {
+            for key in payment_serials(p) {
+                if self.in_flight.contains(&key) {
+                    return Err("one of these coins is already paying for another request".into());
+                }
+                if self.previous_spend(&key).is_some() {
+                    return Err("one of these coins has already been spent".into());
+                }
+                keys.push(key);
+            }
+        }
+        // A tender that names the same coin twice would pass the loop above (nothing is
+        // marked yet), so the duplicate is caught here.
+        let before = self.in_flight.len();
+        let n = keys.len();
+        self.in_flight.extend(keys.iter().cloned());
+        if self.in_flight.len() != before + n {
+            for k in &keys {
+                self.in_flight.remove(k);
+            }
+            return Err("the same coin appears twice in this tender".into());
+        }
+        Ok(())
+    }
+
+    /// Release a hold (after the request was settled, whatever the outcome).
+    pub fn release(&mut self, payments: &[&Payment]) {
+        for p in payments {
+            for key in payment_serials(p) {
+                self.in_flight.remove(&key);
+            }
+        }
+    }
+
+    /// How many serials are held right now (diagnostics).
+    pub fn in_flight_serials(&self) -> usize {
+        self.in_flight.len()
     }
 
     /// Enforced at WITHDRAWAL: has this key been blacklisted for double-spending?
@@ -544,6 +598,36 @@ mod tests {
         let again = QuorumStore::from_meta(&store.meta_json(), Box::new(index), 1).unwrap();
         assert_eq!(again.offense_coins(&fk.user_pubkey()), 1);
         assert_eq!(again.burned(), 1);
+    }
+
+    #[test]
+    fn a_coin_being_served_cannot_be_tendered_again_until_it_is_released() {
+        let fk = testkit::funded();
+        let mut w = fk.wallet();
+        let mut w2 = fk.copy(&w);
+        let mut store = QuorumStore::default();
+        let (p0, pi0) = fk.spend_one(&mut w, 6);
+        let (same_coin, _) = fk.spend_one(&mut w2, 9); // the copy spends the SAME coin
+
+        assert!(store.hold(&[&p0]).is_ok());
+        assert_eq!(store.in_flight_serials(), 1);
+        assert!(store.hold(&[&same_coin]).is_err(), "a coin in flight is not tenderable");
+        // twice in one tender is refused, and leaves nothing behind
+        let mut store2 = QuorumStore::default();
+        assert!(store2.hold(&[&p0, &p0]).is_err());
+        assert_eq!(store2.in_flight_serials(), 0);
+
+        // settle: burn it, release the hold — now it is spent, not merely busy
+        assert_eq!(store.submit(&p0, pi0, 1), Verdict::Accepted);
+        store.release(&[&p0]);
+        assert_eq!(store.in_flight_serials(), 0);
+        let recs = store.pending_records();
+        let mut index = MemIndex::default();
+        for r in &recs {
+            index.insert(r);
+        }
+        let mut store = QuorumStore::from_meta(&store.meta_json(), Box::new(index), 1).unwrap();
+        assert!(store.hold(&[&same_coin]).is_err(), "a spent coin is refused by the index too");
     }
 
     #[test]
