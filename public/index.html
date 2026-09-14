@@ -6980,9 +6980,12 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     // (it used to open at once — unnoticed for a while because opening threw, 2026-09-11).
     if(!tutorialEnabled() && isTauri() && !account){ if(bootEnded) openAccount(); else accountDeferred=true; }
     if(mixConnected) maybeShowTutorial();
-    // Sweep any settled-but-uncollected payment into held credit on startup.
+    // A payment that settled while the app was closed is swept up in the BACKGROUND. It
+    // used to be awaited here, which kept the boot screen on "connecting" until the
+    // account side had built its own mixnet client — half a minute of nothing.
     if(isTauri() && account){
-      try{ const r=await Backend.collect(); if(r&&r.collected>0){ await refreshState(); renderBal(); await sweepReceipts(); } }catch(_){}
+      try{ Backend.collectLater(); }catch(_){}
+      setTimeout(async ()=>{ try{ await refreshState(); renderBal(); await sweepReceipts(); }catch(_){} }, 12000);
     }
     // Show the real entry/exit gateways + flags once the route is up.
     if(isTauri()) refreshRoute();

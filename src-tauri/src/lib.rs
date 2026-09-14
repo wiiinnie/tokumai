@@ -1637,7 +1637,7 @@ async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<V
         "entitlement": w.entitlement_seen,
         // A book is what one withdrawal draws; the device learns the size from a book it
         // holds, so this follows the server rather than a number compiled into the app.
-        "bookToku": books_size_toku(&w),
+        "bookToku": books_size_toku(&w, &dir, server.as_deref().unwrap_or("")),
         // The smallest amount that can change hands: a coin-paid answer rounds up to it.
         "coinToku": scrai_core::coconut::COIN_TOKU,
         "tiers": TIERS,
@@ -2271,6 +2271,19 @@ async fn collect(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result
     collect_now(app, t).await
 }
 
+/// Start-up sweep: if this device is low on books, fetch more in the background. It does
+/// NOT block: waiting for it is what made the boot screen sit on "connecting" for half a
+/// minute, because the account side has to bring up its own mixnet client first.
+#[tauri::command]
+fn collect_later(app: AppHandle) -> Result<Value, String> {
+    let dir = data_dir(&app)?;
+    let low = books_on_device(&wallet::load(&dir)) < LOW_WATER_BOOKS;
+    if low {
+        spawn_refill_soon(&app);
+    }
+    Ok(json!({ "started": low }))
+}
+
 /// The body of `collect`, callable from the background top-up as well.
 async fn collect_now(app: AppHandle, main: Arc<Transport>) -> Result<Value, String> {
     diag(&app, "collect: begin");
@@ -2292,11 +2305,13 @@ async fn collect_now(app: AppHandle, main: Arc<Transport>) -> Result<Value, Stri
     // Top the device UP to the working amount rather than drawing everything: what a lost
     // device can cost is then bounded by that amount, and the rest stays on the account
     // where the recovery phrase reaches it (docs/unlinkability.md, block D).
-    let book_toku = books_size_toku(&w0);
+    let book_toku = books_size_toku(&w0, &dir, &srv);
     let have = books_on_device(&wallet::load(&dir));
     let room = WORKING_BOOKS.saturating_sub(have);
-    let affordable = if book_toku > 0 { (owed / book_toku) as usize } else { 0 };
-    let want = room.min(affordable);
+    // Not knowing the size yet is not a reason to draw nothing: ask for the room and let
+    // the server refuse what the account cannot pay for. A refusal costs one round trip
+    // and is handled per book.
+    let want = if book_toku > 0 { room.min((owed / book_toku) as usize) } else { room };
     // An interrupted withdrawal is finished even when the device is otherwise full — the
     // server may already have charged for it.
     let outstanding = wallet::load(&dir).pending_withdraws.iter().filter(|p| p.server == srv).count();
@@ -2323,6 +2338,16 @@ async fn collect_now(app: AppHandle, main: Arc<Transport>) -> Result<Value, Stri
 /// pause, so the account-side call does not sit right next to the question that emptied it.
 /// One at a time; a second request while one is running is ignored.
 fn spawn_refill(app: &AppHandle) {
+    spawn_refill_in(app, 30, 90)
+}
+
+/// The same, but soon — used at start-up, where there is no question to sit next to and a
+/// user who just bought credit is watching for it.
+fn spawn_refill_soon(app: &AppHandle) {
+    spawn_refill_in(app, 2, 3)
+}
+
+fn spawn_refill_in(app: &AppHandle, base: u64, spread: u64) {
     use std::sync::atomic::{AtomicBool, Ordering};
     static RUNNING: AtomicBool = AtomicBool::new(false);
     if RUNNING.swap(true, Ordering::SeqCst) {
@@ -2330,7 +2355,7 @@ fn spawn_refill(app: &AppHandle) {
     }
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        let wait = 30 + (rand::random::<u64>() % 90);
+        let wait = base + (rand::random::<u64>() % spread.max(1));
         tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
         let t = app.state::<Arc<Transport>>().inner().clone();
         match collect_now(app.clone(), t).await {
@@ -2350,17 +2375,23 @@ fn books_on_device(w: &wallet::Wallet) -> usize {
         .count()
 }
 
-/// What one book is worth, in TOKU — from a book this device holds, else the size this
-/// build expects. The server decides it; the client only needs it to know how many it
-/// can afford.
-fn books_size_toku(w: &wallet::Wallet) -> u64 {
-    w.coconut_purses
+/// What one book is worth, in TOKU. The SERVER decides it, so the client either reads it
+/// off a book it already holds or off the epoch material that server published. A number
+/// compiled into the app would be wrong the moment the server changes the size — which is
+/// exactly what happened on 2026-09-14: a stale fallback of 100 coins made the app believe
+/// a book cost ten times what it does, so it drew nothing and reported the credit as
+/// waiting. 0 means "not known here yet", and the caller then lets the server decide.
+fn books_size_toku(w: &wallet::Wallet, dir: &Path, srv: &str) -> u64 {
+    if let Some(coins) = w
+        .coconut_purses
         .iter()
         .filter_map(|j| scrai_core::purse::Purse::restore(j).ok())
         .map(|p| p.total_coins())
         .next()
-        .unwrap_or(100)
-        * scrai_core::coconut::COIN_TOKU
+    {
+        return coins * scrai_core::coconut::COIN_TOKU;
+    }
+    epoch_keys(dir, srv).map(|k| k.total_coins * scrai_core::coconut::COIN_TOKU).unwrap_or(0)
 }
 
 /// Manually redeem one chunk of held coconut credit into the session balance
@@ -4268,7 +4299,7 @@ pub fn run() {
             state, local_state, set_server, account_new, account_reveal, account_restore, account_delete, account_migrate_qr,
             invoice, invoice_status, invoice_cancel, invite_check, ocr_scan, pdf_text, pdf_ocr, pdf_pages, collect, redeem, chat,
             smart_available, smart_detect, coconut_redeem,
-            mixnet_route, mixnet_ping, cancel_chat, app_resumed, app_hidden, resume_stats, list_entry_gateways, server_identities, set_entry_gateway, set_entry_random, set_mixnet_perf, buy_close, set_coin_chat, coins_return, open_external, save_image, save_file, voucher_redeem,
+            mixnet_route, mixnet_ping, cancel_chat, app_resumed, app_hidden, resume_stats, list_entry_gateways, server_identities, set_entry_gateway, set_entry_random, set_mixnet_perf, buy_close, set_coin_chat, coins_return, collect_later, open_external, save_image, save_file, voucher_redeem,
             phrase_backup_get, iap_products, iap_purchase, iap_restore,
             phrase_check_start,
             phrase_check_verify,
