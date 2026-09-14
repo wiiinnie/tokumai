@@ -41,12 +41,15 @@ use scrai_core::session::SessionStore;
 // baked into the authority keys, so changing it needs a fresh bootstrap and invalidates
 // every purse clients hold. (Operator decision, 2026-09-05, taken while bootstrapping
 // the mainnet authority so it cost nothing.)
-/// Coins per ticketbook: 1000 × 0.1 ¢ = $1. The book VALUE is what matters for how often
-/// the account side has to be asked for another one (about every 300 text answers), and a
-/// rarer account call is a weaker timing signal. The size also fixes the epoch material
-/// every client downloads once per epoch — 1000 coins ≈ a 207 KB keys reply, which is why
-/// that material is cached on disk rather than per app run.
-const TICKETBOOK_COINS: u64 = 1_000;
+/// Coins per ticketbook: 100 × 0.1 ¢ = $0.10.
+///
+/// Small on purpose. The book is the unit credit moves from the account onto a device in,
+/// so it bounds two things: what a lost device costs, and what is left stranded on the
+/// account when the rest is smaller than one book. It also fixes the epoch material every
+/// client downloads once per epoch — 100 coins is a 25 KB keys reply, where 1000 was 207 KB
+/// (measured 2026-09-14). Drawing stays rare because the app takes TEN at a time in one
+/// round trip, the same thing Nym's `--amount` does for its ticketbooks.
+const TICKETBOOK_COINS: u64 = 100;
 
 /// Coins per ticketbook. Baked into the authority keys, so it is checked against the
 /// persisted authority at boot (see `load_or_bootstrap`).

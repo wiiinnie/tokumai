@@ -93,9 +93,14 @@ pub struct Wallet {
     /// An in-flight spend/redeem awaiting its server reply — retried idempotently (H4).
     #[serde(default)]
     pub pending_spend: Option<PendingSpend>,
-    /// An in-flight withdrawal awaiting its credential — resumed idempotently (M-cl-2).
-    #[serde(default)]
+    /// Legacy single in-flight withdrawal — migrated into `pending_withdraws` on load.
+    #[serde(default, skip_serializing)]
     pub pending_withdraw: Option<PendingWithdraw>,
+    /// In-flight withdrawals awaiting their credentials. Books are drawn several at a
+    /// time in one round trip, so there can be a handful; each is resumed idempotently
+    /// with its own unchanged request body (M-cl-2).
+    #[serde(default)]
+    pub pending_withdraws: Vec<PendingWithdraw>,
     /// Coins already spent out of a purse but not yet burned by any server: notes that
     /// were tendered for a chat and came home unused. They pay for the next request
     /// before a single fresh coin is taken out of a book.
@@ -380,6 +385,10 @@ fn load_with_key(data_dir: &Path, key: Option<&[u8; 32]>) -> Wallet {
     // One-way migration: an old wallet's single purse becomes the first entry.
     if let Some(p) = w.coconut_purse.take() {
         w.coconut_purses.insert(0, p);
+    }
+    // …and its single in-flight withdrawal becomes the first pending one.
+    if let Some(p) = w.pending_withdraw.take() {
+        w.pending_withdraws.insert(0, p);
     }
     // Migrate a legacy plaintext file to encrypted-at-rest on first load (best effort —
     // if the keychain is down, it stays plaintext and migrates on a later save).

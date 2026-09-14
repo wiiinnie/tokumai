@@ -757,20 +757,37 @@ fn forget_keys(srv: &str) {
 /// Drop the cached epoch material for a server, on disk as well — used where a rotated
 /// authority is suspected, so the retry fetches the new one instead of re-reading the old.
 fn forget_keys_on_disk(dir: &Path, srv: &str) {
-    forget_keys_on_disk(dir, srv);
+    forget_keys(srv);
     let _ = std::fs::remove_file(keys_file(dir, srv));
 }
 
 /// Full credential withdrawal: fetch keys → blind-withdraw at each authority →
 /// aggregate into a `Purse`. The Withdraw itself is ACCOUNT-SIGNED: the server
 /// only issues a ticketbook against paid entitlement, and the account signature
-/// is what ties the request to the buyer (the coins that come out stay blind).
-async fn withdraw_purse(
+/// Coins per ticketbook the app expects to keep on the device ($0.10 each, so ten books
+/// is one dollar). It is a CAP, not an increment: a top-up fills up to this many, so the
+/// most a lost device can cost is this much, and the app can say so.
+const WORKING_BOOKS: usize = 10;
+/// …and the point at which it goes and fetches more.
+const LOW_WATER_BOOKS: usize = 3;
+
+/// Draw up to `want` ticketbooks in ONE round trip.
+///
+/// Books are small on purpose (docs/unlinkability.md, block D): a small book keeps what a
+/// lost device costs small and keeps the undrawable remainder on the account small, and
+/// drawing several at once keeps the account-side calls as rare as one big book would.
+///
+/// M-cl-2 per book: each request body is persisted BEFORE it leaves, and a book whose
+/// reply never arrived is re-sent with the SAME body — the server answers that from its
+/// issued cache rather than charging again. A book whose reply was a definitive refusal
+/// is dropped; one whose reply was merely "busy" is kept for the next attempt.
+async fn withdraw_books(
     t: &Transport,
     srv: &str,
     auth: &account::Account,
     dir: &std::path::Path,
-) -> Result<scrai_core::purse::Purse, String> {
+    want: usize,
+) -> Result<u64, String> {
     use scrai_core::coconut;
     use scrai_core::federation::{FedRequest, FedResponse};
 
@@ -780,7 +797,6 @@ async fn withdraw_purse(
         return Err("this server was flagged as dishonest (invalid credential issuance) — \
                     not withdrawing more into it. Switch servers.".into());
     }
-
     let (vk, auth_vks, coin_sigs, date_sigs, expiration_date, total_coins) =
         match federation_keys(t, srv, dir).await? {
             FedResponse::Keys {
@@ -791,8 +807,7 @@ async fn withdraw_purse(
         };
     // M8: `total_coins` is server-supplied and NOT cryptographically bound to the coin
     // material — a hostile server returning u64::MAX would make the next `Parameters::new`
-    // allocate O(total_coins) group elements and OOM/hang the client. A ticketbook is 500
-    // coins; reject anything past a generous sane ceiling before it reaches the purse.
+    // allocate O(total_coins) group elements and OOM/hang the client.
     const MAX_BOOK_COINS: u64 = 4096;
     if total_coins == 0 || total_coins > MAX_BOOK_COINS {
         return Err(format!(
@@ -800,111 +815,181 @@ async fn withdraw_purse(
         ));
     }
 
-    // M-cl-2: the request is persisted BEFORE it leaves the device. If we never see the
-    // reply (dropped SURB, timeout, crash before the purse is saved), the next collect
-    // re-sends this exact body and the server answers it from its issued cache instead of
-    // charging a second book. A pending request for another server is left alone.
+    // Resume what is outstanding for THIS server and epoch, then top the list up to `want`.
     let mut w = wallet::load(dir);
-    let resume = w.pending_withdraw.clone().filter(|p| p.server == srv);
-    let (user, req, req_info, resumed): (coconut::KeyPairUser, coconut::WithdrawalRequest, coconut::RequestInfo, bool) =
-        match resume {
-            Some(p) if p.expiration_date == expiration_date => {
-                let user = serde_json::from_value(p.user).map_err(|e| format!("pending withdrawal: {e}"))?;
-                let req = serde_json::from_value(p.req).map_err(|e| format!("pending withdrawal: {e}"))?;
-                let req_info = serde_json::from_value(p.req_info).map_err(|e| format!("pending withdrawal: {e}"))?;
-                log::info!("[coconut] resuming an interrupted withdrawal with the same request");
-                (user, req, req_info, true)
-            }
-            Some(_) => {
-                // The issuing epoch moved on; the old request can no longer become a usable
-                // book. Drop it rather than block every future withdraw — and say so.
-                w.pending_withdraw = None;
-                wallet::save(dir, &w)?;
-                return Err("an interrupted withdrawal could not be resumed because the server's \
-                            issuing keys changed in the meantime. If your balance is short one book, \
-                            contact support with this message.".into());
-            }
-            None => {
-                let user = coconut::new_user();
-                let (req, req_info) =
-                    coconut::make_withdrawal_request(user.secret_key(), expiration_date, coconut::DEFAULT_T_TYPE)?;
-                w.pending_withdraw = Some(wallet::PendingWithdraw {
-                    server: srv.to_string(),
-                    user: serde_json::to_value(&user).map_err(|e| e.to_string())?,
-                    req: serde_json::to_value(&req).map_err(|e| e.to_string())?,
-                    req_info: serde_json::to_value(&req_info).map_err(|e| e.to_string())?,
-                    expiration_date,
-                    created_ms: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0),
-                });
-                wallet::save(dir, &w)?;
-                (user, req, req_info, false)
-            }
+    let stale = w
+        .pending_withdraws
+        .iter()
+        .filter(|p| p.server == srv && p.expiration_date != expiration_date)
+        .count();
+    if stale > 0 {
+        // The issuing epoch moved on; those bodies can never become usable books. Dropping
+        // them is the only way forward — say so loudly, because if the server had charged
+        // for one, that book is lost.
+        log::error!("[coconut] dropped {stale} interrupted withdrawal(s) whose issuing epoch has passed — if the server had charged for them, those books are lost");
+        w.pending_withdraws.retain(|p| p.server != srv || p.expiration_date == expiration_date);
+    }
+    let mut mine: Vec<usize> = w
+        .pending_withdraws
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.server == srv)
+        .map(|(i, _)| i)
+        .collect();
+    while mine.len() < want {
+        let user = coconut::new_user();
+        let (req, req_info) =
+            coconut::make_withdrawal_request(user.secret_key(), expiration_date, coconut::DEFAULT_T_TYPE)?;
+        w.pending_withdraws.push(wallet::PendingWithdraw {
+            server: srv.to_string(),
+            user: serde_json::to_value(&user).map_err(|e| e.to_string())?,
+            req: serde_json::to_value(&req).map_err(|e| e.to_string())?,
+            req_info: serde_json::to_value(&req_info).map_err(|e| e.to_string())?,
+            expiration_date,
+            created_ms: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0),
+        });
+        mine.push(w.pending_withdraws.len() - 1);
+    }
+    if mine.is_empty() {
+        return Ok(0);
+    }
+    // On disk before anything leaves the device.
+    wallet::save(dir, &w)?;
+
+    // One envelope per (book, authority), all in flight together — the whole point of
+    // drawing several at once is that they share one round trip.
+    let mut route: Vec<(String, usize, usize)> = Vec::new(); // (envelope id, book, authority)
+    let mut requests: Vec<Value> = Vec::new();
+    for (slot, &idx) in mine.iter().enumerate() {
+        let p = &w.pending_withdraws[idx];
+        let user: coconut::KeyPairUser =
+            serde_json::from_value(p.user.clone()).map_err(|e| format!("pending withdrawal: {e}"))?;
+        let req: coconut::WithdrawalRequest =
+            serde_json::from_value(p.req.clone()).map_err(|e| format!("pending withdrawal: {e}"))?;
+        for k in 0..auth_vks.len() {
+            let id = format!("{slot}-{k}-{}", rand_hex(8));
+            let nonce = rand_hex(16);
+            let sig = auth.sign("withdraw:coconut", &nonce);
+            requests.push(json!({
+                "v": PROTO, "kind": "coconut", "id": id,
+                "publicKey": auth.public_key_pem, "nonce": nonce, "sig": sig,
+                "fed": serde_json::to_value(FedRequest::Withdraw { user_pk: user.public_key(), req: req.clone() })
+                    .map_err(|e| e.to_string())?,
+            }));
+            route.push((id, slot, k));
+        }
+    }
+    let replies = t
+        .collect_replies(srv, requests, SURBS_SMALL, TIMEOUT_MS, |_, _| {})
+        .await?;
+
+    // Group the answers per book, then aggregate the ones that came back complete.
+    let mut collected = 0u64;
+    let mut done: Vec<usize> = Vec::new();
+    let mut fatal: Vec<usize> = Vec::new();
+    for (slot, &idx) in mine.iter().enumerate() {
+        let p = w.pending_withdraws[idx].clone();
+        let user: coconut::KeyPairUser = match serde_json::from_value(p.user) {
+            Ok(u) => u,
+            Err(_) => continue,
         };
-    // Drop the pending record on a DEFINITIVE outcome that a retry cannot improve; keep it
-    // on transport/busy errors so the next collect resumes it.
-    let clear_pending = |why: &str| {
-        let mut w = wallet::load(dir);
-        if w.pending_withdraw.as_ref().is_some_and(|p| p.server == srv) {
-            w.pending_withdraw = None;
-            let _ = wallet::save(dir, &w);
-            if resumed {
-                log::warn!("[coconut] interrupted withdrawal dropped ({why}) — if the server had charged for it, one book is lost");
+        let req_info: coconut::RequestInfo = match serde_json::from_value(p.req_info) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        let mut shares = Vec::new();
+        let mut give_up = false;
+        for (id, s, k) in route.iter().filter(|(_, s, _)| *s == slot) {
+            let Some(reply) = replies.get(id) else {
+                shares.clear();
+                break; // no answer for this book — keep it pending and retry later
+            };
+            let fed: FedResponse = match serde_json::from_value(reply.get("fed").cloned().unwrap_or(Value::Null)) {
+                Ok(f) => f,
+                Err(e) => {
+                    log::warn!("[coconut] bad fed response: {e}");
+                    shares.clear();
+                    break;
+                }
+            };
+            let blinded = match fed {
+                FedResponse::Withdraw { blinded } => blinded,
+                FedResponse::Error { message } => {
+                    forget_keys_on_disk(dir, srv);
+                    if !(message.contains("retry") || message.contains("busy")) {
+                        // Definitive refusal (no entitlement, blacklisted, malformed): this
+                        // body will never become a book, so stop carrying it.
+                        give_up = true;
+                    }
+                    log::info!("[coconut] server refused a book: {message}");
+                    shares.clear();
+                    break;
+                }
+                _ => {
+                    shares.clear();
+                    break;
+                }
+            };
+            let _ = s;
+            match coconut::verify_share(&auth_vks[*k], user.secret_key(), &blinded, &req_info, *k as u64 + 1) {
+                Ok(share) => shares.push(share),
+                Err(e) => {
+                    // A well-formed reply that fails here means the operator consumed
+                    // entitlement and returned garbage (H3).
+                    forget_keys_on_disk(dir, srv);
+                    flag_server(srv, &format!("invalid withdrawal share: {e}"));
+                    give_up = true;
+                    shares.clear();
+                    break;
+                }
             }
         }
-    };
-    let mut shares = Vec::new();
-    for (i, vk_auth) in auth_vks.iter().enumerate() {
-        // 1-of-1 test server = one address; multi-server sends to each authority's.
-        let fed = FedRequest::Withdraw { user_pk: user.public_key(), req: req.clone() };
-        let nonce = rand_hex(16);
-        let env = json!({
-            "v": PROTO, "kind": "coconut", "id": rand_hex(16),
-            "fed": serde_json::to_value(&fed).map_err(|e| e.to_string())?,
-            "publicKey": auth.public_key_pem,
-            "nonce": nonce,
-            "sig": auth.sign("withdraw:coconut", &nonce),
-        });
-        // A transport error (no verdict) keeps the pending record: the reply may have
-        // been lost AFTER the server charged, and only a resend of this body recovers it.
-        let reply = t.round_trip(srv, &env, SURBS_SMALL, TIMEOUT_MS).await?;
-        let resp: FedResponse = serde_json::from_value(reply.get("fed").cloned().ok_or("no fed in reply")?)
-            .map_err(|e| format!("bad fed response: {e}"))?;
-        let blinded = match resp {
-            FedResponse::Withdraw { blinded } => blinded,
-            FedResponse::Error { message } => {
-                forget_keys_on_disk(dir, srv); // a rotated key would surface here — refetch on retry
-                // "still being issued"/busy: the server is working on this body — resume later.
-                if !(message.contains("retry") || message.contains("busy")) {
-                    clear_pending(&message);
-                }
-                return Err(format!("server: {message}"));
-            }
-            _ => return Err("unexpected response to Withdraw".into()),
-        };
-        // verify_share is the cryptographic proof of honest issuance: a well-formed
-        // reply that FAILS here means the operator consumed entitlement and returned a
-        // garbage share (H3). Flag it so no further book is withdrawn into it.
-        let share = coconut::verify_share(vk_auth, user.secret_key(), &blinded, &req_info, i as u64 + 1)
-            .map_err(|e| {
+        if give_up {
+            fatal.push(idx);
+            continue;
+        }
+        if shares.len() != auth_vks.len() {
+            continue; // incomplete — stays pending
+        }
+        let wallet_cred = match coconut::aggregate(&vk, user.secret_key(), &shares, &req_info) {
+            Ok(c) => c,
+            Err(e) => {
                 forget_keys_on_disk(dir, srv);
-                flag_server(srv, &format!("invalid withdrawal share: {e}"));
-                clear_pending("invalid share"); // a resend would get the same garbage back
-                format!("server issued an invalid credential share (server flagged as dishonest): {e}")
-            })?;
-        shares.push(share);
+                flag_server(srv, &format!("credential shares don't aggregate: {e}"));
+                fatal.push(idx);
+                continue;
+            }
+        };
+        let purse = scrai_core::purse::Purse::new(
+            wallet_cred,
+            user,
+            vk.clone(),
+            coin_sigs.clone(),
+            date_sigs.clone(),
+            total_coins,
+            expiration_date,
+        );
+        // Persist each book as it lands: a dropped connection loses nothing.
+        let mut w2 = wallet::load(dir);
+        w2.coconut_purses.push(purse.persist()?);
+        w2.pending_withdraws.retain(|q| q.req != w.pending_withdraws[idx].req);
+        wallet::save(dir, &w2)?;
+        collected += total_coins * scrai_core::coconut::COIN_TOKU;
+        done.push(idx);
     }
-    // aggregate — succeeds ONLY if the server issued valid shares
-    let wallet = coconut::aggregate(&vk, user.secret_key(), &shares, &req_info)
-        .map_err(|e| {
-            forget_keys_on_disk(dir, srv);
-            flag_server(srv, &format!("credential shares don't aggregate: {e}"));
-            clear_pending("shares don't aggregate");
-            format!("server credential failed to aggregate (server flagged as dishonest): {e}")
-        })?;
-    Ok(scrai_core::purse::Purse::new(
-        wallet, user, vk, coin_sigs, date_sigs, total_coins, expiration_date,
-    ))
+    if !fatal.is_empty() {
+        let mut w2 = wallet::load(dir);
+        let drop: Vec<Value> = fatal.iter().map(|i| w.pending_withdraws[*i].req.clone()).collect();
+        w2.pending_withdraws.retain(|q| !drop.contains(&q.req));
+        wallet::save(dir, &w2)?;
+    }
+    log::info!("[coconut] {} of {} book(s) landed ({collected} TOKU)", done.len(), mine.len());
+    if collected == 0 && done.is_empty() && !fatal.is_empty() {
+        return Err("the server refused to issue a ticketbook — see the log for why".into());
+    }
+    Ok(collected)
 }
+
 
 fn resolve_server(app: &AppHandle, server: Option<String>) -> Result<String, String> {
     match server {
@@ -1006,23 +1091,25 @@ fn build_tender(w: &mut wallet::Wallet, ceiling: u64) -> Result<scrai_core::tend
             Err(e) => log::warn!("[tender] dropping an unreadable spare note: {e}"),
         }
     }
-    let have: u64 = notes.iter().map(|n| n.coins).sum();
-    if have < ceiling {
-        let (idx, mut purse) = first_funded_purse(&w.coconut_purses).ok_or("no TOKU credit — buy credit first")?;
-        let want = (ceiling - have).min(purse.remaining_coins());
-        if want == 0 && notes.is_empty() {
-            return Err("no TOKU credit — buy credit first".into());
+    let mut short = ceiling.saturating_sub(notes.iter().map(|n| n.coins).sum::<u64>());
+    // Books are small, so one request can need coins out of several of them. Take the
+    // oldest first: a coin that has been on the device longest is the one whose purchase
+    // is furthest away in time.
+    while short > 0 {
+        let Some((idx, mut purse)) = first_funded_purse(&w.coconut_purses) else { break };
+        let take = short.min(purse.remaining_coins());
+        if take == 0 {
+            break;
         }
-        if want > 0 {
-            // `expiration − 1 day`, the same spend date every other payment uses.
-            let spend_date = purse.expiration_date().saturating_sub(86_400);
-            let mut fresh = purse.spend_tender(&plan_coins(want), spend_date)?;
-            notes.append(&mut fresh);
-            let emptied = purse.remaining_coins() == 0;
-            w.coconut_purses[idx] = purse.persist()?;
-            if emptied {
-                w.coconut_purses.remove(idx);
-            }
+        // `expiration − 1 day`, the same spend date every other payment uses.
+        let spend_date = purse.expiration_date().saturating_sub(86_400);
+        let mut fresh = purse.spend_tender(&plan_coins(take), spend_date)?;
+        notes.append(&mut fresh);
+        short -= take;
+        let emptied = purse.remaining_coins() == 0;
+        w.coconut_purses[idx] = purse.persist()?;
+        if emptied {
+            w.coconut_purses.remove(idx);
         }
     }
     if notes.is_empty() {
@@ -1030,6 +1117,7 @@ fn build_tender(w: &mut wallet::Wallet, ceiling: u64) -> Result<scrai_core::tend
     }
     Ok(Tender { notes })
 }
+
 
 /// Apply a server's verdict: the notes it named are gone, everything else goes back into
 /// the wallet as spares. Returns how many coins were burned.
@@ -2152,27 +2240,19 @@ async fn invoice_cancel(app: AppHandle, transport: State<'_, Arc<Transport>>, id
 /// nothing — the remaining entitlement stays on the server for the next call.
 #[tauri::command]
 async fn collect(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<Value, String> {
+    let t = transport.inner().clone();
+    collect_now(app, t).await
+}
+
+/// The body of `collect`, callable from the background top-up as well.
+async fn collect_now(app: AppHandle, main: Arc<Transport>) -> Result<Value, String> {
     diag(&app, "collect: begin");
-    let _op = transport.begin_op().await;
-    let transport = buy_transport(&app, &transport).await;
+    let _op = main.begin_op().await;
+    let transport = buy_transport(&app, &main).await;
     let dir = data_dir(&app)?;
     let w0 = wallet::load(&dir);
     let srv = server_addr(&w0)?;
     let a = wallet_account(&app)?;
-    let mut collected = 0u64;
-
-    // M-cl-2: an interrupted withdrawal is finished FIRST, before asking what is owed —
-    // the server may already have charged for it, so it must not count as owed again.
-    if w0.pending_withdraw.as_ref().is_some_and(|p| p.server == srv) {
-        let purse = withdraw_purse(&transport, &srv, &a, &dir).await?;
-        let book_toku = purse.total_coins() * scrai_core::coconut::COIN_TOKU;
-        let mut w = wallet::load(&dir);
-        w.coconut_purses.push(purse.persist()?);
-        w.pending_withdraw = None;
-        wallet::save(&dir, &w)?;
-        collected += book_toku;
-        log::info!("[coconut] recovered an interrupted {book_toku}-SCRAI book");
-    }
 
     // How much is owed?
     let nonce = rand_hex(16);
@@ -2180,38 +2260,80 @@ async fn collect(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result
     let resp = transport
         .round_trip(&srv, &json!({"v":PROTO,"kind":"entitlement","id":rand_hex(16),"publicKey":a.public_key_pem,"nonce":nonce,"sig":sig}), SURBS_SMALL, TIMEOUT_MS)
         .await?;
-    let mut owed = resp.get("entitlement").and_then(|e| e.as_u64()).unwrap_or(0);
+    let owed = resp.get("entitlement").and_then(|e| e.as_u64()).unwrap_or(0);
 
-    while owed > 0 {
-        let purse = match withdraw_purse(&transport, &srv, &a, &dir).await {
-            Ok(p) => p,
-            // The tail below one book (or a race) is not an error — it just
-            // stays as entitlement until the next purchase tops it up.
-            Err(e) if e.contains("not enough entitlement") => break,
-            Err(e) => return Err(e),
-        };
-        let book_toku = purse.total_coins() * scrai_core::coconut::COIN_TOKU;
-        let mut w = wallet::load(&dir);
-        w.coconut_purses.push(purse.persist()?);
-        w.pending_withdraw = None; // the book is on disk — the retry window is closed
-        wallet::save(&dir, &w)?;
-        collected += book_toku;
-        owed = owed.saturating_sub(book_toku);
-        log::info!("[coconut] collected a {book_toku}-SCRAI book ({owed} entitlement left)");
-    }
+    // Top the device UP to the working amount rather than drawing everything: what a lost
+    // device can cost is then bounded by that amount, and the rest stays on the account
+    // where the recovery phrase reaches it (docs/unlinkability.md, block D).
+    let book_toku = books_size_toku(&w0);
+    let have = books_on_device(&wallet::load(&dir));
+    let room = WORKING_BOOKS.saturating_sub(have);
+    let affordable = if book_toku > 0 { (owed / book_toku) as usize } else { 0 };
+    let want = room.min(affordable);
+    // An interrupted withdrawal is finished even when the device is otherwise full — the
+    // server may already have charged for it.
+    let outstanding = wallet::load(&dir).pending_withdraws.iter().filter(|p| p.server == srv).count();
+    let collected = if want > 0 || outstanding > 0 {
+        withdraw_books(&transport, &srv, &a, &dir, want.max(outstanding)).await?
+    } else {
+        0
+    };
+
     diag(&app, "collect: about to respond");
-    // What is left over is a tail smaller than one book: it stays on the account until a
-    // purchase (or another return) tops it past a whole book. Remember it — it is the
-    // user's money, and a balance that does not show it looks like money lost.
+    let left = owed.saturating_sub(collected);
     {
         let mut w = wallet::load(&dir);
-        w.entitlement_seen = owed;
+        w.entitlement_seen = left;
         let _ = wallet::save(&dir, &w);
     }
     // The coins are on the device: the purchase client has done its job for this purchase.
     drop(transport);
     close_buy_link(&app).await;
-    Ok(json!({ "collected": collected, "held": coconut_held_toku(&app), "entitlement": owed }))
+    Ok(json!({ "collected": collected, "held": coconut_held_toku(&app), "entitlement": left }))
+}
+
+/// Fetch more books when the device is running low — in the background and after a random
+/// pause, so the account-side call does not sit right next to the question that emptied it.
+/// One at a time; a second request while one is running is ignored.
+fn spawn_refill(app: &AppHandle) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static RUNNING: AtomicBool = AtomicBool::new(false);
+    if RUNNING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let wait = 30 + (rand::random::<u64>() % 90);
+        tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+        let t = app.state::<Arc<Transport>>().inner().clone();
+        match collect_now(app.clone(), t).await {
+            Ok(v) => log::info!("[coconut] background top-up: {} TOKU", v.get("collected").and_then(|c| c.as_u64()).unwrap_or(0)),
+            Err(e) => log::warn!("[coconut] background top-up failed: {e}"),
+        }
+        RUNNING.store(false, Ordering::SeqCst);
+    });
+}
+
+/// Books with coins left on this device.
+fn books_on_device(w: &wallet::Wallet) -> usize {
+    w.coconut_purses
+        .iter()
+        .filter_map(|j| scrai_core::purse::Purse::restore(j).ok())
+        .filter(|p| p.remaining_coins() > 0)
+        .count()
+}
+
+/// What one book is worth, in TOKU — from a book this device holds, else the size this
+/// build expects. The server decides it; the client only needs it to know how many it
+/// can afford.
+fn books_size_toku(w: &wallet::Wallet) -> u64 {
+    w.coconut_purses
+        .iter()
+        .filter_map(|j| scrai_core::purse::Purse::restore(j).ok())
+        .map(|p| p.total_coins())
+        .next()
+        .unwrap_or(100)
+        * scrai_core::coconut::COIN_TOKU
 }
 
 /// Manually redeem one chunk of held coconut credit into the session balance
@@ -2350,6 +2472,9 @@ async fn chat_impl(
         // A delivered reply — answer or refusal — settles the tender either way: an error
         // reply burned nothing, so every note goes back into the wallet.
         coin_settle(&dir, &notes, &reply)?;
+        if books_on_device(&wallet::load(&dir)) < LOW_WATER_BOOKS {
+            spawn_refill(&app);
+        }
         if let Some(e) = reply.get("error").and_then(|e| e.as_str()) {
             return Err(e.to_string());
         }
@@ -4278,6 +4403,26 @@ mod tender_tests {
             "spares are spent before a fresh coin is taken out of a book"
         );
         assert!(w.spare_notes.is_empty());
+    }
+
+    /// Books are small, so a bigger request has to take coins out of several of them.
+    #[test]
+    fn a_tender_spans_several_books_when_one_is_not_enough() {
+        let fk = testkit::funded();
+        let mut w = wallet::Wallet::default();
+        let per_book = {
+            let p = fk.new_purse();
+            let c = p.remaining_coins();
+            w.coconut_purses.push(p.persist().unwrap());
+            c
+        };
+        w.coconut_purses.push(fk.new_purse().persist().unwrap());
+        w.coconut_purses.push(fk.new_purse().persist().unwrap());
+        let want = per_book * 2 + 1; // more than two whole books
+        let t = build_tender(&mut w, want).unwrap();
+        assert_eq!(t.total_coins(), want, "the tender is complete across books");
+        assert_eq!(w.coconut_purses.len(), 1, "two books were emptied and dropped");
+        assert_eq!(coins_on_device(&w), per_book * 3 - want);
     }
 
     #[test]
