@@ -59,7 +59,7 @@
   </div>
   <div class="eyebrow">Terms of Service · AGB</div>
   <h1>Terms</h1>
-  <p>These terms govern the purchase and use of prepaid credit for the tokumai app, offered by <b>Hermes Blockchain Ventures — Matthias Winter (sole proprietorship / Einzelunternehmen)</b> ("we"). By buying credit you accept them. Version 29 August 2026.</p>
+  <p>These terms govern the purchase and use of prepaid credit for the tokumai app, offered by <b>Hermes Blockchain Ventures — Matthias Winter (sole proprietorship / Einzelunternehmen)</b> ("we"). By buying credit you accept them. Version 14 September 2026.</p>
 
   <h2 id="sell">1. What we sell</h2>
   <p><b>Prepaid credit</b> ("TOKU") for the tokumai app. Credit is spent on requests to third-party AI models (text and image generation) routed through the Nym mixnet. Credit is a usage allowance, not money, not a cryptocurrency, not transferable and not redeemable for cash.</p>
@@ -105,6 +105,24 @@
   <p>There is no user account in the usual sense: your access is a 24-word recovery phrase generated on your device. <b>We do not know it and cannot restore it.</b> Whoever holds the phrase holds the credit. Keep it safe.</p>
   <p><b>What we keep about a purchase.</b> For seven days after it settles, a purchase stays linked to the account it was made from — or, for a code bought on the website, to the code it produced. That is the window in which we can trace a payment that did not arrive and judge a refund. After seven days the link is deleted. The purchase record itself (amount, date, payment method, country) is kept for bookkeeping. None of this touches your prompts: the account a purchase belongs to and the session your prompts are billed to are not connected on our side.</p>
   <p><b>Purchases in the iPhone app.</b> On iPhone, credit is bought through the App Store. Apple is the seller of record for that purchase and its price is set in the App Store; Apple's terms, cancellation and refund rules apply to the payment. The credit itself is delivered by us the moment Apple's transaction is verified, and from then on it is credit like any other: on your recovery phrase, spent as coins, not refundable by us once used.</p>
+
+  <!-- LAWYER CHECK (2026-09-14): expiry of bearer coins. Drafted to state the technical facts
+       and the safeguards (automatic return, warning, bounded amount); wording and the 30-day
+       period to be reviewed against § 307 BGB / case law on prepaid balances before relied on. -->
+  <h2 id="expiry">6a. Validity of credit drawn onto a device</h2>
+  <p>Credit on your account does not expire. To spend it, the app draws it onto your device as
+     <b>coins</b>: blind-signed bearer tokens that we cannot trace back to you, which is what keeps
+     your purchases and your prompts apart. Each batch of coins is valid for <b>30 days</b> from the
+     day it is drawn. This period is a property of the cryptographic scheme, not a commercial
+     choice: a coin that could be spent forever would also have to be remembered forever by every
+     server that must refuse it a second time.</p>
+  <p>The app keeps this from costing you anything as long as it is opened now and then: it draws
+     only a small amount at a time, moves unspent coins back to your account (or onto your recovery
+     phrase) before they expire when it is opened in the days before the deadline, and shows a
+     notice in the account view and, where you allow it, a local notification when coins on a
+     device are about to expire. <b>Coins that expire nonetheless are void and are not refunded</b>,
+     because we cannot tell which coins were spent and which were not. The amount at risk is by
+     design never more than the credit most recently drawn onto that device.</p>
 
   <h2 id="use">7. Acceptable use</h2>
   <p>You may not use the service to break the law, to generate content that infringes the rights of others, or to attack the service or the networks it relies on. The third-party models' own usage policies apply to the content they produce. We may refuse service where required by law.</p>

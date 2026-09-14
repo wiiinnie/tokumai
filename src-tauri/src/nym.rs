@@ -75,6 +75,20 @@ pub fn random_hermes_gateway() -> String {
         .unwrap_or_default()
 }
 
+/// One of the operator's entry gateways, at random, but NEVER `exclude` — the rule for the
+/// purchase client (2026-09-13): account-side traffic must enter the mixnet through a
+/// different gateway than the chat client, so no single gateway operator sees both
+/// connections from one address. Compared by identity (base58), not by hostname.
+pub fn hermes_gateway_excluding(exclude: Option<&str>) -> String {
+    use rand::seq::SliceRandom;
+    let pool: Vec<&str> = HERMES_ENTRY_GATEWAYS
+        .iter()
+        .map(|(_, id)| *id)
+        .filter(|id| Some(*id) != exclude)
+        .collect();
+    pool.choose(&mut rand::thread_rng()).map(|s| s.to_string()).unwrap_or_default()
+}
+
 /// Build the mixnet `DebugConfig` for a performance/privacy setting. Extracted as a
 /// free function so the mapping is unit-testable without a live mixnet, and so the
 /// standalone `mixbench` diagnostic uses the EXACT same knobs the app does.
@@ -234,6 +248,12 @@ impl Transport {
     /// Set the mixnet performance/privacy tradeoff and drop the live client so the next
     /// request reconnects with the new cover-traffic rate + mixing delay. No-op (and no
     /// reconnect) if the values are unchanged, so the UI can push it freely on startup.
+    /// The current performance/privacy tuple — copied onto the purchase client so both
+    /// links carry the user's choice.
+    pub fn perf(&self) -> (u64, u64, u64, bool) {
+        *self.perf.lock().unwrap()
+    }
+
     pub async fn set_perf(&self, cover_ms: u64, mix_ms: u64, send_ms: u64, continuous: bool) {
         {
             let mut p = self.perf.lock().unwrap();
@@ -829,6 +849,18 @@ impl Transport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_purchase_client_never_takes_the_chat_clients_gateway() {
+        let (_, first) = HERMES_ENTRY_GATEWAYS[0];
+        for _ in 0..200 {
+            assert_ne!(hermes_gateway_excluding(Some(first)), first);
+        }
+        // a non-operator gateway on the chat side excludes nothing — the full pool stays
+        let all: std::collections::HashSet<String> = (0..500).map(|_| hermes_gateway_excluding(Some("not-a-hermes-gateway"))).collect();
+        assert_eq!(all.len(), HERMES_ENTRY_GATEWAYS.len());
+        assert!(!hermes_gateway_excluding(None).is_empty());
+    }
 
     #[test]
     fn debug_config_maps_perf_knobs_to_nym_fields() {

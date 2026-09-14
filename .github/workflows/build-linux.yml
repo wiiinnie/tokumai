@@ -54,7 +54,8 @@ jobs:
         if: ${{ inputs.release_tag != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ inputs.release_tag }}" target/release/bundle/appimage/*.AppImage target/release/bundle/deb/*.deb --clobber
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: gh release upload "$RELEASE_TAG" target/release/bundle/appimage/*.AppImage target/release/bundle/deb/*.deb --clobber
 
       - name: Upload artifacts
         continue-on-error: true

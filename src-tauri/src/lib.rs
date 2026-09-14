@@ -570,6 +570,73 @@ async fn session_status(t: &Transport, srv: &str, sk: &account::SessionKeys) -> 
 
 /// One federation round-trip over the mixnet: wrap a `FedRequest` in the app's
 /// id-envelope, send it, and unwrap the `FedResponse` from the reply.
+// ---------------------------------------------------------------------------------------
+// The purchase client (design 2026-09-13, block A). Account-side calls — invoice, invite
+// check, code redeem, App Store receipt, entitlement + coin withdrawal — leave through a
+// SECOND Nym client with its own ephemeral identity, so the server never sees an account
+// call and a session call under the same reply-SURB sender tag. It exists only while it
+// is needed: built on the first account call, dropped after a collect or when the buy
+// sheet closes. Its entry gateway is one of the operator's, never the chat client's — and
+// that is re-checked on EVERY use, because the user can move the chat client to any
+// gateway at any time.
+// ---------------------------------------------------------------------------------------
+
+#[derive(Default)]
+struct BuyLink {
+    t: tokio::sync::Mutex<Option<Arc<Transport>>>,
+}
+
+/// The purchase client, connecting lazily. Enforces the gateway rule: if its gateway equals
+/// the chat client's current one, it is moved (never the chat client, whose gateway is the
+/// user's choice).
+async fn buy_transport(app: &AppHandle, main: &Transport) -> Arc<Transport> {
+    let link = app.state::<BuyLink>();
+    let mut g = link.t.lock().await;
+    let main_gw = main.entry_gateway_id().await;
+    if g.is_none() {
+        let t = Arc::new(Transport::new());
+        let (cover, mix, send, cont) = main.perf();
+        t.set_perf(cover, mix, send, cont).await;
+        let h = app.clone();
+        t.set_progress_sink(Box::new(move |step, detail| {
+            let _ = h.emit("buy-phase", json!({ "step": step, "detail": detail }));
+        }));
+        let pick = nym::hermes_gateway_excluding(main_gw.as_deref());
+        t.set_entry_gateway(Some(pick)).await;
+        log::info!("[buy-link] purchase client prepared on its own gateway");
+        *g = Some(t);
+    }
+    let t = g.clone().expect("just set");
+    if let (Some(m), Some(b)) = (main_gw.as_deref(), t.entry_gateway_id().await.as_deref()) {
+        if m == b {
+            // The chat client moved onto our gateway (server switch, gateway picker):
+            // the purchase client yields and re-picks; dropping the live client is fine,
+            // the next call reconnects.
+            let pick = nym::hermes_gateway_excluding(Some(m));
+            t.set_entry_gateway(Some(pick)).await;
+            log::info!("[buy-link] chat client took the purchase gateway — moved the purchase client");
+        }
+    }
+    t
+}
+
+/// Tear the purchase client down (buy sheet closed, or the coins are in). Its identity is
+/// ephemeral, so the next purchase starts from fresh keys on a fresh gateway pick.
+async fn close_buy_link(app: &AppHandle) {
+    let link = app.state::<BuyLink>();
+    let t = link.t.lock().await.take();
+    if let Some(t) = t {
+        t.drop_client().await;
+        log::info!("[buy-link] purchase client closed");
+    }
+}
+
+#[tauri::command]
+async fn buy_close(app: AppHandle) -> Result<Value, String> {
+    close_buy_link(&app).await;
+    Ok(json!({ "closed": true }))
+}
+
 async fn fed_call(
     t: &Transport,
     srv: &str,
@@ -1376,6 +1443,7 @@ async fn invoice(
     invite_code: Option<String>,
     consent: Option<Value>,
 ) -> Result<Value, String> {
+    let transport = buy_transport(&app, &transport).await;
     let w = wallet::load(&data_dir(&app)?);
     let srv = server_addr(&w)?;
     let m = w.mnemonic.ok_or("no account — create one first")?;
@@ -1479,6 +1547,7 @@ async fn invoice(
 /// a mixnet.
 #[tauri::command]
 async fn voucher_redeem(app: AppHandle, transport: State<'_, Arc<Transport>>, code: String) -> Result<Value, String> {
+    let transport = buy_transport(&app, &transport).await;
     let w = wallet::load(&data_dir(&app)?);
     let srv = server_addr(&w)?;
     let m = w.mnemonic.ok_or("no account — create one first")?;
@@ -1515,6 +1584,7 @@ async fn voucher_redeem(app: AppHandle, transport: State<'_, Arc<Transport>>, co
 
 #[tauri::command]
 async fn invoice_status(app: AppHandle, transport: State<'_, Arc<Transport>>, id: String) -> Result<Value, String> {
+    let transport = buy_transport(&app, &transport).await;
     let w = wallet::load(&data_dir(&app)?);
     let srv = server_addr(&w)?;
     let resp = transport
@@ -1656,6 +1726,7 @@ async fn invite_check(
     transport: State<'_, Arc<Transport>>,
     code: String,
 ) -> Result<Value, String> {
+    let transport = buy_transport(&app, &transport).await;
     let w = wallet::load(&data_dir(&app)?);
     let srv = server_addr(&w)?;
     let m = w.mnemonic.ok_or("no account — create one first")?;
@@ -1676,6 +1747,7 @@ async fn invite_check(
 
 #[tauri::command]
 async fn invoice_cancel(app: AppHandle, transport: State<'_, Arc<Transport>>, id: String) -> Result<Value, String> {
+    let transport = buy_transport(&app, &transport).await;
     let w = wallet::load(&data_dir(&app)?);
     let srv = server_addr(&w)?;
     let resp = transport
@@ -1692,6 +1764,7 @@ async fn invoice_cancel(app: AppHandle, transport: State<'_, Arc<Transport>>, id
 async fn collect(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<Value, String> {
     diag(&app, "collect: begin");
     let _op = transport.begin_op().await;
+    let transport = buy_transport(&app, &transport).await;
     let dir = data_dir(&app)?;
     let w0 = wallet::load(&dir);
     let srv = server_addr(&w0)?;
@@ -1737,6 +1810,9 @@ async fn collect(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result
         log::info!("[coconut] collected a {book_toku}-SCRAI book ({owed} entitlement left)");
     }
     diag(&app, "collect: about to respond");
+    // The coins are on the device: the purchase client has done its job for this purchase.
+    drop(transport);
+    close_buy_link(&app).await;
     Ok(json!({ "collected": collected, "held": coconut_held_toku(&app) }))
 }
 
@@ -3371,6 +3447,7 @@ fn init_android_tls_verifier() {
 
 #[cfg(target_os = "ios")]
 async fn iap_verify_on_server(app: &AppHandle, transport: &Transport, jws: &str) -> Result<(u64, u64), String> {
+    let transport = buy_transport(app, transport).await;
     let w = wallet::load(&data_dir(app)?);
     let srv = server_addr(&w)?;
     let m = w.mnemonic.ok_or("no account — create one first")?;
@@ -3544,6 +3621,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .manage(Arc::new(Transport::new()))
+        .manage(BuyLink::default())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             // FIRST: nothing may touch the data directory before this — the first
@@ -3603,7 +3681,7 @@ pub fn run() {
             state, local_state, set_server, account_new, account_reveal, account_restore, account_delete, account_migrate_qr,
             invoice, invoice_status, invoice_cancel, invite_check, ocr_scan, pdf_text, pdf_ocr, pdf_pages, collect, redeem, chat,
             smart_available, smart_detect, coconut_redeem,
-            mixnet_route, mixnet_ping, cancel_chat, app_resumed, app_hidden, resume_stats, list_entry_gateways, server_identities, set_entry_gateway, set_entry_random, set_mixnet_perf, open_external, save_image, save_file, voucher_redeem,
+            mixnet_route, mixnet_ping, cancel_chat, app_resumed, app_hidden, resume_stats, list_entry_gateways, server_identities, set_entry_gateway, set_entry_random, set_mixnet_perf, buy_close, open_external, save_image, save_file, voucher_redeem,
             phrase_backup_get, iap_products, iap_purchase, iap_restore,
             phrase_check_start,
             phrase_check_verify,

@@ -120,6 +120,8 @@ const httpBackend = {
   appHidden: () => Promise.resolve(),
   resumeStats: () => Promise.resolve({ count: 0, alive: 0, dead: 0, rebuilt: 0, longest_alive_ms: 0, shortest_dead_ms: null, log: "", path: "" }),
   onMixnetPhase: async () => () => {},
+  onBuyPhase: async () => () => {},
+  buyClose: () => Promise.resolve({ closed: false }),
   listEntryGateways: () => Promise.resolve([]),
   serverIdentities: () => Promise.resolve([]),
   setEntryGateway: () => Promise.resolve({ entry_gateway: null }),
@@ -210,6 +212,9 @@ const tauriBackend = (invoke) => ({
   resumeStats: () => invoke("resume_stats"),
   // Rust emits mixnet-phase {step, detail} during every (re)connect — keys · client · gateway · cover · ready · failed · check.
   onMixnetPhase: async (cb) => { const ev = window.__TAURI__ && window.__TAURI__.event; if (ev && ev.listen) return ev.listen("mixnet-phase", (e) => { try { cb(e.payload); } catch (_) {} }); return () => {}; },
+  // The purchase client (account-side calls on their own identity + gateway) reports the same steps.
+  onBuyPhase: async (cb) => { const ev = window.__TAURI__ && window.__TAURI__.event; if (ev && ev.listen) return ev.listen("buy-phase", (e) => { try { cb(e.payload); } catch (_) {} }); return () => {}; },
+  buyClose: () => invoke("buy_close"),
   listEntryGateways: () => invoke("list_entry_gateways"),
   serverIdentities: () => invoke("server_identities"),
   setEntryGateway: (id) => invoke("set_entry_gateway", { id }),
@@ -319,6 +324,8 @@ export const Backend = {
   appHidden: () => pick("appHidden"),
   resumeStats: () => pick("resumeStats"),
   onMixnetPhase: (...a) => pick("onMixnetPhase", ...a),
+  onBuyPhase: (...a) => pick("onBuyPhase", ...a),
+  buyClose: () => pick("buyClose"),
   listEntryGateways: () => pick("listEntryGateways"),
   serverIdentities: () => pick("serverIdentities"),
   setEntryGateway: (id) => pick("setEntryGateway", id),

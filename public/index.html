@@ -333,6 +333,7 @@
   .cardpriv{margin-top:12px;font-size:12px;line-height:1.45;color:var(--muted)}
   /* buy: amount tiles + coin brand colours + pay panel (Buy Credit mockup) */
   .balline{font-family:var(--mono);font-size:11.5px;color:var(--muted);margin:0 0 14px;line-height:1.55}
+  .buylink{font-family:var(--mono);font-size:11px;color:var(--mix);margin:-6px 0 12px;line-height:1.5} .buylink.bad{color:var(--rust)}
   .balline b{color:var(--bone)}
   #tierRow.tiles,#iosStore .tiles{display:flex;gap:9px;margin-bottom:2px}
   #iosStore .tiletier .a{color:var(--mix)}
@@ -1200,6 +1201,9 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     <div class="mh"><span class="ttl">Buy <b>credit</b></span><span class="x" data-click="closeBuy">✕</span></div>
     <div class="mb">
       <p class="balline" id="buyBal"></p>
+      <!-- The purchase client: account calls leave on their own identity and gateway (design
+           2026-09-13). Only shown while it connects or when it failed; silent once ready. -->
+      <p class="buylink" id="buyLink" hidden></p>
       <div id="iosTopup" style="display:none"></div>
       <div id="iosStore" style="display:none"></div>
       <!-- One field for every kind of code — invites, vouchers, gifts. It names no place to get
@@ -6193,7 +6197,19 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   }
   // Closing does NOT stop an open payment's poll — pay in your wallet, come back,
   // and it's already credited. Only the visible timers pause.
-  function closeBuy(){ stopCountdown(); stopPendRefresh(); $("buyScrim").classList.remove("open"); }
+  function closeBuy(){ stopCountdown(); stopPendRefresh(); $("buyScrim").classList.remove("open"); try{ Backend.buyClose(); }catch(_){} }
+  // Purchase-client progress → one quiet line under the balance. "gateway" names where the
+  // account traffic enters; "ready" hides the line after a moment; "failed" keeps it, red.
+  let buyLinkHide=null;
+  function onBuyPhase(p){
+    const el=$("buyLink"); if(!el||!p) return;
+    clearTimeout(buyLinkHide);
+    const step=String(p.step||""), detail=String(p.detail||"");
+    if(step==="keys"||step==="client"){ el.hidden=false; el.className="buylink"; el.textContent="Connecting privately for this purchase\u2026"; }
+    else if(step==="gateway"){ el.hidden=false; el.className="buylink"; el.textContent=`Connecting privately for this purchase via ${detail||"a separate gateway"}\u2026`; }
+    else if(step==="ready"){ el.className="buylink"; el.textContent="Private line for this purchase is up \u2014 separate from your chat connection."; buyLinkHide=setTimeout(()=>{ el.hidden=true; }, 4000); }
+    else if(step==="failed"){ el.hidden=false; el.className="buylink bad"; el.textContent=`Could not open the private purchase line: ${detail||"gateway unreachable"}. It retries on the next step.`; }
+  }
 
   function renderPending(){
     pruneExpired();
@@ -6938,7 +6954,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       }
     });
     // Connect progress from Rust (every reconnect after the first): drives the chip + card.
-    if(isTauri()){ try{ Backend.onMixnetPhase(onMixnetPhase); }catch(_){} }
+    if(isTauri()){ try{ Backend.onMixnetPhase(onMixnetPhase); }catch(_){} try{ Backend.onBuyPhase(onBuyPhase); }catch(_){} }
     // Drag & drop files anywhere in the chat column (alternative to the "+").
     const mainEl=$("main");
     if(mainEl){
