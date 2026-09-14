@@ -1107,16 +1107,51 @@ fn build_tender(
     keys: &scrai_core::purse::EpochKeys,
     ceiling: u64,
 ) -> Result<scrai_core::tender::Tender, String> {
-    use scrai_core::tender::{plan_coins, Note, Tender};
-    let mut notes: Vec<Note> = Vec::new();
+    use scrai_core::tender::{plan_coins, Note, Tender, MAX_NOTES};
+    /// Note slots held back for one finely planned book, so spare notes can never eat the
+    /// whole budget and leave no room for the granularity a book plan provides.
+    const FINE_SLOTS: usize = 6;
+
+    let mut spares: Vec<Note> = Vec::new();
     for v in std::mem::take(&mut w.spare_notes) {
         match serde_json::from_value::<Note>(v) {
-            Ok(n) => notes.push(n),
+            Ok(n) => spares.push(n),
             // A note we can no longer parse is a note we can never spend; dropping it
             // loses at most its face value, keeping it would poison every tender.
             Err(e) => log::warn!("[tender] dropping an unreadable spare note: {e}"),
         }
     }
+    // Spare notes are already paid for, so they go first — but only as many as this tender
+    // can carry. Taking ALL of them is what wedged the wallet on 2026-09-14: a refused
+    // tender comes home in one piece, so the next attempt put the same over-long pile back
+    // on the table and was refused for the same reason, for ever. Largest first, so the
+    // ceiling is reached in the fewest notes.
+    spares.sort_by(|a, b| b.coins.cmp(&a.coins));
+    let mut notes: Vec<Note> = Vec::new();
+    let mut keep: Vec<Note> = Vec::new();
+    let mut have = 0u64;
+    for n in spares {
+        if have < ceiling && notes.len() + FINE_SLOTS < MAX_NOTES {
+            have += n.coins;
+            notes.push(n);
+        } else {
+            keep.push(n);
+        }
+    }
+    // If the spares already cover the ceiling no book will be opened, and then their own
+    // values are all the granularity there is. Spend what is left of the note budget on
+    // the SMALLEST of them, so the server can still burn an exact amount instead of
+    // overshooting onto a whole note.
+    if have >= ceiling {
+        keep.sort_by(|a, b| a.coins.cmp(&b.coins));
+        while notes.len() < MAX_NOTES && !keep.is_empty() {
+            notes.push(keep.remove(0));
+        }
+    }
+    w.spare_notes = keep
+        .iter()
+        .filter_map(|n| serde_json::to_value(n).ok())
+        .collect();
     let mut short = ceiling.saturating_sub(notes.iter().map(|n| n.coins).sum::<u64>());
     // Books are small, so one request can need coins out of several of them. Take the
     // oldest first: a coin that has been on the device longest is the one whose purchase
@@ -1132,7 +1167,7 @@ fn build_tender(
     // total is then the whole notes plus the fine remainder, still exact, in about a
     // tenth of the notes.
     let mut fine_done = false;
-    while short > 0 && notes.len() < scrai_core::tender::MAX_NOTES {
+    while short > 0 && notes.len() < MAX_NOTES {
         let Some((idx, mut purse)) = first_funded_purse(&w.coconut_purses) else { break };
         let take = short.min(purse.remaining_coins());
         if take == 0 {
@@ -1149,7 +1184,7 @@ fn build_tender(
             (plan_coins(fine), fine)
         };
         // Room for what this book would add — never blow the note budget mid-book.
-        if notes.len() + values.len() > scrai_core::tender::MAX_NOTES {
+        if notes.len() + values.len() > MAX_NOTES {
             break;
         }
         let mut fresh = purse.spend_tender(keys, &values, spend_date)?;
@@ -4636,6 +4671,34 @@ mod tender_tests {
             let paid: u64 = picked.iter().map(|i| t.notes[*i].coins).sum();
             assert_eq!(paid, cost, "paying {cost} burned {paid}");
         }
+    }
+
+    /// The wedge of 2026-09-14: a refused tender comes home whole, so the wallet held
+    /// thirty-six spare notes — and the next tender put every one of them back on the
+    /// table and was refused for the same reason. For ever.
+    #[test]
+    fn a_pile_of_spare_notes_cannot_wedge_the_next_tender() {
+        use scrai_core::tender::MAX_NOTES;
+        let fk = testkit::funded();
+        let keys = fk.keys();
+        let mut w = wallet::Wallet::default();
+
+        // Build one over-long tender the way the old code did, and let it come home.
+        for _ in 0..9 {
+            let mut p = fk.new_purse();
+            let notes = p.spend_tender(&keys, &scrai_core::tender::plan_coins(4), fk.spend_date()).unwrap();
+            for n in notes {
+                w.spare_notes.push(serde_json::to_value(&n).unwrap());
+            }
+            w.coconut_purses.push(p.persist().unwrap());
+        }
+        assert!(w.spare_notes.len() > MAX_NOTES, "the fixture must reproduce the pile");
+
+        let t = build_tender(&mut w, &keys, 90).expect("a wallet with credit can tender");
+        assert!(t.notes.len() <= MAX_NOTES, "{} notes in one tender", t.notes.len());
+        t.well_formed().expect("a tender the server would accept");
+        // The notes not carried are still money: they stay in the wallet for next time.
+        assert!(!w.spare_notes.is_empty(), "unused spares must be kept, not dropped");
     }
 
     #[test]
