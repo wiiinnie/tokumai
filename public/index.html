@@ -5021,6 +5021,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   }
 
   let returning = false, returnPct = 0, returnDone = 0;
+  let draining = false, drainMsg = "";   // moving an old session balance onto the account
   async function returnCoins(){
     if(returning || !account) return;
     if(!(held > 0)){ acctStatus("Nothing on this device to return.", ""); return; }
@@ -5306,10 +5307,30 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     const maxD = Math.max(1, Math.floor(held/100000));
     const pickD = Math.min(redeemDollars!=null?redeemDollars:maxD, maxD);
     const pickToku = pickD>=maxD ? held : pickD*100000;
+    // Credit left on the old session layer. Prompts pay with coins now, so nothing spends
+    // this any more — it has to come back to the account before that layer goes.
+    const sessionToku = Math.max(0, balance - held);
+    const drainBox = (coinChat && sessionToku>0) ? `<div class="heldbox">
+        <div class="hh"><span class="amt">${esc(formatToku(sessionToku))} TOKU</span><span class="where">on your old session</span></div>
+        <p>Credit from before prompts paid with coins. It is still yours, but nothing spends it any more.
+           Move it to your account and it comes back as coins on this device.</p>
+        ${draining ? `<div class="act">
+          <button class="rbtn busy" disabled>Moving<span class="dots"></span></button>
+          <span class="rsmall">over the mixnet</span>
+        </div>`
+        : `<div class="act">
+          <button class="rbtn" data-click="doDrain">Move to my account</button>
+          ${drainMsg?`<span class="rsmall">${esc(drainMsg)}</span>`:``}
+        </div>`}
+      </div>` : ``;
     const heldBox = held>0 ? `<div class="heldbox">
         <div class="hh"><span class="amt">${esc(formatToku(held))} TOKU</span><span class="where">on this device only</span></div>
-        <p>Coins are held here, not on your account. A <b>recovery phrase does not bring them back</b>
-           — redeeming moves them onto your balance, where it does.</p>
+        <p>${coinChat
+          ? `Coins are held here, not on your account. A <b>recovery phrase does not bring them back</b> — before you
+             give this device away or move to another one, hand them back under <b>Move credit back to my account</b>.`
+          : `Coins are held here, not on your account. A <b>recovery phrase does not bring them back</b>
+             — redeeming moves them onto your balance, where it does.`}</p>
+        ${coinChat?``:`
         ${redeemPick&&maxD>1?`<div class="rslider">
           <input type="range" id="redeemSlider" min="1" max="${maxD}" value="${pickD}" step="1"
                  data-input="redeemSliderChanged" data-input-pass="value" class="mpslider flat">
@@ -5323,7 +5344,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         : `<div class="act">
           <button class="rbtn" data-click="doRedeem">${redeemPartial?"Redeem the rest":`Redeem ${redeemPick&&maxD>1?`$${pickD}`:`now`}`}</button>
           ${maxD>1&&!redeemPartial?`<span class="rlink" data-click="toggleRedeemPick">${redeemPick?"all of it":"choose amount"}</span>`:``}
-        </div>`}
+        </div>`}`}
       </div>` : ``;
     const idcard = `<div class="idcard">
       <div class="fp">${esc(account.fingerprint)}</div>
@@ -5334,6 +5355,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       ${checking
         ? `<div class="checkline busy">↻ Checking<span class="dots"></span> <span class="dim">· over the mixnet</span></div>`
         : `<div class="checkline" data-click="checkCredit">↻ Check for credit <span class="dim">· ${esc(credResult||checkedAgo())}</span></div>`}
+      ${drainBox}
       ${heldBox}
     </div>`;
 
@@ -5583,6 +5605,23 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   }
   // Strip the machine prefix off a HELD_CREDIT error for display.
   function heldMsg(e){ const m=e&&e.message?e.message:String(e); return m.replace(/^HELD_CREDIT:\s*/,""); }
+  /// Move an old session balance onto the account. One request, once per account: the
+  /// session says "empty me onto this account", the account says "that is me". What lands
+  /// is entitlement, and the app then draws it as books by itself.
+  async function doDrain(){
+    if(draining) return;
+    draining = true; drainMsg = ""; renderAccount();
+    try{
+      const r = await Backend.sessionDrain();
+      const moved = Number(r && r.moved) || 0;
+      await refreshState();
+      drainMsg = moved > 0 ? `${formatToku(moved)} TOKU moved — drawing coins` : "nothing left to move";
+    }catch(e){
+      drainMsg = String((e && e.message) || e || "could not reach the server");
+    }
+    draining = false; renderAccount(); renderBal();
+  }
+
   async function doRedeem(){
     if(redeeming) return;                       // ignore rapid double-clicks
     redeeming = true;
@@ -6821,7 +6860,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     pickModel, copyPhrase, newChat, openSession, deleteSession, exportSession, toggleMenu, selectModelIdx,
     autogrow, onKey, sendMsg, retryMsg, showHandover, downloadHandover, closeHandover, pickImport, importHandover,
     cancelMsg, resendMsg, showDismissed, retrieveMsg, openConnSheet, closeConnSheet, rebuildRoute, rebuildRouteFromSheet, copyResumeLog, routeDismiss, useOfficialServer, iterateImg,
-    openBuy, closeBuy, buyTier, buyOrInvoice, checkInvite, selectCoin, pickVariant, copyUri, copyTopupId, openTopupSheet, closeTopupSheet, confirmTopup, openAccount, closeAccount, doAccountNew, doAccountReveal, doAccountRestore, doAccountDelete, doMigrate, doRedeem, redeemSliderChanged, toggleRedeemPick, askCancelInvoice, dismissCancelAsk, confirmCancelInvoice, toggleConsent, downloadReceipt, startQrScan, stopQrScan,
+    openBuy, closeBuy, buyTier, buyOrInvoice, checkInvite, selectCoin, pickVariant, copyUri, copyTopupId, openTopupSheet, closeTopupSheet, confirmTopup, openAccount, closeAccount, doAccountNew, doAccountReveal, doAccountRestore, doAccountDelete, doMigrate, doDrain, doRedeem, redeemSliderChanged, toggleRedeemPick, askCancelInvoice, dismissCancelAsk, confirmCancelInvoice, toggleConsent, downloadReceipt, startQrScan, stopQrScan,
     showRestore, askNew, redeemThen, cancelAcctView, saveServer, srvSelected, qNav, scrollToBottom, reopenGuard, checkCredit,
     openEntryPicker, showExitInfo, chooseGateway, closeGw, filterGw, toggleGwOpt,
     acceptTerms, declineTerms, termsAgreeToggle, chooseModel, openLink, openSite, writeSupport, paymentSupport, setPhraseBackup, askPhraseBackupYes, askPhraseBackupNo, startPhraseCheck, submitPhraseCheck, showPhraseAgain, toggleImgOvl, saveImgTap, liveNudgeUse, liveNudgeSkip, reconnectMix, runMixPing, resetMixPerf,

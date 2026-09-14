@@ -1269,6 +1269,68 @@ fn coins_on_device(w: &wallet::Wallet) -> u64 {
     in_books + in_notes
 }
 
+/// Move an old SESSION balance onto the account, where it becomes entitlement and from
+/// there coins. Every prompt pays with coins now, so anything still sitting on the
+/// session layer would be stranded when that layer goes (docs/unlinkability.md, block D).
+///
+/// Two signatures travel together: the session consents to being emptied and names the
+/// account, the account proves it is that destination. Both keys come from the one
+/// recovery phrase. This is the single request in the app that carries a session key and
+/// an account key at once — it therefore links the two AT THE SERVER for the length of
+/// that request. Nothing about it is stored (the session store holds a balance and a
+/// counter, no account), it goes out over the purchase client like every other account
+/// call, and it is needed exactly once per account.
+#[tauri::command]
+async fn session_drain(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<Value, String> {
+    let _op = transport.begin_op().await;
+    let dir = data_dir(&app)?;
+    let w = wallet::load(&dir);
+    let srv = server_addr(&w)?;
+    let m = w.mnemonic.clone().ok_or("no account — create one first")?;
+    let a = account::from_mnemonic(&m)?;
+    let sk = account::derive_session_keys(&m, w.session_index)?;
+    let t = buy_transport(&app, &transport).await;
+
+    let nonce = rand_hex(16);
+    let resp = t
+        .round_trip(
+            &srv,
+            &json!({ "v": PROTO, "kind": "session.drain", "id": rand_hex(16),
+                     "publicKey": a.public_key_pem, "nonce": nonce, "sig": a.sign("drain", &nonce),
+                     "sessionKey": sk.public_key_pem, "sessionId": sk.session_id,
+                     "sessionSig": sk.sign_handover(&a.account_id, &nonce) }),
+            SURBS_SMALL,
+            TIMEOUT_MS,
+        )
+        .await;
+    // The purchase client has done its job either way — an error must not leave it up.
+    let resp = match resp {
+        Ok(r) => r,
+        Err(e) => {
+            close_buy_link(&app).await;
+            return Err(e);
+        }
+    };
+    if let Some(err) = resp.get("error").and_then(|e| e.as_str()) {
+        close_buy_link(&app).await;
+        return Err(err.to_string());
+    }
+    let moved = resp.get("moved").and_then(|v| v.as_u64()).unwrap_or(0);
+    let entitlement = resp.get("entitlement").and_then(|v| v.as_u64()).unwrap_or(0);
+    {
+        let mut w = wallet::load(&dir);
+        w.entitlement_seen = entitlement;
+        let _ = wallet::save(&dir, &w);
+    }
+    close_buy_link(&app).await;
+    // What came over is entitlement, and entitlement only becomes spendable as books —
+    // so draw them now rather than leaving the user looking at "waiting on your account".
+    if moved > 0 {
+        spawn_refill_soon(&app);
+    }
+    Ok(json!({ "moved": moved, "entitlement": entitlement }))
+}
+
 /// Hand every unspent coin on this device back to the account, where it becomes
 /// entitlement again — the way to move to another device, or to empty one before giving
 /// it away. Coins are bearer money: they live only here, and a recovery phrase does not
@@ -4324,7 +4386,7 @@ pub fn run() {
             state, local_state, set_server, account_new, account_reveal, account_restore, account_delete, account_migrate_qr,
             invoice, invoice_status, invoice_cancel, invite_check, ocr_scan, pdf_text, pdf_ocr, pdf_pages, collect, redeem, chat,
             smart_available, smart_detect, coconut_redeem,
-            mixnet_route, mixnet_ping, cancel_chat, app_resumed, app_hidden, resume_stats, list_entry_gateways, server_identities, set_entry_gateway, set_entry_random, set_mixnet_perf, buy_close, set_coin_chat, coins_return, collect_later, open_external, save_image, save_file, voucher_redeem,
+            mixnet_route, mixnet_ping, cancel_chat, app_resumed, app_hidden, resume_stats, list_entry_gateways, server_identities, set_entry_gateway, set_entry_random, set_mixnet_perf, buy_close, set_coin_chat, coins_return, collect_later, session_drain, open_external, save_image, save_file, voucher_redeem,
             phrase_backup_get, iap_products, iap_purchase, iap_restore,
             phrase_check_start,
             phrase_check_verify,

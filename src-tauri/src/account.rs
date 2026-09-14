@@ -131,6 +131,14 @@ impl SessionKeys {
         let msg = format!("{}:{}:{}", self.session_id, counter, body_hash);
         B64.encode(self.signing.sign(msg.as_bytes()).to_bytes())
     }
+
+    /// Consent to this session being emptied onto an account. The destination is inside
+    /// the signed message, so the signature cannot be replayed to move the balance
+    /// anywhere else. Counterpart of `auth::session_hands_over` on the server.
+    pub fn sign_handover(&self, account_id: &str, nonce: &str) -> String {
+        let msg = format!("{}:drain:{}:{}", self.session_id, account_id, nonce);
+        B64.encode(self.signing.sign(msg.as_bytes()).to_bytes())
+    }
 }
 
 #[cfg(test)]

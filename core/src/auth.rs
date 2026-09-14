@@ -79,6 +79,27 @@ pub fn session_authorises(
     verify(public_key_pem, &msg, sig)
 }
 
+/// Verify that the holder of a session key agrees to hand that session's whole balance
+/// over to `account_id`. Same stateless shape as `session_authorises`: the key must BE
+/// the session. The DESTINATION is part of the signed message, so a captured signature
+/// cannot be replayed to move the money onto somebody else's account.
+///
+/// This exists for one migration: the session layer is going away (docs/unlinkability.md,
+/// block D) and the balance sitting on it has to reach the account that paid for it.
+pub fn session_hands_over(
+    public_key_pem: &str,
+    session_id: &str,
+    account_id: &str,
+    nonce: &str,
+    sig: &str,
+) -> bool {
+    if id_for(public_key_pem) != session_id {
+        return false;
+    }
+    let msg = format!("{session_id}:drain:{account_id}:{nonce}");
+    verify(public_key_pem, &msg, sig)
+}
+
 // ---------------------------------------------------------------------------
 #[cfg(test)]
 mod tests {
@@ -121,5 +142,19 @@ mod tests {
         assert!(!session_authorises(&pem, &sid, 4, body, &sig)); // other counter
         assert!(!session_authorises(&pem, &sid, 3, "{}", &sig)); // other body
         assert!(!session_authorises(&pem, "someone-else", 3, body, &sig)); // key ≠ session
+    }
+
+    #[test]
+    fn a_hand_over_names_the_account_it_moves_to() {
+        let (sk, pem) = keypair();
+        let sid = id_for(&pem);
+        let msg = format!("{sid}:drain:acct-1:n1");
+        let sig = B64.encode(sk.sign(msg.as_bytes()).to_bytes());
+        assert!(session_hands_over(&pem, &sid, "acct-1", "n1", &sig));
+        // The same signature cannot move the balance onto another account, or with
+        // another nonce, and a key that is not this session cannot sign for it at all.
+        assert!(!session_hands_over(&pem, &sid, "acct-2", "n1", &sig));
+        assert!(!session_hands_over(&pem, &sid, "acct-1", "n2", &sig));
+        assert!(!session_hands_over(&pem, "another-session", "acct-1", "n1", &sig));
     }
 }

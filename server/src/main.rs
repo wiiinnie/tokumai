@@ -1186,6 +1186,44 @@ const ORDER_TICK_MS: u64 = 1000;
                 }
                 continue;
             }
+            // The old session layer handing its balance back. Every prompt pays with coins
+            // now, so a balance left on a session would simply be stranded when that path
+            // goes (docs/unlinkability.md, block D). Two signatures: the SESSION consents
+            // to being emptied and names where the money goes, the ACCOUNT proves it is
+            // that destination. Both keys come from one recovery phrase, so only its owner
+            // can produce the pair — the server learns nothing new about who is who, it
+            // just sees the two proofs it already understands.
+            if kind == "session.drain" {
+                let id = envelope.get("id").cloned().unwrap_or(serde_json::Value::Null);
+                let bad = |e: &str| serde_json::to_vec(&serde_json::json!({ "id": id, "kind": "error", "error": e })).unwrap_or_default();
+                let field = |k: &str| envelope.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let (skey, sid, ssig, nonce) = (field("sessionKey"), field("sessionId"), field("sessionSig"), field("nonce"));
+                let response = match paywall.drain_claimant(&envelope) {
+                    None => bad("account signature does not check out, or the nonce was reused"),
+                    Some(account) if !scrai_core::auth::session_hands_over(&skey, &sid, &account, &nonce, &ssig) => {
+                        bad("the session did not authorise this hand-over")
+                    }
+                    Some(account) => {
+                        // Drain first, credit second, and persist before the ack: a crash
+                        // between them would lose the money, which is why the reply waits
+                        // for the disk write below like every other credit.
+                        let moved = sessions.drain(&sid);
+                        paywall.credit_voucher(&account, moved);
+                        if moved > 0 {
+                            println!("scrai-server: a session balance moved to its account — {moved} TOKU");
+                        }
+                        serde_json::to_vec(&serde_json::json!({ "id": id, "kind": "drain.ok", "moved": moved,
+                            "entitlement": paywall.entitlement(&account) })).unwrap_or_default()
+                    }
+                };
+                let (c0, c1) = label_color(&kind);
+                println!("scrai-server: handled {c0}{kind}{c1} ({} → {} bytes)", m.message.len(), response.len());
+                persist_changed(&mut db, &sessions, &mut quorum, &paywall, &mut saved);
+                if let Err(e) = senders[to.idx].read().await.send_reply(to.tag, response).await {
+                    eprintln!("scrai-server: session.drain reply failed: {e}");
+                }
+                continue;
+            }
             // Coins coming home: a device being retired or moved hands back what it never
             // spent, and the value lands on the ACCOUNT as entitlement. Account-signed so
             // only its owner can receive it; the coins themselves are bearer money and are

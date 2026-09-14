@@ -939,6 +939,14 @@ impl Pay {
         self.account_owns(v, "return")
     }
 
+    /// The old session layer handing its balance to the account that paid for it. "drain"
+    /// is its own purpose, so no signature this account made for anything else can be
+    /// replayed to move a session balance (the session's own consent is checked next to
+    /// this, with `auth::session_hands_over`).
+    pub fn drain_claimant(&mut self, v: &Value) -> Option<String> {
+        self.account_owns(v, "drain")
+    }
+
     /// Deduct entitlement for a coconut issuance. Called BEFORE the (off-loop) issuance
     /// runs, so two withdraws of the same account in flight can't both pass the gate;
     /// `restore_entitlement` gives it back when issuance fails.

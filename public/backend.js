@@ -129,6 +129,7 @@ const httpBackend = {
   setCoinChat: (on) => Promise.resolve({ coinChat: !!on }),
   coinsReturn: () => Promise.resolve({ credited: 0, entitlement: 0, held: 0 }),
   collectLater: () => Promise.resolve({ started: false }),
+  sessionDrain: () => Promise.resolve({ moved: 0, entitlement: 0 }),
   onCoinsReturn: async () => () => {},
   onTopUp: async () => () => {},
   setMixnetPerf: () => Promise.resolve({}), // dev backend has no mixnet
@@ -227,6 +228,7 @@ const tauriBackend = (invoke) => ({
   setCoinChat: (on) => invoke("set_coin_chat", { on: !!on }),
   coinsReturn: () => invoke("coins_return"),
   collectLater: () => invoke("collect_later"),
+  sessionDrain: () => invoke("session_drain"),
   // Progress while coins go home — one event per batch, so a long return does not look frozen.
   onCoinsReturn: async (cb) => { const ev = window.__TAURI__ && window.__TAURI__.event; if (ev && ev.listen) return ev.listen("coins-return", (e) => { try { cb(e.payload); } catch (_) {} }); return () => {}; },
   onTopUp: async (cb) => { const ev = window.__TAURI__ && window.__TAURI__.event; if (ev && ev.listen) return ev.listen("top-up", (e) => { try { cb(e.payload); } catch (_) {} }); return () => {}; },
@@ -344,6 +346,7 @@ export const Backend = {
   setCoinChat: (on) => pick("setCoinChat", on),
   coinsReturn: () => pick("coinsReturn"),
   collectLater: () => pick("collectLater"),
+  sessionDrain: () => pick("sessionDrain"),
   onCoinsReturn: (...a) => pick("onCoinsReturn", ...a),
   onTopUp: (...a) => pick("onTopUp", ...a),
   setMixnetPerf: (coverMs, mixMs, sendMs, continuous) => pick("setMixnetPerf", coverMs, mixMs, sendMs, continuous),

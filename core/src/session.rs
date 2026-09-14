@@ -73,6 +73,19 @@ impl SessionStore {
 
     /// Charge up to `cost` (never below zero); returns the new balance. Used for chat
     /// settlement — the answer was already produced, so we take what's there.
+    /// Empty a session: return what was on it and leave it at zero. The session layer is
+    /// being retired (docs/unlinkability.md, block D) and this is how a balance that was
+    /// paid for reaches the account's entitlement instead of being written off. Draining
+    /// an unknown or already-empty session moves 0, which makes a retry harmless.
+    pub fn drain(&mut self, id: &str) -> u64 {
+        let Some(s) = self.sessions.get_mut(id) else { return 0 };
+        let moved = std::mem::take(&mut s.balance);
+        if moved > 0 {
+            self.rev += 1;
+        }
+        moved
+    }
+
     pub fn charge_saturating(&mut self, id: &str, cost: u64) -> u64 {
         let s = self.sessions.entry(id.to_string()).or_default();
         s.balance = s.balance.saturating_sub(cost);
@@ -145,6 +158,22 @@ mod tests {
         assert_eq!(s.charge_saturating("a", 3_000), 7_000);
         // over-charge floors at zero, never negative
         assert_eq!(s.charge_saturating("a", 999_999), 0);
+    }
+
+    #[test]
+    fn draining_empties_the_session_exactly_once() {
+        let mut s = SessionStore::default();
+        s.credit("a", 9_703);
+        s.credit("b", 500);
+        let rev = s.revision();
+        assert_eq!(s.drain("a"), 9_703);
+        assert_eq!(s.balance("a"), 0);
+        assert!(s.revision() > rev, "a drained balance must reach disk");
+        // A second attempt (a lost reply, a retry) moves nothing more, and no other
+        // session is touched.
+        assert_eq!(s.drain("a"), 0);
+        assert_eq!(s.drain("never-funded"), 0);
+        assert_eq!(s.balance("b"), 500);
     }
 
     #[test]
