@@ -1112,9 +1112,10 @@ fn build_tender(
     ceiling: u64,
 ) -> Result<scrai_core::tender::Tender, String> {
     use scrai_core::tender::{plan_coins, Note, Tender, MAX_NOTES};
-    /// Note slots held back for one finely planned book, so spare notes can never eat the
-    /// whole budget and leave no room for the granularity a book plan provides.
-    const FINE_SLOTS: usize = 6;
+    // A whole book is the most a single note can be worth, so the slots left after the fine
+    // plan decide how much a tender can carry at all.
+    let book = keys.total_coins.max(1);
+    let fine_slots = plan_coins(book).len();
 
     let mut spares: Vec<Note> = Vec::new();
     for v in std::mem::take(&mut w.spare_notes) {
@@ -1126,16 +1127,22 @@ fn build_tender(
         }
     }
     // Spare notes are already paid for, so they go first — but only as many as this tender
-    // can carry. Taking ALL of them is what wedged the wallet on 2026-09-14: a refused
-    // tender comes home in one piece, so the next attempt put the same over-long pile back
-    // on the table and was refused for the same reason, for ever. Largest first, so the
-    // ceiling is reached in the fewest notes.
+    // can still afford to carry. Taking ALL of them is what wedged the wallet on
+    // 2026-09-14: a refused tender comes home in one piece, so the next attempt put the
+    // same over-long pile back on the table and was refused for the same reason, for ever.
+    //
+    // Slots, not notes, are the scarce thing. A spare is worth a few coins; a whole-book
+    // note is worth ten. So a spare is only taken while the notes still needed for the
+    // REST of the ceiling — whole books plus the fine plan — would still fit beside it.
+    // Without that check ten small spares filled the table with 34 coins while the device
+    // held 55, and an image was refused with the money sitting right there.
     spares.sort_by(|a, b| b.coins.cmp(&a.coins));
     let mut notes: Vec<Note> = Vec::new();
     let mut keep: Vec<Note> = Vec::new();
     let mut have = 0u64;
     for n in spares {
-        if have < ceiling && notes.len() + FINE_SLOTS < MAX_NOTES {
+        let bulk_after = ceiling.saturating_sub(have + n.coins).div_ceil(book) as usize;
+        if have < ceiling && notes.len() + 1 + bulk_after + fine_slots <= MAX_NOTES {
             have += n.coins;
             notes.push(n);
         } else {
@@ -1379,7 +1386,18 @@ fn coins_on_device(w: &wallet::Wallet) -> u64 {
         .filter_map(|v| serde_json::from_value::<scrai_core::tender::Note>(v.clone()).ok())
         .map(|n| n.coins)
         .sum();
-    in_books + in_notes
+    // Coins on the table for a question that has not been answered yet are still the
+    // user's: all but the few the answer costs come home. Leaving them out made the
+    // balance drop by the whole tender and jump back on the reply — "suddenly I have
+    // 8.9k instead of 5.5k" (2026-09-14). Money in flight is shown, not hidden.
+    let in_flight: u64 = w
+        .pending_tenders
+        .iter()
+        .flat_map(|p| p.notes.iter())
+        .filter_map(|v| serde_json::from_value::<scrai_core::tender::Note>(v.clone()).ok())
+        .map(|n| n.coins)
+        .sum();
+    in_books + in_notes + in_flight
 }
 
 /// Move an old SESSION balance onto the account, where it becomes entitlement and from
@@ -4759,6 +4777,55 @@ mod tender_tests {
         t.well_formed().expect("a tender the server would accept");
         // The notes not carried are still money: they stay in the wallet for next time.
         assert!(!w.spare_notes.is_empty(), "unused spares must be kept, not dropped");
+    }
+
+    /// 2026-09-14: the device held 55 coins and could only tender 34, because ten small
+    /// spare notes filled the table and left no room for the whole-book notes that carry
+    /// the weight. Slots are the scarce thing, not coins.
+    #[test]
+    fn small_spares_do_not_crowd_out_whole_books() {
+        use scrai_core::tender::MAX_NOTES;
+        let fk = testkit::funded();
+        let keys = fk.keys();
+        let book = keys.total_coins;
+        let mut w = wallet::Wallet::default();
+        // A pile of one-coin leftovers, and books to carry the bulk.
+        for _ in 0..6 {
+            let mut p = fk.new_purse();
+            let notes = p.spend_tender(&keys, &[1, 1, 1, 1], fk.spend_date()).unwrap();
+            for n in notes {
+                w.spare_notes.push(serde_json::to_value(&n).unwrap());
+            }
+            w.coconut_purses.push(p.persist().unwrap());
+        }
+        let on_device = coins_on_device(&w);
+        let ceiling = book * 3;
+        assert!(on_device >= ceiling, "the fixture must hold more than the ceiling");
+
+        let t = build_tender(&mut w, &keys, ceiling).expect("a wallet with credit can tender");
+        assert!(t.notes.len() <= MAX_NOTES, "{} notes", t.notes.len());
+        assert!(
+            t.total_coins() >= ceiling,
+            "tendered {} coins for a {ceiling} ceiling with {on_device} on the device",
+            t.total_coins()
+        );
+    }
+
+    /// Coins on the table for an unanswered question are still the user's money: the
+    /// balance must not drop by the whole tender and jump back when the reply lands.
+    #[test]
+    fn coins_in_flight_still_count_as_held() {
+        let fk = testkit::funded();
+        let keys = fk.keys();
+        let mut w = wallet::Wallet::default();
+        w.coconut_purses.push(fk.new_purse().persist().unwrap());
+        let before = coins_on_device(&w);
+        let t = build_tender(&mut w, &keys, 5).expect("a funded wallet can tender");
+        w.pending_tenders.push(wallet::PendingTender {
+            request: json!({ "id": "r1" }),
+            notes: t.notes.iter().map(|n| serde_json::to_value(n).unwrap()).collect(),
+        });
+        assert_eq!(coins_on_device(&w), before, "a tender in flight is not a loss");
     }
 
     #[test]
