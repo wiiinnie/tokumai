@@ -327,40 +327,42 @@ async fn main() {
     // silent reset — a reset double-spend set would reopen every spent coin, and reset
     // balances would erase credit. (Normal writes are valid+atomic, so this only fires on
     // external corruption, and then the operator must act, not the server silently.)
-    let mut quorum = match (db.load("quorum_meta"), db.load("quorum")) {
-        // Current layout: small meta blob + append-only record rows.
-        (Some(meta), _) => {
-            let rows = db.load_quorum_records();
-            QuorumStore::from_parts(&meta, rows.iter().map(String::as_str)).unwrap_or_else(|e| {
-                eprintln!("scrai-server: FATAL: quorum state present but unparseable ({e}) — refusing \
-                    to start (a silent reset would reopen every spent coin). Restore a good state.db.");
-                std::process::exit(1);
-            })
+    // Double-spend store: the small part (offenses, blacklist, counters) from its blob, the
+    // spent serials + payments through a read-only index over the same file. Rows from
+    // before the index existed are indexed once; rows past retention are pruned at boot
+    // and every few hours (see `prune_tick`). A legacy whole-store snapshot ("quorum")
+    // is refused: run 0.6.2 once to migrate it, this build no longer carries that path.
+    if db.load("quorum").is_some() && db.load("quorum_meta").is_none() {
+        eprintln!("scrai-server: FATAL: legacy quorum snapshot found — start 0.6.2 once to migrate it, then this build.");
+        std::process::exit(1);
+    }
+    match db.index_legacy_quorum_records() {
+        Ok(0) => {}
+        Ok(n) => println!("scrai-server: indexed {n} spend record(s) into spent_serials"),
+        Err(e) => {
+            eprintln!("scrai-server: FATAL: could not index the spend records ({e}) — refusing to start.");
+            std::process::exit(1);
         }
-        // Legacy whole-store snapshot: load it once, re-persist as meta + rows, retire it.
-        (None, Some(j)) => {
-            let q: QuorumStore = serde_json::from_str(&j).unwrap_or_else(|e| {
-                eprintln!("scrai-server: FATAL: quorum snapshot present but unparseable ({e}) — refusing \
-                    to start (a silent reset would reopen every spent coin). Restore a good state.db.");
-                std::process::exit(1);
-            });
-            let rows: Vec<(usize, usize, String)> = (0..q.records_len())
-                .filter_map(|i| q.record_json(i).map(|(v, coins)| (i, coins, v)))
-                .collect();
-            let meta = q.meta_json();
-            match db.save_batch(&[("quorum_meta", meta.as_str())], &rows) {
-                Ok(()) => {
-                    db.delete("quorum");
-                    println!("scrai-server: migrated the quorum snapshot to {} record rows + meta", rows.len());
-                }
-                Err(e) => {
-                    eprintln!("scrai-server: FATAL: could not migrate the quorum snapshot: {e}");
-                    std::process::exit(1);
-                }
-            }
-            q
-        }
-        (None, None) => QuorumStore::default(),
+    }
+    match db.prune_spent(quorum_retain_secs()) {
+        Ok((0, _)) => {}
+        Ok((rows, coins)) => println!("scrai-server: pruned {rows} spend record(s) / {coins} coins past retention"),
+        Err(e) => eprintln!("scrai-server: spend-record prune failed ({e}) — continuing"),
+    }
+    let serial_index = store::SqliteSerialIndex::open(&data_dir.join("state.db")).unwrap_or_else(|e| {
+        eprintln!("scrai-server: FATAL: {e}");
+        std::process::exit(1);
+    });
+    let next_idx = db.next_quorum_idx();
+    let mut quorum = match db.load("quorum_meta") {
+        // L1: absent = fresh start; present-but-UNPARSEABLE = FATAL, never a silent reset — a
+        // reset double-spend set would reopen every spent coin.
+        Some(meta) => QuorumStore::from_meta(&meta, Box::new(serial_index), next_idx).unwrap_or_else(|e| {
+            eprintln!("scrai-server: FATAL: quorum state present but unparseable ({e}) — refusing \
+                to start (a silent reset would reopen every spent coin). Restore a good state.db.");
+            std::process::exit(1);
+        }),
+        None => QuorumStore::with_index(scrai_core::quorum::Policy::default(), Box::new(serial_index), next_idx),
     };
     let mut sessions = match db.load("sessions") {
         None => SessionStore::default(),
@@ -417,10 +419,13 @@ async fn main() {
     // only when its revision moved past these.
     let mut saved = SavedRevs {
         sessions: sessions.revision(),
-        quorum_records: quorum.records_len(),
         quorum_meta: quorum.meta_revision(),
         pay: paywall.revision(),
     };
+    // A meta from before the lifetime counter: seed it from the rows once and write it now,
+    // so the admin's "burned" does not restart at the next spend and pruning cannot shrink it.
+    quorum.seed_burned(db.spent_coins_total());
+    persist_changed(&mut db, &sessions, &mut quorum, &paywall, &mut saved);
     let book_toku = ticketbook_coins() * scrai_core::coconut::COIN_TOKU;
     println!(
         "scrai-server: gateway {} · ticketbook {} coins ({} TOKU = ${}){}",
@@ -594,13 +599,16 @@ const ORDER_TICK_MS: u64 = 1000;
     // app could cause (2026-09-06). Now the server checks a few open invoices itself.
     // Before serving anything: a voucher burned in a run that did not survive to credit it.
     if credit_pending_vouchers(&db, &mut paywall) {
-        persist_changed(&mut db, &sessions, &quorum, &paywall, &mut saved);
+        persist_changed(&mut db, &sessions, &mut quorum, &paywall, &mut saved);
     }
     // One second, because a person is looking at a spinner. See the arm below.
     let mut order_tick = tokio::time::interval(std::time::Duration::from_millis(ORDER_TICK_MS));
     order_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut watch_tick = tokio::time::interval(std::time::Duration::from_secs(WATCH_TICK_SECS));
     watch_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // Spend-record retention: rows older than QUORUM_RETAIN_DAYS go, every six hours.
+    let mut prune_tick = tokio::time::interval(std::time::Duration::from_secs(6 * 3600));
+    prune_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tokio::select! {
             // Ask the chain about a few open invoices, off the loop like every other
@@ -618,7 +626,7 @@ const ORDER_TICK_MS: u64 = 1000;
                 for (order_id, invoice) in db.web_orders_to_cancel() {
                     paywall.cancel_invoice(&invoice);
                     db.web_order_answer(&order_id, Some(&invoice), None, Some("cancelled"));
-                    persist_changed(&mut db, &sessions, &quorum, &paywall, &mut saved);
+                    persist_changed(&mut db, &sessions, &mut quorum, &paywall, &mut saved);
                 }
                 // Bearer money must not outlive its window. Unconditional: a buyer who never
                 // pressed "I have written it down" is exactly the one whose code would
@@ -643,13 +651,20 @@ const ORDER_TICK_MS: u64 = 1000;
                     }
                 }
             }
+            _ = prune_tick.tick() => {
+                match db.prune_spent(quorum_retain_secs()) {
+                    Ok((0, _)) => {}
+                    Ok((rows, coins)) => println!("scrai-server: pruned {rows} spend record(s) / {coins} coins past retention"),
+                    Err(e) => eprintln!("scrai-server: spend-record prune failed ({e})"),
+                }
+            }
             _ = watch_tick.tick() => {
                 // A voucher whose burn landed but whose credit did not — the crash window
                 // between the two stores. Repaired here rather than only at boot: a task
                 // that fails without taking the process with it would otherwise leave a
                 // buyer waiting for a restart that may be weeks away.
                 if credit_pending_vouchers(&db, &mut paywall) {
-                    persist_changed(&mut db, &sessions, &quorum, &paywall, &mut saved);
+                    persist_changed(&mut db, &sessions, &mut quorum, &paywall, &mut saved);
                 }
                 // Mirror settlement into the order row, so the faucet can answer "paid yet?"
                 // without ever parsing the pay snapshot.
@@ -764,7 +779,7 @@ const ORDER_TICK_MS: u64 = 1000;
                     }
                 }
                 // Durability: persist any changed store before acknowledging (same as below).
-                persist_changed(&mut db, &sessions, &quorum, &paywall, &mut saved);
+                persist_changed(&mut db, &sessions, &mut quorum, &paywall, &mut saved);
                 if let Err(e) = senders[done.to.idx].read().await.send_reply(done.to.tag, response).await {
                     eprintln!("scrai-server: chat reply failed: {e}");
                 }
@@ -805,7 +820,7 @@ const ORDER_TICK_MS: u64 = 1000;
                     "scrai-server: handled {c0}{label}{c1} (→ {} bytes · crypto wait {} ms, work {} ms)",
                     response.len(), done.timing.0, done.timing.1
                 );
-                persist_changed(&mut db, &sessions, &quorum, &paywall, &mut saved);
+                persist_changed(&mut db, &sessions, &mut quorum, &paywall, &mut saved);
                 if let Err(e) = senders[done.to.idx].read().await.send_reply(done.to.tag, response).await {
                     eprintln!("scrai-server: {label} reply failed: {e}");
                 }
@@ -822,7 +837,7 @@ const ORDER_TICK_MS: u64 = 1000;
                 if delta > 0 {
                     db.bump_daily(&today_utc(), 0, 0, 0, 1, delta);
                 }
-                persist_changed(&mut db, &sessions, &quorum, &paywall, &mut saved);
+                persist_changed(&mut db, &sessions, &mut quorum, &paywall, &mut saved);
                 match done.to {
                     Some(to) => {
                         if let Err(e) = senders[to.idx].read().await.send_reply(to.tag, response).await {
@@ -1020,7 +1035,7 @@ const ORDER_TICK_MS: u64 = 1000;
                         }
                     }
                 };
-                persist_changed(&mut db, &sessions, &quorum, &paywall, &mut saved);
+                persist_changed(&mut db, &sessions, &mut quorum, &paywall, &mut saved);
                 let out = serde_json::to_vec(&reply).unwrap_or_default();
                 if let Err(e) = senders[to.idx].read().await.send_reply(to.tag, out).await {
                     eprintln!("scrai-server: purchase reply failed: {e}");
@@ -1096,7 +1111,7 @@ const ORDER_TICK_MS: u64 = 1000;
                 };
                 // The credit lives in the snapshot, so it must reach disk before the ack —
                 // same rule as a cancelled invoice a few lines below.
-                persist_changed(&mut db, &sessions, &quorum, &paywall, &mut saved);
+                persist_changed(&mut db, &sessions, &mut quorum, &paywall, &mut saved);
                 let out = serde_json::to_vec(&reply).unwrap_or_default();
                 if let Err(e) = senders[to.idx].read().await.send_reply(to.tag, out).await {
                     eprintln!("scrai-server: voucher reply failed: {e}");
@@ -1127,7 +1142,7 @@ const ORDER_TICK_MS: u64 = 1000;
                 // cancelled invoice must still hit disk before the ack.
                 let (c0, c1) = label_color(&kind);
                 println!("scrai-server: handled {c0}{kind}{c1} ({} → {} bytes)", m.message.len(), response.len());
-                persist_changed(&mut db, &sessions, &quorum, &paywall, &mut saved);
+                persist_changed(&mut db, &sessions, &mut quorum, &paywall, &mut saved);
                 if let Err(e) = senders[to.idx].read().await.send_reply(to.tag, response).await {
                     eprintln!("scrai-server: reply failed: {e}");
                 }
@@ -1235,7 +1250,7 @@ const ORDER_TICK_MS: u64 = 1000;
                                         let _ = tx.send(CryptoDone { kind: CryptoKind::Withdraw { id, account_id, req_key, result }, to, timing, _guard: guard }).await;
                                     });
                                     // The reservation must be on disk before anything else happens.
-                                    persist_changed(&mut db, &sessions, &quorum, &paywall, &mut saved);
+                                    persist_changed(&mut db, &sessions, &mut quorum, &paywall, &mut saved);
                                     continue;
                                 }
                             }
@@ -1274,7 +1289,7 @@ const ORDER_TICK_MS: u64 = 1000;
             // acknowledging — so a session credit and the burned-coin serial that backs
             // it commit together (never one without the other), and a crash after the
             // reply can't lose a credit the client already advanced its purse for.
-            persist_changed(&mut db, &sessions, &quorum, &paywall, &mut saved);
+            persist_changed(&mut db, &sessions, &mut quorum, &paywall, &mut saved);
                     if let Err(e) = senders[to.idx].read().await.send_reply(to.tag, response).await {
                         eprintln!("scrai-server: reply failed: {e}");
                     }
@@ -1302,8 +1317,7 @@ struct ReplyTo {
 /// Revision marks of the last persisted snapshot per store.
 struct SavedRevs {
     sessions: u64,
-    /// Quorum: records persisted so far (rows) + revision of the small meta blob.
-    quorum_records: usize,
+    /// Quorum: revision of the small meta blob (records are pending-until-written, no mark).
     quorum_meta: u64,
     pay: u64,
 }
@@ -1316,17 +1330,16 @@ struct SavedRevs {
 fn persist_changed(
     db: &mut store::Store,
     sessions: &SessionStore,
-    quorum: &QuorumStore,
+    quorum: &mut QuorumStore,
     paywall: &pay::Pay,
     saved: &mut SavedRevs,
 ) {
     let sess_snap = (sessions.revision() != saved.sessions).then(|| sessions.snapshot());
     let quorum_meta = (quorum.meta_revision() != saved.quorum_meta).then(|| quorum.meta_json());
     let pay_snap = (paywall.revision() != saved.pay).then(|| paywall.snapshot());
-    // New double-spend records since the last persist — rows, never a re-snapshot.
-    let new_records: Vec<(usize, usize, String)> = (saved.quorum_records..quorum.records_len())
-        .filter_map(|i| quorum.record_json(i).map(|(v, coins)| (i, coins, v)))
-        .collect();
+    // Spends accepted since the last persist — rows + their serials, never a re-snapshot.
+    // They stay pending (answerable from RAM) until the batch commits.
+    let new_records = quorum.pending_records();
     let mut changed: Vec<(&str, &str)> = Vec::new();
     if let Some(s) = &sess_snap {
         changed.push(("sessions", s));
@@ -1342,11 +1355,11 @@ fn persist_changed(
     }
     let t = std::time::Instant::now();
     let bytes: usize = changed.iter().map(|(_, s)| s.len()).sum::<usize>()
-        + new_records.iter().map(|(_, _, v)| v.len()).sum::<usize>();
+        + new_records.iter().map(|r| r.json.len()).sum::<usize>();
     match db.save_batch(&changed, &new_records) {
         Ok(()) => {
             saved.sessions = sessions.revision();
-            saved.quorum_records = quorum.records_len();
+            quorum.clear_pending();
             saved.quorum_meta = quorum.meta_revision();
             saved.pay = paywall.revision();
         }
@@ -1779,6 +1792,13 @@ async fn connect_identity_at_boot(dir: &Path, gateway: Option<String>, label: &s
             Err(e) => panic!("{label}: {e} — gave up after {} s (MIX_CONNECT_RETRY_S)", started.elapsed().as_secs()),
         }
     }
+}
+
+/// How long a spend record is kept (seconds): `QUORUM_RETAIN_DAYS`, default 35 — a book
+/// lives ~30 days from issue, a payment verifies at most 2 days past its spend date
+/// (federation::SPEND_DATE_PAST_SECS), plus slack. Never below 33.
+fn quorum_retain_secs() -> u64 {
+    env_usize("QUORUM_RETAIN_DAYS", 35).max(33) as u64 * 86_400
 }
 
 fn identity_exists(dir: &Path) -> bool {

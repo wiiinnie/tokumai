@@ -139,15 +139,51 @@ impl Authority {
         }
     }
 
-    /// Verify a spent payment offline against this federation's aggregated key.
+    /// Verify a spent payment offline against this federation's aggregated key — and
+    /// against the clock: the spend date the client signed must be close to NOW. Without
+    /// that bound a coin whose record was pruned could be presented again years later with
+    /// the old date and verify; with it, a coin is unspendable from (its book's expiry +
+    /// `SPEND_DATE_PAST_SECS`) on, which is what makes pruning safe (docs: quorum retention).
     pub fn verify_payment(
         &self,
         payment: &Payment,
         pay_info: &PayInfo,
         spend_date: u32,
     ) -> Result<(), String> {
+        if !spend_date_plausible(spend_date, clock_now()) {
+            return Err("spend date out of range (check the device clock)".into());
+        }
         coconut::verify(payment, &self.vk, pay_info, spend_date)
     }
+}
+
+/// How far in the past a spend date may lie and still verify. Two days: one for the
+/// client's own "expiration − 1 day" choice, one for clocks and day alignment.
+pub const SPEND_DATE_PAST_SECS: u32 = 2 * 86_400;
+/// How far ahead: a book issued today expires ~30 days out and the client spends with
+/// `expiration − 1 day`, so up to 31 days is a legitimate future date.
+pub const SPEND_DATE_FUTURE_SECS: u32 = 31 * 86_400;
+
+/// `spend_date` within [now − past, now + future].
+pub fn spend_date_plausible(spend_date: u32, now: u32) -> bool {
+    spend_date.saturating_add(SPEND_DATE_PAST_SECS) >= now && spend_date <= now.saturating_add(SPEND_DATE_FUTURE_SECS)
+}
+
+/// Seconds since the epoch, unless a test pinned the clock (`set_test_clock`).
+fn clock_now() -> u32 {
+    let pinned = TEST_CLOCK.load(std::sync::atomic::Ordering::Relaxed);
+    if pinned != 0 {
+        return pinned;
+    }
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as u32)
+        .unwrap_or(0)
+}
+static TEST_CLOCK: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+/// Pin "now" for tests whose fixtures carry fixed spend dates. 0 = the real clock.
+pub fn set_test_clock(secs: u32) {
+    TEST_CLOCK.store(secs, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// On-disk form of an authority (incl. its secret share). The published material is
@@ -483,6 +519,7 @@ mod tests {
         use nym_compact_ecash::scheme::Wallet;
         let exp = 1702166400u32;
         let spend_date = 1701907200u32;
+        set_test_clock(spend_date);
         let auth = bootstrap(1, 1, 32, exp).unwrap();
         let mut store = QuorumStore::default();
 

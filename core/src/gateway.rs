@@ -240,6 +240,7 @@ mod tests {
 
         let exp = 1702166400u32;
         let spend_date = 1701907200u32;
+        crate::federation::set_test_clock(spend_date);
         let auth = federation::bootstrap(1, 1, 32, exp).unwrap();
 
         // withdraw a wallet from the single authority

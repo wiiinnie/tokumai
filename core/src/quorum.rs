@@ -69,10 +69,22 @@ fn serial_key(g: &G1Projective) -> String {
     hex::encode(G1Affine::from(g).to_compressed())
 }
 
-/// A recorded spend. `pay_info` is the raw 72 bytes (PayInfo isn't serde) so the whole
-/// store snapshots to disk — the payment is kept because `detect` needs BOTH payments
-/// to PROVE a later double-spend, even across a server restart.
-#[derive(Serialize, Deserialize)]
+/// The canonical serial keys of a payment (what the spent-serial index is keyed by).
+pub fn payment_serials(p: &Payment) -> Vec<String> {
+    p.ss.iter().map(serial_key).collect()
+}
+
+/// The serials inside a persisted record row — for indexing rows written before the
+/// spent-serial table existed (one-time migration on the server).
+pub fn record_serials(record_json: &str) -> Result<Vec<String>, String> {
+    let rec: Record = serde_json::from_str(record_json).map_err(|e| format!("quorum record: {e}"))?;
+    Ok(payment_serials(&rec.payment))
+}
+
+/// A recorded spend. `pay_info` is the raw 72 bytes (PayInfo isn't serde). The payment
+/// is kept because `detect` needs BOTH payments to PROVE a later double-spend — but it is
+/// kept on DISK (see `SerialIndex`), loaded only when a serial matches.
+#[derive(Clone, Serialize, Deserialize)]
 struct Record {
     payment: Payment,
     pay_info: Vec<u8>,
@@ -86,6 +98,60 @@ impl Record {
     }
 }
 
+/// The cold side of the store: every persisted spend, by serial and by record index. The
+/// server backs it with SQLite (`spent_serials` + `quorum_records`), tests with a map.
+/// Nothing here is kept in RAM by the store itself — that is the point (2026-09-13: the
+/// in-memory map of every serial ever seen, plus every payment, grew ~50 KB per dollar of
+/// revenue and was never pruned).
+pub trait SerialIndex: Send {
+    /// The record index of the first persisted spend of this serial, if any.
+    fn lookup(&self, serial_hex: &str) -> Option<u64>;
+    /// The persisted record (JSON of `Record`) by index.
+    fn record(&self, idx: u64) -> Option<String>;
+}
+
+/// In-memory index for tests and for a server that runs without a database. Fed by
+/// `PendingRecord`s exactly as the SQLite one is.
+#[derive(Default)]
+pub struct MemIndex {
+    serials: HashMap<String, u64>,
+    records: HashMap<u64, String>,
+}
+
+impl MemIndex {
+    pub fn insert(&mut self, rec: &PendingRecord) {
+        for s in &rec.serials {
+            self.serials.entry(s.clone()).or_insert(rec.idx);
+        }
+        self.records.insert(rec.idx, rec.json.clone());
+    }
+    pub fn len(&self) -> usize {
+        self.records.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.records.is_empty()
+    }
+}
+
+impl SerialIndex for MemIndex {
+    fn lookup(&self, serial_hex: &str) -> Option<u64> {
+        self.serials.get(serial_hex).copied()
+    }
+    fn record(&self, idx: u64) -> Option<String> {
+        self.records.get(&idx).cloned()
+    }
+}
+
+/// A fresh spend the server has accepted but not yet written: its row index, coin count,
+/// serial keys (for the index) and the record JSON (for the proof).
+#[derive(Clone, Debug)]
+pub struct PendingRecord {
+    pub idx: u64,
+    pub coins: usize,
+    pub serials: Vec<String>,
+    pub json: String,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 struct Offense {
     pubkey: PublicKeyUser,
@@ -93,32 +159,31 @@ struct Offense {
     servers: HashSet<ServerId>,
 }
 
-/// Double-spend store + blacklist. One per quorum (replicated in a later phase). Held
-/// in memory; the server snapshots it to SQLite whenever `revision()` advances.
-#[derive(Serialize, Deserialize)]
+/// Double-spend store + blacklist. The HOT part (policy, offenses, blacklist, counters)
+/// lives here and is tiny; spends are held only until the server persists them
+/// (`pending_records` → `clear_pending`), then looked up through the `SerialIndex`.
 pub struct QuorumStore {
     policy: Policy,
-    /// First spender of each coin serial → index into `records`.
-    serials: HashMap<String, usize>,
-    records: Vec<Record>,
+    index: Box<dyn SerialIndex>,
+    /// Row index the next fresh record gets — continues where the persisted rows end.
+    next_idx: u64,
+    /// Accepted since the last persist: (idx, record) + serial → idx.
+    pending: Vec<(u64, Record)>,
+    pending_serials: HashMap<String, u64>,
     offenses: HashMap<String, Offense>, // offender base58 → offense
     blacklist: HashSet<String>,         // offender base58
+    /// Lifetime coins recorded as spent — survives pruning of the rows (admin "burned").
+    burned: u64,
     /// Monotonic mutation counter (change-detection for persistence). Bumped only when
     /// durable state changes — a fresh record or a new/updated offense — never on a
     /// replay or a benign no-op.
-    #[serde(default)]
     rev: u64,
-    /// Bumped only when the SMALL part changes (offenses / blacklist) — the server
-    /// persists that part as one blob and the records as append-only rows.
-    #[serde(default)]
+    /// Bumped only when the SMALL part changes (offenses / blacklist / burned).
     meta_rev: u64,
 }
 
 /// The store minus its per-payment records: policy, offenses, blacklist, revisions.
-/// Small and rarely changing, so it can be re-written whole; the records (~100 KB per
-/// 100-coin payment, one per redeem, never modified) are persisted as rows instead. A
-/// whole-store snapshot was 17 MB after 160 redeems and took ~90 ms per write ON the
-/// dispatch loop — every state change re-wrote every payment ever seen.
+/// Small, re-written whole; the records are rows.
 #[derive(Serialize, Deserialize)]
 pub struct QuorumMeta {
     policy: Policy,
@@ -126,6 +191,8 @@ pub struct QuorumMeta {
     blacklist: HashSet<String>,
     rev: u64,
     meta_rev: u64,
+    #[serde(default)]
+    burned: u64,
 }
 
 impl Default for QuorumStore {
@@ -135,39 +202,65 @@ impl Default for QuorumStore {
 }
 
 impl QuorumStore {
+    /// A store over an in-memory index (tests; a server without a database).
     pub fn new(policy: Policy) -> Self {
+        Self::with_index(policy, Box::new(MemIndex::default()), 0)
+    }
+
+    pub fn with_index(policy: Policy, index: Box<dyn SerialIndex>, next_idx: u64) -> Self {
         Self {
             policy,
-            serials: HashMap::new(),
-            records: Vec::new(),
+            index,
+            next_idx,
+            pending: Vec::new(),
+            pending_serials: HashMap::new(),
             offenses: HashMap::new(),
             blacklist: HashSet::new(),
+            burned: 0,
             rev: 0,
             meta_rev: 0,
         }
+    }
+
+    /// Restore the small part from its blob and attach the cold index; `next_idx` is one
+    /// past the highest persisted row.
+    pub fn from_meta(meta: &str, index: Box<dyn SerialIndex>, next_idx: u64) -> Result<Self, String> {
+        let m: QuorumMeta = serde_json::from_str(meta).map_err(|e| format!("quorum meta: {e}"))?;
+        Ok(Self {
+            policy: m.policy,
+            index,
+            next_idx,
+            pending: Vec::new(),
+            pending_serials: HashMap::new(),
+            offenses: m.offenses,
+            blacklist: m.blacklist,
+            burned: m.burned,
+            rev: m.rev,
+            meta_rev: m.meta_rev,
+        })
     }
 
     /// Monotonic revision, bumped whenever durable state changes.
     pub fn revision(&self) -> u64 {
         self.rev
     }
-
-    /// Revision of the small part (offenses/blacklist) — see `QuorumMeta`.
+    /// Revision of the small part (offenses/blacklist/burned) — see `QuorumMeta`.
     pub fn meta_revision(&self) -> u64 {
         self.meta_rev
     }
-
-    /// Number of recorded (fresh) payments; records `saved..records_len()` are new.
-    pub fn records_len(&self) -> usize {
-        self.records.len()
+    /// Lifetime coins recorded as spent.
+    pub fn burned(&self) -> u64 {
+        self.burned
     }
-
-    /// One record as JSON (for append-only persistence) plus its coin count.
-    pub fn record_json(&self, idx: usize) -> Option<(String, usize)> {
-        let r = self.records.get(idx)?;
-        Some((serde_json::to_string(r).ok()?, r.payment.ss.len()))
+    /// One-time seed for a store whose meta predates the counter: the server passes the
+    /// coins it can still count in its rows (plus what earlier prunes removed). No-op once
+    /// the counter is non-zero.
+    pub fn seed_burned(&mut self, coins: u64) {
+        if self.burned == 0 && coins > 0 {
+            self.burned = coins;
+            self.meta_rev += 1;
+        }
     }
-
     /// The small part as JSON.
     pub fn meta_json(&self) -> String {
         let m = QuorumMeta {
@@ -176,76 +269,69 @@ impl QuorumStore {
             blacklist: self.blacklist.clone(),
             rev: self.rev,
             meta_rev: self.meta_rev,
+            burned: self.burned,
         };
         serde_json::to_string(&m).unwrap_or_else(|_| "{}".into())
     }
 
-    /// Rebuild from the small part + the record rows (in index order). The serial
-    /// index is derived from the records, so it is never stored twice.
-    pub fn from_parts<'a>(meta: &str, records: impl Iterator<Item = &'a str>) -> Result<Self, String> {
-        let m: QuorumMeta = serde_json::from_str(meta).map_err(|e| format!("quorum meta: {e}"))?;
-        let mut q = QuorumStore {
-            policy: m.policy,
-            serials: HashMap::new(),
-            records: Vec::new(),
-            offenses: m.offenses,
-            blacklist: m.blacklist,
-            rev: m.rev,
-            meta_rev: m.meta_rev,
-        };
-        for (i, r) in records.enumerate() {
-            let rec: Record = serde_json::from_str(r).map_err(|e| format!("quorum record {i}: {e}"))?;
-            let idx = q.records.len();
-            for key in rec.payment.ss.iter().map(serial_key) {
-                q.serials.entry(key).or_insert(idx);
-            }
-            q.records.push(rec);
+    /// Accepted spends not yet on disk, oldest first. The server writes them in the same
+    /// transaction as the session credit they back, then calls `clear_pending`.
+    pub fn pending_records(&self) -> Vec<PendingRecord> {
+        self.pending
+            .iter()
+            .map(|(idx, r)| PendingRecord {
+                idx: *idx,
+                coins: r.payment.ss.len(),
+                serials: payment_serials(&r.payment),
+                json: serde_json::to_string(r).unwrap_or_else(|_| "{}".into()),
+            })
+            .collect()
+    }
+    pub fn has_pending(&self) -> bool {
+        !self.pending.is_empty()
+    }
+    /// The pending spends are persisted (and visible through the index from now on).
+    pub fn clear_pending(&mut self) {
+        self.pending.clear();
+        self.pending_serials.clear();
+    }
+
+    /// The earlier spend that used `key`, from RAM (pending) or from the index.
+    fn previous_spend(&self, key: &str) -> Option<Record> {
+        if let Some(idx) = self.pending_serials.get(key) {
+            return self.pending.iter().find(|(i, _)| i == idx).map(|(_, r)| r.clone());
         }
-        Ok(q)
-    }
-
-    /// Restore from a JSON snapshot (server boot); empty/invalid → a fresh store.
-    pub fn from_snapshot(json: &str) -> Self {
-        serde_json::from_str(json).unwrap_or_default()
-    }
-
-    /// JSON snapshot for durable storage.
-    pub fn snapshot(&self) -> String {
-        serde_json::to_string(self).unwrap_or_else(|_| "{}".into())
+        let idx = self.index.lookup(key)?;
+        let json = self.index.record(idx)?;
+        serde_json::from_str(&json).ok()
     }
 
     /// Report a spend a server accepted offline. Detects reuse, records offenses, and
     /// applies the blacklist policy. Returns the store's verdict.
     pub fn submit(&mut self, payment: &Payment, pay_info: PayInfo, server: ServerId) -> Verdict {
-        let keys: Vec<String> = payment.ss.iter().map(serial_key).collect();
+        let keys: Vec<String> = payment_serials(payment);
         if keys.is_empty() {
             return Verdict::Accepted;
         }
-
         // Look for any coin whose serial was already spent.
         let mut reused_serials: Vec<String> = Vec::new();
         let mut offender: Option<PublicKeyUser> = None;
         let mut prev_servers: HashSet<ServerId> = HashSet::new();
         let mut all_seen = true;
-
         for key in &keys {
-            match self.serials.get(key) {
+            match self.previous_spend(key) {
                 None => all_seen = false,
-                Some(&idx) => {
-                    let prev = &self.records[idx];
-                    match detect(&prev.payment, payment, prev.pay_info(), pay_info) {
-                        DoubleSpend::Replay => { /* same pay_info — benign, already recorded */ }
-                        DoubleSpend::Detected(pk) => {
-                            offender = Some(pk);
-                            reused_serials.push(key.clone());
-                            prev_servers.insert(prev.server);
-                        }
-                        DoubleSpend::None => { /* serial matched but no proof — treat as fresh */ }
+                Some(prev) => match detect(&prev.payment, payment, prev.pay_info(), pay_info) {
+                    DoubleSpend::Replay => { /* same pay_info — benign, already recorded */ }
+                    DoubleSpend::Detected(pk) => {
+                        offender = Some(pk);
+                        reused_serials.push(key.clone());
+                        prev_servers.insert(prev.server);
                     }
-                }
+                    DoubleSpend::None => { /* serial matched but no proof — treat as fresh */ }
+                },
             }
         }
-
         // Genuine double-spend: refuse the reused coins, record the offense, maybe ban.
         if let Some(pk) = offender {
             let bkey = pk.to_base58_string();
@@ -259,7 +345,6 @@ impl QuorumStore {
             }
             entry.servers.insert(server);
             entry.servers.extend(prev_servers);
-
             let banned_now = entry.coins.len() as u32 >= self.policy.blacklist_threshold_coins
                 || (self.policy.cross_server_fast_ban && entry.servers.len() >= 2);
             if banned_now {
@@ -273,23 +358,27 @@ impl QuorumStore {
                 banned: banned_now,
             };
         }
-
         // No reuse. If every coin was already seen (with the same pay_info), it's a replay.
         if all_seen {
             return Verdict::Replay;
         }
-
         // Fresh payment — record it as the first spender of each of its new serials.
-        let idx = self.records.len();
-        self.records.push(Record {
-            payment: payment.clone(),
-            pay_info: pay_info.pay_info_bytes.to_vec(),
-            server,
-        });
-        for key in keys {
-            self.serials.entry(key).or_insert(idx);
+        let idx = self.next_idx;
+        self.next_idx += 1;
+        for key in &keys {
+            self.pending_serials.entry(key.clone()).or_insert(idx);
         }
+        self.pending.push((
+            idx,
+            Record {
+                payment: payment.clone(),
+                pay_info: pay_info.pay_info_bytes.to_vec(),
+                server,
+            },
+        ));
+        self.burned += keys.len() as u64;
         self.rev += 1; // fresh record — durable state changed
+        self.meta_rev += 1; // `burned` moved
         Verdict::Accepted
     }
 
@@ -307,6 +396,7 @@ impl QuorumStore {
     }
 }
 
+// ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
 #[cfg(test)]
 mod tests {
@@ -370,8 +460,14 @@ mod tests {
         assert_eq!(store.submit(&p1, pi1, 1), Verdict::Accepted);
         assert!(store.revision() > 0);
 
-        // snapshot → restore, modelling a server restart
-        let mut store = QuorumStore::from_snapshot(&store.snapshot());
+        // persist → restart, modelling the server: pending rows go to the index, the small
+        // part is reloaded from its blob, and the in-RAM pending set is gone.
+        let mut index = MemIndex::default();
+        for rec in store.pending_records() {
+            index.insert(&rec);
+        }
+        let meta = store.meta_json();
+        let mut store = QuorumStore::from_meta(&meta, Box::new(index), 1).unwrap();
 
         // re-spend the SAME coin from the copy → the doubled coin is still PROVEN,
         // because the original payment was persisted and reloaded.
@@ -414,18 +510,22 @@ mod tests {
         let mut store = QuorumStore::default();
         let (p1, pi1) = fk.spend_one(&mut w, 6);
         assert_eq!(store.submit(&p1, pi1, 1), Verdict::Accepted);
-        assert_eq!(store.records_len(), 1);
-        assert_eq!(store.meta_revision(), 0); // no offense yet → meta untouched
+        let rows = store.pending_records();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].coins, 1); // one coin in that payment
+        assert_eq!(store.meta_revision(), 1); // `burned` moved
 
         let meta = store.meta_json();
-        let rows: Vec<String> = (0..store.records_len()).map(|i| store.record_json(i).unwrap().0).collect();
-        assert_eq!(store.record_json(0).unwrap().1, 1); // one coin in that payment
-        let mut store = QuorumStore::from_parts(&meta, rows.iter().map(String::as_str)).unwrap();
-        assert_eq!(store.records_len(), 1);
+        let mut index = MemIndex::default();
+        for r in &rows {
+            index.insert(r);
+        }
+        let mut store = QuorumStore::from_meta(&meta, Box::new(index), 1).unwrap();
+        assert!(!store.has_pending());
 
         // same payment again → replay, not a fresh record
         assert_eq!(store.submit(&p1, pi1, 1), Verdict::Replay);
-        assert_eq!(store.records_len(), 1);
+        assert!(!store.has_pending());
         // the same coin from the copy → proven double-spend, and the meta revision moves
         let (p2, pi2) = fk.spend_one(&mut w2, 7);
         match store.submit(&p2, pi2, 1) {
@@ -435,9 +535,45 @@ mod tests {
             }
             other => panic!("expected DoubleSpend after parts restore, got {other:?}"),
         }
-        assert_eq!(store.meta_revision(), 1);
-        // and the offense survives another parts round trip
-        let again = QuorumStore::from_parts(&store.meta_json(), rows.iter().map(String::as_str)).unwrap();
-        assert!(again.is_blacklisted(&fk.user_pubkey()) || again.meta_revision() == 1);
+        assert_eq!(store.meta_revision(), 2);
+        // and the offense survives another round trip through the blob
+        let mut index = MemIndex::default();
+        for r in &rows {
+            index.insert(r);
+        }
+        let again = QuorumStore::from_meta(&store.meta_json(), Box::new(index), 1).unwrap();
+        assert_eq!(again.offense_coins(&fk.user_pubkey()), 1);
+        assert_eq!(again.burned(), 1);
+    }
+
+    #[test]
+    fn nothing_stays_in_ram_after_persist_and_lookups_go_to_the_index() {
+        let fk = testkit::funded();
+        let mut w = fk.wallet();
+        let mut store = QuorumStore::default();
+        let (p0, pi0) = fk.spend_one(&mut w, 6);
+        assert_eq!(store.submit(&p0, pi0, 1), Verdict::Accepted);
+        assert!(store.has_pending());
+        assert_eq!(store.burned(), 1);
+        let recs = store.pending_records();
+        assert_eq!(recs.len(), 1);
+        assert_eq!(recs[0].idx, 0);
+        assert_eq!(recs[0].coins, 1);
+        assert_eq!(recs[0].serials.len(), 1);
+        assert_eq!(record_serials(&recs[0].json).unwrap(), recs[0].serials);
+        // hand the rows to the cold side, as the server does after a successful batch write
+        let mut index = MemIndex::default();
+        for r in &recs {
+            index.insert(r);
+        }
+        let mut store = QuorumStore::from_meta(&store.meta_json(), Box::new(index), 1).unwrap();
+        assert!(!store.has_pending());
+        // a replay of the persisted payment is still recognised — via the index
+        assert_eq!(store.submit(&p0, pi0, 1), Verdict::Replay);
+        // and a fresh payment continues the row numbering after the persisted ones
+        let (p1, pi1) = fk.spend_one(&mut w, 7);
+        assert_eq!(store.submit(&p1, pi1, 1), Verdict::Accepted);
+        assert_eq!(store.pending_records()[0].idx, 1);
     }
 }
+

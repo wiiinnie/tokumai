@@ -82,6 +82,18 @@ impl Store {
             [],
         )
         .map_err(|e| e.to_string())?;
+        // When the row was written (unix seconds) — the prune key. Rows from before the
+        // column get "now" at the migration below, so they age out from then on.
+        add_column(&conn, "ALTER TABLE quorum_records ADD COLUMN seen INTEGER NOT NULL DEFAULT 0")?;
+        // The spent-serial index: one row per coin serial → the record that first spent it.
+        // This is what the double-spend check reads, so no serial has to live in RAM.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS spent_serials (\
+               serial TEXT PRIMARY KEY,\
+               idx INTEGER NOT NULL)",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
         // Per-UTC-day activity counters — the ONLY timestamped data the server keeps.
         // Aggregate-only (no account/session ids, no content): totals for the admin view.
         conn.execute(
@@ -733,8 +745,9 @@ impl Store {
         self.save_batch(pairs, &[])
     }
 
-    /// `save_many` plus new quorum record rows, all in the same transaction.
-    pub fn save_batch(&mut self, pairs: &[(&str, &str)], records: &[(usize, usize, String)]) -> Result<(), String> {
+    /// `save_many` plus new quorum records (row + its serials), all in the same transaction.
+    pub fn save_batch(&mut self, pairs: &[(&str, &str)], records: &[scrai_core::quorum::PendingRecord]) -> Result<(), String> {
+        let now = crate::pay::now_ms() / 1000;
         let tx = self.conn.transaction().map_err(|e| e.to_string())?;
         for (k, v) in pairs {
             tx.execute(
@@ -744,26 +757,112 @@ impl Store {
             )
             .map_err(|e| e.to_string())?;
         }
-        for (idx, coins, v) in records {
+        for r in records {
             tx.execute(
-                "INSERT INTO quorum_records (idx, coins, v) VALUES (?1, ?2, ?3) \
+                "INSERT INTO quorum_records (idx, coins, v, seen) VALUES (?1, ?2, ?3, ?4) \
                  ON CONFLICT(idx) DO UPDATE SET v = excluded.v, coins = excluded.coins",
-                params![*idx as i64, *coins as i64, v],
+                params![r.idx as i64, r.coins as i64, r.json, now as i64],
             )
             .map_err(|e| e.to_string())?;
+            for serial in &r.serials {
+                tx.execute(
+                    "INSERT OR IGNORE INTO spent_serials (serial, idx) VALUES (?1, ?2)",
+                    params![serial, r.idx as i64],
+                )
+                .map_err(|e| e.to_string())?;
+            }
         }
         tx.commit().map_err(|e| e.to_string())
     }
 
-    /// All quorum record rows in index order.
-    pub fn load_quorum_records(&self) -> Vec<String> {
-        let mut out = Vec::new();
-        if let Ok(mut st) = self.conn.prepare("SELECT v FROM quorum_records ORDER BY idx") {
-            if let Ok(rows) = st.query_map([], |r| r.get::<_, String>(0)) {
-                out.extend(rows.flatten());
-            }
+    /// Coins in the spend rows still on disk plus what pruning already removed — the
+    /// lifetime count for a store whose meta has no `burned` yet.
+    pub fn spent_coins_total(&self) -> u64 {
+        let rows: i64 = self
+            .conn
+            .query_row("SELECT COALESCE(SUM(coins), 0) FROM quorum_records", [], |r| r.get(0))
+            .unwrap_or(0);
+        let pruned: i64 = self.load("quorum_pruned_coins").and_then(|v| v.parse().ok()).unwrap_or(0);
+        (rows + pruned).max(0) as u64
+    }
+
+    /// One past the highest persisted quorum row — where fresh records continue.
+    pub fn next_quorum_idx(&self) -> u64 {
+        self.conn
+            .query_row("SELECT COALESCE(MAX(idx), -1) FROM quorum_records", [], |r| r.get::<_, i64>(0))
+            .map(|m| (m + 1) as u64)
+            .unwrap_or(0)
+    }
+
+    /// One-time: rows written before `spent_serials` existed get indexed (their serials are
+    /// parsed out of the record JSON) and stamped `seen = now` so the prune clock starts.
+    /// Idempotent — a row that is already indexed is skipped. Returns how many were indexed.
+    pub fn index_legacy_quorum_records(&mut self) -> Result<usize, String> {
+        let now = (crate::pay::now_ms() / 1000) as i64;
+        let rows: Vec<(i64, String)> = {
+            let mut st = self
+                .conn
+                .prepare(
+                    "SELECT idx, v FROM quorum_records q \
+                     WHERE NOT EXISTS (SELECT 1 FROM spent_serials s WHERE s.idx = q.idx)",
+                )
+                .map_err(|e| e.to_string())?;
+            let it = st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))).map_err(|e| e.to_string())?;
+            it.flatten().collect()
+        };
+        if rows.is_empty() {
+            return Ok(0);
         }
-        out
+        let tx = self.conn.transaction().map_err(|e| e.to_string())?;
+        for (idx, json) in &rows {
+            let serials = scrai_core::quorum::record_serials(json).map_err(|e| format!("row {idx}: {e}"))?;
+            for serial in serials {
+                tx.execute("INSERT OR IGNORE INTO spent_serials (serial, idx) VALUES (?1, ?2)", params![serial, idx])
+                    .map_err(|e| e.to_string())?;
+            }
+            tx.execute("UPDATE quorum_records SET seen = ?2 WHERE idx = ?1 AND seen = 0", params![idx, now])
+                .map_err(|e| e.to_string())?;
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(rows.len())
+    }
+
+    /// Drop spend records older than `retain_secs`. Safe because a payment only verifies
+    /// with a spend date near NOW (federation::spend_date_plausible) and a book expires
+    /// ~30 days after issue: past retention no coin of the pruned rows can be presented
+    /// again. The coins of pruned rows are added to kv `quorum_pruned_coins` so the admin
+    /// lifetime count does not shrink. Returns (rows, coins) removed.
+    pub fn prune_spent(&mut self, retain_secs: u64) -> Result<(u64, u64), String> {
+        let cutoff = (crate::pay::now_ms() / 1000).saturating_sub(retain_secs) as i64;
+        let tx = self.conn.transaction().map_err(|e| e.to_string())?;
+        let (rows, coins): (i64, i64) = tx
+            .query_row(
+                "SELECT COUNT(*), COALESCE(SUM(coins), 0) FROM quorum_records WHERE seen > 0 AND seen < ?1",
+                params![cutoff],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .map_err(|e| e.to_string())?;
+        if rows == 0 {
+            return Ok((0, 0));
+        }
+        tx.execute(
+            "DELETE FROM spent_serials WHERE idx IN (SELECT idx FROM quorum_records WHERE seen > 0 AND seen < ?1)",
+            params![cutoff],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM quorum_records WHERE seen > 0 AND seen < ?1", params![cutoff]).map_err(|e| e.to_string())?;
+        let prior: i64 = tx
+            .query_row("SELECT v FROM kv WHERE k = 'quorum_pruned_coins'", [], |r| r.get::<_, String>(0))
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        tx.execute(
+            "INSERT INTO kv (k, v) VALUES ('quorum_pruned_coins', ?1) ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+            params![(prior + coins).to_string()],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok((rows as u64, coins as u64))
     }
 
     /// Remove one blob (used once, to retire the legacy whole-quorum snapshot).
@@ -1213,5 +1312,84 @@ mod voucher_tests {
         assert!(matches!(db.voucher_void_by_invoice("inv4", 300), VoucherVoid::AlreadySpent),
             "spent credit cannot be clawed back — the same rule the app follows");
         assert!(matches!(db.voucher_void_by_invoice("inv-nope", 300), VoucherVoid::Unknown));
+    }
+}
+
+/// The cold side of the double-spend store, read through its own read-only connection so
+/// lookups never contend with the writer for the `Store`'s connection. Sees committed rows
+/// only — the in-RAM pending set of `QuorumStore` covers what is not committed yet.
+pub struct SqliteSerialIndex {
+    conn: Connection,
+}
+
+impl SqliteSerialIndex {
+    pub fn open(path: &Path) -> Result<Self, String> {
+        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)
+            .map_err(|e| format!("serial index: {e}"))?;
+        conn.busy_timeout(std::time::Duration::from_secs(5)).map_err(|e| format!("serial index: {e}"))?;
+        Ok(Self { conn })
+    }
+}
+
+impl scrai_core::quorum::SerialIndex for SqliteSerialIndex {
+    fn lookup(&self, serial_hex: &str) -> Option<u64> {
+        self.conn
+            .query_row("SELECT idx FROM spent_serials WHERE serial = ?1", params![serial_hex], |r| r.get::<_, i64>(0))
+            .ok()
+            .map(|i| i as u64)
+    }
+    fn record(&self, idx: u64) -> Option<String> {
+        self.conn
+            .query_row("SELECT v FROM quorum_records WHERE idx = ?1", params![idx as i64], |r| r.get::<_, String>(0))
+            .ok()
+    }
+}
+
+#[cfg(test)]
+mod spent_serials_tests {
+    use super::*;
+    use scrai_core::quorum::{PendingRecord, SerialIndex};
+
+    fn tmp() -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("tokumai-store-{}", rand::random::<u64>()));
+        std::fs::create_dir_all(&d).unwrap();
+        d.join("state.db")
+    }
+
+    #[test]
+    fn a_batch_writes_rows_and_serials_and_the_index_reads_them_back() {
+        let path = tmp();
+        let mut st = Store::open(&path).unwrap();
+        assert_eq!(st.next_quorum_idx(), 0);
+        let rec = PendingRecord { idx: 0, coins: 2, serials: vec!["aa".into(), "bb".into()], json: "{\"r\":0}".into() };
+        st.save_batch(&[("quorum_meta", "{}")], &[rec]).unwrap();
+        assert_eq!(st.next_quorum_idx(), 1);
+        let ix = SqliteSerialIndex::open(&path).unwrap();
+        assert_eq!(ix.lookup("aa"), Some(0));
+        assert_eq!(ix.lookup("bb"), Some(0));
+        assert_eq!(ix.lookup("cc"), None);
+        assert_eq!(ix.record(0).as_deref(), Some("{\"r\":0}"));
+        assert_eq!(ix.record(7), None);
+        // nothing from before the index → nothing to migrate
+        assert_eq!(st.index_legacy_quorum_records().unwrap(), 0);
+    }
+
+    #[test]
+    fn prune_removes_old_rows_and_keeps_the_lifetime_coin_count() {
+        let path = tmp();
+        let mut st = Store::open(&path).unwrap();
+        let rec = PendingRecord { idx: 0, coins: 3, serials: vec!["s1".into()], json: "{}".into() };
+        st.save_batch(&[], &[rec]).unwrap();
+        // fresh rows are inside retention → untouched
+        assert_eq!(st.prune_spent(35 * 86_400).unwrap(), (0, 0));
+        // age the row artificially and prune with the real retention
+        st.conn.execute("UPDATE quorum_records SET seen = seen - 40 * 86400", []).unwrap();
+        assert_eq!(st.prune_spent(35 * 86_400).unwrap(), (1, 3));
+        let ix = SqliteSerialIndex::open(&path).unwrap();
+        assert_eq!(ix.lookup("s1"), None, "the serial index shrinks with the rows");
+        assert_eq!(st.load("quorum_pruned_coins").as_deref(), Some("3"));
+        // a row that was never stamped (seen = 0) is never pruned — the migration stamps it first
+        st.conn.execute("INSERT INTO quorum_records (idx, coins, v, seen) VALUES (5, 1, '{}', 0)", []).unwrap();
+        assert_eq!(st.prune_spent(1).unwrap(), (0, 0));
     }
 }

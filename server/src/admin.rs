@@ -80,6 +80,9 @@ pub struct Inv {
 pub struct QuorumBlob {
     #[serde(default)]
     pub serials: HashMap<String, serde_json::Value>,
+    /// Lifetime coins recorded as spent (kept in the meta since the spend rows are pruned).
+    #[serde(default)]
+    pub burned: u64,
     #[serde(default)]
     pub offenses: HashMap<String, serde_json::Value>,
     #[serde(default)]
@@ -534,7 +537,9 @@ pub fn read_metrics(path: &PathBuf) -> Metrics {
     // NOTE: coins_redeemed is the count of burned ecash SERIALS, an integrity
     // number only — a nym ticketbook holds many tiny coins, so a serial is NOT
     // a $1 coin. Do not dollarize it. Real spend comes from the daily counters.
-    m.coins_redeemed = coins_from_rows.unwrap_or(quo.serials.len() as u64);
+    // Newest layout: the meta carries the lifetime count. Older: rows (+ what pruning removed).
+    let pruned: u64 = blob("quorum_pruned_coins").and_then(|v| v.parse().ok()).unwrap_or(0);
+    m.coins_redeemed = if quo.burned > 0 { quo.burned } else { coins_from_rows.unwrap_or(quo.serials.len() as u64) + pruned };
 
     // integrity
     m.offenders = quo.offenses.len();
