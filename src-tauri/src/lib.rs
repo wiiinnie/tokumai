@@ -206,7 +206,7 @@ async fn handle_spend_rejection(
                 Ok(FedResponse::Keys { vk, .. }) => serde_json::to_string(&vk).ok(),
                 _ => None,
             };
-            let purse_vk = serde_json::to_string(purse.verification_key()).ok();
+            let purse_vk = epoch_keys(dir, srv).and_then(|k| serde_json::to_string(&k.vk).ok());
             match server_vk {
                 // Confirmed stale (minted under a different authority key) → safe to drop.
                 Some(sv) if Some(&sv) != purse_vk.as_ref() => {
@@ -730,6 +730,19 @@ fn keys_file(dir: &Path, srv: &str) -> std::path::PathBuf {
     dir.join(format!("keys-{h}.json"))
 }
 
+/// The epoch material for a server, from the on-disk cache, in the form a book needs to
+/// spend. Held once per server and epoch rather than inside every book.
+fn epoch_keys(dir: &Path, srv: &str) -> Option<scrai_core::purse::EpochKeys> {
+    use scrai_core::federation::FedResponse;
+    let (_, v) = read_keys_file(dir, srv)?;
+    match serde_json::from_value::<FedResponse>(v).ok()? {
+        FedResponse::Keys { vk, coin_sigs, date_sigs, expiration_date, total_coins, .. } => {
+            Some(scrai_core::purse::EpochKeys { vk, coin_sigs, date_sigs, expiration_date, total_coins })
+        }
+        _ => None,
+    }
+}
+
 fn read_keys_file(dir: &Path, srv: &str) -> Option<(u32, Value)> {
     let raw = std::fs::read_to_string(keys_file(dir, srv)).ok()?;
     let v: Value = serde_json::from_str(&raw).ok()?;
@@ -967,15 +980,7 @@ async fn withdraw_books(
                 continue;
             }
         };
-        let purse = scrai_core::purse::Purse::new(
-            wallet_cred,
-            user,
-            vk.clone(),
-            coin_sigs.clone(),
-            date_sigs.clone(),
-            total_coins,
-            expiration_date,
-        );
+        let purse = scrai_core::purse::Purse::new(wallet_cred, user, total_coins, expiration_date);
         // Persist each book as it lands: a dropped connection loses nothing.
         let mut w2 = wallet::load(dir);
         w2.coconut_purses.push(purse.persist()?);
@@ -1087,7 +1092,11 @@ fn tender_ceiling_coins(model: &str, messages: &Value, max_tokens: Option<u64>) 
 /// Assemble a tender worth at least `ceiling` coins: spare notes first, then — only if
 /// they fall short — a fresh plan minted out of a book. The purse is advanced here, so the
 /// caller MUST persist the wallet before anything leaves the device.
-fn build_tender(w: &mut wallet::Wallet, ceiling: u64) -> Result<scrai_core::tender::Tender, String> {
+fn build_tender(
+    w: &mut wallet::Wallet,
+    keys: &scrai_core::purse::EpochKeys,
+    ceiling: u64,
+) -> Result<scrai_core::tender::Tender, String> {
     use scrai_core::tender::{plan_coins, Note, Tender};
     let mut notes: Vec<Note> = Vec::new();
     for v in std::mem::take(&mut w.spare_notes) {
@@ -1110,7 +1119,7 @@ fn build_tender(w: &mut wallet::Wallet, ceiling: u64) -> Result<scrai_core::tend
         }
         // `expiration − 1 day`, the same spend date every other payment uses.
         let spend_date = purse.expiration_date().saturating_sub(86_400);
-        let mut fresh = purse.spend_tender(&plan_coins(take), spend_date)?;
+        let mut fresh = purse.spend_tender(keys, &plan_coins(take), spend_date)?;
         notes.append(&mut fresh);
         short -= take;
         let emptied = purse.remaining_coins() == 0;
@@ -1167,6 +1176,7 @@ fn coin_value_toku(w: &wallet::Wallet) -> u64 {
 #[allow(clippy::too_many_arguments, non_snake_case)]
 fn coin_request(
     dir: &std::path::Path,
+    srv: &str,
     model: &str,
     messages: &Value,
     maxTokens: Option<u64>,
@@ -1189,7 +1199,8 @@ fn coin_request(
         log::warn!("[tender] a pending tender could not be read back — starting a fresh one");
         w.pending_tender = None;
     }
-    let tender = build_tender(&mut w, tender_ceiling_coins(model, messages, maxTokens))?;
+    let keys = epoch_keys(dir, srv).ok_or("the server's issuing keys are not on this device yet — check for credit first")?;
+    let tender = build_tender(&mut w, &keys, tender_ceiling_coins(model, messages, maxTokens))?;
     let mut req = json!({
         "v": PROTO, "kind": "chat", "id": rand_hex(16), "model": model, "messages": messages,
         "stream": false, "chunkedImages": true,
@@ -1299,7 +1310,8 @@ async fn coins_return(app: AppHandle, transport: State<'_, Arc<Transport>>) -> R
                 if left == 0 {
                     break;
                 }
-                let tender = build_tender(&mut w, left.min(BATCH_COINS))?;
+                let keys = epoch_keys(&dir, &srv).ok_or("the server's issuing keys are not on this device yet — check for credit first")?;
+                let tender = build_tender(&mut w, &keys, left.min(BATCH_COINS))?;
                 let nonce = rand_hex(16);
                 let sig = a.sign("return", &nonce);
                 let req = json!({
@@ -1377,7 +1389,8 @@ async fn redeem_coconut(app: &AppHandle, t: &Transport, srv: &str, coins: u64) -
                 let mut pib = [0u8; 72];
                 rand::thread_rng().fill_bytes(&mut pib);
                 let spend_date = purse.expiration_date().saturating_sub(86_400);
-                let payment = purse.spend(coins, &PayInfo { pay_info_bytes: pib }, spend_date)?;
+                let keys = epoch_keys(&dir, srv).ok_or("the server's issuing keys are not on this device yet — check for credit first")?;
+                let payment = purse.spend(&keys, coins, &PayInfo { pay_info_bytes: pib }, spend_date)?;
                 let emptied = purse.remaining_coins() == 0;
                 w.coconut_purses[idx] = purse.persist()?;
                 if emptied {
@@ -2468,7 +2481,7 @@ async fn chat_impl(
     // Coins instead of a session: the request carries a tender and no signature at all.
     // The unburned notes come back in `coin_settle` once the server has answered.
     if coin_chat_enabled(&dir) {
-        let (req, notes, resumed) = coin_request(&dir, &model, &messages, maxTokens, live, thinkingBudget, &imageSize)?;
+        let (req, notes, resumed) = coin_request(&dir, &srv, &model, &messages, maxTokens, live, thinkingBudget, &imageSize)?;
         if resumed {
             log::info!("[tender] resuming an unanswered tender verbatim");
         }
@@ -4376,22 +4389,22 @@ mod tender_tests {
     use super::*;
     use scrai_core::coconut::testkit;
 
-    fn wallet_with_a_book() -> (wallet::Wallet, u64) {
+    fn wallet_with_a_book() -> (wallet::Wallet, u64, scrai_core::purse::EpochKeys) {
         let fk = testkit::funded();
         let purse = fk.new_purse();
         let coins = purse.remaining_coins();
         let mut w = wallet::Wallet::default();
         w.coconut_purses.push(purse.persist().unwrap());
-        (w, coins)
+        (w, coins, fk.keys())
     }
 
     #[test]
     fn a_tender_is_minted_once_and_its_leftovers_pay_for_the_next_request() {
-        let (mut w, coins) = wallet_with_a_book();
+        let (mut w, coins, keys) = wallet_with_a_book();
         assert!(coins >= 20, "the testkit book has {coins} coins");
 
         // First request: nothing spare yet, so the notes come out of the book.
-        let t1 = build_tender(&mut w, 7).unwrap();
+        let t1 = build_tender(&mut w, &keys, 7).unwrap();
         assert_eq!(t1.total_coins(), 7);
         assert_eq!(t1.notes.iter().map(|n| n.coins).collect::<Vec<_>>(), vec![1, 2, 4]);
         let left_in_book = scrai_core::purse::Purse::restore(&w.coconut_purses[0]).unwrap().remaining_coins();
@@ -4404,7 +4417,7 @@ mod tender_tests {
         assert_eq!(w.spare_notes.len(), 2);
 
         // Second request, small enough for the spares: the book is not touched again.
-        let t2 = build_tender(&mut w, 5).unwrap();
+        let t2 = build_tender(&mut w, &keys, 5).unwrap();
         assert_eq!(t2.total_coins(), 5, "1 + 4 that came back");
         assert_eq!(
             scrai_core::purse::Purse::restore(&w.coconut_purses[0]).unwrap().remaining_coins(),
@@ -4418,6 +4431,7 @@ mod tender_tests {
     #[test]
     fn a_tender_spans_several_books_when_one_is_not_enough() {
         let fk = testkit::funded();
+        let keys = fk.keys();
         let mut w = wallet::Wallet::default();
         let per_book = {
             let p = fk.new_purse();
@@ -4428,7 +4442,7 @@ mod tender_tests {
         w.coconut_purses.push(fk.new_purse().persist().unwrap());
         w.coconut_purses.push(fk.new_purse().persist().unwrap());
         let want = per_book * 2 + 1; // more than two whole books
-        let t = build_tender(&mut w, want).unwrap();
+        let t = build_tender(&mut w, &keys, want).unwrap();
         assert_eq!(t.total_coins(), want, "the tender is complete across books");
         assert_eq!(w.coconut_purses.len(), 1, "two books were emptied and dropped");
         assert_eq!(coins_on_device(&w), per_book * 3 - want);
@@ -4436,12 +4450,12 @@ mod tender_tests {
 
     #[test]
     fn a_tender_tops_the_spares_up_out_of_the_book_when_they_fall_short() {
-        let (mut w, _) = wallet_with_a_book();
-        let t1 = build_tender(&mut w, 3).unwrap();
+        let (mut w, _, keys) = wallet_with_a_book();
+        let t1 = build_tender(&mut w, &keys, 3).unwrap();
         keep_unburned(&mut w, &t1.notes, &[]); // nothing burned: 1 + 2 are spare
         assert_eq!(w.spare_notes.len(), 2);
 
-        let t2 = build_tender(&mut w, 10).unwrap();
+        let t2 = build_tender(&mut w, &keys, 10).unwrap();
         assert!(t2.total_coins() >= 10, "at least the ceiling: {}", t2.total_coins());
         // the spares are in there, plus a fresh plan for the shortfall
         assert!(t2.notes.len() > 2);
@@ -4449,8 +4463,9 @@ mod tender_tests {
 
     #[test]
     fn a_wallet_without_credit_cannot_tender() {
+        let keys = testkit::funded().keys();
         let mut w = wallet::Wallet::default();
-        assert!(build_tender(&mut w, 7).is_err());
+        assert!(build_tender(&mut w, &keys, 7).is_err());
     }
 
     #[test]

@@ -22,29 +22,44 @@ use crate::coconut;
 /// A held credential plus everything needed to spend it offline. All fields are
 /// serde-native, so the purse persists directly — treat the stored JSON as money
 /// (until redeemed onto a session it is NOT rebuildable from the account phrase).
+/// Everything an issuing epoch publishes: the aggregated verification key and the
+/// signatures every client needs in order to spend. It is the SAME for every book of a
+/// server and epoch, which is why it does not live inside a book.
+///
+/// It used to. Each purse carried its own copy, so the wallet — decrypted and rewritten on
+/// every message — grew with the NUMBER of books rather than with the money in them
+/// (measured 2026-09-14: 5.9 KB per one-cent book, and a $10 purchase came to megabytes).
+/// Held once beside the books, a book is 641 bytes.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct EpochKeys {
+    pub vk: VerificationKeyAuth,
+    pub coin_sigs: Vec<CoinIndexSignature>,
+    pub date_sigs: Vec<ExpirationDateSignature>,
+    pub expiration_date: u32,
+    /// Coins per ticketbook this epoch issues.
+    pub total_coins: u64,
+}
+
+impl EpochKeys {
+    /// Do these keys belong to the epoch this book was issued in? Spending a book with
+    /// another epoch's material only produces a payment no server will accept, so it is
+    /// refused here rather than burned.
+    pub fn fits(&self, purse: &Purse) -> bool {
+        self.expiration_date == purse.expiration_date() && self.total_coins == purse.total_coins()
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct Purse {
     wallet: Wallet,
     user: KeyPairUser,
-    vk: VerificationKeyAuth,
-    coin_sigs: Vec<CoinIndexSignature>,
-    date_sigs: Vec<ExpirationDateSignature>,
     total_coins: u64,
     expiration_date: u32,
 }
 
 impl Purse {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        wallet: Wallet,
-        user: KeyPairUser,
-        vk: VerificationKeyAuth,
-        coin_sigs: Vec<CoinIndexSignature>,
-        date_sigs: Vec<ExpirationDateSignature>,
-        total_coins: u64,
-        expiration_date: u32,
-    ) -> Self {
-        Self { wallet, user, vk, coin_sigs, date_sigs, total_coins, expiration_date }
+    pub fn new(wallet: Wallet, user: KeyPairUser, total_coins: u64, expiration_date: u32) -> Self {
+        Self { wallet, user, total_coins, expiration_date }
     }
 
     /// Spend `coins` from the purse, advancing its counter and returning a payment
@@ -56,20 +71,24 @@ impl Purse {
     /// fresh spend — that is how honest clients avoid a self-inflicted double-spend.
     pub fn spend(
         &mut self,
+        keys: &EpochKeys,
         coins: u64,
         pay_info: &PayInfo,
         spend_date: u32,
     ) -> Result<Payment, String> {
+        if !keys.fits(self) {
+            return Err("these keys are from a different issuing epoch than this ticketbook".into());
+        }
         let params = Parameters::new(self.total_coins);
         coconut::spend(
             &mut self.wallet,
             &params,
-            &self.vk,
+            &keys.vk,
             self.user.secret_key(),
             pay_info,
             coins,
-            &self.date_sigs,
-            &self.coin_sigs,
+            &keys.date_sigs,
+            &keys.coin_sigs,
             spend_date,
         )
     }
@@ -83,6 +102,7 @@ impl Purse {
     /// caller drops this copy), so a half-advanced counter never reaches disk.
     pub fn spend_tender(
         &mut self,
+        keys: &EpochKeys,
         values: &[u64],
         spend_date: u32,
     ) -> Result<Vec<crate::tender::Note>, String> {
@@ -93,7 +113,7 @@ impl Purse {
             let mut bytes = [0u8; 72];
             rand::thread_rng().fill_bytes(&mut bytes);
             let pi = PayInfo { pay_info_bytes: bytes };
-            let payment = probe.spend(*coins, &pi, spend_date)?;
+            let payment = probe.spend(keys, *coins, &pi, spend_date)?;
             notes.push(crate::tender::Note {
                 coins: *coins,
                 payment,
@@ -152,9 +172,6 @@ impl Purse {
         }
         self.total_coins - spent
     }
-    pub fn verification_key(&self) -> &VerificationKeyAuth {
-        &self.vk
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -172,12 +189,13 @@ mod tests {
         let fk = testkit::funded();
         let sd = fk.spend_date();
         let mut purse = fk.new_purse();
+        let keys = fk.keys();
         let mut store = QuorumStore::default();
 
         // ceiling 7 coins → notes 1,2,4; the answer turns out to cost 3
         let values = plan_coins(7);
         assert_eq!(values, vec![1, 2, 4]);
-        let notes = purse.spend_tender(&values, sd).unwrap();
+        let notes = purse.spend_tender(&keys, &values, sd).unwrap();
         let tender = Tender { notes };
         tender.well_formed().unwrap();
         assert_eq!(tender.total_coins(), 7);
@@ -207,9 +225,10 @@ mod tests {
         let fk = testkit::funded();
         let sd = fk.spend_date();
         let mut purse = fk.new_purse();
+        let keys = fk.keys();
         let before = purse.remaining_coins();
         // more coins than the purse holds → the whole tender fails
-        assert!(purse.spend_tender(&[before, 1], sd).is_err());
+        assert!(purse.spend_tender(&keys, &[before, 1], sd).is_err());
         assert_eq!(purse.remaining_coins(), before);
     }
 
@@ -224,17 +243,18 @@ mod tests {
         let fk = testkit::funded();
         let sd = fk.spend_date();
         let mut purse = fk.new_purse();
+        let keys = fk.keys();
         let mut store = QuorumStore::default();
 
         let pi1 = PayInfo { pay_info_bytes: [1u8; 72] };
-        let p1 = purse.spend(2, &pi1, sd).unwrap();
+        let p1 = purse.spend(&keys, 2, &pi1, sd).unwrap();
         assert_eq!(store.submit(&p1, pi1, 1), Verdict::Accepted);
 
         // persist the ADVANCED purse, then restore and spend again
         let restored = Purse::restore(&purse.persist().unwrap()).unwrap();
         let mut restored = restored;
         let pi2 = PayInfo { pay_info_bytes: [2u8; 72] };
-        let p2 = restored.spend(2, &pi2, sd).unwrap();
+        let p2 = restored.spend(&keys, 2, &pi2, sd).unwrap();
         // fresh coins (counter continued) → accepted, NOT a double-spend
         assert_eq!(store.submit(&p2, pi2, 1), Verdict::Accepted);
     }
@@ -247,18 +267,19 @@ mod tests {
         let fk = testkit::funded();
         let sd = fk.spend_date();
         let mut purse = fk.new_purse();
+        let keys = fk.keys();
         let mut store = QuorumStore::default();
 
         // snapshot at counter 0, then spend coins 0,1 from the live purse
         let stale = purse.persist().unwrap();
         let pi1 = PayInfo { pay_info_bytes: [1u8; 72] };
-        let p1 = purse.spend(2, &pi1, sd).unwrap();
+        let p1 = purse.spend(&keys, 2, &pi1, sd).unwrap();
         assert_eq!(store.submit(&p1, pi1, 1), Verdict::Accepted);
 
         // a crash restores the STALE snapshot → re-spends coins 0,1 with new pay_info
         let mut rolled_back = Purse::restore(&stale).unwrap();
         let pi2 = PayInfo { pay_info_bytes: [2u8; 72] };
-        let p2 = rolled_back.spend(2, &pi2, sd).unwrap();
+        let p2 = rolled_back.spend(&keys, 2, &pi2, sd).unwrap();
         match store.submit(&p2, pi2, 1) {
             Verdict::DoubleSpend { offender, .. } => {
                 assert!(offender == fk.user_pubkey(), "wrong offender")

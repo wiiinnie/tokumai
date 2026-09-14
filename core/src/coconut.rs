@@ -397,15 +397,19 @@ pub mod testkit {
 
         /// A client purse built from this federation's material (for purse tests).
         pub fn new_purse(&self) -> crate::purse::Purse {
-            crate::purse::Purse::new(
-                self.wallet(),
-                self.user.clone(),
-                self.vk.clone(),
-                self.coin_sigs.clone(),
-                self.date_sigs.clone(),
-                32,
-                self.expiration_date,
-            )
+            crate::purse::Purse::new(self.wallet(), self.user.clone(), 32, self.expiration_date)
+        }
+
+        /// The epoch material a purse needs in order to spend — held once, beside the
+        /// books rather than inside each of them.
+        pub fn keys(&self) -> crate::purse::EpochKeys {
+            crate::purse::EpochKeys {
+                vk: self.vk.clone(),
+                coin_sigs: self.coin_sigs.clone(),
+                date_sigs: self.date_sigs.clone(),
+                expiration_date: self.expiration_date,
+                total_coins: 32,
+            }
         }
     }
 }

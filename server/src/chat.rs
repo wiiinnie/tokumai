@@ -1726,9 +1726,14 @@ mod tests {
     }
 
     /// Build a request that pays with coins: no sessionId, no counter, no signature.
-    fn coin_chat(purse: &mut scrai_core::purse::Purse, ceiling_coins: u64, spend_date: u32) -> (Vec<u8>, scrai_core::tender::Tender) {
+    fn coin_chat(
+        purse: &mut scrai_core::purse::Purse,
+        keys: &scrai_core::purse::EpochKeys,
+        ceiling_coins: u64,
+        spend_date: u32,
+    ) -> (Vec<u8>, scrai_core::tender::Tender) {
         let values = scrai_core::tender::plan_coins(ceiling_coins);
-        let notes = purse.spend_tender(&values, spend_date).unwrap();
+        let notes = purse.spend_tender(keys, &values, spend_date).unwrap();
         let tender = scrai_core::tender::Tender { notes };
         let req = json!({
             "v": 1, "kind": "chat", "id": "c1", "model": "gemini-b",
@@ -1749,7 +1754,7 @@ mod tests {
         let mut replies: std::collections::HashMap<String, (u64, Vec<u8>, std::time::Instant)> = std::collections::HashMap::new();
         let pricing = coin_pricing();
 
-        let (req, tender) = coin_chat(&mut purse, 31, fk.spend_date());
+        let (req, tender) = coin_chat(&mut purse, &fk.keys(), 31, fk.spend_date());
         let Reserved::Proceed(p) = reserve(&req, &mut sessions, &mut quorum, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH)
         else {
             panic!("coins should reserve");
@@ -1803,7 +1808,7 @@ mod tests {
         let mut replies: std::collections::HashMap<String, (u64, Vec<u8>, std::time::Instant)> = std::collections::HashMap::new();
         let pricing = coin_pricing();
 
-        let (req, _) = coin_chat(&mut purse, 31, fk.spend_date());
+        let (req, _) = coin_chat(&mut purse, &fk.keys(), 31, fk.spend_date());
         let Reserved::Proceed(p) = reserve(&req, &mut sessions, &mut quorum, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH)
         else {
             panic!("coins should reserve");
@@ -1832,7 +1837,7 @@ mod tests {
 
         // One coin is 0.1 ¢; a request whose input alone costs more cannot be served.
         let values = scrai_core::tender::plan_coins(1);
-        let notes = purse.spend_tender(&values, fk.spend_date()).unwrap();
+        let notes = purse.spend_tender(&fk.keys(), &values, fk.spend_date()).unwrap();
         let tender = scrai_core::tender::Tender { notes };
         let long = "x".repeat(200_000);
         let req = serde_json::to_vec(&json!({
@@ -1867,7 +1872,7 @@ mod tests {
 
         // 31 coins = 3.1 ¢ — enough to cover the thinking budget alone, which a smaller
         // tender is not (that path is the "not enough coins" test above).
-        let (req, tender) = coin_chat(&mut purse, 31, fk.spend_date());
+        let (req, tender) = coin_chat(&mut purse, &fk.keys(), 31, fk.spend_date());
         let Reserved::Proceed(_p) = reserve(&req, &mut sessions, &mut quorum, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH)
         else {
             panic!("first request reserves");

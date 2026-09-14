@@ -122,11 +122,13 @@ pub struct User {
     pub counter: u64,
     pub balance: u64,
     pub purse: Option<Purse>,
+    /// The issuing epoch's material — one copy for every book this user holds.
+    pub keys: Option<scrai_core::purse::EpochKeys>,
 }
 
 impl User {
     pub fn new() -> Self {
-        Self { account: Signer::random(), session: Signer::random(), counter: 0, balance: 0, purse: None }
+        Self { account: Signer::random(), session: Signer::random(), counter: 0, balance: 0, purse: None, keys: None }
     }
 }
 
@@ -224,7 +226,9 @@ pub async fn fund(ctx: &Ctx, user: &mut User, usd: u32, redeem_coins: u64) -> Re
         shares.push(coconut::verify_share(vk_auth, user_kp.secret_key(), &blinded, &req_info, i as u64 + 1)?);
     }
     let wallet = coconut::aggregate(&vk, user_kp.secret_key(), &shares, &req_info)?;
-    user.purse = Some(Purse::new(wallet, user_kp, vk, coin_sigs, date_sigs, total_coins, expiration_date));
+    // The epoch material is the same for every book, so it is held beside them.
+    user.keys = Some(scrai_core::purse::EpochKeys { vk, coin_sigs, date_sigs, expiration_date, total_coins });
+    user.purse = Some(Purse::new(wallet, user_kp, total_coins, expiration_date));
 
     redeem(ctx, user, redeem_coins).await
 }
@@ -239,7 +243,9 @@ pub async fn redeem(ctx: &Ctx, user: &mut User, coins: u64) -> Result<u64, Strin
     let mut pib = [0u8; 72];
     rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut pib);
     let spend_date = purse.expiration_date().saturating_sub(86_400);
-    let payment = purse.spend(coins, &PayInfo { pay_info_bytes: pib }, spend_date)?;
+    let keys = user.keys.clone().ok_or("no epoch keys for this book")?;
+    let purse = user.purse.as_mut().ok_or("no coconut book to redeem from")?;
+    let payment = purse.spend(&keys, coins, &PayInfo { pay_info_bytes: pib }, spend_date)?;
     let req = with(envelope("redeem"), json!({
         "sessionId": user.session.id,
         "payment": serde_json::to_value(&payment).map_err(|e| e.to_string())?,
