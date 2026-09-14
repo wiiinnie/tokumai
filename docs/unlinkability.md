@@ -91,8 +91,15 @@ never an account), and it is needed once per account. With coins as the payment 
 "Redeem now" control is gone — it pushed coins ONTO the session layer, which is backwards
 now; the way off a device is "Move credit back to my account".
 
+`session.drain` is migration code with a fixed lifetime: it exists only until the balances
+that predate coins have been carried over, and it GOES OUT WITH THE SESSION LAYER — server
+dispatch, `SessionStore::drain`, `auth::session_hands_over`, the client command and the
+card's box. It is the only place in the app where the two key kinds meet, so leaving it in
+after the layer is gone would keep a link alive that nothing needs any more.
+
 Still to do for D: prices quoted in coins, expiry return, removing the session path itself
-(and with it `redeem`, the session id in chat, and the moderation strikes that hang on it).
+(and with it `redeem`, `session.drain`, the session id in chat, and the moderation strikes
+that hang on it).
 
 Decided parameters:
 
