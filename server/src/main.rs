@@ -122,11 +122,6 @@ async fn main() {
     let authority = Arc::new(load_or_bootstrap(&data_dir.join("authority.json")));
 
     // Persistent Nym identity so the server keeps ONE address across restarts.
-    let storage = StoragePaths::new_from_dir(data_dir.join(".nym-server"))
-        .expect("nym storage paths");
-    let mut builder = MixnetClientBuilder::new_with_default_storage(storage)
-        .await
-        .expect("mixnet client builder");
     // Entry gateways. GATEWAY_MASTER pins the primary identity (the address the app
     // ships with); GATEWAY_FALLBACK=gw1,gw2,… pins the extra identities #1, #2, … —
     // the same server on other gateways, which the app learns from the catalog reply and
@@ -153,20 +148,22 @@ async fn main() {
         .iter()
         .find_map(|k| scrai_server::cfg(k).ok().map(|g| g.trim().to_string()).filter(|g| !g.is_empty()));
     let primary_exists = identity_exists(&data_dir.join(".nym-server"));
-    if let Some(gw) = pinned {
+    let primary_gateway: Option<String> = if let Some(gw) = pinned {
         println!("scrai-server: requesting entry gateway {gw}");
-        builder = builder.request_gateway(gw);
+        Some(gw)
     } else if primary_exists {
         println!("scrai-server: no gateway pin — the existing identity keeps its gateway");
+        None
     } else if let Some((gw, country, host)) = random_described_gateway().await {
         // No pin → curated random instead of the SDK's blind pick: only gateways
         // whose directory entry carries a location AND a reverse-DNS hostname, so
         // the exit the clients see is always identifiable in their UI.
         println!("scrai-server: picked described gateway {gw} ({country}, {host})");
-        builder = builder.request_gateway(gw);
+        Some(gw)
     } else {
         println!("scrai-server: directory unavailable — letting the SDK pick a gateway");
-    }
+        None
+    };
     // Egress rate. The SDK default (one real packet every 20 ms ≈ 50 packets/s, the
     // privacy-preserving stream shape) is a CLIENT default: a service provider that
     // answers hundreds of users through ONE Nym client serialises every reply behind it —
@@ -175,15 +172,7 @@ async fn main() {
     // volume" preset is 4 ms ≈ 250 packets/s); MIX_COVER_MS thins the loop cover
     // stream that a server does not need for its own anonymity. Unset = SDK defaults.
     // Measured in docs/load-testing.md.
-    if let Some(cfg) = server_traffic_config() {
-        builder = builder.debug_config(cfg);
-    }
-    let client = builder
-        .build()
-        .expect("mixnet build")
-        .connect_to_mixnet()
-        .await
-        .expect("mixnet connect");
+    let client = connect_identity_at_boot(&data_dir.join(".nym-server"), primary_gateway, "primary").await;
 
     println!(
         "scrai-server: authority #{} live on the mixnet.\n  address: {}\n  (point a client at this address)",
@@ -204,29 +193,26 @@ async fn main() {
     let mut clients = vec![client];
     let mut used_gateways: Vec<String> = clients.iter().map(|c| c.nym_address().gateway().to_base58_string()).collect();
     for k in 1..n_clients {
-        let storage = StoragePaths::new_from_dir(data_dir.join(format!(".nym-server-{k}")))
-            .expect("nym storage paths");
-        let mut b = MixnetClientBuilder::new_with_default_storage(storage)
-            .await
-            .expect("mixnet client builder");
-        if let Some(gw) = fallback_gateways.get(k - 1) {
+        let dir_k = data_dir.join(format!(".nym-server-{k}"));
+        let gateway_k: Option<String> = if let Some(gw) = fallback_gateways.get(k - 1) {
             println!("scrai-server: client #{k}: requesting entry gateway {gw} (GATEWAY_FALLBACK)");
-            b = b.request_gateway(gw.clone());
-        } else if identity_exists(&data_dir.join(format!(".nym-server-{k}"))) {
+            Some(gw.clone())
+        } else if identity_exists(&dir_k) {
             println!("scrai-server: client #{k}: no gateway pin — the existing identity keeps its gateway");
+            None
         } else {
             match random_described_gateway_excluding(&used_gateways).await {
                 Some((gw, country, host)) => {
                     println!("scrai-server: client #{k}: picked described gateway {gw} ({country}, {host})");
-                    b = b.request_gateway(gw);
+                    Some(gw)
                 }
-                None => println!("scrai-server: client #{k}: directory unavailable — letting the SDK pick a gateway"),
+                None => {
+                    println!("scrai-server: client #{k}: directory unavailable — letting the SDK pick a gateway");
+                    None
+                }
             }
-        }
-        if let Some(cfg) = server_traffic_config() {
-            b = b.debug_config(cfg);
-        }
-        let c = b.build().expect("mixnet build").connect_to_mixnet().await.expect("mixnet connect");
+        };
+        let c = connect_identity_at_boot(&dir_k, gateway_k, &format!("client #{k}")).await;
         println!("  address[{k}]: {}", c.nym_address());
         used_gateways.push(c.nym_address().gateway().to_base58_string());
         clients.push(c);
@@ -1765,13 +1751,43 @@ mod env_tests {
 }
 
 /// Has this identity registered before? (Its keys live in the dir once it has.)
+/// Bring one persistent identity onto the mixnet at boot, RETRYING instead of panicking.
+/// After a restart the gateway can still hold the previous process's session for the same
+/// identity and refuse the re-registration for a while; a panic here made systemd restart
+/// the server every five seconds until the gateway let go — about 75 s of crash loop after
+/// every deploy (2026-09-11). Each attempt goes through `connect_identity` (fresh storage
+/// handle and builder — the SDK's builder is consumed by `build`). Gives up only after
+/// `MIX_CONNECT_RETRY_S` (default 300): a gateway that is really gone must still fail
+/// loudly so the pin gets fixed.
+async fn connect_identity_at_boot(dir: &Path, gateway: Option<String>, label: &str) -> MixnetClient {
+    let budget = std::time::Duration::from_secs(env_usize("MIX_CONNECT_RETRY_S", 300) as u64);
+    let started = std::time::Instant::now();
+    let mut attempt = 0u32;
+    loop {
+        attempt += 1;
+        match connect_identity(dir, gateway.as_deref()).await {
+            Ok(c) => {
+                if attempt > 1 {
+                    println!("scrai-server: {label}: on the mixnet after {attempt} attempts ({} s)", started.elapsed().as_secs());
+                }
+                return c;
+            }
+            Err(e) if started.elapsed() < budget => {
+                eprintln!("scrai-server: {label}: {e} — retrying in 5 s (attempt {attempt})");
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            }
+            Err(e) => panic!("{label}: {e} — gave up after {} s (MIX_CONNECT_RETRY_S)", started.elapsed().as_secs()),
+        }
+    }
+}
+
 fn identity_exists(dir: &Path) -> bool {
     std::fs::read_dir(dir).map(|mut d| d.next().is_some()).unwrap_or(false)
 }
 
 /// Build + connect one identity from its storage dir, at `gateway` (re-homing it there if
-/// it sat elsewhere). Used for reconnects with the gateway the identity already has; the
-/// initial connects above print their gateway story and keep `expect`.
+/// it sat elsewhere). Used for reconnects with the gateway the identity already has, and by
+/// `connect_identity_at_boot`, which wraps it in a retry loop for the initial connects.
 async fn connect_identity(dir: &Path, gateway: Option<&str>) -> Result<MixnetClient, String> {
     let storage = StoragePaths::new_from_dir(dir).map_err(|e| format!("storage paths: {e}"))?;
     let mut b = MixnetClientBuilder::new_with_default_storage(storage)
