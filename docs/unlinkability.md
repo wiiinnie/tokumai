@@ -42,10 +42,39 @@ lost) — never at app start (the user rejected the hybrid: the old session's ba
 stranded). Costs: restore must scan indices, "session #n" becomes a rotating number,
 moderation strikes rotate with it, admin "users" becomes "sessions".
 
-## D · No session balance — target architecture
+## D · No session balance — core, server and client built 2026-09-14
 
 Every prompt pays with coins directly; the server verifies offline, burns the serials,
-answers. No session id, no counter, no redeem. Decided parameters:
+answers. No session id, no counter, no signature.
+
+**How the "pay before, price after" problem is solved: the tender.** A single ecash payment
+is atomic, so one payment for the ceiling would charge the worst case every time, and there
+is no change that would not re-link the payer. Instead the request carries SEVERAL payments
+valued 1, 2, 4, … (`core/src/tender.rs`), so every whole number of coins up to the ceiling
+is an exact subset sum. The server burns exactly the subset the answer cost and leaves the
+rest unsubmitted — those notes are still good, come home to the wallet, and are spent before
+a fresh coin is taken out of a book. Rounding is therefore the coin (0.1 ¢), not the ceiling.
+Re-sending an unburned note verbatim is safe: identical (serials, pay_info) is a replay, never
+a double-spend.
+
+Built so far:
+
+- `core/src/tender.rs` — plan and selection, `Purse::spend_tender` (all-or-nothing, never a
+  half-advanced counter), `QuorumStore::hold`/`release` (the coin-paid equivalent of
+  reserving a balance: a coin being served cannot be tendered again).
+- Server (`server/src/chat.rs`) — `reserve` holds the serials and caps the answer to what
+  the coins cover; the pairings and the provider call run off the dispatch loop; `settle`
+  burns the exact subset and names it in the reply (`burned`), a provider failure burns
+  nothing, and an identical tender replays the cached answer.
+- Client (`src-tauri/src/lib.rs`) — `coin_request`/`coin_settle`/`build_tender`, spare notes
+  and an unanswered tender in the wallet, held credit counts spares. Behind
+  `TOKUMAI_COIN_CHAT=1` until the fleet accepts tenders.
+
+Still to do for D: the coin denomination change (see below), prices quoted in coins, the UI
+(balance is "coins on this device", no session line), lazy $1 books with a spare, expiry
+return, removing the session path and the trickle.
+
+Decided parameters:
 
 | | |
 |---|---|
