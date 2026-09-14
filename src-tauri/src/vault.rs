@@ -238,8 +238,14 @@ mod tests {
         d
     }
 
+    /// The message text carries a CANARY long enough that random base64 cannot contain it
+    /// by chance. It used to be "m0", two characters — which a few hundred characters of
+    /// ciphertext hit often enough to fail the "nothing readable on disk" assertion at
+    /// random (seen 2026-09-14).
+    const CANARY: &str = "cleartext-canary-7f3a";
+
     fn session(id: &str, title: &str, n: usize) -> Value {
-        let msgs: Vec<Value> = (0..n).map(|i| json!({"role": if i % 2 == 0 {"you"} else {"ai"}, "text": format!("m{i}")})).collect();
+        let msgs: Vec<Value> = (0..n).map(|i| json!({"role": if i % 2 == 0 {"you"} else {"ai"}, "text": format!("{CANARY}-m{i}")})).collect();
         json!({"id": id, "title": title, "model": "gemini-3.5-flash", "created": "2026-08-30T10:00:00Z", "messages": msgs})
     }
 
@@ -247,7 +253,7 @@ mod tests {
     fn round_trip_is_sealed_and_listed_newest_first() {
         let d = tmp();
         let key = [7u8; 32];
-        let a = Record { updated: 100, session: session("aaaa-1", "first", 2) };
+        let a = Record { updated: 100, session: session("aaaa-1", "first-title-canary-9b2e", 2) };
         let b = Record { updated: 200, session: session("bbbb-2", "", 5) };
         for r in [&a, &b] {
             let id = r.session["id"].as_str().unwrap();
@@ -255,7 +261,9 @@ mod tests {
         }
         // on disk: an envelope, not the chat
         let raw = std::fs::read_to_string(path(&d, "aaaa-1").unwrap()).unwrap();
-        assert!(raw.contains("aes-256-gcm") && !raw.contains("first") && !raw.contains("m0"));
+        assert!(raw.contains("aes-256-gcm"), "the envelope names its cipher");
+        assert!(!raw.contains("first-title-canary-9b2e"), "the title must not be readable on disk");
+        assert!(!raw.contains(CANARY), "the messages must not be readable on disk");
         // wrong key → unreadable; right key → the session
         assert!(open(Some(&[8u8; 32]), &raw).is_err());
         let rec = open(Some(&key), &raw).unwrap();

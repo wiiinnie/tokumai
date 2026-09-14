@@ -1121,7 +1121,18 @@ fn build_tender(
     // Books are small, so one request can need coins out of several of them. Take the
     // oldest first: a coin that has been on the device longest is the one whose purchase
     // is furthest away in time.
-    while short > 0 {
+    //
+    // HOW THE NOTES ARE PACKED. A payment comes out of ONE book, so a note can never be
+    // worth more than a book (ten coins). A tender may carry at most MAX_NOTES of them,
+    // and a fine 1,2,4,… plan per book blows that budget at once: nine books used to mean
+    // thirty-six notes for a ninety-coin ceiling, and the server refused the lot
+    // ("too many notes in one tender", 2026-09-14). So only the FIRST book opened is
+    // planned finely — that alone makes every amount from 0 to a full book an exact
+    // subset sum — and every book after it comes as a SINGLE note of what it holds. Any
+    // total is then the whole notes plus the fine remainder, still exact, in about a
+    // tenth of the notes.
+    let mut fine_done = false;
+    while short > 0 && notes.len() < scrai_core::tender::MAX_NOTES {
         let Some((idx, mut purse)) = first_funded_purse(&w.coconut_purses) else { break };
         let take = short.min(purse.remaining_coins());
         if take == 0 {
@@ -1129,9 +1140,22 @@ fn build_tender(
         }
         // `expiration − 1 day`, the same spend date every other payment uses.
         let spend_date = purse.expiration_date().saturating_sub(86_400);
-        let mut fresh = purse.spend_tender(keys, &plan_coins(take), spend_date)?;
+        // The fine plan has to cover a WHOLE book's worth of remainder, not just what is
+        // still short, or a later coarse note could not be made up exactly.
+        let (values, take) = if fine_done {
+            (vec![take], take)
+        } else {
+            let fine = purse.remaining_coins().min(ceiling);
+            (plan_coins(fine), fine)
+        };
+        // Room for what this book would add — never blow the note budget mid-book.
+        if notes.len() + values.len() > scrai_core::tender::MAX_NOTES {
+            break;
+        }
+        let mut fresh = purse.spend_tender(keys, &values, spend_date)?;
         notes.append(&mut fresh);
-        short -= take;
+        fine_done = true;
+        short = short.saturating_sub(take);
         let emptied = purse.remaining_coins() == 0;
         w.coconut_purses[idx] = purse.persist()?;
         if emptied {
@@ -4585,6 +4609,33 @@ mod tender_tests {
         assert!(t2.total_coins() >= 10, "at least the ceiling: {}", t2.total_coins());
         // the spares are in there, plus a fresh plan for the shortfall
         assert!(t2.notes.len() > 2);
+    }
+
+    /// The bug of 2026-09-14: a ninety-coin ceiling out of ten-coin books produced a fine
+    /// 1,2,4,… plan PER BOOK — thirty-six notes — and the server refused the tender for
+    /// carrying more than sixteen. One fine book plus whole-book notes keeps it small and
+    /// still lets the server burn any exact amount.
+    #[test]
+    fn a_tender_spanning_many_books_stays_inside_the_note_limit() {
+        use scrai_core::tender::MAX_NOTES;
+        let fk = testkit::funded();
+        let keys = fk.keys();
+        let mut w = wallet::Wallet::default();
+        for _ in 0..8 {
+            w.coconut_purses.push(fk.new_purse().persist().unwrap());
+        }
+        let ceiling = 90;
+        let t = build_tender(&mut w, &keys, ceiling).expect("eight books can pay for ninety coins");
+        assert!(t.notes.len() <= MAX_NOTES, "{} notes in one tender", t.notes.len());
+        assert!(t.total_coins() >= ceiling, "tendered {} coins for a {ceiling} ceiling", t.total_coins());
+        t.well_formed().expect("a tender the server would accept");
+        // And it is still exact: the server must be able to burn any cost up to the
+        // ceiling without the client overpaying.
+        for cost in 0..=ceiling {
+            let picked = t.select(cost).unwrap_or_else(|| panic!("no subset for {cost}"));
+            let paid: u64 = picked.iter().map(|i| t.notes[*i].coins).sum();
+            assert_eq!(paid, cost, "paying {cost} burned {paid}");
+        }
     }
 
     #[test]
