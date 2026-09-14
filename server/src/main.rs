@@ -513,6 +513,8 @@ async fn main() {
     enum CryptoKind {
         Withdraw { id: serde_json::Value, account_id: String, req_key: String, result: Result<federation::FedResponse, String> },
         Redeem { id: serde_json::Value, req: scrai_core::gateway::RedeemRequest, verified: Result<(), String> },
+        /// Coins handed back to an account (docs/unlinkability.md, block D).
+        Return { id: serde_json::Value, account: String, tender: scrai_core::tender::Tender, verified: Result<(), String> },
     }
     struct CryptoDone {
         kind: CryptoKind,
@@ -811,6 +813,31 @@ const ORDER_TICK_MS: u64 = 1000;
                         }
                         let reply = serde_json::json!({ "id": id, "fed": serde_json::to_value(&resp).unwrap_or(serde_json::Value::Null) });
                         ("coconut.Withdraw", serde_json::to_vec(&reply).unwrap_or_default())
+                    }
+                    CryptoKind::Return { id, account, tender, verified } => {
+                        let reply = match verified {
+                            Err(e) => serde_json::json!({ "id": id, "kind": "error", "error": e }),
+                            Ok(()) => {
+                                // Burn what is still unspent and credit only that. A note the
+                                // quorum has seen before is simply worth nothing here — which
+                                // is also what makes a lost reply safe to retry: the second
+                                // attempt credits 0 and reports the same entitlement.
+                                let mut credited = 0u64;
+                                for n in &tender.notes {
+                                    let Ok(pi) = n.pay_info() else { continue };
+                                    if let scrai_core::quorum::Verdict::Accepted =
+                                        quorum.submit(&n.payment, pi, federation::this_server())
+                                    {
+                                        credited += n.coins * scrai_core::coconut::COIN_TOKU;
+                                    }
+                                }
+                                paywall.credit_voucher(&account, credited);
+                                println!("scrai-server: coins returned to an account — {credited} TOKU");
+                                serde_json::json!({ "id": id, "kind": "coins.ok", "credited": credited,
+                                    "entitlement": paywall.entitlement(&account) })
+                            }
+                        };
+                        ("coins.return", serde_json::to_vec(&reply).unwrap_or_default())
                     }
                     CryptoKind::Redeem { id, req, verified } => {
                         let reply = match verified {
@@ -1151,6 +1178,65 @@ const ORDER_TICK_MS: u64 = 1000;
                 persist_changed(&mut db, &sessions, &mut quorum, &paywall, &mut saved);
                 if let Err(e) = senders[to.idx].read().await.send_reply(to.tag, response).await {
                     eprintln!("scrai-server: reply failed: {e}");
+                }
+                continue;
+            }
+            // Coins coming home: a device being retired or moved hands back what it never
+            // spent, and the value lands on the ACCOUNT as entitlement. Account-signed so
+            // only its owner can receive it; the coins themselves are bearer money and are
+            // burned here like any other spend. Same three steps as redeem.
+            if kind == "coins.return" {
+                let id = envelope.get("id").cloned().unwrap_or(serde_json::Value::Null);
+                let bad = |e: &str| serde_json::to_vec(&serde_json::json!({ "id": id, "kind": "error", "error": e })).unwrap_or_default();
+                let account = paywall.return_claimant(&envelope);
+                let tender: Option<scrai_core::tender::Tender> =
+                    serde_json::from_value(envelope.get("tender").cloned().unwrap_or(serde_json::Value::Null)).ok();
+                let response = match (account, tender) {
+                    (None, _) => Some(bad("account signature does not check out, or the nonce was reused")),
+                    (_, None) => Some(bad("no coins in this request")),
+                    (Some(account), Some(tender)) => match tender.well_formed() {
+                        Err(e) => Some(bad(&e)),
+                        // Bounded so one request cannot hand the crypto pool an unbounded
+                        // pile of pairings; the client returns a book in chunks.
+                        Ok(()) if tender.total_coins() > MAX_RETURN_COINS => {
+                            Some(bad("too many coins in one return — send them in smaller batches"))
+                        }
+                        Ok(()) => {
+                            let (tx, auth, slots) = (crypto_tx.clone(), authority.clone(), crypto_slots.clone());
+                            let guard = inflight.enter(to);
+                            note_peak(&db, &inflight, &mut peak_written);
+                            tokio::spawn(async move {
+                                let t0 = std::time::Instant::now();
+                                let (tender, verified, waited) = match tokio::time::timeout(QUEUE_WAIT, slots.acquire_owned()).await {
+                                    Ok(Ok(_permit)) => {
+                                        let waited = t0.elapsed().as_millis();
+                                        let (tender, v) = tokio::task::spawn_blocking(move || {
+                                            let v = tender.notes.iter().try_for_each(|n| {
+                                                let pi = n.pay_info()?;
+                                                auth.verify_payment(&n.payment, &pi, n.spend_date).map_err(|e| format!("invalid coin: {e}"))
+                                            });
+                                            (tender, v)
+                                        })
+                                        .await
+                                        .unwrap_or_else(|e| panic!("coin return verify task failed: {e}"));
+                                        (tender, v, waited)
+                                    }
+                                    _ => (tender, Err("the server is busy verifying payments right now — please try again in a moment".into()), t0.elapsed().as_millis()),
+                                };
+                                let timing = (waited, t0.elapsed().as_millis() - waited);
+                                let _ = tx
+                                    .send(CryptoDone { kind: CryptoKind::Return { id, account, tender, verified }, to, timing, _guard: guard })
+                                    .await;
+                            });
+                            None
+                        }
+                    },
+                };
+                if let Some(out) = response {
+                    persist_changed(&mut db, &sessions, &mut quorum, &paywall, &mut saved);
+                    if let Err(e) = senders[to.idx].read().await.send_reply(to.tag, out).await {
+                        eprintln!("scrai-server: coins.return reply failed: {e}");
+                    }
                 }
                 continue;
             }
@@ -1803,6 +1889,11 @@ async fn connect_identity_at_boot(dir: &Path, gateway: Option<String>, label: &s
 /// How long a spend record is kept (seconds): `QUORUM_RETAIN_DAYS`, default 35 — a book
 /// lives ~30 days from issue, a payment verifies at most 2 days past its spend date
 /// (federation::SPEND_DATE_PAST_SECS), plus slack. Never below 33.
+/// Most coins one `coins.return` may carry. A payment costs ~4 ms of pairings per coin,
+/// so this bounds what a single request can ask the crypto pool for; a whole book comes
+/// home in several batches.
+const MAX_RETURN_COINS: u64 = 200;
+
 fn quorum_retain_secs() -> u64 {
     env_usize("QUORUM_RETAIN_DAYS", 35).max(33) as u64 * 86_400
 }

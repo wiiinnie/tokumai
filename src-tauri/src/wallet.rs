@@ -104,6 +104,10 @@ pub struct Wallet {
     /// A tender whose answer never arrived — see `PendingTender`.
     #[serde(default)]
     pub pending_tender: Option<PendingTender>,
+    /// A batch of coins handed back to the account whose answer never arrived. Same rule
+    /// as `pending_tender`: re-send it verbatim, never mint a fresh one.
+    #[serde(default)]
+    pub pending_return: Option<PendingTender>,
     /// Pay chats with coins instead of a session balance (docs/unlinkability.md, block D).
     /// A Developer-page switch while the fleet still runs the session path; it lives here
     /// rather than in an environment variable because a phone has no environment to set.

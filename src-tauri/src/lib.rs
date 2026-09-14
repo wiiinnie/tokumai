@@ -1120,6 +1120,97 @@ fn coin_settle(dir: &std::path::Path, notes: &[scrai_core::tender::Note], resp: 
     Ok(())
 }
 
+/// Coins on this device, in coins (books plus notes already taken out of one).
+fn coins_on_device(w: &wallet::Wallet) -> u64 {
+    let in_books: u64 = w
+        .coconut_purses
+        .iter()
+        .filter_map(|j| scrai_core::purse::Purse::restore(j).ok())
+        .map(|p| p.remaining_coins())
+        .sum();
+    let in_notes: u64 = w
+        .spare_notes
+        .iter()
+        .filter_map(|v| serde_json::from_value::<scrai_core::tender::Note>(v.clone()).ok())
+        .map(|n| n.coins)
+        .sum();
+    in_books + in_notes
+}
+
+/// Hand every unspent coin on this device back to the account, where it becomes
+/// entitlement again — the way to move to another device, or to empty one before giving
+/// it away. Coins are bearer money: they live only here, and a recovery phrase does not
+/// bring them back, so this is the only way to make them survive the device.
+///
+/// Batched, because a payment costs ~490 bytes and ~4 ms of server pairings per coin: a
+/// whole book goes home in several requests. Each batch is persisted before it leaves and
+/// re-sent verbatim until the server answers, so a lost reply can never lose the coins.
+#[tauri::command]
+async fn coins_return(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<Value, String> {
+    const BATCH_COINS: u64 = 200; // the server's MAX_RETURN_COINS
+    let _op = transport.begin_op().await;
+    let dir = data_dir(&app)?;
+    let srv = server_addr(&wallet::load(&dir))?;
+    let a = wallet_account(&app)?;
+    let t = buy_transport(&app, &transport).await;
+    let mut credited_total = 0u64;
+    let mut entitlement = 0u64;
+    loop {
+        let mut w = wallet::load(&dir);
+        // Finish an unanswered batch before building another one.
+        let (req, notes) = match w.pending_return.clone() {
+            Some(p) => {
+                let notes: Vec<scrai_core::tender::Note> =
+                    p.notes.iter().filter_map(|v| serde_json::from_value(v.clone()).ok()).collect();
+                if notes.len() != p.notes.len() {
+                    return Err("a pending return could not be read back — please report this".into());
+                }
+                (p.request, notes)
+            }
+            None => {
+                let left = coins_on_device(&w);
+                if left == 0 {
+                    break;
+                }
+                let tender = build_tender(&mut w, left.min(BATCH_COINS))?;
+                let nonce = rand_hex(16);
+                let sig = a.sign("return", &nonce);
+                let req = json!({
+                    "v": PROTO, "kind": "coins.return", "id": rand_hex(16),
+                    "publicKey": a.public_key_pem, "nonce": nonce, "sig": sig,
+                    "tender": serde_json::to_value(&tender).map_err(|e| e.to_string())?,
+                });
+                w.pending_return = Some(wallet::PendingTender {
+                    request: req.clone(),
+                    notes: tender.notes.iter().map(|n| serde_json::to_value(n).unwrap_or(Value::Null)).collect(),
+                });
+                wallet::save(&dir, &w)?;
+                (req, tender.notes)
+            }
+        };
+        let reply = t.round_trip(&srv, &req, SURBS_SMALL, TIMEOUT_MS).await?;
+        let mut w = wallet::load(&dir);
+        w.pending_return = None;
+        if let Some(e) = reply.get("error").and_then(|e| e.as_str()) {
+            // Nothing was burned — the coins are still good, so they go back in the wallet
+            // rather than being thrown away with the failed batch.
+            keep_unburned(&mut w, &notes, &[]);
+            wallet::save(&dir, &w)?;
+            return Err(e.to_string());
+        }
+        // Answered: these coins are spent, whatever the credited number says (a retry of a
+        // batch the server already took credits 0 and reports the same entitlement).
+        wallet::save(&dir, &w)?;
+        credited_total += reply.get("credited").and_then(|c| c.as_u64()).unwrap_or(0);
+        entitlement = reply.get("entitlement").and_then(|c| c.as_u64()).unwrap_or(entitlement);
+        let _ = app.emit("coins-returned", json!({ "credited": credited_total }));
+    }
+    drop(t);
+    close_buy_link(&app).await;
+    log::info!("[tender] returned {credited_total} TOKU to the account");
+    Ok(json!({ "credited": credited_total, "entitlement": entitlement, "held": coconut_held_toku(&app) }))
+}
+
 /// Redeem `coins` from the stored coconut credential into the ACTIVE session's TOKU
 /// balance (the credit `chat` draws down). Durable: the advanced purse is persisted
 /// BEFORE the payment leaves the device, so a crash/retry can't roll the counter back
@@ -3970,7 +4061,7 @@ pub fn run() {
             state, local_state, set_server, account_new, account_reveal, account_restore, account_delete, account_migrate_qr,
             invoice, invoice_status, invoice_cancel, invite_check, ocr_scan, pdf_text, pdf_ocr, pdf_pages, collect, redeem, chat,
             smart_available, smart_detect, coconut_redeem,
-            mixnet_route, mixnet_ping, cancel_chat, app_resumed, app_hidden, resume_stats, list_entry_gateways, server_identities, set_entry_gateway, set_entry_random, set_mixnet_perf, buy_close, set_coin_chat, open_external, save_image, save_file, voucher_redeem,
+            mixnet_route, mixnet_ping, cancel_chat, app_resumed, app_hidden, resume_stats, list_entry_gateways, server_identities, set_entry_gateway, set_entry_random, set_mixnet_perf, buy_close, set_coin_chat, coins_return, open_external, save_image, save_file, voucher_redeem,
             phrase_backup_get, iap_products, iap_purchase, iap_restore,
             phrase_check_start,
             phrase_check_verify,

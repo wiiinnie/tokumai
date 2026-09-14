@@ -932,6 +932,13 @@ impl Pay {
         self.account_owns(v, "iap")
     }
 
+    /// Coins handed back from a device that is being retired or moved: their value goes to
+    /// the account that signed the request, as entitlement. "return" is its own purpose,
+    /// so no other signature this account ever made can be replayed to move coins.
+    pub fn return_claimant(&mut self, v: &Value) -> Option<String> {
+        self.account_owns(v, "return")
+    }
+
     /// Deduct entitlement for a coconut issuance. Called BEFORE the (off-loop) issuance
     /// runs, so two withdraws of the same account in flight can't both pass the gate;
     /// `restore_entitlement` gives it back when issuance fails.
