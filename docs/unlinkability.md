@@ -79,7 +79,7 @@ Decided parameters:
 | | |
 |---|---|
 | coin | **0.1 ¢** ($0.001); a $1 book = 1,000 coins. Measured: issuing is one blind signature regardless of book size; key material per client and epoch 46 KB → 468 KB (cache on disk, ~30-day epoch); a payment costs ~470 B + ~4 ms per coin. 0.01 ¢ rejected (115 ms server CPU per text prompt, 4.6 MB material). |
-| prices | quoted in coins; pay-as-you-stream in fixed increments, no change (returned coins would be a link) |
+| prices | quoted in coins. Paying in increments as the answer streams is NOT needed: the tender above settles exactly in one round trip. |
 | books | $1 each, drawn lazily from the entitlement, one spare book fetched when the current one drops under 30 % — at most ~$1.30 on a device |
 | expiry | books last ~30 days; on app start, books < 3 days from expiry are returned to the account (plus a fresh book if in use); local notification at expiry − 3 d; no server push |
 | device change | "Return credit to my account" — no wallet export (a copy is a double-spend) |
