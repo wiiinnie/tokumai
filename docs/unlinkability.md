@@ -89,9 +89,9 @@ Decided parameters:
 |---|---|
 | coin | **0.1 ¢** ($0.001); a $1 book = 1,000 coins. Measured: issuing is one blind signature regardless of book size; key material per client and epoch 46 KB → 468 KB (cache on disk, ~30-day epoch); a payment costs ~470 B + ~4 ms per coin. 0.01 ¢ rejected (115 ms server CPU per text prompt, 4.6 MB material). |
 | prices | quoted in coins. Paying in increments as the answer streams is NOT needed: the tender above settles exactly in one round trip. |
-| books | $1 each, drawn lazily from the entitlement, one spare book fetched when the current one drops under 30 % — at most ~$1.30 on a device |
+| books | **$0.10 each (100 coins), ten drawn at a time in ONE round trip.** The book is the unit credit moves onto a device in, so it bounds both what a lost device costs and what is stranded on the account when the rest is under one book. A top-up fills UP TO ten books, so a device never carries more than $1.00 however much was bought; below three books the app fetches more by itself after a random 30–120 s pause, so the account call does not sit next to the question that emptied it. Stranded remainder: under $0.10. Epoch material: 25 KB (1000-coin books were 207 KB). Measured against the live server 2026-09-14: eight books in three seconds. Nym does the same thing — its ticketbooks are 50 tickets, 7 days, fetched several at a time with `--amount`. |
 | expiry | books last ~30 days; on app start, books < 3 days from expiry are returned to the account (plus a fresh book if in use); local notification at expiry − 3 d; no server push |
-| device change | "Return credit to my account" — no wallet export (a copy is a double-spend) |
+| device change | "Move credit back to my account" — built: account-signed, burns the notes, credits their value as entitlement, in batches with a progress bar. No wallet export (a copy is a double-spend). |
 | two devices | share account + entitlement, never books |
 | trickle | removed entirely |
 
