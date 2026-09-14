@@ -299,6 +299,12 @@ pub fn dispatch_enveloped(
 /// This server's id in the quorum (multi-server assigns distinct ids).
 const THIS_SERVER: ServerId = 1;
 
+/// This server's quorum id, for callers outside this module (chat settles coin payments
+/// into the same quorum the federation spend path uses).
+pub fn this_server() -> ServerId {
+    THIS_SERVER
+}
+
 /// Verify a spent payment offline, then record it in the double-spend quorum.
 fn handle_spend(
     authority: &Authority,

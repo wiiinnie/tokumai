@@ -732,7 +732,7 @@ const ORDER_TICK_MS: u64 = 1000;
             // A spawned chat's provider call returned → price + settle it here on the loop.
             Some(done) = http_rx.recv() => {
                 let session_of_chat = done.pending.session_id().map(str::to_string);
-                let settled = chat::settle(done.pending, done.result, &mut sessions, &mut chat_replies);
+                let settled = chat::settle(done.pending, done.result, &mut sessions, &mut quorum, &mut chat_replies);
                 let mut response = settled.reply;
                 // Per-day chat metrics from the reply (spent = charged, cost = provider price).
                 if let Ok(mut rv) = serde_json::from_slice::<serde_json::Value>(&response) {
@@ -970,7 +970,7 @@ const ORDER_TICK_MS: u64 = 1000;
                 let g_month_key = format!("grounding:{}", &today_utc()[..7]);
                 let g_used: u64 = db.load(&g_month_key).and_then(|s| s.parse().ok()).unwrap_or(0);
                 let grounding_free = chat::GROUNDING_FREE_PER_MONTH.saturating_sub(g_used);
-                match chat::reserve(&m.message, &mut sessions, &mut uploads, &pricing, margin, &mut chat_replies, grounding_free) {
+                match chat::reserve(&m.message, &mut sessions, &mut quorum, &mut uploads, &pricing, margin, &mut chat_replies, grounding_free) {
                     // Validation error or an idempotent replay hit — no provider call, and
                     // reserve() never mutates the money state on this path.
                     chat::Reserved::Reply(response) => {
@@ -984,10 +984,11 @@ const ORDER_TICK_MS: u64 = 1000;
                         let slots = if pending.provider() == "openai" { openai_slots.clone() } else { chat_slots.clone() };
                         let guard = inflight.enter(to);
                         note_peak(&db, &inflight, &mut peak_written);
+                        let auth = authority.clone();
                         tokio::spawn(async move {
                             let result = match tokio::time::timeout(QUEUE_WAIT, slots.acquire_owned()).await {
                                 // The permit lives for the whole provider call.
-                                Ok(Ok(_permit)) => chat::run_provider(&pending).await,
+                                Ok(Ok(_permit)) => chat::run_provider(&pending, &auth).await,
                                 _ => Err("the server is busy with too many chats right now — please try again in a moment".to_string()),
                             };
                             let _ = tx.send(HttpDone { pending: *pending, result, to, _guard: guard }).await;

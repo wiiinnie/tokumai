@@ -300,8 +300,8 @@ mod tests {
 
 /// Shared test scaffolding so other modules' tests (e.g. the quorum store) can mint
 /// real payments without duplicating the heavy setup.
-#[cfg(test)]
-pub(crate) mod testkit {
+#[cfg(any(test, feature = "testkit"))]
+pub mod testkit {
     use super::*;
     use nym_compact_ecash::scheme::keygen::{KeyPairAuth, KeyPairUser, SecretKeyAuth};
     use nym_compact_ecash::{aggregate_verification_keys, generate_keypair_user, ttp_keygen};

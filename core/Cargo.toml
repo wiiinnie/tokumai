@@ -22,6 +22,11 @@ async-trait = "0.1"
 # purse.rs: a fresh pay_info per tender note.
 rand = "0.8"
 
+[features]
+# `coconut::testkit` — a real 2-of-2 federation that mints wallets and payments. Enabled
+# by the server's dev-dependencies so the coin-paid chat path can be tested end to end.
+testkit = []
+
 [dev-dependencies]
 # block_on for the sync tests that drive the now-async gateway handlers.
 futures = "0.3"

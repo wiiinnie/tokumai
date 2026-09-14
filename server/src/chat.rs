@@ -300,45 +300,65 @@ pub fn effective_price(p: scrai_core::billing::ModelPrice) -> scrai_core::billin
     }
 }
 
-/// Handle a `chat` request envelope; returns the reply bytes (never panics).
-///
-/// Payment order matters and mirrors the TS server: verify the session
-/// signature (it covers the canonical body WITH the small uploadId references,
-/// not the megabytes) → reserve the worst-case ceiling → only then resolve
-/// uploads and call the provider → settle to the real price, or refund fully on
-/// a provider failure so the user pays nothing for an answer they never got.
-///
-/// The dispatch loop (main.rs) drives reserve()/run_provider()/settle() directly so the
-/// provider call runs off-thread (H2); this synchronous wrapper stays for the tests and
-/// as the reference for the exact phase ordering.
-#[allow(dead_code)]
-pub async fn handle(
-    request: &[u8],
-    sessions: &mut scrai_core::session::SessionStore,
-    uploads: &mut crate::uploads::UploadStore,
-    pricing: &PricingTable,
-    margin: f64,
-    replies: &mut HashMap<String, (u64, Vec<u8>, std::time::Instant)>,
-    // Grounding queries still free this UTC month (Gemini's 5,000/mo allowance minus
-    // what's been used). Queries beyond it bill at $14/1k; within it they cost $0.
-    grounding_free: u64,
-) -> Vec<u8> {
-    // Phase 1 (reserve) + phase 3 (settle) both touch the money state and are FAST;
-    // only the provider call between them is slow. Splitting here lets main.rs run that
-    // call off the dispatch loop (H2) while reserve/settle stay serialized on it.
-    match reserve(request, sessions, uploads, pricing, margin, replies, grounding_free) {
-        Reserved::Reply(bytes) => bytes,
-        Reserved::Proceed(p) => {
-            let result = run_provider(&p).await;
-            settle(*p, result, sessions, replies).reply
-        }
-    }
-}
+// The chat path is three phases on purpose (H2): `reserve` and `settle` touch the money
+// state and are fast, so they run on the dispatch loop; `run_provider` is the slow call
+// and runs in a spawned task between them. There is deliberately no all-in-one wrapper —
+// it would have to hold the loop for the whole provider round trip.
+
 
 /// PHASE 2 (off the loop): the slow provider call for a reserved chat. Holds no money
 /// state, so main.rs can run it in a spawned task and hand the result back to settle().
-pub async fn run_provider(p: &PendingChat) -> Result<(String, TokenUsage, Images), String> {
+pub async fn run_provider(
+    p: &PendingChat,
+    authority: &scrai_core::federation::Authority,
+) -> Result<(String, TokenUsage, Images), String> {
+    // Coin-paid: the offline payment check (O(coins) BLS pairings) happens HERE, off the
+    // dispatch loop, before a single token is bought from a provider. The coins were
+    // already held against double-spend on the loop; this proves they are real.
+    if let Paid::Coins(c) = &p.paid {
+        for n in &c.tender.notes {
+            let pi = n.pay_info()?;
+            authority
+                .verify_payment(&n.payment, &pi, n.spend_date)
+                .map_err(|e| format!("invalid coin: {e}"))?;
+        }
+    }
     chat(&p.v, p.messages.clone(), p.live, p.thinking, p.image_size).await
+}
+
+/// The most output tokens this request can afford: the largest cap whose worst case still
+/// fits `budget_toku`. Binary search over `ceiling_for`, which is what settle bills
+/// against, so "affordable" here and "covered" there can never drift apart.
+#[allow(clippy::too_many_arguments)]
+fn affordable_tokens(
+    price: &scrai_core::billing::ModelPrice,
+    margin: f64,
+    messages: &Value,
+    want: u64,
+    live: bool,
+    grounding_free: u64,
+    thinking: u64,
+    image_size: &str,
+    model: &str,
+    budget_toku: u64,
+) -> u64 {
+    let fits = |t: u64| {
+        ceiling_for(price, margin, messages, Some(t), live, grounding_free, thinking, image_size, model)
+            <= budget_toku
+    };
+    if fits(want) {
+        return want;
+    }
+    let (mut lo, mut hi) = (0u64, want);
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        if fits(mid) {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    lo
 }
 
 /// Everything settle() needs after the provider returns — carried from reserve() so the
@@ -358,12 +378,31 @@ pub struct PendingChat {
     margin: f64,
     pricing_version: String,
     grounding_free: u64,
-    paid: Option<PaidCtx>, // None = genuinely-free tier (no session/reserve)
+    paid: Paid,
+}
+/// How this request is paid for.
+enum Paid {
+    /// Genuinely-free tier: no session, no reserve, nothing to settle.
+    Free,
+    /// A funded, seed-derived session: reserve the ceiling now, settle the rest back.
+    Session(PaidCtx),
+    /// Coins on the table (docs/unlinkability.md, block D): no session, no counter, no
+    /// signature — the tender IS the authorisation, and settle burns exactly the notes
+    /// the answer cost. The rest go home with the client.
+    Coins(CoinCtx),
 }
 struct PaidCtx {
     session_id: String,
     counter: u64,
     ceiling: u64,
+}
+struct CoinCtx {
+    tender: scrai_core::tender::Tender,
+    /// What the tender is worth, in TOKU — the ceiling this request may cost.
+    budget_toku: u64,
+    /// Idempotency key: the first coin serial of the tender. Re-sending the identical
+    /// tender replays the cached answer instead of burning a second time.
+    key: String,
 }
 
 /// Outcome of the synchronous, loop-side reserve step.
@@ -371,7 +410,14 @@ impl PendingChat {
     /// The paying session behind this chat (None on the genuinely-free tier). Used only
     /// for the per-day distinct-users count — hashed before it touches the metrics table.
     pub fn session_id(&self) -> Option<&str> {
-        self.paid.as_ref().map(|p| p.session_id.as_str())
+        match &self.paid {
+            Paid::Session(p) => Some(p.session_id.as_str()),
+            // A coin-paid request has no session at all; for the day's distinct-payer
+            // count the tender key stands in — it is a coin serial, so it identifies the
+            // request, never the person, and is hashed again before it is counted.
+            Paid::Coins(c) => Some(c.key.as_str()),
+            Paid::Free => None,
+        }
     }
 
     /// Provider key for the per-provider concurrency cap (main.rs).
@@ -393,6 +439,7 @@ pub enum Reserved {
 pub fn reserve(
     request: &[u8],
     sessions: &mut scrai_core::session::SessionStore,
+    quorum: &mut scrai_core::quorum::QuorumStore,
     uploads: &mut crate::uploads::UploadStore,
     pricing: &PricingTable,
     margin: f64,
@@ -467,6 +514,59 @@ pub fn reserve(
 
     // ---- payment: everything here happens BEFORE the provider is called, so a
     // request that cannot pay costs the operator nothing.
+
+    // Coins on the table (block D). No session, no counter, no signature: the notes are
+    // bearer money, and whoever holds them may ask. The loop-side work is deliberately
+    // cheap — shape check, replay cache, and holding the serials against a concurrent
+    // tender of the same coins; the pairings run off the loop in `run_provider`.
+    if let Some(t) = v.get("tender") {
+        let tender: scrai_core::tender::Tender = match serde_json::from_value(t.clone()) {
+            Ok(t) => t,
+            Err(e) => return err(&format!("bad tender: {e}")),
+        };
+        if let Err(e) = tender.well_formed() {
+            return err(&e);
+        }
+        let key = match tender.notes.first().and_then(|n| scrai_core::quorum::payment_serials(&n.payment).into_iter().next()) {
+            Some(k) => k,
+            None => return err("a note with no coins"),
+        };
+        // Idempotent retry: the identical tender already bought an answer whose reply was
+        // lost. Hand the same one back rather than burning a second time.
+        if let Some((_, bytes, _)) = replies.get(&key) {
+            return Reserved::Reply(bytes.clone());
+        }
+        let payments: Vec<&scrai_core::coconut::Payment> = tender.notes.iter().map(|n| &n.payment).collect();
+        if let Err(e) = quorum.hold(&payments) {
+            return err(&e);
+        }
+        let budget_toku = tender.total_coins().saturating_mul(scrai_core::coconut::COIN_TOKU);
+        // Cap the answer to what the coins cover, so the bill can never exceed the tender.
+        let want = max_tokens.unwrap_or_else(default_max_tokens);
+        let afford = affordable_tokens(
+            &price, margin, &messages, want, live, grounding_free, thinking, image_size, &model, budget_toku,
+        );
+        if afford == 0 {
+            quorum.release(&payments);
+            return err(&format!(
+                "not enough coins for this request: it needs more than the {} TOKU tendered",
+                budget_toku
+            ));
+        }
+        let mut resolved = messages.clone();
+        if let Err(e) = uploads.resolve(&mut resolved) {
+            quorum.release(&payments);
+            return err(&format!("file upload failed: {e}"));
+        }
+        let mut p = match pending(Paid::Coins(CoinCtx { tender, budget_toku, key }), resolved) {
+            Reserved::Proceed(p) => p,
+            other => return other,
+        };
+        // The provider must not be asked for more than the coins paid for.
+        p.v["maxTokens"] = json!(afford);
+        return Reserved::Proceed(p);
+    }
+
     let (Some(counter), Some(sig), Some(pem)) = (
         v.get("counter").and_then(|c| c.as_u64()),
         v.get("sig").and_then(|s| s.as_str()),
@@ -533,7 +633,7 @@ pub fn reserve(
         return err(&format!("file upload failed: {e}"));
     }
 
-    pending(Some(PaidCtx { session_id, counter, ceiling }), resolved)
+    pending(Paid::Session(PaidCtx { session_id, counter, ceiling }), resolved)
 }
 
 /// PHASE 3 (loop side, fast): price the real usage, settle the reservation (or refund
@@ -552,11 +652,15 @@ pub fn settle(
     p: PendingChat,
     result: Result<(String, TokenUsage, Images), String>,
     sessions: &mut scrai_core::session::SessionStore,
+    quorum: &mut scrai_core::quorum::QuorumStore,
     replies: &mut HashMap<String, (u64, Vec<u8>, std::time::Instant)>,
 ) -> Settled {
+    if matches!(p.paid, Paid::Coins(_)) {
+        return settle_coins(p, result, quorum, replies);
+    }
     let id = p.id;
     let mut provider_cost: Option<f64> = None;
-    let Some(paid) = p.paid else {
+    let Paid::Session(paid) = p.paid else {
         // ---- genuinely-free tier: no session, no cache ----
         let reply = match result {
             Ok((text, usage, images)) => {
@@ -682,6 +786,137 @@ pub fn settle(
             }
         }
         replies.insert(paid.session_id.clone(), (paid.counter, out.clone(), std::time::Instant::now()));
+    }
+    Settled { reply: out, provider_cost }
+}
+
+/// Settle a coin-paid request (block D): price the real usage, burn exactly the notes it
+/// cost, and tell the client which ones went — the rest are still good and come back on
+/// the next request. Nothing is reserved and nothing is refunded, because nothing was
+/// ever credited anywhere: the coins were on the table the whole time.
+fn settle_coins(
+    mut p: PendingChat,
+    result: Result<(String, TokenUsage, Images), String>,
+    quorum: &mut scrai_core::quorum::QuorumStore,
+    replies: &mut HashMap<String, (u64, Vec<u8>, std::time::Instant)>,
+) -> Settled {
+    use scrai_core::coconut::COIN_TOKU;
+    let Paid::Coins(ctx) = std::mem::replace(&mut p.paid, Paid::Free) else {
+        unreachable!("settle_coins is only called for a coin-paid request")
+    };
+    let id = p.id;
+    let payments: Vec<&scrai_core::coconut::Payment> = ctx.tender.notes.iter().map(|n| &n.payment).collect();
+    let mut provider_cost: Option<f64> = None;
+
+    let (text, usage, images) = match result {
+        Ok(v) => v,
+        Err(e) => {
+            // The provider failed: nothing is burned, so the user keeps every coin.
+            quorum.release(&payments);
+            let reply = json!({ "id": id, "kind": "error", "error": e });
+            return Settled { reply: encode(&reply), provider_cost };
+        }
+    };
+
+    let mut frame = compute_billing(&p.price, &usage, p.margin, min_charge(), usage.estimated);
+    let billable_queries = usage.grounding_queries.saturating_sub(p.grounding_free);
+    let (g_cost, g_retail) = grounding_charge_at(billable_queries, search_usd_per_query(&p.model), p.margin);
+    frame.cost_toku += g_cost;
+    provider_cost = Some(frame.cost_toku);
+    let n_images = images.as_ref().and_then(|i| i.as_array()).map(|a| a.len()).unwrap_or(0) as u64;
+    let price_toku = frame.price_toku + n_images * per_image_toku(&p.price, p.margin) + g_retail;
+    // Coins are the unit of payment, so the bill rounds UP to a whole coin (0.1 ¢).
+    let want_coins = price_toku.div_ceil(COIN_TOKU);
+
+    let picked = ctx.tender.select(want_coins).unwrap_or_else(|| {
+        // The cap in reserve() is computed from the same ceiling settle bills against, so
+        // this is a bug or a provider that ignored maxTokens. Take everything tendered and
+        // say so — the alternative is serving for free and never noticing.
+        eprintln!(
+            "scrai-server: COIN SHORTFALL — {price_toku} TOKU billed against a {} TOKU tender ({} coins); burning the whole tender",
+            ctx.budget_toku,
+            ctx.tender.total_coins()
+        );
+        (0..ctx.tender.notes.len()).collect()
+    });
+    let burned_coins: u64 = picked.iter().map(|i| ctx.tender.notes[*i].coins).sum();
+
+    for i in &picked {
+        let n = &ctx.tender.notes[*i];
+        let pi = match n.pay_info() {
+            Ok(pi) => pi,
+            Err(_) => continue, // well_formed() already proved this parses
+        };
+        match quorum.submit(&n.payment, pi, scrai_core::federation::this_server()) {
+            scrai_core::quorum::Verdict::Accepted | scrai_core::quorum::Verdict::Replay => {}
+            scrai_core::quorum::Verdict::DoubleSpend { .. } => {
+                // `hold` proved these serials unspent before the provider was called, so a
+                // double-spend here means another server got them in between (or a bug).
+                // The answer is already bought; record it loudly rather than lose it.
+                eprintln!("scrai-server: DOUBLE-SPEND at settle — a held coin was spent elsewhere mid-request");
+            }
+        }
+    }
+    quorum.release(&payments);
+
+    eprintln!(
+        "scrai-server: usage {} in={} cached={} out={} img={} searches={} (billable {}) cost={:.0} charged={} coins={}{}",
+        p.model,
+        usage.input,
+        usage.cached_input,
+        usage.output,
+        usage.output_image,
+        usage.grounding_queries,
+        billable_queries,
+        frame.cost_toku,
+        price_toku,
+        burned_coins,
+        if usage.estimated { " ESTIMATED" } else { "" }
+    );
+
+    let usage_json = json!({
+        "inputTokens": usage.input,
+        "cachedInputTokens": usage.cached_input,
+        "audioInputTokens": usage.audio_input,
+        "outputTokens": usage.output,
+        "outputImageTokens": usage.output_image,
+        "imageSize": p.image_size,
+        "groundingQueries": usage.grounding_queries,
+        "billing": {
+            "priceToku": price_toku,
+            "costToku": dev_audit_cost(frame.cost_toku),
+            "model": p.model,
+            "pricingVersion": p.pricing_version,
+            "estimated": frame.estimated,
+            "fallbackPrice": frame.fallback_price,
+        },
+    });
+    // `burned` names the notes that are gone, by their index in the tender the client
+    // sent: everything else is still spendable and belongs back in its wallet.
+    let mut r = json!({
+        "id": id,
+        "text": text,
+        "usage": usage_json,
+        "cost": price_toku,
+        "coins": burned_coins,
+        "burned": picked,
+    });
+    if let Some(imgs) = images {
+        r["images"] = imgs;
+        if p.chunked {
+            r["chunked"] = json!(true);
+        }
+    }
+    let out = encode(&r);
+    // Cache against the tender so a lost reply can be re-asked with the identical tender
+    // and answered without burning a second time. Counter 0: coins have no counter.
+    if out.len() <= MAX_CACHED_REPLY {
+        if replies.len() >= MAX_CACHED_SESSIONS && !replies.contains_key(&ctx.key) {
+            if let Some(k) = replies.keys().next().cloned() {
+                replies.remove(&k);
+            }
+        }
+        replies.insert(ctx.key, (0, out.clone(), std::time::Instant::now()));
     }
     Settled { reply: out, provider_cost }
 }
@@ -1164,6 +1399,29 @@ mod tests {
     }
 
     use super::*;
+
+    /// Test-only stand-in for the three phases in one call. Production runs them apart on
+    /// purpose (reserve and settle on the dispatch loop, the provider call in between);
+    /// these tests only exercise the session-paid path, which carries no tender, so no
+    /// authority is needed and `chat` can be called directly.
+    async fn handle(
+        request: &[u8],
+        sessions: &mut scrai_core::session::SessionStore,
+        uploads: &mut crate::uploads::UploadStore,
+        pricing: &PricingTable,
+        margin: f64,
+        replies: &mut HashMap<String, (u64, Vec<u8>, std::time::Instant)>,
+        grounding_free: u64,
+    ) -> Vec<u8> {
+        let mut quorum = scrai_core::quorum::QuorumStore::default();
+        match reserve(request, sessions, &mut quorum, uploads, pricing, margin, replies, grounding_free) {
+            Reserved::Reply(bytes) => bytes,
+            Reserved::Proceed(p) => {
+                let result = chat(&p.v, p.messages.clone(), p.live, p.thinking, p.image_size).await;
+                settle(*p, result, sessions, &mut quorum, replies).reply
+            }
+        }
+    }
     use scrai_core::billing::{ModelPrice, Tier};
 
     #[test]
@@ -1450,12 +1708,176 @@ mod tests {
         assert!(r["error"].as_str().unwrap().contains("already used"));
     }
 
+    // ---- coins instead of a session (docs/unlinkability.md, block D) -------------------
+
+    fn coin_pricing() -> PricingTable {
+        PricingTable::parse(
+            r#"{"version":"t","default":{"in":1.0,"out":4.0,"fallback":true},"models":{"gemini-b":{"in":1.0,"out":4.0}}}"#,
+        )
+        .unwrap()
+    }
+
+    /// Build a request that pays with coins: no sessionId, no counter, no signature.
+    fn coin_chat(purse: &mut scrai_core::purse::Purse, ceiling_coins: u64, spend_date: u32) -> (Vec<u8>, scrai_core::tender::Tender) {
+        let values = scrai_core::tender::plan_coins(ceiling_coins);
+        let notes = purse.spend_tender(&values, spend_date).unwrap();
+        let tender = scrai_core::tender::Tender { notes };
+        let req = json!({
+            "v": 1, "kind": "chat", "id": "c1", "model": "gemini-b",
+            "messages": [{ "role": "user", "content": "hi" }],
+            "tender": serde_json::to_value(&tender).unwrap(),
+        });
+        (serde_json::to_vec(&req).unwrap(), tender)
+    }
+
+    #[tokio::test]
+    async fn a_coin_paid_chat_burns_only_what_the_answer_cost() {
+        use scrai_core::coconut::{testkit, COIN_TOKU};
+        let fk = testkit::funded();
+        let mut purse = fk.new_purse();
+        let mut sessions = scrai_core::session::SessionStore::default();
+        let mut quorum = scrai_core::quorum::QuorumStore::default();
+        let mut uploads = crate::uploads::UploadStore::default();
+        let mut replies: std::collections::HashMap<String, (u64, Vec<u8>, std::time::Instant)> = std::collections::HashMap::new();
+        let pricing = coin_pricing();
+
+        let (req, tender) = coin_chat(&mut purse, 31, fk.spend_date());
+        let Reserved::Proceed(p) = reserve(&req, &mut sessions, &mut quorum, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH)
+        else {
+            panic!("coins should reserve");
+        };
+        // The answer is capped to what the coins cover, never to what the client asked for.
+        let capped = p.v["maxTokens"].as_u64().unwrap();
+        assert!(capped > 0 && capped <= default_max_tokens(), "capped to the tender: {capped}");
+        assert_eq!(quorum.in_flight_serials(), 31, "every tendered coin is held while we answer");
+
+        let usage = TokenUsage { input: 1_000, output: 1_000, ..Default::default() };
+        let r: Value = serde_json::from_slice(
+            &settle(*p, Ok(("hi".to_string(), usage, None)), &mut sessions, &mut quorum, &mut replies).reply,
+        )
+        .unwrap();
+
+        let price = r["cost"].as_u64().unwrap();
+        let burned: Vec<usize> = serde_json::from_value(r["burned"].clone()).unwrap();
+        let burned_coins: u64 = burned.iter().map(|i| tender.notes[*i].coins).sum();
+        assert_eq!(r["coins"].as_u64().unwrap(), burned_coins);
+        assert_eq!(burned_coins, price.div_ceil(COIN_TOKU), "exactly the cost, rounded up to a coin");
+        assert!(burned_coins < 31, "a short answer must not eat the whole tender");
+        assert_eq!(quorum.in_flight_serials(), 0, "the hold is released either way");
+        assert!(r["balance"].is_null(), "coins leave no balance behind");
+
+        // The notes that were not burned are still good: they pay for the next request.
+        for (i, n) in tender.notes.iter().enumerate() {
+            let v = quorum.submit(&n.payment, n.pay_info().unwrap(), 1);
+            if burned.contains(&i) {
+                assert_eq!(v, scrai_core::quorum::Verdict::Replay, "note {i} was burned");
+            } else {
+                assert_eq!(v, scrai_core::quorum::Verdict::Accepted, "note {i} is still spendable");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn re_sending_the_same_tender_replays_the_answer_instead_of_burning_again() {
+        use scrai_core::coconut::testkit;
+        let fk = testkit::funded();
+        let mut purse = fk.new_purse();
+        let mut sessions = scrai_core::session::SessionStore::default();
+        let mut quorum = scrai_core::quorum::QuorumStore::default();
+        let mut uploads = crate::uploads::UploadStore::default();
+        let mut replies: std::collections::HashMap<String, (u64, Vec<u8>, std::time::Instant)> = std::collections::HashMap::new();
+        let pricing = coin_pricing();
+
+        let (req, _) = coin_chat(&mut purse, 31, fk.spend_date());
+        let Reserved::Proceed(p) = reserve(&req, &mut sessions, &mut quorum, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH)
+        else {
+            panic!("coins should reserve");
+        };
+        let usage = TokenUsage { input: 1_000, output: 1_000, ..Default::default() };
+        let first = settle(*p, Ok(("hi".to_string(), usage, None)), &mut sessions, &mut quorum, &mut replies).reply;
+
+        // The reply was lost; the client re-sends the identical tender.
+        let Reserved::Reply(again) = reserve(&req, &mut sessions, &mut quorum, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH)
+        else {
+            panic!("a repeated tender must replay, not re-charge");
+        };
+        assert_eq!(first, again, "same answer, and nothing burned a second time");
+    }
+
+    #[tokio::test]
+    async fn a_tender_that_cannot_cover_the_request_is_refused_before_the_provider() {
+        use scrai_core::coconut::testkit;
+        let fk = testkit::funded();
+        let mut purse = fk.new_purse();
+        let mut sessions = scrai_core::session::SessionStore::default();
+        let mut quorum = scrai_core::quorum::QuorumStore::default();
+        let mut uploads = crate::uploads::UploadStore::default();
+        let mut replies: std::collections::HashMap<String, (u64, Vec<u8>, std::time::Instant)> = std::collections::HashMap::new();
+        let pricing = coin_pricing();
+
+        // One coin is 0.1 ¢; a request whose input alone costs more cannot be served.
+        let values = scrai_core::tender::plan_coins(1);
+        let notes = purse.spend_tender(&values, fk.spend_date()).unwrap();
+        let tender = scrai_core::tender::Tender { notes };
+        let long = "x".repeat(200_000);
+        let req = serde_json::to_vec(&json!({
+            "v": 1, "kind": "chat", "id": "c1", "model": "gemini-b",
+            "messages": [{ "role": "user", "content": long }],
+            "tender": serde_json::to_value(&tender).unwrap(),
+        }))
+        .unwrap();
+        let Reserved::Reply(bytes) = reserve(&req, &mut sessions, &mut quorum, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH)
+        else {
+            panic!("a tender that cannot pay must be refused");
+        };
+        let r: Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(r["error"].as_str().unwrap().contains("not enough coins"), "{r}");
+        assert_eq!(quorum.in_flight_serials(), 0, "a refused tender leaves no hold behind");
+        // …and the coins are untouched, so they still pay for a smaller request later.
+        for n in &tender.notes {
+            assert_eq!(quorum.submit(&n.payment, n.pay_info().unwrap(), 1), scrai_core::quorum::Verdict::Accepted);
+        }
+    }
+
+    #[tokio::test]
+    async fn the_same_coin_cannot_pay_for_two_requests_at_once() {
+        use scrai_core::coconut::testkit;
+        let fk = testkit::funded();
+        let mut purse = fk.new_purse();
+        let mut sessions = scrai_core::session::SessionStore::default();
+        let mut quorum = scrai_core::quorum::QuorumStore::default();
+        let mut uploads = crate::uploads::UploadStore::default();
+        let mut replies: std::collections::HashMap<String, (u64, Vec<u8>, std::time::Instant)> = std::collections::HashMap::new();
+        let pricing = coin_pricing();
+
+        let (req, tender) = coin_chat(&mut purse, 7, fk.spend_date());
+        let Reserved::Proceed(_p) = reserve(&req, &mut sessions, &mut quorum, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH)
+        else {
+            panic!("first request reserves");
+        };
+        // A second request tendering the same notes, while the first is still being served
+        // (different id, so the reply cache does not answer it).
+        let req2 = serde_json::to_vec(&json!({
+            "v": 1, "kind": "chat", "id": "c2", "model": "gemini-b",
+            "messages": [{ "role": "user", "content": "hi again" }],
+            "tender": serde_json::to_value(&tender).unwrap(),
+        }))
+        .unwrap();
+        let Reserved::Reply(bytes) = reserve(&req2, &mut sessions, &mut quorum, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH)
+        else {
+            panic!("the same coins must not pay twice at once");
+        };
+        let r: Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(r["error"].as_str().unwrap().contains("already paying"), "{r}");
+    }
+
     // The unit rename ships server-first, so one reply has to satisfy both: a 0.4.6 app
     // reading *Scrai and a newer one reading *Toku. Same number under both names.
     #[tokio::test]
     async fn a_reply_carries_the_billing_numbers_under_both_names() {
         let (sk, pem, sid) = session_keypair();
         let mut sessions = scrai_core::session::SessionStore::default();
+        let mut quorum = scrai_core::quorum::QuorumStore::default();
         let mut uploads = crate::uploads::UploadStore::default();
         let mut replies: std::collections::HashMap<String, (u64, Vec<u8>, std::time::Instant)> = std::collections::HashMap::new();
         let pricing = PricingTable::parse(
@@ -1463,13 +1885,13 @@ mod tests {
         )
         .unwrap();
         sessions.credit(&sid, 1_000_000);
-        let Reserved::Proceed(p) = reserve(&signed_chat(&sk, &pem, &sid, 1, "gemini-b"), &mut sessions, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH)
+        let Reserved::Proceed(p) = reserve(&signed_chat(&sk, &pem, &sid, 1, "gemini-b"), &mut sessions, &mut quorum, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH)
         else {
             panic!("should reserve");
         };
         let usage = TokenUsage { input: 5_000, output: 5_000, ..Default::default() };
         let r: Value = serde_json::from_slice(
-            &settle(*p, Ok(("hi".to_string(), usage, None)), &mut sessions, &mut replies).reply,
+            &settle(*p, Ok(("hi".to_string(), usage, None)), &mut sessions, &mut quorum, &mut replies).reply,
         )
         .unwrap();
         let b = &r["usage"]["billing"];
@@ -1485,6 +1907,7 @@ mod tests {
     async fn openai_search_calls_are_billed_despite_gemini_free_allowance() {
         let (sk, pem, sid) = session_keypair();
         let mut sessions = scrai_core::session::SessionStore::default();
+        let mut quorum = scrai_core::quorum::QuorumStore::default();
         let mut uploads = crate::uploads::UploadStore::default();
         let mut replies: std::collections::HashMap<String, (u64, Vec<u8>, std::time::Instant)> = std::collections::HashMap::new();
         let pricing = PricingTable::parse(
@@ -1493,13 +1916,13 @@ mod tests {
         .unwrap();
         sessions.credit(&sid, 1_000_000);
         // 4,990 Gemini queries still free this month — must not leak into OpenAI billing
-        let Reserved::Proceed(p) = reserve(&signed_chat(&sk, &pem, &sid, 1, "gpt-5.6-luna"), &mut sessions, &mut uploads, &pricing, 1.4, &mut replies, 4_990)
+        let Reserved::Proceed(p) = reserve(&signed_chat(&sk, &pem, &sid, 1, "gpt-5.6-luna"), &mut sessions, &mut quorum, &mut uploads, &pricing, 1.4, &mut replies, 4_990)
         else {
             panic!("should reserve");
         };
         assert_eq!(p.grounding_free, 0, "OpenAI has no free search allowance");
         let usage = TokenUsage { input: 32_000, output: 4_000, grounding_queries: 3, ..Default::default() };
-        let settled = settle(*p, Ok(("hi".to_string(), usage, None)), &mut sessions, &mut replies);
+        let settled = settle(*p, Ok(("hi".to_string(), usage, None)), &mut sessions, &mut quorum, &mut replies);
         let cost = settled.provider_cost.unwrap();
         // tokens: 32k × $0.20/M + 4k × $1.25/M = $0.0114 = 1,140 TOKU; searches: 3 × $0.01 = 3,000 TOKU
         assert!(cost >= 4_100.0 && cost < 4_200.0, "provider cost must include the three search calls, got {cost}");
@@ -1514,6 +1937,7 @@ mod tests {
     async fn concurrent_reserves_hold_both_then_settle_without_double_spend() {
         let (sk, pem, sid) = session_keypair();
         let mut sessions = scrai_core::session::SessionStore::default();
+        let mut quorum = scrai_core::quorum::QuorumStore::default();
         let mut uploads = crate::uploads::UploadStore::default();
         let mut replies: std::collections::HashMap<String, (u64, Vec<u8>, std::time::Instant)> = std::collections::HashMap::new();
         let pricing = PricingTable::parse(
@@ -1525,11 +1949,11 @@ mod tests {
 
         // Two chats reserved back-to-back (counter 1 then 2) — the H2 window where BOTH
         // worst-case reservations are held at once, before either provider call returns.
-        let Reserved::Proceed(a) = reserve(&signed_chat(&sk, &pem, &sid, 1, "gemini-m"), &mut sessions, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH)
+        let Reserved::Proceed(a) = reserve(&signed_chat(&sk, &pem, &sid, 1, "gemini-m"), &mut sessions, &mut quorum, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH)
         else {
             panic!("A should reserve");
         };
-        let Reserved::Proceed(b) = reserve(&signed_chat(&sk, &pem, &sid, 2, "gemini-m"), &mut sessions, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH)
+        let Reserved::Proceed(b) = reserve(&signed_chat(&sk, &pem, &sid, 2, "gemini-m"), &mut sessions, &mut quorum, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH)
         else {
             panic!("B should reserve");
         };
@@ -1539,12 +1963,12 @@ mod tests {
 
         // Settle both as if the provider returned a tiny answer (order A then B).
         let usage = TokenUsage { input: 5, output: 5, ..Default::default() };
-        let sa = settle(*a, Ok(("hi".to_string(), usage, None)), &mut sessions, &mut replies);
+        let sa = settle(*a, Ok(("hi".to_string(), usage, None)), &mut sessions, &mut quorum, &mut replies);
         let ra: Value = serde_json::from_slice(&sa.reply).unwrap();
         // the provider cost travels beside the reply, never inside it (release servers)
         assert!(sa.provider_cost.unwrap() > 0.0);
         assert!(ra["usage"]["billing"]["costScrai"].is_null() || crate::cfg("DEV_AUDIT").as_deref() == Ok("1"));
-        let rb: Value = serde_json::from_slice(&settle(*b, Ok(("hi".to_string(), usage, None)), &mut sessions, &mut replies).reply).unwrap();
+        let rb: Value = serde_json::from_slice(&settle(*b, Ok(("hi".to_string(), usage, None)), &mut sessions, &mut quorum, &mut replies).reply).unwrap();
 
         let cost_a = ra["cost"].as_u64().unwrap();
         let cost_b = rb["cost"].as_u64().unwrap();
@@ -1559,6 +1983,7 @@ mod tests {
     async fn replay_after_settle_returns_cached_reply_without_recharging() {
         let (sk, pem, sid) = session_keypair();
         let mut sessions = scrai_core::session::SessionStore::default();
+        let mut quorum = scrai_core::quorum::QuorumStore::default();
         let mut uploads = crate::uploads::UploadStore::default();
         let mut replies: std::collections::HashMap<String, (u64, Vec<u8>, std::time::Instant)> = std::collections::HashMap::new();
         let pricing = PricingTable::parse(
@@ -1568,16 +1993,16 @@ mod tests {
         sessions.credit(&sid, 1_000_000);
 
         // A first, successful turn (counter 1): reserve → settle.
-        let Reserved::Proceed(p) = reserve(&signed_chat(&sk, &pem, &sid, 1, "gemini-m"), &mut sessions, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH)
+        let Reserved::Proceed(p) = reserve(&signed_chat(&sk, &pem, &sid, 1, "gemini-m"), &mut sessions, &mut quorum, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH)
         else {
             panic!("should reserve");
         };
         let usage = TokenUsage { input: 5, output: 5, ..Default::default() };
-        let first = settle(*p, Ok(("hi".to_string(), usage, None)), &mut sessions, &mut replies).reply;
+        let first = settle(*p, Ok(("hi".to_string(), usage, None)), &mut sessions, &mut quorum, &mut replies).reply;
         let bal_after = sessions.balance(&sid);
 
         // A lost-reply retry resends the SAME counter → the cached reply, and NO second charge.
-        match reserve(&signed_chat(&sk, &pem, &sid, 1, "gemini-m"), &mut sessions, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH) {
+        match reserve(&signed_chat(&sk, &pem, &sid, 1, "gemini-m"), &mut sessions, &mut quorum, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH) {
             Reserved::Reply(bytes) => assert_eq!(bytes, first, "replay returns the exact cached reply"),
             Reserved::Proceed(_) => panic!("replay must NOT re-run the provider"),
         }
