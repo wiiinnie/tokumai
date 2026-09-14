@@ -603,9 +603,25 @@ async fn buy_transport(app: &AppHandle, main: &Transport) -> Arc<Transport> {
         t.set_progress_sink(Box::new(move |step, detail| {
             let _ = h.emit("buy-phase", json!({ "step": step, "detail": detail }));
         }));
-        let pick = nym::hermes_gateway_excluding(main_gw.as_deref());
-        t.set_entry_gateway(Some(pick)).await;
-        log::info!("[buy-link] purchase client prepared on its own gateway");
+        // Connect now and prove the gateway answers. A random operator gateway can be
+        // down, and an account call that fails on that is indistinguishable, to the user,
+        // from "the server is gone" — so try a few before giving up.
+        let mut ok = false;
+        for attempt in 1..=3 {
+            t.set_entry_gateway(Some(nym::hermes_gateway_excluding(main_gw.as_deref()))).await;
+            match t.ensure_connected().await {
+                Ok(()) => {
+                    ok = true;
+                    break;
+                }
+                Err(e) => log::warn!("[buy-link] gateway attempt {attempt} failed: {e}"),
+            }
+        }
+        if ok {
+            log::info!("[buy-link] purchase client up on its own gateway");
+        } else {
+            log::warn!("[buy-link] no operator gateway answered — the next account call will retry");
+        }
         *g = Some(t);
     }
     let t = g.clone().expect("just set");
@@ -1221,6 +1237,11 @@ async fn coins_return(app: AppHandle, transport: State<'_, Arc<Transport>>) -> R
     }
     drop(t);
     close_buy_link(&app).await;
+    {
+        let mut w = wallet::load(&dir);
+        w.entitlement_seen = entitlement;
+        let _ = wallet::save(&dir, &w);
+    }
     log::info!("[tender] returned {credited_total} TOKU to the account");
     Ok(json!({ "credited": credited_total, "entitlement": entitlement, "held": coconut_held_toku(&app) }))
 }
@@ -1495,6 +1516,10 @@ async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<V
         "account": account,
         "balance": balance,
         "held": coconut_held_toku(&app),
+        // Paid for, not yet drawn as coins. Below one ticketbook it cannot be drawn at
+        // all, so it has to be named rather than silently missing from the total.
+        "entitlement": w.entitlement_seen,
+        "bookToku": scrai_core::coconut::COIN_TOKU * 1_000,
         "tiers": TIERS,
         "fakePayments": false,
         "gateway": "btcpay",
@@ -2170,10 +2195,18 @@ async fn collect(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result
         log::info!("[coconut] collected a {book_toku}-SCRAI book ({owed} entitlement left)");
     }
     diag(&app, "collect: about to respond");
+    // What is left over is a tail smaller than one book: it stays on the account until a
+    // purchase (or another return) tops it past a whole book. Remember it — it is the
+    // user's money, and a balance that does not show it looks like money lost.
+    {
+        let mut w = wallet::load(&dir);
+        w.entitlement_seen = owed;
+        let _ = wallet::save(&dir, &w);
+    }
     // The coins are on the device: the purchase client has done its job for this purchase.
     drop(transport);
     close_buy_link(&app).await;
-    Ok(json!({ "collected": collected, "held": coconut_held_toku(&app) }))
+    Ok(json!({ "collected": collected, "held": coconut_held_toku(&app), "entitlement": owed }))
 }
 
 /// Manually redeem one chunk of held coconut credit into the session balance

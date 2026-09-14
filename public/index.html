@@ -1824,6 +1824,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       if(gotModels.length) models = gotModels;
       tiers = s.tiers || tiers || [];
       account = s.account; balance = s.balance||0; held = s.held||0;
+      entitlement = s.entitlement||0; bookToku = s.bookToku||100000;
       phraseVerified = !(account && account.phraseVerified === false);
 
       { const l = String(s.redeemLabel||"").slice(0,80), h = String(s.redeemHint||"").slice(0,80);
@@ -2323,17 +2324,17 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     flashSaved._t=setTimeout(()=>{ s.style.opacity="0"; },1400);
   }
   function renderBal(){
-    $("bal").innerHTML = formatToku(balance)+'<small> TOKU</small>';
+    $("bal").innerHTML = formatToku(balance + entitlement)+'<small> TOKU</small>';
     $("balbar").style.width = Math.max(2,Math.min(100, balance/10000))+'%';
     // The session pseudonym is meaningless once coins pay for each answer — nothing is
     // billed to it — so it is only named while the session path is the one in use.
     $("acctLine").textContent = account
       ? `account ${account.fingerprint}` + (coinChat ? " · paid with coins" : ` · session #${account.sessionIndex}`)
       : "no account — open Account & recovery";
-    if(held>0){
+    if(held>0 || entitlement>0){
       $("heldLine").style.display="flex";
       // nosemgrep: scrai-taint-untrusted-to-html -- reviewed 2026-08-30: only formatted numbers + static copy
-      $("heldText").innerHTML = `${esc(formatToku(Math.max(0,balance-held)))} recoverable from your phrase · <span style="color:var(--rust)">${esc(formatToku(held))} on this device only</span>
+      $("heldText").innerHTML = `${esc(formatToku(Math.max(0,balance-held)))} recoverable from your phrase${held>0?` · <span style="color:var(--rust)">${esc(formatToku(held))} on this device only</span>`:``}${entitlement>0?` · ${esc(formatToku(entitlement))} waiting on your account`:``}
         <details class="why"><summary><span class="chev">›</span> What this means</summary>
           <div class="body">Coins on this device are blind-signed <b>cash</b>: not linked to your account, and a recovery phrase does not bring them back. Lose this device and that part is gone — so before you give it away or move to another one, hand them back under <b>Account &amp; recovery → Move credit back to my account</b>.</div>
         </details>`;
@@ -2656,6 +2657,9 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // dev HTTP bridge: always) — a shipped binary hides the Developer section and never
   // renders the audit, and a release server doesn't even send the provider cost.
   let devBuild = false;
+  // Paid for but not yet drawn as coins. A tail under one ticketbook cannot be drawn at
+  // all until a purchase tops it up — it is still the user's money and is shown as such.
+  let entitlement = 0, bookToku = 100000;
   // Developer switch: pay each answer with coins instead of a session balance.
   let coinChat = false;
   // The Developer section is a debug-build thing, but a phone has no way to run a debug
@@ -5318,8 +5322,9 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     const idcard = `<div class="idcard">
       <div class="fp">${esc(account.fingerprint)}</div>
       <div class="ses">${coinChat ? "paid with coins" : `session #${account.sessionIndex}`} · fingerprint</div>
-      <div class="bal">${esc(tokuLine(balance))}</div>
-      <div class="held">${esc(formatToku(Math.max(0,balance-held)))} recoverable from your phrase${held>0?` · <span style="color:var(--rust)">${esc(formatToku(held))} on this device only</span>`:` · nothing held on this device`}</div>
+      <div class="bal">${esc(tokuLine(balance + entitlement))}</div>
+      <div class="held">${esc(formatToku(Math.max(0,balance-held)))} recoverable from your phrase${held>0?` · <span style="color:var(--rust)">${esc(formatToku(held))} on this device only</span>`:` · nothing held on this device`}${entitlement>0?` · ${esc(formatToku(entitlement))} waiting on your account`:``}</div>
+      ${entitlement>0 && entitlement<bookToku ? `<div class="held" style="color:var(--rust)">Coins are drawn a whole book at a time (${esc(formatToku(bookToku))} TOKU), so this rest waits here until your next top-up. It is on your recovery phrase and cannot be lost.</div>` : ``}
       ${checking
         ? `<div class="checkline busy">↻ Checking<span class="dots"></span> <span class="dim">· over the mixnet</span></div>`
         : `<div class="checkline" data-click="checkCredit">↻ Check for credit <span class="dim">· ${esc(credResult||checkedAgo())}</span></div>`}
@@ -5672,7 +5677,12 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       await refreshState();
       maybeAskPhraseBackup(r && r.collected);
       if(r && r.collected > 0) await sweepReceipts();
-      credResult = r&&r.collected>0 ? `+${formatToku(r.collected)} TOKU collected` : "nothing outstanding";
+      // A tail smaller than one ticketbook is not "nothing": it is paid-for credit that
+      // cannot be drawn as coins until a top-up takes it past a whole book.
+      const rest = (r && r.entitlement) || 0;
+      credResult = r && r.collected > 0
+        ? `+${formatToku(r.collected)} TOKU collected`
+        : (rest > 0 ? `${formatToku(rest)} TOKU waiting — a book is ${formatToku(bookToku)}` : "nothing outstanding");
       checking = false; renderAccount();
     }catch(e){
       credResult = "could not reach the server";

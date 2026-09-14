@@ -108,6 +108,12 @@ pub struct Wallet {
     /// as `pending_tender`: re-send it verbatim, never mint a fresh one.
     #[serde(default)]
     pub pending_return: Option<PendingTender>,
+    /// What the server last said is still owed to this account but not yet drawn as coins
+    /// — a tail smaller than one ticketbook cannot be drawn until it is topped up, and it
+    /// is the user's money either way, so the app has to show it rather than let it look
+    /// like it vanished. Refreshed by every account call that learns it.
+    #[serde(default)]
+    pub entitlement_seen: u64,
     /// Pay chats with coins instead of a session balance (docs/unlinkability.md, block D).
     /// A Developer-page switch while the fleet still runs the session path; it lives here
     /// rather than in an environment variable because a phone has no environment to set.
