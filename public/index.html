@@ -1824,7 +1824,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       if(gotModels.length) models = gotModels;
       tiers = s.tiers || tiers || [];
       account = s.account; balance = s.balance||0; held = s.held||0;
-      entitlement = s.entitlement||0; bookToku = s.bookToku||100000;
+      entitlement = s.entitlement||0; bookToku = s.bookToku||100000; coinToku = s.coinToku||100;
       phraseVerified = !(account && account.phraseVerified === false);
 
       { const l = String(s.redeemLabel||"").slice(0,80), h = String(s.redeemHint||"").slice(0,80);
@@ -2014,10 +2014,16 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   function thinkTokens(){ const t=thinkStops(); return t.typical[thinkIndex()]; }
   // ~2000 input tokens (the context sent along) + 800 output tokens + the thinking tokens
   // of the current depth, at the model's per-1M rates.
+  // What one answer is expected to cost, in TOKU. With coins paying, a request is rounded
+  // up to a whole coin, so the estimate has to be too — otherwise the number shown before
+  // sending is below what the balance then drops by.
   function answerCost(m){
     const r=m&&m.rate; if(!r) return Infinity;
-    if((m.kind||'text')==='image') return Number(r.image)||Number(r.out)||Infinity;
-    return (Number(r.in)||0)/500 + (Number(r.out)||0)*(800+thinkTokens())/1e6;
+    const raw = (m.kind||'text')==='image'
+      ? (Number(r.image)||Number(r.out)||Infinity)
+      : (Number(r.in)||0)/500 + (Number(r.out)||0)*(800+thinkTokens())/1e6;
+    if(!coinChat || !isFinite(raw)) return raw;
+    return Math.ceil(raw / coinToku) * coinToku;
   }
   function costLabel(m){
     const toku=answerCost(m);
@@ -2659,7 +2665,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   let devBuild = false;
   // Paid for but not yet drawn as coins. A tail under one ticketbook cannot be drawn at
   // all until a purchase tops it up — it is still the user's money and is shown as such.
-  let entitlement = 0, bookToku = 100000;
+  let entitlement = 0, bookToku = 100000, coinToku = 100;
   // Developer switch: pay each answer with coins instead of a session balance.
   let coinChat = false;
   // The Developer section is a debug-build thing, but a phone has no way to run a debug

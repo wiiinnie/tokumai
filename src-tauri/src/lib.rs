@@ -131,6 +131,9 @@ const CLIENT_RETAIL_MARGIN: f64 = 1.4;
 /// the gross attacks (the audit's ≥50×, up to ~1000×) with wide false-positive headroom.
 const OVERCHARGE_FACTOR: f64 = 4.0;
 /// Don't flag trivial charges where rounding/floor noise dominates.
+/// …and never below one coin: a coin-paid answer is rounded up to a whole coin, so a
+/// cheap one can legitimately be charged more than its token price without anything
+/// being wrong.
 const MIN_FLAG_SCRAI: u64 = 50;
 
 /// Servers this client caught grossly overcharging THIS process-run. In-memory on
@@ -1520,6 +1523,8 @@ async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<V
         // all, so it has to be named rather than silently missing from the total.
         "entitlement": w.entitlement_seen,
         "bookToku": scrai_core::coconut::COIN_TOKU * 1_000,
+        // The smallest amount that can change hands: a coin-paid answer rounds up to it.
+        "coinToku": scrai_core::coconut::COIN_TOKU,
         "tiers": TIERS,
         "fakePayments": false,
         "gateway": "btcpay",
@@ -2475,7 +2480,10 @@ async fn chat_impl(
     if let (Some(charged), false) = (charged, has_images) {
         let reply_text = resp.get("text").and_then(|t| t.as_str()).unwrap_or("");
         if let Some(fair) = fair_price_estimate(&model, &messages, reply_text) {
-            let ceiling = (fair as f64 * OVERCHARGE_FACTOR).ceil() as u64;
+            // The comparison is against the rounded-up price, because that is what the
+            // server may legitimately take: a 0.17 ¢ answer costs 0.2 ¢ when coins pay.
+            let coin = scrai_core::coconut::COIN_TOKU;
+            let ceiling = ((fair as f64 * OVERCHARGE_FACTOR).ceil() as u64).div_ceil(coin) * coin;
             if charged > MIN_FLAG_SCRAI && charged > ceiling {
                 flag_server(
                     &srv,

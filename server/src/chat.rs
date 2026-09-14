@@ -828,6 +828,9 @@ fn settle_coins(
     // Coins are the unit of payment, so the bill rounds UP to a whole coin (0.1 ¢).
     let want_coins = price_toku.div_ceil(COIN_TOKU);
 
+    // What the user ACTUALLY pays is the rounded-up coin amount, not the raw price — the
+    // coin is the smallest thing that can change hands. Reporting the raw price would put a
+    // number in the app that the balance then contradicts.
     let picked = ctx.tender.select(want_coins).unwrap_or_else(|| {
         // The cap in reserve() is computed from the same ceiling settle bills against, so
         // this is a bug or a provider that ignored maxTokens. Take everything tendered and
@@ -840,6 +843,7 @@ fn settle_coins(
         (0..ctx.tender.notes.len()).collect()
     });
     let burned_coins: u64 = picked.iter().map(|i| ctx.tender.notes[*i].coins).sum();
+    let charged_toku = burned_coins.saturating_mul(COIN_TOKU);
 
     for i in &picked {
         let n = &ctx.tender.notes[*i];
@@ -860,7 +864,7 @@ fn settle_coins(
     quorum.release(&payments);
 
     eprintln!(
-        "scrai-server: usage {} in={} cached={} out={} img={} searches={} (billable {}) cost={:.0} charged={} coins={}{}",
+        "scrai-server: usage {} in={} cached={} out={} img={} searches={} (billable {}) cost={:.0} price={price_toku} charged={} coins={}{}",
         p.model,
         usage.input,
         usage.cached_input,
@@ -869,7 +873,7 @@ fn settle_coins(
         usage.grounding_queries,
         billable_queries,
         frame.cost_toku,
-        price_toku,
+        charged_toku,
         burned_coins,
         if usage.estimated { " ESTIMATED" } else { "" }
     );
@@ -883,7 +887,11 @@ fn settle_coins(
         "imageSize": p.image_size,
         "groundingQueries": usage.grounding_queries,
         "billing": {
-            "priceToku": price_toku,
+            // The charged amount under both names: a client that still reads *Scrai gets
+            // the same number, and both are what actually left the wallet.
+            "priceToku": charged_toku,
+            "priceScrai": charged_toku,
+            "rawPriceToku": price_toku,
             "costToku": dev_audit_cost(frame.cost_toku),
             "model": p.model,
             "pricingVersion": p.pricing_version,
@@ -897,7 +905,7 @@ fn settle_coins(
         "id": id,
         "text": text,
         "usage": usage_json,
-        "cost": price_toku,
+        "cost": charged_toku,
         "coins": burned_coins,
         "burned": picked,
     });
@@ -1757,11 +1765,18 @@ mod tests {
         )
         .unwrap();
 
-        let price = r["cost"].as_u64().unwrap();
+        let charged = r["cost"].as_u64().unwrap();
+        let raw = r["usage"]["billing"]["rawPriceToku"].as_u64().unwrap();
         let burned: Vec<usize> = serde_json::from_value(r["burned"].clone()).unwrap();
         let burned_coins: u64 = burned.iter().map(|i| tender.notes[*i].coins).sum();
         assert_eq!(r["coins"].as_u64().unwrap(), burned_coins);
-        assert_eq!(burned_coins, price.div_ceil(COIN_TOKU), "exactly the cost, rounded up to a coin");
+        assert_eq!(burned_coins, raw.div_ceil(COIN_TOKU), "exactly the cost, rounded up to a coin");
+        // What the reply calls the price must be what the wallet actually lost, or the
+        // balance contradicts the number under the answer.
+        assert_eq!(charged, burned_coins * COIN_TOKU, "the reported price is the charged price");
+        assert_eq!(r["usage"]["billing"]["priceToku"], charged);
+        assert_eq!(r["usage"]["billing"]["priceScrai"], charged);
+        assert!(charged >= raw && charged - raw < COIN_TOKU, "rounded up by less than one coin");
         assert!(burned_coins < 31, "a short answer must not eat the whole tender");
         assert_eq!(quorum.in_flight_serials(), 0, "the hold is released either way");
         assert!(r["balance"].is_null(), "coins leave no balance behind");
