@@ -319,6 +319,99 @@ impl Transport {
     /// Boxed: nym's send/receive futures are enormous, and this future is moved by value
     /// into the Tauri command that awaits it — on iOS the IPC handler runs on the 1 MB
     /// main thread, where that move alone overflowed the stack (see `chat` in lib.rs).
+    /// Fire several INDEPENDENT requests together and return whatever answered, keyed by
+    /// request id. Unlike `collect_replies` — which serves one chunked download, where any
+    /// error or a missing chunk ruins the whole thing — this never lets one request decide
+    /// the fate of the others: an error reply is a result for that request, and a request
+    /// that does not answer in time is simply absent from the map.
+    ///
+    /// That distinction is the difference between "one book was refused" and "eight books
+    /// were thrown away", which is exactly what went wrong on 2026-09-14.
+    pub async fn round_trip_many(
+        &self,
+        server: &str,
+        requests: Vec<Value>,
+        surbs: u32,
+        timeout_ms: u64,
+    ) -> Result<HashMap<String, Value>, String> {
+        Box::pin(self.round_trip_many_inner(server, requests, surbs, timeout_ms)).await
+    }
+
+    async fn round_trip_many_inner(
+        &self,
+        server: &str,
+        requests: Vec<Value>,
+        surbs: u32,
+        timeout_ms: u64,
+    ) -> Result<HashMap<String, Value>, String> {
+        self.ensure_connected().await?;
+        let recipient = Recipient::try_from_base58_string(server)
+            .map_err(|e| format!("bad server address: {e}"))?;
+        let mut guard = self.client.lock().await;
+        let client = guard.as_mut().ok_or("mixnet not connected — please retry")?;
+        let sender = client.split_sender();
+
+        let mut pending: HashMap<String, Vec<u8>> = HashMap::new();
+        let mut replies: HashMap<String, Value> = HashMap::new();
+        for req in &requests {
+            let bytes = stamp_app(req)?;
+            if let Err(e) = sender.send_message(recipient, bytes.clone(), IncludedSurbs::new(surbs)).await {
+                *guard = None;
+                self.mark_dead();
+                return Err(format!("mixnet send failed: {e} — reconnecting on the next attempt"));
+            }
+            if let Some(id) = req.get("id").and_then(|x| x.as_str()) {
+                pending.insert(id.to_string(), bytes);
+            }
+        }
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+        let mut last_progress = tokio::time::Instant::now();
+        let mut refires: u32 = 0;
+        while !pending.is_empty() {
+            let Some(remaining) = deadline.checked_duration_since(tokio::time::Instant::now()) else {
+                // Out of time: hand back what did answer. The caller knows which of its
+                // requests are still open and can re-send exactly those.
+                break;
+            };
+            let poll = remaining.min(Duration::from_secs(5));
+            let got = tokio::select! {
+                r = tokio::time::timeout(poll, client.wait_for_messages()) => match r {
+                    Ok(Some(b)) => Some(b),
+                    Ok(None) => {
+                        *guard = None;
+                        self.mark_dead();
+                        return Err("mixnet stream ended — reconnecting on the next attempt".into());
+                    }
+                    Err(_) => None,
+                },
+                _ = self.cancel.notified() => break,
+            };
+            if let Some(batch) = got {
+                for m in batch {
+                    let Ok(v) = serde_json::from_slice::<Value>(&m.message) else { continue };
+                    let Some(id) = v.get("id").and_then(|x| x.as_str()) else { continue };
+                    if pending.remove(id).is_none() {
+                        continue; // not one of ours (stray/cover)
+                    }
+                    replies.insert(id.to_string(), v);
+                    last_progress = tokio::time::Instant::now();
+                }
+            }
+            if !pending.is_empty() && last_progress.elapsed() >= Duration::from_secs(10) && refires < 4 {
+                for bytes in pending.values() {
+                    if let Err(e) = sender.send_message(recipient, bytes.clone(), IncludedSurbs::new(surbs)).await {
+                        *guard = None;
+                        self.mark_dead();
+                        return Err(format!("mixnet send failed: {e} — reconnecting on the next attempt"));
+                    }
+                }
+                refires += 1;
+                last_progress = tokio::time::Instant::now();
+            }
+        }
+        Ok(replies)
+    }
+
     pub async fn collect_replies<F: Fn(&Value, usize)>(
         &self,
         server: &str,

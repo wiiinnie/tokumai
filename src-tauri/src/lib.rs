@@ -879,9 +879,7 @@ async fn withdraw_books(
             route.push((id, slot, k));
         }
     }
-    let replies = t
-        .collect_replies(srv, requests, SURBS_SMALL, TIMEOUT_MS, |_, _| {})
-        .await?;
+    let replies = t.round_trip_many(srv, requests, SURBS_SMALL, TIMEOUT_MS).await?;
 
     // Group the answers per book, then aggregate the ones that came back complete.
     let mut collected = 0u64;
@@ -904,6 +902,15 @@ async fn withdraw_books(
                 shares.clear();
                 break; // no answer for this book — keep it pending and retry later
             };
+            // A refusal from the gate (no entitlement, bad signature) arrives as a plain
+            // error envelope, not a federation reply. Nothing was charged for it, so the
+            // body is dead and carrying it further would only re-ask for the same refusal.
+            if let Some(message) = reply.get("error").and_then(|e| e.as_str()) {
+                log::info!("[coconut] a book was refused: {message}");
+                give_up = !(message.contains("retry") || message.contains("busy"));
+                shares.clear();
+                break;
+            }
             let fed: FedResponse = match serde_json::from_value(reply.get("fed").cloned().unwrap_or(Value::Null)) {
                 Ok(f) => f,
                 Err(e) => {
@@ -1610,7 +1617,9 @@ async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<V
         // Paid for, not yet drawn as coins. Below one ticketbook it cannot be drawn at
         // all, so it has to be named rather than silently missing from the total.
         "entitlement": w.entitlement_seen,
-        "bookToku": scrai_core::coconut::COIN_TOKU * 1_000,
+        // A book is what one withdrawal draws; the device learns the size from a book it
+        // holds, so this follows the server rather than a number compiled into the app.
+        "bookToku": books_size_toku(&w),
         // The smallest amount that can change hands: a coin-paid answer rounds up to it.
         "coinToku": scrai_core::coconut::COIN_TOKU,
         "tiers": TIERS,
