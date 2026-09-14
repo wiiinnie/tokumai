@@ -436,11 +436,12 @@ async fn main() {
     persist_changed(&mut db, &sessions, &mut quorum, &paywall, &mut saved);
     let book_toku = ticketbook_coins() * scrai_core::coconut::COIN_TOKU;
     println!(
-        "scrai-server: gateway {} · ticketbook {} coins ({} TOKU = ${}){}",
+        "scrai-server: gateway {} · ticketbook {} coins ({} TOKU = ${:.2}){}",
         gateway.name(),
         ticketbook_coins(),
         book_toku,
-        book_toku / scrai_core::coconut::TOKU_PER_USD,
+        // Integer dollars would print a ten-cent book as "$0".
+        book_toku as f64 / scrai_core::coconut::TOKU_PER_USD as f64,
         if pay::is_testnet_server() { " · testnet $1 books" } else { "" }
     );
     // Codes sold on the website are bearer money whose only trace here is a fingerprint.
