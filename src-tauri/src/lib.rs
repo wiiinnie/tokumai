@@ -342,7 +342,7 @@ fn restore_from_synced_phrase(dir: &Path) {
     match wallet::synced_phrase() {
         Ok(Some(m)) => match account::from_mnemonic(&m) {
             Ok(a) => {
-                let w = wallet::Wallet { mnemonic: Some(a.mnemonic), server: w.server, entry_gateway: w.entry_gateway, phrase_verified: true, ..Default::default() };
+                let w = wallet::Wallet { mnemonic: Some(a.mnemonic), server: w.server, entry_gateway: w.entry_gateway, entry_random: w.entry_random, coin_chat: w.coin_chat, phrase_verified: true, ..Default::default() };
                 match wallet::save(dir, &w) {
                     Ok(()) => log::info!("[restore] account restored from the iCloud Keychain copy"),
                     Err(e) => log::error!("[restore] found a Keychain copy but could not save the wallet: {e}"),
@@ -1486,7 +1486,7 @@ fn account_new_inner(app: &AppHandle, force: Option<bool>) -> Result<(PathBuf, S
     let a = account::create_account();
     // A NEW account starts unverified: the three-word check has to happen before this
     // wallet may buy anything. A restore sets it true — typing all twenty-four words IS the proof.
-    let w = wallet::Wallet { mnemonic: Some(a.mnemonic.clone()), server: prev.server, entry_gateway: prev.entry_gateway, phrase_verified: false, ..Default::default() };
+    let w = wallet::Wallet { mnemonic: Some(a.mnemonic.clone()), server: prev.server, entry_gateway: prev.entry_gateway, entry_random: prev.entry_random, coin_chat: prev.coin_chat, phrase_verified: false, ..Default::default() };
     wallet::save(&dir, &w)?;
     let fp = account::fingerprint(&a.account_id);
     Ok((dir, a.mnemonic, fp))
@@ -1525,7 +1525,7 @@ fn account_delete(app: AppHandle, force: Option<bool>) -> Result<Value, String> 
     if has_held_value(&prev) && !force.unwrap_or(false) {
         return Err(HELD_CREDIT_ERR.into());
     }
-    let w = wallet::Wallet { server: prev.server, entry_gateway: prev.entry_gateway, ..Default::default() };
+    let w = wallet::Wallet { server: prev.server, entry_gateway: prev.entry_gateway, entry_random: prev.entry_random, coin_chat: prev.coin_chat, ..Default::default() };
     wallet::save(&dir, &w)?;
     Ok(json!({ "ok": true }))
 }
@@ -1595,7 +1595,7 @@ fn account_restore(app: AppHandle, mnemonic: String, force: Option<bool>) -> Res
         return Err(HELD_CREDIT_ERR.into());
     }
     let a = account::from_mnemonic(&mnemonic)?;
-    let w = wallet::Wallet { mnemonic: Some(a.mnemonic.clone()), server: prev.server, entry_gateway: prev.entry_gateway, phrase_verified: true, ..Default::default() };
+    let w = wallet::Wallet { mnemonic: Some(a.mnemonic.clone()), server: prev.server, entry_gateway: prev.entry_gateway, entry_random: prev.entry_random, coin_chat: prev.coin_chat, phrase_verified: true, ..Default::default() };
     wallet::save(&dir, &w)?;
     Ok(json!({ "fingerprint": account::fingerprint(&a.account_id), "balance": 0 }))
 }

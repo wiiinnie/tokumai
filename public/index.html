@@ -5016,6 +5016,10 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   async function trickleTick(){
     trickleTimer = null;
     if(!trickleOn()) return;
+    // Paying with coins and moving coins onto the phrase are the same coins: the trickle
+    // would quietly eat the very notes the next request has to tender. Coins win; the
+    // trickle is a convenience for the session path and goes away with it.
+    if(coinChat){ trickleTimer = setTimeout(trickleTick, trickleDelayMs()); return; }
     if(held > 0 && !redeeming && !busy && account){
       redeeming = true;
       try{ const r = await Backend.redeem(); if(r){ balance = r.balance ?? balance; held = r.held ?? held; renderBal(); } }
@@ -5417,7 +5421,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         <button class="btn" data-click="showPhraseAgain">Show the phrase again</button></div>
       <p class="hint">Until this is done, the account cannot buy credit. A phrase that was only ever looked at is one that gets screenshotted — and the screenshot lands in every cloud the photos sync to.</p>`;
 
-    const trickleRow = `<label class="setrow"><input type="checkbox" id="trickleChk" data-change="trickleToggle"${trickleOn()?" checked":""}><span><b>Move credit onto my phrase</b><small>${trickleOn()?`On · a dollar every ${esc(String(trickleMinutes))} minutes the app is open`:`Off · the coins stay cash on this device`}</small></span></label>`;
+    const trickleRow = `${coinChat ? `<p class="hint" style="color:var(--rust)">Paused while you are paying with coins: it would spend the same coins your next question needs.</p>` : ""}<label class="setrow"><input type="checkbox" id="trickleChk" data-change="trickleToggle"${trickleOn()?" checked":""}><span><b>Move credit onto my phrase</b><small>${trickleOn()?`On · a dollar every ${esc(String(trickleMinutes))} minutes the app is open`:`Off · the coins stay cash on this device`}</small></span></label>`;
     const tricklePage = trickleOn()
       ? `<p class="pagelead">A dollar of the coins on this device moves onto your recovery phrase every <b>${esc(String(trickleMinutes))} minutes</b> the app is open — at the same pace as everyone else, so it cannot be told apart. From the phrase, credit can always come back.</p>
          ${trickleRow}
