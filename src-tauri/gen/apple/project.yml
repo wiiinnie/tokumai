@@ -57,8 +57,8 @@ targets:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        CFBundleShortVersionString: 0.6.2
-        CFBundleVersion: "0.6.2"
+        CFBundleShortVersionString: 0.6.3
+        CFBundleVersion: "0.6.3"
     entitlements:
       path: scrambleai_iOS/scrambleai_iOS.entitlements
     scheme:
