@@ -122,6 +122,84 @@ pub fn estimate_tokens(chars: u64) -> u64 {
 }
 
 /// Clamp a margin the way the TS server does: must be finite and ≥ 1, else 1.0.
+/// Google's published output tokens per generated image, by requested size
+/// (`generationConfig.imageConfig.imageSize` on Gemini 3.x image models). Nano Banana
+/// (2.5) takes no size and always returns a 1K picture of 1290 tokens.
+pub const IMAGE_SIZES: [(&str, u64); 4] = [("512", 747), ("1K", 1120), ("2K", 1680), ("4K", 2520)];
+pub const DEFAULT_IMAGE_SIZE: &str = "1K";
+
+/// Output tokens of ONE picture at `size`. An unknown size bills as 1K.
+pub fn image_tokens_for(size: &str) -> u64 {
+    IMAGE_SIZES.iter().find(|(s, _)| *s == size).map(|(_, t)| *t).unwrap_or(1120)
+}
+
+/// Safe upper bound on the input tokens one attachment bills as. Gemini tiles a large
+/// image into ~hundreds of tokens and a PDF page costs ~258+; this over-reserves rather
+/// than risk billing above the ceiling.
+pub const ATTACHMENT_INPUT_TOKENS: u64 = 4096;
+
+/// What one request could cost at worst, in tokens.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Ceiling {
+    /// Input tokens, counted as BYTES (a byte-level BPE token decodes to at least one
+    /// byte, so the byte count cannot undercount) plus a flat budget per attachment.
+    pub in_tokens: u64,
+    /// Answer budget plus the thinking budget — both bill at the text rate.
+    pub out_tokens: u64,
+    /// Output tokens of the picture this request may generate; 0 for text models and
+    /// for models that do not bill an image separately.
+    pub image_tokens: u64,
+}
+
+/// Worst-case retail price of one request, in TOKU: what the server reserves, and
+/// therefore what a client paying with coins has to put on the table.
+///
+/// ONE definition, used by both sides. The client used to estimate this with its own
+/// formula and got image models wrong by a factor of three — it tendered 1300 TOKU for a
+/// 4368 TOKU picture and the request was refused with coins sitting right there
+/// (2026-09-14). A second formula is a second answer; there is only room for one.
+pub fn ceiling_toku(price: &ModelPrice, margin: f64, c: &Ceiling) -> u64 {
+    let retail = |usd_per_million: f64| ceil_toku(usd_per_million * TOKU_PER_USD as f64 * clamp_margin(margin)).ceil();
+    // Token-billed image models (Nano Banana): text + thinking reserve at the TEXT rate,
+    // the picture at the IMAGE rate — the same split settle() bills.
+    let (text_out_rate, image_tokens) = match price.output_text {
+        Some(t) => (t, c.image_tokens),
+        None => (price.output, 0),
+    };
+    ((c.in_tokens as f64 * retail(price.input)
+        + c.out_tokens as f64 * retail(text_out_rate)
+        + image_tokens as f64 * retail(price.output))
+        / 1_000_000.0)
+        .ceil() as u64
+}
+
+/// Retail TOKU for ONE generated image on a model whose provider reports no tokens for
+/// it (a flat per-image price); 0 for text models and for token-billed image models.
+pub fn per_image_toku(price: &ModelPrice, margin: f64) -> u64 {
+    match price.per_image {
+        Some(usd) if usd > 0.0 => ceil_toku(usd * TOKU_PER_USD as f64 * clamp_margin(margin)).ceil() as u64,
+        _ => 0,
+    }
+}
+
+/// Input tokens of a `[{role, content, attachments}]` message array, the way the ceiling
+/// must count them. Bytes, not chars/4: an adversarial multibyte prompt tokenises far
+/// above chars/4, and nobody may ever be charged above the ceiling.
+pub fn ceiling_input_tokens(messages: &serde_json::Value) -> u64 {
+    messages
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .map(|m| {
+                    let text = m.get("content").and_then(|c| c.as_str()).unwrap_or("").len() as u64;
+                    let atts = m.get("attachments").and_then(|x| x.as_array()).map(|x| x.len()).unwrap_or(0) as u64;
+                    text + atts * ATTACHMENT_INPUT_TOKENS
+                })
+                .sum()
+        })
+        .unwrap_or(0)
+}
+
 pub fn clamp_margin(margin: f64) -> f64 {
     if margin.is_finite() && margin >= 1.0 {
         margin

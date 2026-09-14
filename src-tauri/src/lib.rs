@@ -1057,11 +1057,21 @@ fn coin_chat_enabled(dir: &Path) -> bool {
     dev_env("COIN_CHAT").as_deref() == Some("1") || wallet::load(dir).coin_chat
 }
 
-/// How many coins to put on the table for this request: the client's own worst-case
-/// estimate with headroom, clamped. Tendering too much costs nothing but bytes (unburned
-/// notes return); tendering too little makes the server cap the answer.
-fn tender_ceiling_coins(model: &str, messages: &Value, max_tokens: Option<u64>) -> u64 {
-    use scrai_core::billing::{compute_billing, TokenUsage};
+/// What this request could cost at worst, in coins — the size of the tender.
+///
+/// The formula is `scrai_core::billing::ceiling_toku`, the SAME one the server reserves
+/// with. It used to be re-derived here from `compute_billing` with a text-shaped usage,
+/// which ignored the picture an image model draws: a 4368 TOKU image request went out
+/// with 1300 TOKU on the table and was refused while the device held 187 coins
+/// (2026-09-14). Anything that changes the ceiling must change it in core, for both.
+fn tender_ceiling_coins(
+    model: &str,
+    messages: &Value,
+    max_tokens: Option<u64>,
+    thinking: Option<u64>,
+    image_size: Option<&str>,
+) -> u64 {
+    use scrai_core::billing::{ceiling_input_tokens, ceiling_toku, image_tokens_for, per_image_toku, Ceiling, DEFAULT_IMAGE_SIZE};
     use scrai_core::coconut::COIN_TOKU;
     use scrai_core::pricing::PricingTable;
     let est = (|| {
@@ -1070,24 +1080,17 @@ fn tender_ceiling_coins(model: &str, messages: &Value, max_tokens: Option<u64>) 
         if price.fallback {
             return None;
         }
-        // Count input the way the SERVER's ceiling does — one token per character, plus a
-        // flat budget per attachment. Our own fair-price check uses chars / 4, which is
-        // closer to the truth but four times SMALLER: tendering against that would leave
-        // every long prompt short of the server's ceiling and get its answer capped.
-        let input: u64 = messages
-            .as_array()
-            .map(|a| {
-                a.iter()
-                    .map(|m| {
-                        let text = m.get("content").and_then(|c| c.as_str()).unwrap_or("").len() as u64;
-                        let atts = m.get("attachments").and_then(|x| x.as_array()).map(|x| x.len()).unwrap_or(0) as u64;
-                        text + atts * 4096
-                    })
-                    .sum()
-            })
-            .unwrap_or(0);
-        let usage = TokenUsage { input, output: max_tokens.unwrap_or(4096), ..Default::default() };
-        Some(compute_billing(&price, &usage, CLIENT_RETAIL_MARGIN, 1, true).price_toku)
+        let c = Ceiling {
+            in_tokens: ceiling_input_tokens(messages),
+            // A request that names no thinking budget gets the server's own
+            // (THINKING_BUDGET, 2048 by default); the headroom below covers a server set
+            // higher. Live grounding adds nothing while the monthly free allowance holds,
+            // which is the only case we have ever been in — if that changes, the ceiling
+            // grows server-side and this estimate has to learn about it.
+            out_tokens: max_tokens.unwrap_or(4096) + thinking.unwrap_or(2048),
+            image_tokens: image_tokens_for(image_size.unwrap_or(DEFAULT_IMAGE_SIZE)),
+        };
+        Some(ceiling_toku(&price, CLIENT_RETAIL_MARGIN, &c) + per_image_toku(&price, CLIENT_RETAIL_MARGIN))
     })()
     .unwrap_or(0);
     // Half again on top: the server's margin may be higher than the one bundled here, and
@@ -1207,7 +1210,7 @@ fn coin_request(
         w.pending_tender = None;
     }
     let keys = epoch_keys(dir, srv).ok_or("the server's issuing keys are not on this device yet — check for credit first")?;
-    let tender = build_tender(&mut w, &keys, tender_ceiling_coins(model, messages, maxTokens))?;
+    let tender = build_tender(&mut w, &keys, tender_ceiling_coins(model, messages, maxTokens, thinkingBudget, imageSize.as_deref()))?;
     let mut req = json!({
         "v": PROTO, "kind": "chat", "id": rand_hex(16), "model": model, "messages": messages,
         "stream": false, "chunkedImages": true,
@@ -4595,15 +4598,56 @@ mod tender_tests {
     fn the_ceiling_stays_inside_its_bounds() {
         let msgs = json!([{ "role": "user", "content": "hi" }]);
         use scrai_core::coconut::COIN_TOKU;
-        let c = tender_ceiling_coins("gemini-3.5-flash", &msgs, Some(1000));
+        let c = tender_ceiling_coins("gemini-3.5-flash", &msgs, Some(1000), None, None);
         let (lo, hi) = (TENDER_MIN_TOKU / COIN_TOKU, TENDER_MAX_TOKU / COIN_TOKU);
         assert!((lo..=hi).contains(&c), "{c} coins outside {lo}..={hi}");
-        // A short prompt must stay cheap to carry: ~490 bytes per coin over the mixnet.
-        // Today this is 19 coins ≈ 9 KB for a 1000-token answer; the guard is there to
-        // catch a pricing or headroom change that turns a chat into a wallet-sized upload.
-        assert!(c * 490 < 15_000, "an ordinary request tenders {c} coins ≈ {} bytes", c * 490);
+        // A tender costs ~490 bytes per coin over the mixnet, and the ceiling is the WORST
+        // case: on an expensive model a full answer budget plus the server's thinking
+        // budget really is a few cents, so this is 58 coins ≈ 28 KB for a 1000-token
+        // answer on gemini-3.5-flash (it was 19 coins while the client under-tendered and
+        // the server silently capped the answer to fit). The guard catches growth beyond
+        // that, not the size itself — the levers for the size are a tender priced off the
+        // catalog's own rates (no margin guess, so less headroom) and a second, coarser
+        // coin denomination (fewer coins for the same TOKU).
+        assert!(c * 490 < 35_000, "an ordinary request tenders {c} coins ≈ {} bytes", c * 490);
         let long = json!([{ "role": "user", "content": "x".repeat(400_000) }]);
-        let c = tender_ceiling_coins("gemini-3.5-flash", &long, Some(100_000));
+        let c = tender_ceiling_coins("gemini-3.5-flash", &long, Some(100_000), None, None);
         assert_eq!(c, hi, "a huge request is capped, not unbounded");
+    }
+
+    /// The bug of 2026-09-14: an image model's ceiling was computed as if the answer were
+    /// text, so the tender covered a fraction of the picture and the server refused it
+    /// with coins sitting on the device. The tender must cover what the SERVER reserves.
+    #[test]
+    fn an_image_request_tenders_enough_for_the_picture() {
+        use scrai_core::billing::{ceiling_input_tokens, ceiling_toku, image_tokens_for, Ceiling};
+        use scrai_core::coconut::COIN_TOKU;
+        use scrai_core::pricing::PricingTable;
+        let model = "gemini-3.1-flash-lite-image";
+        let msgs = json!([{ "role": "user", "content": "render an image of a beach" }]);
+        let table = PricingTable::parse(BUNDLED_PRICING).expect("bundled pricing parses");
+        let price = table.price(model);
+        assert!(!price.fallback, "{model} must be priced for this test to mean anything");
+
+        for size in ["1K", "2K", "4K"] {
+            // What the server will reserve, at the same margin the client assumes.
+            let server = ceiling_toku(
+                &price,
+                CLIENT_RETAIL_MARGIN,
+                &Ceiling {
+                    in_tokens: ceiling_input_tokens(&msgs),
+                    out_tokens: 4096 + 2048,
+                    image_tokens: image_tokens_for(size),
+                },
+            );
+            let tendered = tender_ceiling_coins(model, &msgs, None, None, Some(size)) * COIN_TOKU;
+            assert!(tendered >= server, "{size}: tendered {tendered} TOKU against a {server} TOKU ceiling");
+        }
+        // And the picture is really in there: a bigger one costs more to tender. (Comparing
+        // against a TEXT model proves nothing — gemini-3.5-flash bills output at $9/1M
+        // against this model's $1.50 text rate, so its ceiling is the higher of the two.)
+        let one_k = tender_ceiling_coins(model, &msgs, None, None, Some("1K"));
+        let four_k = tender_ceiling_coins(model, &msgs, None, None, Some("4K"));
+        assert!(four_k > one_k, "a 4K picture must tender more than a 1K one ({four_k} vs {one_k})");
     }
 }

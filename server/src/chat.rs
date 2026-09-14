@@ -99,8 +99,7 @@ const MAX_THINKING_BUDGET: u64 = 16384;
 /// reserve assumes the requested size; settle() bills the real
 /// `candidatesTokensDetails` count. Nano Banana (2.5) takes no size and always
 /// returns a 1K picture of 1290 tokens.
-const IMAGE_SIZES: [(&str, u64); 4] = [("512", 747), ("1K", 1120), ("2K", 1680), ("4K", 2520)];
-const DEFAULT_IMAGE_SIZE: &str = "1K";
+use scrai_core::billing::{DEFAULT_IMAGE_SIZE, IMAGE_SIZES};
 const LEGACY_IMAGE_TOKENS: u64 = 1290;
 
 /// The client's requested image size for this turn. UNSIGNED like `thinkingBudget`
@@ -115,10 +114,7 @@ fn image_size_of(v: &Value) -> &'static str {
         .unwrap_or(DEFAULT_IMAGE_SIZE)
 }
 
-/// Output tokens of ONE picture at `size` (Gemini 3.x image models).
-pub fn image_tokens_for(size: &str) -> u64 {
-    IMAGE_SIZES.iter().find(|(s, _)| *s == size).map(|(_, t)| *t).unwrap_or(1120)
-}
+pub use scrai_core::billing::image_tokens_for;
 
 /// Every selectable size with its token count — the catalog prices them for the picker.
 pub fn image_sizes() -> &'static [(&'static str, u64)] {
@@ -170,10 +166,6 @@ fn effective_thinking(v: &Value) -> u64 {
     }
 }
 
-/// Safe upper bound on the input tokens one attachment bills as. Gemini tiles a
-/// large image into ~hundreds of tokens and a PDF page costs ~258+; this
-/// over-reserves rather than risk billing above the ceiling.
-const ATTACHMENT_INPUT_TOKENS: u64 = 4096;
 
 /// Worst-case price of a request, in TOKU — the amount to reserve. Byte length,
 /// not chars/4: a byte-level BPE token decodes to at least one byte, so the byte
@@ -221,37 +213,19 @@ fn ceiling_for(
     image_size: &str,
     model: &str,
 ) -> u64 {
-    use scrai_core::billing::{ceil_toku, clamp_margin};
-    use scrai_core::coconut::TOKU_PER_USD;
-    let retail = |usd_per_million: f64| {
-        ceil_toku(usd_per_million * TOKU_PER_USD as f64 * clamp_margin(margin)).ceil()
-    };
-    let empty = Vec::new();
-    let in_tokens: u64 = messages
-        .as_array()
-        .unwrap_or(&empty)
-        .iter()
-        .map(|m| {
-            let text = m.get("content").and_then(|c| c.as_str()).unwrap_or("").len() as u64;
-            let atts = m.get("attachments").and_then(|a| a.as_array()).map(|a| a.len()).unwrap_or(0) as u64;
-            text + atts * ATTACHMENT_INPUT_TOKENS
-        })
-        .sum();
+    use scrai_core::billing::{ceiling_input_tokens, ceiling_toku, Ceiling};
     // Same `thinking` value the request will actually use → reserve matches the real
     // billable output, so a lowered thinking budget really does reserve (and cost) less.
-    let out_tokens = max_tokens.unwrap_or_else(default_max_tokens) + thinking;
-    // Token-billed image models (Nano Banana): text + thinking reserve at the TEXT
-    // rate, plus one image at the REQUESTED size at the IMAGE rate — the same split
-    // settle() bills, so the reserve neither blocks nor under-covers.
-    let (text_out_rate, image_tokens) = match price.output_text {
-        Some(t) => (t, image_tokens_for(image_size)),
-        None => (price.output, 0),
-    };
-    let tokens = ((in_tokens as f64 * retail(price.input)
-        + out_tokens as f64 * retail(text_out_rate)
-        + image_tokens as f64 * retail(price.output))
-        / 1_000_000.0)
-        .ceil() as u64;
+    // The formula itself lives in core, so the paying client computes the same number.
+    let tokens = ceiling_toku(
+        price,
+        margin,
+        &Ceiling {
+            in_tokens: ceiling_input_tokens(messages),
+            out_tokens: max_tokens.unwrap_or_else(default_max_tokens) + thinking,
+            image_tokens: image_tokens_for(image_size),
+        },
+    );
     // Live grounding: reserve headroom only for the BILLABLE worst case — queries
     // beyond the month's free allowance. Under the allowance grounding is free, so a
     // low-balance user isn't falsely blocked by a reserve for cost they won't incur.
@@ -263,17 +237,7 @@ fn ceiling_for(
     tokens + per_image_toku(price, margin) + grounding
 }
 
-/// Retail TOKU for ONE generated image (0 for text models).
-pub fn per_image_toku(price: &scrai_core::billing::ModelPrice, margin: f64) -> u64 {
-    use scrai_core::billing::{ceil_toku, clamp_margin};
-    use scrai_core::coconut::TOKU_PER_USD;
-    match price.per_image {
-        Some(usd) if usd > 0.0 => {
-            ceil_toku(usd * TOKU_PER_USD as f64 * clamp_margin(margin)).ceil() as u64
-        }
-        _ => 0,
-    }
-}
+pub use scrai_core::billing::per_image_toku;
 
 /// The price actually offered: free-TIER models bill at a reduced rate —
 /// provider list price × FREE_TIER_FACTOR (default 0.5, clamped to 0..=1) —
