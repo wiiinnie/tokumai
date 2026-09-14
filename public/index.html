@@ -1340,7 +1340,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
          and nothing here that ties what you ask to who you are.</p>
 
       <div class="grouplbl" style="margin-top:2px">This build</div>
-      <div class="setrow" style="cursor:default"><span><b id="abVer">tokumai</b><small id="abSrv">server —</small></span></div>
+      <div class="setrow" style="cursor:default" data-click="tapVersion"><span><b id="abVer">tokumai</b><small id="abSrv">server —</small></span></div>
 
       <div class="grouplbl">Support</div>
       <div class="setrow" data-click="writeSupport" style="cursor:pointer"><span><b>Write to support</b><small>Opens your own e-mail app with the version details filled in. Nothing is sent until you press send, and the message never touches our server — so we do not learn your address from a page you had to load first.</small></span><span class="chev">›</span></div>
@@ -1832,7 +1832,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       fakePayments = s.fakePayments === true;    // only when the server SAYS so
       devBuild = s.devBuild === true;
       coinChat = s.coinChat === true;
-      if(!devBuild) devCost = false;             // no diagnostics outside a debug build, whatever localStorage says
+      if(!devBuild && !devUnlocked) devCost = false;   // diagnostics need a debug build or the unlock gesture
       if(s.update && s.update.required) showUpdateGate(s.update);
       // Settings footer: app + server version (server absent on the web dev bridge / old servers).
       { const av=String(s.appVersion||"").slice(0,32), sv=String(s.serverVersion||"").slice(0,32);
@@ -2653,6 +2653,31 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   let devBuild = false;
   // Developer switch: pay each answer with coins instead of a session balance.
   let coinChat = false;
+  // The Developer section is a debug-build thing, but a phone has no way to run a debug
+  // build sensibly (a debug nym-sdk is enormous) and no environment to set — so seven taps
+  // on the version line reveal it. Nothing behind it leaks: the per-answer cost audit is
+  // gated on the SERVER (DEV_AUDIT), and the rest is local diagnostics.
+  const DEV_TAP_KEY = "tokumai.dev.unlocked";
+  let devUnlocked = (()=>{ try{ return localStorage.getItem(DEV_TAP_KEY) === "1"; }catch(_){ return false; } })();
+  let devTaps = 0, devTapAt = 0;
+  function tapVersion(){
+    const now = Date.now();
+    devTaps = now - devTapAt > 3000 ? 1 : devTaps + 1;
+    devTapAt = now;
+    if(devUnlocked){
+      if(devTaps >= 7){ devUnlocked = false; devTaps = 0; try{ localStorage.removeItem(DEV_TAP_KEY); }catch(_){}
+        $("setStatus").textContent = "developer section hidden again"; renderAbout(); }
+      return;
+    }
+    if(devTaps >= 7){
+      devUnlocked = true; devTaps = 0;
+      try{ localStorage.setItem(DEV_TAP_KEY, "1"); }catch(_){}
+      $("setStatus").textContent = "developer section unlocked";
+      renderAbout();
+    } else if(devTaps >= 4){
+      $("setStatus").textContent = (7 - devTaps) + " more";
+    }
+  }
   // Footer/update-gate version: the build's real version comes from the backend's
   // `state` reply (Tauri package_info / dev bridge package.json) and replaces this
   // fallback on the first status. Codenames per minor series from Howard Marks'
@@ -4351,8 +4376,9 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     const showDlVals = ()=>{ const i=parseInt($("dlSize").value,10)||0, s=DL_STEPS[i]; if($("dlSizeVal")) $("dlSizeVal").textContent = s[0]+"px · q"+s[1]; markTicks("dlSize", Math.round(i/(DL_STEPS.length-1)*2)); };
     showDlVals();
     $("dlSize").oninput = ()=>{ try{ localStorage.setItem("scrai.dev.dlsize", $("dlSize").value); }catch(_){}; showDlVals(); $("setStatus").textContent="applies to your next image"; };
-    // The Developer section exists in debug builds only (backend `devBuild`).
-    const showDev = devBuild;
+    // Debug builds show it outright; on a release build it takes seven taps on the
+    // version line above (`tapVersion`), which is how a phone gets at the test switches.
+    const showDev = devBuild || devUnlocked;
     { const e=$("devCatRow"); if(e) e.style.display = showDev?"":"none"; }
     openScrim("setScrim");
   }
@@ -6765,7 +6791,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   function pickModel(i){ selectModelIdx(i); toggleMenu(); }
 
   // expose for inline handlers
-  Object.assign(window,{ toggleGwRandom, pickServerIdentity, trickleToggle, toggleCoinChat, selectIap, loadIap, toggleIapConsent, buyIap, restoreIap, codeTyped,
+  Object.assign(window,{ toggleGwRandom, pickServerIdentity, trickleToggle, toggleCoinChat, tapVersion, selectIap, loadIap, toggleIapConsent, buyIap, restoreIap, codeTyped,
     pickModel, copyPhrase, newChat, openSession, deleteSession, exportSession, toggleMenu, selectModelIdx,
     autogrow, onKey, sendMsg, retryMsg, showHandover, downloadHandover, closeHandover, pickImport, importHandover,
     cancelMsg, resendMsg, showDismissed, retrieveMsg, openConnSheet, closeConnSheet, rebuildRoute, rebuildRouteFromSheet, copyResumeLog, routeDismiss, useOfficialServer, iterateImg,
