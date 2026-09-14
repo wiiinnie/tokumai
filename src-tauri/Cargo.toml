@@ -124,3 +124,7 @@ objc2-core-graphics = { version = "0.3", features = ["CGDataProvider", "CGPDFDoc
 objc2-core-foundation = { version = "0.3", features = ["CFCGTypes", "CFData"] }
 # Encode rendered PDF pages to PNG (for the redaction preview in the webview).
 image = { version = "0.25", default-features = false, features = ["png"] }
+
+[dev-dependencies]
+# the ecash testkit (see core/Cargo.toml) — tests only, never in the shipped app
+scrai-core = { path = "../core", features = ["testkit"] }

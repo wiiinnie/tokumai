@@ -52,6 +52,18 @@ pub struct PendingWithdraw {
     pub created_ms: u64,
 }
 
+/// A tender that has left the device and whose outcome we do not know yet. The notes in
+/// it are already spent out of the purse, so the ONLY safe move is to re-send this exact
+/// request until the server says which notes it burned — a fresh tender would spend more
+/// coins for an answer that may already be paid for.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct PendingTender {
+    /// The chat request, verbatim.
+    pub request: serde_json::Value,
+    /// Its notes in order; the reply's `burned` indexes into this list.
+    pub notes: Vec<serde_json::Value>,
+}
+
 #[derive(Default, Serialize, Deserialize)]
 pub struct Wallet {
     #[serde(default)]
@@ -84,6 +96,14 @@ pub struct Wallet {
     /// An in-flight withdrawal awaiting its credential — resumed idempotently (M-cl-2).
     #[serde(default)]
     pub pending_withdraw: Option<PendingWithdraw>,
+    /// Coins already spent out of a purse but not yet burned by any server: notes that
+    /// were tendered for a chat and came home unused. They pay for the next request
+    /// before a single fresh coin is taken out of a book.
+    #[serde(default)]
+    pub spare_notes: Vec<serde_json::Value>,
+    /// A tender whose answer never arrived — see `PendingTender`.
+    #[serde(default)]
+    pub pending_tender: Option<PendingTender>,
     /// Every Nym address of the CURRENT server (its multi-identity front doors, from the
     /// catalog reply's `identities`). Same server, same money — so when the one we use
     /// stops answering, the liveness check switches to another without any user action.

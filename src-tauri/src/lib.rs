@@ -861,6 +861,202 @@ fn wallet_account(app: &AppHandle) -> Result<account::Account, String> {
 // an XSS frontend could race against chat's auto-redeem and clobber a purse. Removed. The
 // live buy→coins path is `collect` (withdraws via `withdraw_purse`) and `redeem`.
 
+// ---------------------------------------------------------------------------------------
+// Paying a chat with coins (docs/unlinkability.md, block D). No session, no counter, no
+// signature: the request carries a tender — several payments valued 1, 2, 4, … — and the
+// server burns exactly the notes the answer cost. The rest come home and pay for the next
+// one, so over-tendering is free apart from the bytes.
+//
+// Off by default while the fleet still runs the session path; `TOKUMAI_COIN_CHAT=1` turns
+// it on for testing against a server that already accepts tenders.
+// ---------------------------------------------------------------------------------------
+
+/// The smallest tender worth sending: 31 coins (3.1 ¢) covers any ordinary text answer, so
+/// most requests never have to mint a second time.
+const TENDER_MIN_COINS: u64 = 31;
+/// …and the largest, so one request can never carry a wallet-sized payload over the mixnet
+/// (≈ 490 bytes per coin). 255 coins ≈ 25 ¢, which covers a 4K picture.
+const TENDER_MAX_COINS: u64 = 255;
+
+fn coin_chat_enabled() -> bool {
+    dev_env("COIN_CHAT").as_deref() == Some("1")
+}
+
+/// How many coins to put on the table for this request: the client's own worst-case
+/// estimate with headroom, clamped. Tendering too much costs nothing but bytes (unburned
+/// notes return); tendering too little makes the server cap the answer.
+fn tender_ceiling_coins(model: &str, messages: &Value, max_tokens: Option<u64>) -> u64 {
+    use scrai_core::billing::{compute_billing, estimate_tokens, TokenUsage};
+    use scrai_core::coconut::COIN_TOKU;
+    use scrai_core::pricing::PricingTable;
+    let est = (|| {
+        let table = PricingTable::parse(BUNDLED_PRICING).ok()?;
+        let price = table.price(model);
+        if price.fallback {
+            return None;
+        }
+        let input = messages_plaintext(messages)?;
+        let usage = TokenUsage {
+            input: estimate_tokens(input.chars().count() as u64),
+            output: max_tokens.unwrap_or(4096),
+            ..Default::default()
+        };
+        Some(compute_billing(&price, &usage, CLIENT_RETAIL_MARGIN, 1, true).price_toku)
+    })()
+    .unwrap_or(0);
+    // Double the estimate: the server's margin may be higher than ours, and an answer that
+    // gets capped for want of a coin is a worse outcome than a few unused notes.
+    let coins = est.saturating_mul(2).div_ceil(COIN_TOKU);
+    coins.clamp(TENDER_MIN_COINS, TENDER_MAX_COINS)
+}
+
+/// Assemble a tender worth at least `ceiling` coins: spare notes first, then — only if
+/// they fall short — a fresh plan minted out of a book. The purse is advanced here, so the
+/// caller MUST persist the wallet before anything leaves the device.
+fn build_tender(w: &mut wallet::Wallet, ceiling: u64) -> Result<scrai_core::tender::Tender, String> {
+    use scrai_core::tender::{plan_coins, Note, Tender};
+    let mut notes: Vec<Note> = Vec::new();
+    for v in std::mem::take(&mut w.spare_notes) {
+        match serde_json::from_value::<Note>(v) {
+            Ok(n) => notes.push(n),
+            // A note we can no longer parse is a note we can never spend; dropping it
+            // loses at most its face value, keeping it would poison every tender.
+            Err(e) => log::warn!("[tender] dropping an unreadable spare note: {e}"),
+        }
+    }
+    let have: u64 = notes.iter().map(|n| n.coins).sum();
+    if have < ceiling {
+        let (idx, mut purse) = first_funded_purse(&w.coconut_purses).ok_or("no TOKU credit — buy credit first")?;
+        let want = (ceiling - have).min(purse.remaining_coins());
+        if want == 0 && notes.is_empty() {
+            return Err("no TOKU credit — buy credit first".into());
+        }
+        if want > 0 {
+            // `expiration − 1 day`, the same spend date every other payment uses.
+            let spend_date = purse.expiration_date().saturating_sub(86_400);
+            let mut fresh = purse.spend_tender(&plan_coins(want), spend_date)?;
+            notes.append(&mut fresh);
+            let emptied = purse.remaining_coins() == 0;
+            w.coconut_purses[idx] = purse.persist()?;
+            if emptied {
+                w.coconut_purses.remove(idx);
+            }
+        }
+    }
+    if notes.is_empty() {
+        return Err("no TOKU credit — buy credit first".into());
+    }
+    Ok(Tender { notes })
+}
+
+/// Apply a server's verdict: the notes it named are gone, everything else goes back into
+/// the wallet as spares. Returns how many coins were burned.
+fn keep_unburned(w: &mut wallet::Wallet, notes: &[scrai_core::tender::Note], burned: &[usize]) -> u64 {
+    let mut spent = 0u64;
+    for (i, n) in notes.iter().enumerate() {
+        if burned.contains(&i) {
+            spent += n.coins;
+            continue;
+        }
+        match serde_json::to_value(n) {
+            Ok(v) => w.spare_notes.push(v),
+            Err(e) => log::warn!("[tender] could not keep an unburned note: {e}"),
+        }
+    }
+    spent
+}
+
+/// Coins lying on this device: unspent book coins plus notes already taken out of a book.
+fn coin_value_toku(w: &wallet::Wallet) -> u64 {
+    use scrai_core::coconut::COIN_TOKU;
+    let in_books: u64 = w
+        .coconut_purses
+        .iter()
+        .filter_map(|j| scrai_core::purse::Purse::restore(j).ok())
+        .map(|p| p.remaining_coins())
+        .sum();
+    let in_notes: u64 = w
+        .spare_notes
+        .iter()
+        .filter_map(|v| serde_json::from_value::<scrai_core::tender::Note>(v.clone()).ok())
+        .map(|n| n.coins)
+        .sum();
+    (in_books + in_notes).saturating_mul(COIN_TOKU)
+}
+
+/// Build the coin-paid chat request — or resume the one that never got an answer. The
+/// notes are spent out of the purse HERE, so the wallet is persisted before returning:
+/// a crash between this and the send leaves the tender recorded, never the coins in limbo.
+#[allow(clippy::too_many_arguments, non_snake_case)]
+fn coin_request(
+    dir: &std::path::Path,
+    model: &str,
+    messages: &Value,
+    maxTokens: Option<u64>,
+    live: Option<bool>,
+    thinkingBudget: Option<u64>,
+    imageSize: &Option<String>,
+) -> Result<(Value, Vec<scrai_core::tender::Note>, bool), String> {
+    let mut w = wallet::load(dir);
+    // An unanswered tender is re-sent VERBATIM. Its coins are already spent, so building
+    // a fresh request would pay twice for one answer; the server replays from its cache.
+    if let Some(pt) = w.pending_tender.clone() {
+        let notes: Vec<scrai_core::tender::Note> = pt
+            .notes
+            .iter()
+            .filter_map(|v| serde_json::from_value(v.clone()).ok())
+            .collect();
+        if notes.len() == pt.notes.len() {
+            return Ok((pt.request, notes, true));
+        }
+        log::warn!("[tender] a pending tender could not be read back — starting a fresh one");
+        w.pending_tender = None;
+    }
+    let tender = build_tender(&mut w, tender_ceiling_coins(model, messages, maxTokens))?;
+    let mut req = json!({
+        "v": PROTO, "kind": "chat", "id": rand_hex(16), "model": model, "messages": messages,
+        "stream": false, "chunkedImages": true,
+        "tender": serde_json::to_value(&tender).map_err(|e| e.to_string())?,
+    });
+    if let Some(mt) = maxTokens {
+        req["maxTokens"] = json!(mt);
+    }
+    if live.unwrap_or(false) {
+        req["live"] = json!(true);
+    }
+    if let Some(tb) = thinkingBudget {
+        req["thinkingBudget"] = json!(tb);
+    }
+    if let Some(sz) = imageSize {
+        req["imageSize"] = json!(sz);
+    }
+    w.pending_tender = Some(wallet::PendingTender {
+        request: req.clone(),
+        notes: tender
+            .notes
+            .iter()
+            .map(|n| serde_json::to_value(n).unwrap_or(Value::Null))
+            .collect(),
+    });
+    wallet::save(dir, &w)?;
+    Ok((req, tender.notes, false))
+}
+
+/// The server answered: put the notes it did NOT burn back in the wallet and close the
+/// retry window. `burned` absent (an error reply) means nothing was burned at all.
+fn coin_settle(dir: &std::path::Path, notes: &[scrai_core::tender::Note], resp: &Value) -> Result<(), String> {
+    let burned: Vec<usize> = resp
+        .get("burned")
+        .and_then(|b| serde_json::from_value(b.clone()).ok())
+        .unwrap_or_default();
+    let mut w = wallet::load(dir);
+    let spent = keep_unburned(&mut w, notes, &burned);
+    w.pending_tender = None;
+    wallet::save(dir, &w)?;
+    log::info!("[tender] {spent} coin(s) burned, {} kept", notes.len() - burned.len());
+    Ok(())
+}
+
 /// Redeem `coins` from the stored coconut credential into the ACTIVE session's TOKU
 /// balance (the credit `chat` draws down). Durable: the advanced purse is persisted
 /// BEFORE the payment leaves the device, so a crash/retry can't roll the counter back
@@ -955,12 +1151,7 @@ fn first_funded_purse(purses: &[String]) -> Option<(usize, scrai_core::purse::Pu
 
 fn coconut_held_toku(app: &AppHandle) -> u64 {
     let Ok(dir) = data_dir(app) else { return 0 };
-    let w = wallet::load(&dir);
-    w.coconut_purses
-        .iter()
-        .filter_map(|pj| scrai_core::purse::Purse::restore(pj).ok())
-        .map(|p| p.remaining_coins() * scrai_core::coconut::COIN_TOKU)
-        .sum()
+    coin_value_toku(&wallet::load(&dir))
 }
 
 /// Manually redeem coconut coins into the session balance (chat also does this
@@ -1936,6 +2127,29 @@ async fn chat_impl(
     // already processed it answers by replay (cached reply, no second charge); one it
     // never received processes it once. Anything else builds a fresh, freshly-signed
     // request (which also covers a retry after the pending was cleared, e.g. a restart).
+    // Coins instead of a session: the request carries a tender and no signature at all.
+    // The unburned notes come back in `coin_settle` once the server has answered.
+    if coin_chat_enabled() {
+        let (req, notes, resumed) = coin_request(&dir, &model, &messages, maxTokens, live, thinkingBudget, &imageSize)?;
+        if resumed {
+            log::info!("[tender] resuming an unanswered tender verbatim");
+        }
+        let sent_app = app.clone();
+        let reply = transport
+            .round_trip_raw_notify(&srv, &req, surbs, chat_timeout_ms, move || {
+                let _ = sent_app.emit("chat-sent", ());
+            })
+            .await?;
+        // A delivered reply — answer or refusal — settles the tender either way: an error
+        // reply burned nothing, so every note goes back into the wallet.
+        coin_settle(&dir, &notes, &reply)?;
+        if let Some(e) = reply.get("error").and_then(|e| e.as_str()) {
+            return Err(e.to_string());
+        }
+        let resp = fetch_staged_images(&app, &transport, &srv, &sk.session_id, reply).await?;
+        return Ok(paid_chat_reply(&app, &resp, Value::Null));
+    }
+
     let req = match (retry.unwrap_or(false), transport.pending_chat(&sk.session_id).await) {
         (true, Some(prev)) => prev,
         _ => {
@@ -3799,5 +4013,78 @@ mod c3_tests {
         assert!(!is_openable_url("https:///nohost"));
         assert!(!is_openable_url("https://?q=1"));
         assert!(!is_openable_url(""));
+    }
+}
+
+#[cfg(test)]
+mod tender_tests {
+    use super::*;
+    use scrai_core::coconut::testkit;
+
+    fn wallet_with_a_book() -> (wallet::Wallet, u64) {
+        let fk = testkit::funded();
+        let purse = fk.new_purse();
+        let coins = purse.remaining_coins();
+        let mut w = wallet::Wallet::default();
+        w.coconut_purses.push(purse.persist().unwrap());
+        (w, coins)
+    }
+
+    #[test]
+    fn a_tender_is_minted_once_and_its_leftovers_pay_for_the_next_request() {
+        let (mut w, coins) = wallet_with_a_book();
+        assert!(coins >= 20, "the testkit book has {coins} coins");
+
+        // First request: nothing spare yet, so the notes come out of the book.
+        let t1 = build_tender(&mut w, 7).unwrap();
+        assert_eq!(t1.total_coins(), 7);
+        assert_eq!(t1.notes.iter().map(|n| n.coins).collect::<Vec<_>>(), vec![1, 2, 4]);
+        let left_in_book = scrai_core::purse::Purse::restore(&w.coconut_purses[0]).unwrap().remaining_coins();
+        assert_eq!(left_in_book, coins - 7, "the purse advanced by exactly the tender");
+        assert!(w.spare_notes.is_empty(), "nothing is spare while the tender is out");
+
+        // The server burned the 2-coin note; the other two come home.
+        let burned = vec![1usize];
+        assert_eq!(keep_unburned(&mut w, &t1.notes, &burned), 2);
+        assert_eq!(w.spare_notes.len(), 2);
+
+        // Second request, small enough for the spares: the book is not touched again.
+        let t2 = build_tender(&mut w, 5).unwrap();
+        assert_eq!(t2.total_coins(), 5, "1 + 4 that came back");
+        assert_eq!(
+            scrai_core::purse::Purse::restore(&w.coconut_purses[0]).unwrap().remaining_coins(),
+            left_in_book,
+            "spares are spent before a fresh coin is taken out of a book"
+        );
+        assert!(w.spare_notes.is_empty());
+    }
+
+    #[test]
+    fn a_tender_tops_the_spares_up_out_of_the_book_when_they_fall_short() {
+        let (mut w, _) = wallet_with_a_book();
+        let t1 = build_tender(&mut w, 3).unwrap();
+        keep_unburned(&mut w, &t1.notes, &[]); // nothing burned: 1 + 2 are spare
+        assert_eq!(w.spare_notes.len(), 2);
+
+        let t2 = build_tender(&mut w, 10).unwrap();
+        assert!(t2.total_coins() >= 10, "at least the ceiling: {}", t2.total_coins());
+        // the spares are in there, plus a fresh plan for the shortfall
+        assert!(t2.notes.len() > 2);
+    }
+
+    #[test]
+    fn a_wallet_without_credit_cannot_tender() {
+        let mut w = wallet::Wallet::default();
+        assert!(build_tender(&mut w, 7).is_err());
+    }
+
+    #[test]
+    fn the_ceiling_stays_inside_its_bounds() {
+        let msgs = json!([{ "role": "user", "content": "hi" }]);
+        let c = tender_ceiling_coins("gemini-3.5-flash", &msgs, Some(1000));
+        assert!((TENDER_MIN_COINS..=TENDER_MAX_COINS).contains(&c), "{c}");
+        let long = json!([{ "role": "user", "content": "x".repeat(400_000) }]);
+        let c = tender_ceiling_coins("gemini-3.5-flash", &long, Some(100_000));
+        assert_eq!(c, TENDER_MAX_COINS, "a huge request is capped, not unbounded");
     }
 }

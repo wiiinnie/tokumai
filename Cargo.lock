@@ -9077,6 +9077,7 @@ dependencies = [
  "hex",
  "nym-bls12_381-fork",
  "nym-compact-ecash",
+ "rand 0.8.7",
  "serde",
  "serde_json",
  "sha2 0.10.9",
