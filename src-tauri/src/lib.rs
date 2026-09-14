@@ -107,6 +107,10 @@ const SURBS_TEXT: u32 = 30;
 // pictures now come back as `image.chunk` references fetched with SURBS_SMALL each —
 // see `fetch_staged_images` — so an image chat's own reply is text-sized.)
 const TIMEOUT_MS: u64 = 120_000;
+/// How long a NEW question waits for an older, unanswered tender to be closed. Short on
+/// purpose: the answer is usually already in the server's replay cache, and a tender that
+/// still says nothing stays pending rather than holding up the question in front of it.
+const SETTLE_TIMEOUT_MS: u64 = 30_000;
 /// Timeout for small metadata round trips (catalogue fetch in `state`): these replies
 /// are a few KB and normally arrive in seconds — the generous chat TIMEOUT_MS here is
 /// what once delayed the "server unreachable" verdict by minutes.
@@ -1252,11 +1256,16 @@ fn coin_request(
     live: Option<bool>,
     thinkingBudget: Option<u64>,
     imageSize: &Option<String>,
+    resume: bool,
 ) -> Result<(Value, Vec<scrai_core::tender::Note>, bool), String> {
     let mut w = wallet::load(dir);
-    // An unanswered tender is re-sent VERBATIM. Its coins are already spent, so building
-    // a fresh request would pay twice for one answer; the server replays from its cache.
-    if let Some(pt) = w.pending_tender.clone() {
+    // A RETRY re-sends the unanswered tender VERBATIM. Its coins are already spent, so
+    // building a fresh request would pay twice for one answer; the server replays from
+    // its cache. A NEW question must never take this path: the replay cache is keyed on
+    // the tender, so re-sending it would answer the new question with the old answer —
+    // which is exactly what happened on 2026-09-14, when "test" came back as a picture.
+    if resume {
+        if let Some(pt) = w.pending_tenders.last().cloned() {
         let notes: Vec<scrai_core::tender::Note> = pt
             .notes
             .iter()
@@ -1265,8 +1274,9 @@ fn coin_request(
         if notes.len() == pt.notes.len() {
             return Ok((pt.request, notes, true));
         }
-        log::warn!("[tender] a pending tender could not be read back — starting a fresh one");
-        w.pending_tender = None;
+            log::warn!("[tender] a pending tender could not be read back — starting a fresh one");
+            w.pending_tenders.pop();
+        }
     }
     let keys = epoch_keys(dir, srv).ok_or("the server's issuing keys are not on this device yet — check for credit first")?;
     let tender = build_tender(&mut w, &keys, tender_ceiling_coins(model, messages, maxTokens, thinkingBudget, imageSize.as_deref()))?;
@@ -1287,7 +1297,7 @@ fn coin_request(
     if let Some(sz) = imageSize {
         req["imageSize"] = json!(sz);
     }
-    w.pending_tender = Some(wallet::PendingTender {
+    w.pending_tenders.push(wallet::PendingTender {
         request: req.clone(),
         notes: tender
             .notes
@@ -1299,16 +1309,48 @@ fn coin_request(
     Ok((req, tender.notes, false))
 }
 
+/// Close any tender left unanswered by an earlier question — a cancelled request, or one
+/// whose reply was lost. Each is re-sent VERBATIM: the server either replays the answer it
+/// already gave or serves it now, and either way tells us which notes it burned, so the
+/// rest come home. Best effort — one attempt each, and a tender that still gets no reply
+/// stays pending for the next try rather than being written off.
+async fn settle_pending_tenders(app: &AppHandle, transport: &Transport, srv: &str) {
+    let Ok(dir) = data_dir(app) else { return };
+    let pending = wallet::load(&dir).pending_tenders;
+    for pt in pending {
+        let Some(id) = pt.request.get("id").and_then(|i| i.as_str()).map(|s| s.to_string()) else { continue };
+        let notes: Vec<scrai_core::tender::Note> =
+            pt.notes.iter().filter_map(|v| serde_json::from_value(v.clone()).ok()).collect();
+        if notes.len() != pt.notes.len() {
+            log::warn!("[tender] a pending tender could not be read back — dropping it");
+            let mut w = wallet::load(&dir);
+            w.pending_tenders.retain(|p| p.request.get("id").and_then(|i| i.as_str()) != Some(id.as_str()));
+            let _ = wallet::save(&dir, &w);
+            continue;
+        }
+        log::info!("[tender] settling an unanswered tender before the new question");
+        match transport.round_trip_raw_notify(srv, &pt.request, SURBS_TEXT, SETTLE_TIMEOUT_MS, || {}).await {
+            Ok(reply) => {
+                if let Err(e) = coin_settle(&dir, &id, &notes, &reply) {
+                    log::warn!("[tender] settling failed: {e}");
+                }
+            }
+            Err(e) => log::warn!("[tender] an unanswered tender is still unanswered: {e}"),
+        }
+    }
+}
+
 /// The server answered: put the notes it did NOT burn back in the wallet and close the
 /// retry window. `burned` absent (an error reply) means nothing was burned at all.
-fn coin_settle(dir: &std::path::Path, notes: &[scrai_core::tender::Note], resp: &Value) -> Result<(), String> {
+fn coin_settle(dir: &std::path::Path, req_id: &str, notes: &[scrai_core::tender::Note], resp: &Value) -> Result<(), String> {
     let burned: Vec<usize> = resp
         .get("burned")
         .and_then(|b| serde_json::from_value(b.clone()).ok())
         .unwrap_or_default();
     let mut w = wallet::load(dir);
     let spent = keep_unburned(&mut w, notes, &burned);
-    w.pending_tender = None;
+    // Only the tender this reply answers: another one may still be outstanding.
+    w.pending_tenders.retain(|p| p.request.get("id").and_then(|i| i.as_str()) != Some(req_id));
     wallet::save(dir, &w)?;
     log::info!("[tender] {spent} coin(s) burned, {} kept", notes.len() - burned.len());
     Ok(())
@@ -2666,7 +2708,15 @@ async fn chat_impl(
     // Coins instead of a session: the request carries a tender and no signature at all.
     // The unburned notes come back in `coin_settle` once the server has answered.
     if coin_chat_enabled(&dir) {
-        let (req, notes, resumed) = coin_request(&dir, &srv, &model, &messages, maxTokens, live, thinkingBudget, &imageSize)?;
+        // A new question first CLOSES whatever is still open. An unanswered tender holds
+        // coins that are already spent, and the server answers an identical tender from
+        // its replay cache — so carrying one into a new question would answer the new
+        // question with the old answer (2026-09-14: "test" came back as a picture).
+        if !retry.unwrap_or(false) {
+            settle_pending_tenders(&app, &transport, &srv).await;
+        }
+        let (req, notes, resumed) =
+            coin_request(&dir, &srv, &model, &messages, maxTokens, live, thinkingBudget, &imageSize, retry.unwrap_or(false))?;
         if resumed {
             log::info!("[tender] resuming an unanswered tender verbatim");
         }
@@ -2678,7 +2728,8 @@ async fn chat_impl(
             .await?;
         // A delivered reply — answer or refusal — settles the tender either way: an error
         // reply burned nothing, so every note goes back into the wallet.
-        coin_settle(&dir, &notes, &reply)?;
+        let req_id = req.get("id").and_then(|i| i.as_str()).unwrap_or_default().to_string();
+        coin_settle(&dir, &req_id, &notes, &reply)?;
         if books_on_device(&wallet::load(&dir)) < LOW_WATER_BOOKS {
             spawn_refill(&app);
         }

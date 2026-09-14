@@ -106,9 +106,15 @@ pub struct Wallet {
     /// before a single fresh coin is taken out of a book.
     #[serde(default)]
     pub spare_notes: Vec<serde_json::Value>,
-    /// A tender whose answer never arrived — see `PendingTender`.
-    #[serde(default)]
+    /// Legacy single unanswered tender — migrated into `pending_tenders` on load.
+    #[serde(default, skip_serializing)]
     pub pending_tender: Option<PendingTender>,
+    /// Tenders whose answer never arrived — see `PendingTender`. More than one can be
+    /// outstanding: a cancelled request leaves one behind, and the user is free to ask
+    /// something else before it has been settled. Each is settled by re-sending it
+    /// VERBATIM, never by minting fresh coins.
+    #[serde(default)]
+    pub pending_tenders: Vec<PendingTender>,
     /// A batch of coins handed back to the account whose answer never arrived. Same rule
     /// as `pending_tender`: re-send it verbatim, never mint a fresh one.
     #[serde(default)]
@@ -389,6 +395,10 @@ fn load_with_key(data_dir: &Path, key: Option<&[u8; 32]>) -> Wallet {
     // …and its single in-flight withdrawal becomes the first pending one.
     if let Some(p) = w.pending_withdraw.take() {
         w.pending_withdraws.insert(0, p);
+    }
+    // …and its single unanswered tender likewise.
+    if let Some(p) = w.pending_tender.take() {
+        w.pending_tenders.insert(0, p);
     }
     // Migrate a legacy plaintext file to encrypted-at-rest on first load (best effort —
     // if the keychain is down, it stays plaintext and migrates on a later save).
