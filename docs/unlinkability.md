@@ -70,6 +70,15 @@ Built so far:
   and an unanswered tender in the wallet, held credit counts spares. Behind
   `TOKUMAI_COIN_CHAT=1` until the fleet accepts tenders.
 
+**Cut over 2026-09-14.** The coin is 0.1 ¢ and a ticketbook is 1000 coins ($1, unchanged).
+The book size lives in the authority keys, so this was a key rotation: the old authority was
+moved aside and a fresh 1000-coin one bootstrapped. Every ticketbook held on a device at that
+moment became worthless — accepted, we are not live. Server-side entitlement and session
+balances are in TOKU and were untouched. Two measured consequences: the epoch material grew
+from 25 KB to 207 KB (now cached on disk, SURB budget 64 → 130, so an app older than 0.6.4
+may struggle to withdraw), and a tender carries the ceiling rather than the cost, so an
+ordinary text prompt puts ~19 coins ≈ 9 KB on the table.
+
 Still to do for D: the coin denomination change (see below), prices quoted in coins, the UI
 (balance is "coins on this device", no session line), lazy $1 books with a spare, expiry
 return, removing the session path and the trickle.
