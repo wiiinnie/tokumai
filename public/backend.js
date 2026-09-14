@@ -126,6 +126,7 @@ const httpBackend = {
   serverIdentities: () => Promise.resolve([]),
   setEntryGateway: () => Promise.resolve({ entry_gateway: null }),
   setEntryRandom: (on) => Promise.resolve({ entry_gateway: null, entry_random: !!on }),
+  setCoinChat: (on) => Promise.resolve({ coinChat: !!on }),
   setMixnetPerf: () => Promise.resolve({}), // dev backend has no mixnet
   // nosemgrep: scrai-js-window-open -- dev bridge only; the app routes through open_external
   openExternal: (url) => { window.open(url, "_blank", "noopener"); return Promise.resolve(); },
@@ -219,6 +220,7 @@ const tauriBackend = (invoke) => ({
   serverIdentities: () => invoke("server_identities"),
   setEntryGateway: (id) => invoke("set_entry_gateway", { id }),
   setEntryRandom: (on) => invoke("set_entry_random", { on: !!on }),
+  setCoinChat: (on) => invoke("set_coin_chat", { on: !!on }),
   setMixnetPerf: (coverMs, mixMs, sendMs, continuous) => invoke("set_mixnet_perf", { coverMs, mixMs, sendMs, continuous }),
   openExternal: (url) => invoke("open_external", { url }),
   saveImage: (dataB64, filename) => invoke("save_image", { data: dataB64, filename }),
@@ -330,6 +332,7 @@ export const Backend = {
   serverIdentities: () => pick("serverIdentities"),
   setEntryGateway: (id) => pick("setEntryGateway", id),
   setEntryRandom: (on) => pick("setEntryRandom", on),
+  setCoinChat: (on) => pick("setCoinChat", on),
   setMixnetPerf: (coverMs, mixMs, sendMs, continuous) => pick("setMixnetPerf", coverMs, mixMs, sendMs, continuous),
   openExternal: (url) => pick("openExternal", url),
   vaultList: () => pick("vaultList"),

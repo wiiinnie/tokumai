@@ -1850,7 +1850,9 @@ mod tests {
         let mut replies: std::collections::HashMap<String, (u64, Vec<u8>, std::time::Instant)> = std::collections::HashMap::new();
         let pricing = coin_pricing();
 
-        let (req, tender) = coin_chat(&mut purse, 7, fk.spend_date());
+        // 31 coins = 3.1 ¢ — enough to cover the thinking budget alone, which a smaller
+        // tender is not (that path is the "not enough coins" test above).
+        let (req, tender) = coin_chat(&mut purse, 31, fk.spend_date());
         let Reserved::Proceed(_p) = reserve(&req, &mut sessions, &mut quorum, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH)
         else {
             panic!("first request reserves");

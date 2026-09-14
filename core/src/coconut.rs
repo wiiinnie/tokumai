@@ -35,9 +35,19 @@ use ce::setup::Parameters;
 // ---- economic parameters (docs/federation-params.md) ----------------------
 /// 10 USD = 1_000_000 TOKU (existing peg).
 pub const TOKU_PER_USD: u64 = 100_000;
-/// One ecash coin = 1000 TOKU = $0.01. Coarse on purpose (one serial per coin).
-pub const COIN_TOKU: u64 = 1_000;
-/// Redeem ~$1 (100 coins) into a session at a time, uniform across users.
+/// One ecash coin = 100 TOKU = $0.001 (0.1 ¢).
+///
+/// The coin is the unit a request is rounded up to, so it has to be smaller than the
+/// cheapest thing anyone buys — a text answer costs 0.2–0.3 ¢, and at the old 1 ¢ coin
+/// that was a threefold overcharge. It cannot be smaller either: a payment costs about
+/// 490 bytes and 4 ms of server CPU PER COIN, and a request has to tender its ceiling,
+/// not its cost (core/src/tender.rs). At 0.1 ¢ an ordinary text prompt tenders ~8 coins
+/// (4 KB, 32 ms); at 0.01 ¢ it would tender 80 (40 KB, 320 ms). Measured 2026-09-13/14.
+pub const COIN_TOKU: u64 = 100;
+/// Redeem $0.10 (100 coins) into a session at a time, uniform across users. Kept at 100
+/// coins rather than a whole dollar because a payment grows with its coin count: a
+/// 1000-coin redeem would be half a megabyte over the mixnet. The session path is on its
+/// way out anyway (docs/unlinkability.md, block D).
 pub const REDEEM_CHUNK_COINS: u64 = 100;
 /// Ticket type / denomination class (single class for now).
 pub const DEFAULT_T_TYPE: u8 = 1;
@@ -292,9 +302,10 @@ mod tests {
 
     #[test]
     fn book_coins_maps_tiers() {
-        // $10 = 1_000_000 TOKU → 1000 coins of $0.01
-        assert_eq!(book_coins(1_000_000), 1_000);
-        assert_eq!(book_coins(500_000), 500); // $5
+        // $10 = 1_000_000 TOKU → 10,000 coins of 0.1 ¢
+        assert_eq!(book_coins(1_000_000), 10_000);
+        assert_eq!(book_coins(500_000), 5_000); // $5
+        assert_eq!(book_coins(100_000), 1_000); // $1 — one ticketbook
     }
 }
 

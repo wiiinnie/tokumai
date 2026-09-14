@@ -27,7 +27,7 @@ use scrai_core::pricing::PricingTable;
 use scrai_core::quorum::QuorumStore;
 use scrai_core::session::SessionStore;
 
-// One issued ticketbook = 100 coins × 1000 TOKU = 100,000 TOKU = $1, the smallest
+// One issued ticketbook = 1000 coins × 100 TOKU = 100,000 TOKU = $1, the smallest
 // thing this server sells. Every tier is a whole number of books ($5 = 5, $50 = 50).
 //
 // It was 500 ($5) on mainnet and 100 on testnet, and that split does not survive the
@@ -41,7 +41,12 @@ use scrai_core::session::SessionStore;
 // baked into the authority keys, so changing it needs a fresh bootstrap and invalidates
 // every purse clients hold. (Operator decision, 2026-09-05, taken while bootstrapping
 // the mainnet authority so it cost nothing.)
-const TICKETBOOK_COINS: u64 = 100;
+/// Coins per ticketbook: 1000 × 0.1 ¢ = $1. The book VALUE is what matters for how often
+/// the account side has to be asked for another one (about every 300 text answers), and a
+/// rarer account call is a weaker timing signal. The size also fixes the epoch material
+/// every client downloads once per epoch — 1000 coins ≈ a 207 KB keys reply, which is why
+/// that material is cached on disk rather than per app run.
+const TICKETBOOK_COINS: u64 = 1_000;
 
 /// Coins per ticketbook. Baked into the authority keys, so it is checked against the
 /// persisted authority at boot (see `load_or_bootstrap`).

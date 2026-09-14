@@ -88,8 +88,10 @@ const PROTO: u64 = 1;
 const SURBS_SMALL: u32 = 8;
 /// The catalogue (a few KB).
 const SURBS_META: u32 = 16;
-/// Coconut `Keys` (~109 KB ≈ 55 packets) — fetched once per epoch and cached (`keys_cache`).
-const SURBS_KEYS: u32 = 64;
+/// Coconut `Keys` — the epoch material, ~207 KB at a thousand coins per book (measured
+/// 2026-09-14), so ~105 packets. Fetched once per epoch and then cached on disk, which is
+/// what keeps this out of the way of the first answer after a start.
+const SURBS_KEYS: u32 = 130;
 /// One staged picture chunk (96 KB base64 ≈ 50 packets).
 const SURBS_CHUNK: u32 = 64;
 /// `staged_download` key for the unsigned (free-model) chat path, which has no session.
@@ -663,13 +665,28 @@ fn keys_cache() -> &'static std::sync::Mutex<std::collections::HashMap<String, (
 }
 
 /// Fetch (or reuse) the federation keys for `srv`.
-async fn federation_keys(t: &Transport, srv: &str) -> Result<scrai_core::federation::FedResponse, String> {
+async fn federation_keys(t: &Transport, srv: &str, dir: &Path) -> Result<scrai_core::federation::FedResponse, String> {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) as u32;
-    let cached = keys_cache().lock().ok().and_then(|c| c.get(srv).cloned());
     // Valid while the spend date the app uses (expiration − 1 day) is still ahead.
-    if let Some((exp, v)) = cached {
-        if now + 2 * 86_400 < exp {
-            if let Ok(r) = serde_json::from_value::<scrai_core::federation::FedResponse>(v) {
+    let fresh = |exp: u32| now + 2 * 86_400 < exp;
+    let parse = |v: Value| serde_json::from_value::<scrai_core::federation::FedResponse>(v).ok();
+    if let Some((exp, v)) = keys_cache().lock().ok().and_then(|c| c.get(srv).cloned()) {
+        if fresh(exp) {
+            if let Some(r) = parse(v) {
+                return Ok(r);
+            }
+        }
+    }
+    // Then the disk. At a thousand coins per book this material is ~200 KB, so fetching it
+    // once per app start would put a fifth of a megabyte through the mixnet before the
+    // first answer. It changes only when the authority rotates, which shows up as a new
+    // expiration date — so a stale file is simply ignored, never trusted.
+    if let Some((exp, v)) = read_keys_file(dir, srv) {
+        if fresh(exp) {
+            if let Some(r) = parse(v.clone()) {
+                if let Ok(mut c) = keys_cache().lock() {
+                    c.insert(srv.to_string(), (exp, v));
+                }
                 return Ok(r);
             }
         }
@@ -677,6 +694,7 @@ async fn federation_keys(t: &Transport, srv: &str) -> Result<scrai_core::federat
     let resp = fed_call(t, srv, scrai_core::federation::FedRequest::Keys).await?;
     if let scrai_core::federation::FedResponse::Keys { expiration_date, .. } = &resp {
         if let Ok(v) = serde_json::to_value(&resp) {
+            write_keys_file(dir, srv, *expiration_date, &v);
             if let Ok(mut c) = keys_cache().lock() {
                 c.insert(srv.to_string(), (*expiration_date, v));
             }
@@ -685,10 +703,43 @@ async fn federation_keys(t: &Transport, srv: &str) -> Result<scrai_core::federat
     Ok(resp)
 }
 
+/// Where the epoch material for one server is kept. The file name is a hash of the
+/// address, not the address itself — this directory is not a list of who we talk to.
+fn keys_file(dir: &Path, srv: &str) -> std::path::PathBuf {
+    use sha2::{Digest, Sha256};
+    let h = hex::encode(&Sha256::digest(srv.as_bytes())[..8]);
+    dir.join(format!("keys-{h}.json"))
+}
+
+fn read_keys_file(dir: &Path, srv: &str) -> Option<(u32, Value)> {
+    let raw = std::fs::read_to_string(keys_file(dir, srv)).ok()?;
+    let v: Value = serde_json::from_str(&raw).ok()?;
+    let exp = v.get("expiration_date").and_then(|e| e.as_u64())? as u32;
+    Some((exp, v.get("keys").cloned()?))
+}
+
+fn write_keys_file(dir: &Path, srv: &str, expiration_date: u32, keys: &Value) {
+    let body = json!({ "expiration_date": expiration_date, "keys": keys });
+    match serde_json::to_vec(&body).map_err(|e| e.to_string()).and_then(|b| {
+        std::fs::write(keys_file(dir, srv), b).map_err(|e| e.to_string())
+    }) {
+        Ok(()) => log::info!("[coconut] epoch material cached on disk"),
+        // Not fatal: without the file every start just refetches, as it did before.
+        Err(e) => log::warn!("[coconut] could not cache the epoch material: {e}"),
+    }
+}
+
 fn forget_keys(srv: &str) {
     if let Ok(mut c) = keys_cache().lock() {
         c.remove(srv);
     }
+}
+
+/// Drop the cached epoch material for a server, on disk as well — used where a rotated
+/// authority is suspected, so the retry fetches the new one instead of re-reading the old.
+fn forget_keys_on_disk(dir: &Path, srv: &str) {
+    forget_keys_on_disk(dir, srv);
+    let _ = std::fs::remove_file(keys_file(dir, srv));
 }
 
 /// Full credential withdrawal: fetch keys → blind-withdraw at each authority →
@@ -712,7 +763,7 @@ async fn withdraw_purse(
     }
 
     let (vk, auth_vks, coin_sigs, date_sigs, expiration_date, total_coins) =
-        match federation_keys(t, srv).await? {
+        match federation_keys(t, srv, dir).await? {
             FedResponse::Keys {
                 vk, auth_vks, coin_sigs, date_sigs, expiration_date, total_coins, ..
             } => (vk, auth_vks, coin_sigs, date_sigs, expiration_date, total_coins),
@@ -802,7 +853,7 @@ async fn withdraw_purse(
         let blinded = match resp {
             FedResponse::Withdraw { blinded } => blinded,
             FedResponse::Error { message } => {
-                forget_keys(srv); // a rotated key would surface here — refetch on retry
+                forget_keys_on_disk(dir, srv); // a rotated key would surface here — refetch on retry
                 // "still being issued"/busy: the server is working on this body — resume later.
                 if !(message.contains("retry") || message.contains("busy")) {
                     clear_pending(&message);
@@ -816,7 +867,7 @@ async fn withdraw_purse(
         // garbage share (H3). Flag it so no further book is withdrawn into it.
         let share = coconut::verify_share(vk_auth, user.secret_key(), &blinded, &req_info, i as u64 + 1)
             .map_err(|e| {
-                forget_keys(srv);
+                forget_keys_on_disk(dir, srv);
                 flag_server(srv, &format!("invalid withdrawal share: {e}"));
                 clear_pending("invalid share"); // a resend would get the same garbage back
                 format!("server issued an invalid credential share (server flagged as dishonest): {e}")
@@ -826,7 +877,7 @@ async fn withdraw_purse(
     // aggregate — succeeds ONLY if the server issued valid shares
     let wallet = coconut::aggregate(&vk, user.secret_key(), &shares, &req_info)
         .map_err(|e| {
-            forget_keys(srv);
+            forget_keys_on_disk(dir, srv);
             flag_server(srv, &format!("credential shares don't aggregate: {e}"));
             clear_pending("shares don't aggregate");
             format!("server credential failed to aggregate (server flagged as dishonest): {e}")
@@ -871,22 +922,23 @@ fn wallet_account(app: &AppHandle) -> Result<account::Account, String> {
 // it on for testing against a server that already accepts tenders.
 // ---------------------------------------------------------------------------------------
 
-/// The smallest tender worth sending: 31 coins (3.1 ¢) covers any ordinary text answer, so
-/// most requests never have to mint a second time.
-const TENDER_MIN_COINS: u64 = 31;
-/// …and the largest, so one request can never carry a wallet-sized payload over the mixnet
-/// (≈ 490 bytes per coin). 255 coins ≈ 25 ¢, which covers a 4K picture.
-const TENDER_MAX_COINS: u64 = 255;
+// A payment costs about 490 bytes and 4 ms of server CPU per coin, and a request has to
+// tender its CEILING rather than its cost — so these bounds are what keeps an ordinary
+// chat request small. They are amounts, not coin counts, so they survive a change of
+// denomination: a 0.8 ¢ floor (≈ 4 KB) and a 25 ¢ ceiling (≈ 125 KB, enough for a 4K
+// picture).
+const TENDER_MIN_TOKU: u64 = 800;
+const TENDER_MAX_TOKU: u64 = 25_000;
 
-fn coin_chat_enabled() -> bool {
-    dev_env("COIN_CHAT").as_deref() == Some("1")
+fn coin_chat_enabled(dir: &Path) -> bool {
+    dev_env("COIN_CHAT").as_deref() == Some("1") || wallet::load(dir).coin_chat
 }
 
 /// How many coins to put on the table for this request: the client's own worst-case
 /// estimate with headroom, clamped. Tendering too much costs nothing but bytes (unburned
 /// notes return); tendering too little makes the server cap the answer.
 fn tender_ceiling_coins(model: &str, messages: &Value, max_tokens: Option<u64>) -> u64 {
-    use scrai_core::billing::{compute_billing, estimate_tokens, TokenUsage};
+    use scrai_core::billing::{compute_billing, TokenUsage};
     use scrai_core::coconut::COIN_TOKU;
     use scrai_core::pricing::PricingTable;
     let est = (|| {
@@ -895,19 +947,30 @@ fn tender_ceiling_coins(model: &str, messages: &Value, max_tokens: Option<u64>) 
         if price.fallback {
             return None;
         }
-        let input = messages_plaintext(messages)?;
-        let usage = TokenUsage {
-            input: estimate_tokens(input.chars().count() as u64),
-            output: max_tokens.unwrap_or(4096),
-            ..Default::default()
-        };
+        // Count input the way the SERVER's ceiling does — one token per character, plus a
+        // flat budget per attachment. Our own fair-price check uses chars / 4, which is
+        // closer to the truth but four times SMALLER: tendering against that would leave
+        // every long prompt short of the server's ceiling and get its answer capped.
+        let input: u64 = messages
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .map(|m| {
+                        let text = m.get("content").and_then(|c| c.as_str()).unwrap_or("").len() as u64;
+                        let atts = m.get("attachments").and_then(|x| x.as_array()).map(|x| x.len()).unwrap_or(0) as u64;
+                        text + atts * 4096
+                    })
+                    .sum()
+            })
+            .unwrap_or(0);
+        let usage = TokenUsage { input, output: max_tokens.unwrap_or(4096), ..Default::default() };
         Some(compute_billing(&price, &usage, CLIENT_RETAIL_MARGIN, 1, true).price_toku)
     })()
     .unwrap_or(0);
-    // Double the estimate: the server's margin may be higher than ours, and an answer that
-    // gets capped for want of a coin is a worse outcome than a few unused notes.
-    let coins = est.saturating_mul(2).div_ceil(COIN_TOKU);
-    coins.clamp(TENDER_MIN_COINS, TENDER_MAX_COINS)
+    // Half again on top: the server's margin may be higher than the one bundled here, and
+    // an answer capped for want of one coin is worse than a few notes that come home.
+    let toku = est.saturating_mul(3) / 2;
+    toku.clamp(TENDER_MIN_TOKU, TENDER_MAX_TOKU).div_ceil(COIN_TOKU)
 }
 
 /// Assemble a tender worth at least `ceiling` coins: spare notes first, then — only if
@@ -1319,6 +1382,7 @@ async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<V
         // Developer diagnostics (cost audit, upload readout, dev dials) exist only in a
         // debug build — a shipped binary never shows the Developer section.
         "devBuild": cfg!(debug_assertions),
+        "coinChat": w.coin_chat,
         "appVersion": app_version(),
         "serverVersion": server_version,
         "storefront": ios_storefront(),
@@ -2129,7 +2193,7 @@ async fn chat_impl(
     // request (which also covers a retry after the pending was cleared, e.g. a restart).
     // Coins instead of a session: the request carries a tender and no signature at all.
     // The unburned notes come back in `coin_settle` once the server has answered.
-    if coin_chat_enabled() {
+    if coin_chat_enabled(&dir) {
         let (req, notes, resumed) = coin_request(&dir, &model, &messages, maxTokens, live, thinkingBudget, &imageSize)?;
         if resumed {
             log::info!("[tender] resuming an unanswered tender verbatim");
@@ -2873,6 +2937,17 @@ async fn set_entry_gateway(
 
 /// "Use random gateway" on/off. On: forget the pinned gateway, a random directory node on
 /// every connect. Off: pin one of the operator's gateways again (the picker can change it).
+/// Developer switch: pay chats with coins instead of a session balance.
+#[tauri::command]
+fn set_coin_chat(app: AppHandle, on: bool) -> Result<Value, String> {
+    let dir = data_dir(&app)?;
+    let mut w = wallet::load(&dir);
+    w.coin_chat = on;
+    wallet::save(&dir, &w)?;
+    log::info!("[tender] coin-paid chat {}", if on { "on" } else { "off" });
+    Ok(json!({ "coinChat": on }))
+}
+
 #[tauri::command]
 async fn set_entry_random(app: AppHandle, transport: State<'_, Arc<Transport>>, on: bool) -> Result<Value, String> {
     let dir = data_dir(&app)?;
@@ -3895,7 +3970,7 @@ pub fn run() {
             state, local_state, set_server, account_new, account_reveal, account_restore, account_delete, account_migrate_qr,
             invoice, invoice_status, invoice_cancel, invite_check, ocr_scan, pdf_text, pdf_ocr, pdf_pages, collect, redeem, chat,
             smart_available, smart_detect, coconut_redeem,
-            mixnet_route, mixnet_ping, cancel_chat, app_resumed, app_hidden, resume_stats, list_entry_gateways, server_identities, set_entry_gateway, set_entry_random, set_mixnet_perf, buy_close, open_external, save_image, save_file, voucher_redeem,
+            mixnet_route, mixnet_ping, cancel_chat, app_resumed, app_hidden, resume_stats, list_entry_gateways, server_identities, set_entry_gateway, set_entry_random, set_mixnet_perf, buy_close, set_coin_chat, open_external, save_image, save_file, voucher_redeem,
             phrase_backup_get, iap_products, iap_purchase, iap_restore,
             phrase_check_start,
             phrase_check_verify,
@@ -4081,10 +4156,16 @@ mod tender_tests {
     #[test]
     fn the_ceiling_stays_inside_its_bounds() {
         let msgs = json!([{ "role": "user", "content": "hi" }]);
+        use scrai_core::coconut::COIN_TOKU;
         let c = tender_ceiling_coins("gemini-3.5-flash", &msgs, Some(1000));
-        assert!((TENDER_MIN_COINS..=TENDER_MAX_COINS).contains(&c), "{c}");
+        let (lo, hi) = (TENDER_MIN_TOKU / COIN_TOKU, TENDER_MAX_TOKU / COIN_TOKU);
+        assert!((lo..=hi).contains(&c), "{c} coins outside {lo}..={hi}");
+        // A short prompt must stay cheap to carry: ~490 bytes per coin over the mixnet.
+        // Today this is 19 coins ≈ 9 KB for a 1000-token answer; the guard is there to
+        // catch a pricing or headroom change that turns a chat into a wallet-sized upload.
+        assert!(c * 490 < 15_000, "an ordinary request tenders {c} coins ≈ {} bytes", c * 490);
         let long = json!([{ "role": "user", "content": "x".repeat(400_000) }]);
         let c = tender_ceiling_coins("gemini-3.5-flash", &long, Some(100_000));
-        assert_eq!(c, TENDER_MAX_COINS, "a huge request is capped, not unbounded");
+        assert_eq!(c, hi, "a huge request is capped, not unbounded");
     }
 }

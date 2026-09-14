@@ -288,7 +288,7 @@ mod tests {
         let first = redeem(&mut quorum, &mut sessions);
         assert_eq!(first["accepted"], true);
         assert_eq!(first["coins"], 3);
-        assert_eq!(first["balance"], 3 * COIN_TOKU); // 3000 TOKU
+        assert_eq!(first["balance"], 3 * COIN_TOKU); // three coins' worth
 
         // replay the SAME payment → idempotent, no double-credit
         let again = redeem(&mut quorum, &mut sessions);

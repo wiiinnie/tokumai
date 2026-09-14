@@ -1449,6 +1449,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       </div>
       <div class="mpage" data-page="dev">
       <p class="pagelead" id="devSectionNote">Diagnostics for testing. Hidden in release builds.</p>
+      <label class="setrow" id="coinChatRow"><input type="checkbox" id="coinChatChk" data-change="toggleCoinChat"><span><b>Pay with coins, not a session</b><small>Each answer is paid for with blind-signed coins attached to the request — no session, no counter, no signature. The server burns exactly what the answer cost and the rest comes back. Testing only until every platform has it.</small></span></label>
       <label class="setrow" id="devCostRow"><input type="checkbox" id="devCostChk"><span><b>Developer diagnostics</b><small>Master switch for inline developer diagnostics: the per-answer cost/margin audit and the real upload transfer speed (size ÷ transfer time). Everything meant to be removed later lives here — local-only, toggle any time.</small></span></label>
       <div class="mprow" id="dlSizeRow">
         <div class="mptop"><b>Image upload size</b></div>
@@ -1830,6 +1831,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       startTrickle();
       fakePayments = s.fakePayments === true;    // only when the server SAYS so
       devBuild = s.devBuild === true;
+      coinChat = s.coinChat === true;
       if(!devBuild) devCost = false;             // no diagnostics outside a debug build, whatever localStorage says
       if(s.update && s.update.required) showUpdateGate(s.update);
       // Settings footer: app + server version (server absent on the web dev bridge / old servers).
@@ -2649,6 +2651,8 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // dev HTTP bridge: always) — a shipped binary hides the Developer section and never
   // renders the audit, and a release server doesn't even send the provider cost.
   let devBuild = false;
+  // Developer switch: pay each answer with coins instead of a session balance.
+  let coinChat = false;
   // Footer/update-gate version: the build's real version comes from the backend's
   // `state` reply (Tauri package_info / dev bridge package.json) and replaces this
   // fallback on the first status. Codenames per minor series from Howard Marks'
@@ -4331,6 +4335,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     $("grText").checked    = !!g.scanText;
     $("grImages").checked  = !!g.scanImages;
     $("devCostChk").checked = devCost;
+    $("coinChatChk").checked = coinChat;
     $("setStatus").textContent = "";
     ["prCtx","prTopic","prWhite","prReq","prHand"].forEach(id=>{ $(id).onchange = persistSettings; });
     syncRowTint();
@@ -4957,6 +4962,15 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   const TRICKLE_KEY = "tokumai.trickle";
   function trickleOn(){ try{ return localStorage.getItem(TRICKLE_KEY) !== "0"; }catch(_){ return true; } }
   function trickleToggle(){ const el=$("trickleChk"); setTrickle(!!(el && el.checked)); }
+  // Developer: coins instead of a session. The backend keeps the flag in the wallet, so it
+  // survives a restart and works on a phone, where there is no environment to set.
+  async function toggleCoinChat(){
+    const el = $("coinChatChk");
+    coinChat = !!(el && el.checked);
+    try{ await Backend.setCoinChat(coinChat); }
+    catch(e){ coinChat = !coinChat; if(el) el.checked = coinChat; $("setStatus").textContent = "could not switch: " + e; return; }
+    $("setStatus").textContent = "paying with " + (coinChat ? "coins" : "a session balance");
+  }
   function setTrickle(on){ try{ localStorage.setItem(TRICKLE_KEY, on ? "1" : "0"); }catch(_){} if(on) startTrickle(); else stopTrickle(); renderAccount(); renderBal(); }
   function trickleDelayMs(){ const base = Math.max(1, trickleMinutes) * 60000; return Math.round(base * (0.5 + Math.random())); }
   function startTrickle(){ if(trickleTimer || !isTauri()) return; trickleTimer = setTimeout(trickleTick, Math.round(Math.random() * Math.max(1, trickleMinutes) * 60000)); }
@@ -6751,7 +6765,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   function pickModel(i){ selectModelIdx(i); toggleMenu(); }
 
   // expose for inline handlers
-  Object.assign(window,{ toggleGwRandom, pickServerIdentity, trickleToggle, selectIap, loadIap, toggleIapConsent, buyIap, restoreIap, codeTyped,
+  Object.assign(window,{ toggleGwRandom, pickServerIdentity, trickleToggle, toggleCoinChat, selectIap, loadIap, toggleIapConsent, buyIap, restoreIap, codeTyped,
     pickModel, copyPhrase, newChat, openSession, deleteSession, exportSession, toggleMenu, selectModelIdx,
     autogrow, onKey, sendMsg, retryMsg, showHandover, downloadHandover, closeHandover, pickImport, importHandover,
     cancelMsg, resendMsg, showDismissed, retrieveMsg, openConnSheet, closeConnSheet, rebuildRoute, rebuildRouteFromSheet, copyResumeLog, routeDismiss, useOfficialServer, iterateImg,

@@ -104,6 +104,11 @@ pub struct Wallet {
     /// A tender whose answer never arrived — see `PendingTender`.
     #[serde(default)]
     pub pending_tender: Option<PendingTender>,
+    /// Pay chats with coins instead of a session balance (docs/unlinkability.md, block D).
+    /// A Developer-page switch while the fleet still runs the session path; it lives here
+    /// rather than in an environment variable because a phone has no environment to set.
+    #[serde(default)]
+    pub coin_chat: bool,
     /// Every Nym address of the CURRENT server (its multi-identity front doors, from the
     /// catalog reply's `identities`). Same server, same money — so when the one we use
     /// stops answering, the liveness check switches to another without any user action.
