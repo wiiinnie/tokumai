@@ -204,7 +204,7 @@ async fn handle_spend_rejection(
     w.pending_spend = None;
     let mut note = "";
     if is_invalid_credential(&e) {
-        if let Some((idx, purse)) = first_funded_purse(&w.coconut_purses) {
+        if let Some((idx, _purse)) = first_funded_purse(&w.coconut_purses) {
             let server_vk = match fed_call(t, srv, FedRequest::Keys).await {
                 Ok(FedResponse::Keys { vk, .. }) => serde_json::to_string(&vk).ok(),
                 _ => None,
@@ -813,7 +813,9 @@ async fn withdraw_books(
         return Err("this server was flagged as dishonest (invalid credential issuance) — \
                     not withdrawing more into it. Switch servers.".into());
     }
-    let (vk, auth_vks, coin_sigs, date_sigs, expiration_date, total_coins) =
+    // The coin/date material is cached by `federation_keys` itself and lives in EpochKeys,
+    // not in the book — a purse is built from the wallet, the user key, the size and the date.
+    let (vk, auth_vks, _coin_sigs, _date_sigs, expiration_date, total_coins) =
         match federation_keys(t, srv, dir).await? {
             FedResponse::Keys {
                 vk, auth_vks, coin_sigs, date_sigs, expiration_date, total_coins, ..
@@ -2358,10 +2360,23 @@ fn spawn_refill_in(app: &AppHandle, base: u64, spread: u64) {
         let wait = base + (rand::random::<u64>() % spread.max(1));
         tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
         let t = app.state::<Arc<Transport>>().inner().clone();
-        match collect_now(app.clone(), t).await {
-            Ok(v) => log::info!("[coconut] background top-up: {} TOKU", v.get("collected").and_then(|c| c.as_u64()).unwrap_or(0)),
-            Err(e) => log::warn!("[coconut] background top-up failed: {e}"),
-        }
+        let res = collect_now(app.clone(), t).await;
+        // Tell the app it happened. Without this the only refresh was a fixed timer, and a
+        // sweep that draws several books outlives it — the balance on screen stayed stale
+        // until the user pressed "Check for credit" by hand (reported 2026-09-14).
+        let done = match &res {
+            Ok(v) => {
+                log::info!("[coconut] background top-up: {} TOKU", v.get("collected").and_then(|c| c.as_u64()).unwrap_or(0));
+                json!({ "ok": true,
+                        "collected": v.get("collected").and_then(|c| c.as_u64()).unwrap_or(0),
+                        "entitlement": v.get("entitlement").and_then(|c| c.as_u64()).unwrap_or(0) })
+            }
+            Err(e) => {
+                log::warn!("[coconut] background top-up failed: {e}");
+                json!({ "ok": false, "error": e.to_string() })
+            }
+        };
+        let _ = app.emit("top-up", done);
         RUNNING.store(false, Ordering::SeqCst);
     });
 }

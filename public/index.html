@@ -6984,8 +6984,10 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     // used to be awaited here, which kept the boot screen on "connecting" until the
     // account side had built its own mixnet client — half a minute of nothing.
     if(isTauri() && account){
+      // Fire and forget: the "top-up" listener above refreshes the balance when the sweep
+      // is actually done. The timer is only a backstop for a build that never emits.
       try{ Backend.collectLater(); }catch(_){}
-      setTimeout(async ()=>{ try{ await refreshState(); renderBal(); await sweepReceipts(); }catch(_){} }, 12000);
+      setTimeout(async ()=>{ try{ await refreshState(); renderBal(); await sweepReceipts(); }catch(_){} }, 25000);
     }
     // Show the real entry/exit gateways + flags once the route is up.
     if(isTauri()) refreshRoute();
@@ -7024,7 +7026,10 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     });
     // Connect progress from Rust (every reconnect after the first): drives the chip + card.
     if(isTauri()){ try{ Backend.onMixnetPhase(onMixnetPhase); }catch(_){} try{ Backend.onBuyPhase(onBuyPhase); }catch(_){}
-      try{ Backend.onCoinsReturn(p=>{ if(!p) return; returnPct = Math.max(returnPct, Number(p.percent)||0); returnDone = Number(p.credited)||returnDone; if(returning) renderAccount(); }); }catch(_){} }
+      try{ Backend.onCoinsReturn(p=>{ if(!p) return; returnPct = Math.max(returnPct, Number(p.percent)||0); returnDone = Number(p.credited)||returnDone; if(returning) renderAccount(); }); }catch(_){}
+      // The background top-up finishes when it finishes — drawing several books takes
+      // longer than any timer we could pick. Refresh on its event instead.
+      try{ Backend.onTopUp(async p=>{ try{ await refreshState(); renderBal(); if($("acctScrim") && $("acctScrim").classList.contains("open")) renderAccount(); if(p && p.ok) await sweepReceipts(); }catch(_){} }); }catch(_){} }
     // Drag & drop files anywhere in the chat column (alternative to the "+").
     const mainEl=$("main");
     if(mainEl){
