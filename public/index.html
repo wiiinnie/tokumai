@@ -1449,6 +1449,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       </div>
       <div class="mpage" data-page="dev">
       <p class="pagelead" id="devSectionNote">Diagnostics for testing. Hidden in release builds.</p>
+      <div class="setrow" id="hideDevRow" data-click="hideDev" style="cursor:pointer"><span><b>Hide this section</b><small>Takes the Developer row out of the settings list again. Seven taps on the version line bring it back.</small></span><span class="chev">›</span></div>
       <label class="setrow" id="coinChatRow"><input type="checkbox" id="coinChatChk" data-change="toggleCoinChat"><span><b>Pay with coins, not a session</b><small>Each answer is paid for with blind-signed coins attached to the request — no session, no counter, no signature. The server burns exactly what the answer cost and the rest comes back. Testing only until every platform has it.</small></span></label>
       <label class="setrow" id="devCostRow"><input type="checkbox" id="devCostChk"><span><b>Developer diagnostics</b><small>Master switch for inline developer diagnostics: the per-answer cost/margin audit and the real upload transfer speed (size ÷ transfer time). Everything meant to be removed later lives here — local-only, toggle any time.</small></span></label>
       <div class="mprow" id="dlSizeRow">
@@ -2661,22 +2662,34 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   let devUnlocked = (()=>{ try{ return localStorage.getItem(DEV_TAP_KEY) === "1"; }catch(_){ return false; } })();
   let devTaps = 0, devTapAt = 0;
   function tapVersion(){
+    // Unlocking is one-way. Tapping past seven used to hide it again, which is exactly what
+    // someone does while looking for the feedback — the way back out is the row at the
+    // bottom of the Developer page (`hideDev`).
+    if(devUnlocked){ $("setStatus").textContent = "Developer is already in the settings list"; return; }
     const now = Date.now();
     devTaps = now - devTapAt > 3000 ? 1 : devTaps + 1;
     devTapAt = now;
-    if(devUnlocked){
-      if(devTaps >= 7){ devUnlocked = false; devTaps = 0; try{ localStorage.removeItem(DEV_TAP_KEY); }catch(_){}
-        $("setStatus").textContent = "developer section hidden again"; renderAbout(); }
-      return;
-    }
     if(devTaps >= 7){
       devUnlocked = true; devTaps = 0;
       try{ localStorage.setItem(DEV_TAP_KEY, "1"); }catch(_){}
-      $("setStatus").textContent = "developer section unlocked";
-      renderAbout();
-    } else if(devTaps >= 4){
-      $("setStatus").textContent = (7 - devTaps) + " more";
+      showDevRow();
+      $("setStatus").textContent = "Developer unlocked — it is in the settings list now";
+    } else if(devTaps >= 3){
+      $("setStatus").textContent = (7 - devTaps) + " more tap" + (7 - devTaps === 1 ? "" : "s");
     }
+  }
+  // The Developer row's visibility, applied the moment it changes rather than on the next
+  // time settings are opened.
+  function showDevRow(){
+    const e = $("devCatRow");
+    if(e) e.style.display = (devBuild || devUnlocked) ? "" : "none";
+  }
+  function hideDev(){
+    devUnlocked = false; devTaps = 0;
+    try{ localStorage.removeItem(DEV_TAP_KEY); }catch(_){}
+    showDevRow();
+    navReset("setScrim");
+    $("setStatus").textContent = "Developer hidden — seven taps on the version line bring it back";
   }
   // Footer/update-gate version: the build's real version comes from the backend's
   // `state` reply (Tauri package_info / dev bridge package.json) and replaces this
@@ -4378,8 +4391,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     $("dlSize").oninput = ()=>{ try{ localStorage.setItem("scrai.dev.dlsize", $("dlSize").value); }catch(_){}; showDlVals(); $("setStatus").textContent="applies to your next image"; };
     // Debug builds show it outright; on a release build it takes seven taps on the
     // version line above (`tapVersion`), which is how a phone gets at the test switches.
-    const showDev = devBuild || devUnlocked;
-    { const e=$("devCatRow"); if(e) e.style.display = showDev?"":"none"; }
+    showDevRow();
     openScrim("setScrim");
   }
   function closeSettings(){ $("setScrim").classList.remove("open"); }
@@ -6791,7 +6803,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   function pickModel(i){ selectModelIdx(i); toggleMenu(); }
 
   // expose for inline handlers
-  Object.assign(window,{ toggleGwRandom, pickServerIdentity, trickleToggle, toggleCoinChat, tapVersion, selectIap, loadIap, toggleIapConsent, buyIap, restoreIap, codeTyped,
+  Object.assign(window,{ toggleGwRandom, pickServerIdentity, trickleToggle, toggleCoinChat, tapVersion, hideDev, selectIap, loadIap, toggleIapConsent, buyIap, restoreIap, codeTyped,
     pickModel, copyPhrase, newChat, openSession, deleteSession, exportSession, toggleMenu, selectModelIdx,
     autogrow, onKey, sendMsg, retryMsg, showHandover, downloadHandover, closeHandover, pickImport, importHandover,
     cancelMsg, resendMsg, showDismissed, retrieveMsg, openConnSheet, closeConnSheet, rebuildRoute, rebuildRouteFromSheet, copyResumeLog, routeDismiss, useOfficialServer, iterateImg,
