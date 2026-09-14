@@ -79,9 +79,20 @@ from 25 KB to 207 KB (now cached on disk, SURB budget 64 → 130, so an app olde
 may struggle to withdraw), and a tender carries the ceiling rather than the cost, so an
 ordinary text prompt puts ~19 coins ≈ 9 KB on the table.
 
-Still to do for D: the coin denomination change (see below), prices quoted in coins, the UI
-(balance is "coins on this device", no session line), lazy $1 books with a spare, expiry
-return, removing the session path and the trickle.
+**Carrying the old session balances over (built 2026-09-14).** Credit that sits on the
+session layer has nothing left to spend it, so it must reach the account before that layer
+is deleted. `session.drain`: the session signs "empty me onto account X" — the destination
+is inside the signed message, so the signature cannot be replayed onto another account —
+and the account signs that it is X. Both keys come from one recovery phrase. It lands as
+entitlement and is drawn as books at once. The request is the only one in the app that
+carries a session key and an account key together: it links them at the server while it is
+in flight, nothing about it is stored (the session store holds a balance and a counter,
+never an account), and it is needed once per account. With coins as the payment path the
+"Redeem now" control is gone — it pushed coins ONTO the session layer, which is backwards
+now; the way off a device is "Move credit back to my account".
+
+Still to do for D: prices quoted in coins, expiry return, removing the session path itself
+(and with it `redeem`, the session id in chat, and the moderation strikes that hang on it).
 
 Decided parameters:
 
