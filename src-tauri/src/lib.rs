@@ -1297,6 +1297,15 @@ fn coin_request(
     if let Some(sz) = imageSize {
         req["imageSize"] = json!(sz);
     }
+    // Size and shape of what goes on the wire, so a hang can be told apart from a refusal
+    // without guessing (2026-09-14: an image request was blamed on gateway bandwidth
+    // before the log showed what it actually weighed).
+    log::info!(
+        "[tender] {} notes, {} coins, request {} bytes",
+        tender.notes.len(),
+        tender.notes.iter().map(|n| n.coins).sum::<u64>(),
+        serde_json::to_vec(&req).map(|v| v.len()).unwrap_or(0)
+    );
     w.pending_tenders.push(wallet::PendingTender {
         request: req.clone(),
         notes: tender
