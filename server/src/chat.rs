@@ -506,6 +506,15 @@ pub fn reserve(
         // Notes of different denominations sit side by side, so the budget is the sum of
         // what they are worth — never a coin count times one size.
         let budget_toku = tender.total_toku();
+        // What the client actually put on the table. One line per coin-paid request, from
+        // the side that has to carry it: notes are bounded at MAX_NOTES and each coin costs
+        // ~490 bytes and ~4 ms of pairings, so this is the number that says whether the
+        // denominations are doing their job.
+        println!(
+            "scrai-server: tender {} notes, {} coins, {budget_toku} TOKU",
+            tender.notes.len(),
+            tender.total_coins()
+        );
         // Cap the answer to what the coins cover, so the bill can never exceed the tender.
         let want = max_tokens.unwrap_or_else(default_max_tokens);
         let afford = affordable_tokens(

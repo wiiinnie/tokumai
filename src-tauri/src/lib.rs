@@ -665,12 +665,27 @@ async fn buy_close(app: AppHandle) -> Result<Value, String> {
     Ok(json!({ "closed": true }))
 }
 
+/// How many reply SURBs a federation call has to carry.
+///
+/// The epoch material is ~25 KB — a dozen packets — and the reply can only come back in
+/// SURBs the request brought along. When the request for it grew a second variant
+/// (`KeysFor`, one per denomination) this match did not, so every key fetch went out with
+/// eight SURBs and could not be answered: the app redeemed a code, showed the credit, and
+/// the balance sat still until someone pressed "Check for credit" (2026-09-15).
+fn surbs_for(req: &scrai_core::federation::FedRequest) -> u32 {
+    use scrai_core::federation::FedRequest;
+    match req {
+        FedRequest::Keys | FedRequest::KeysFor { .. } => SURBS_KEYS,
+        _ => SURBS_SMALL,
+    }
+}
+
 async fn fed_call(
     t: &Transport,
     srv: &str,
     req: scrai_core::federation::FedRequest,
 ) -> Result<scrai_core::federation::FedResponse, String> {
-    let surbs = if matches!(req, scrai_core::federation::FedRequest::Keys) { SURBS_KEYS } else { SURBS_SMALL };
+    let surbs = surbs_for(&req);
     let env = json!({
         "v": PROTO, "kind": "coconut", "id": rand_hex(16),
         "fed": serde_json::to_value(&req).map_err(|e| e.to_string())?,
@@ -1190,9 +1205,20 @@ fn build_tender(
     let mut notes: Vec<Note> = Vec::new();
     let mut keep: Vec<Note> = Vec::new();
     let mut have = 0u64;
+    // What the REST of the ceiling would still cost in notes, at the coarsest book this
+    // device actually has. Without the fallback to the fine book this was zero whenever no
+    // coarse book had been drawn — and then small spares filled the table again, which is
+    // how an image edit tendered 3,200 TOKU with 11,000 on the device (2026-09-15).
+    let bulk_book_toku = if coarse_book_toku > 0 {
+        COARSE_TOKU
+    } else if fine_book_coins > 0 {
+        fine_book_coins * COIN_TOKU
+    } else {
+        0
+    };
     for n in spares {
         let rest = ceiling_toku.saturating_sub(have + n.value_toku());
-        let bulk_after = if coarse_book_toku > 0 { plan_coins(rest.div_ceil(COARSE_TOKU)).len() } else { 0 };
+        let bulk_after = if bulk_book_toku > 0 { plan_coins(rest.div_ceil(bulk_book_toku)).len() } else { 0 };
         if have < ceiling_toku && notes.len() + 1 + bulk_after + fine_slots <= MAX_NOTES {
             have += n.value_toku();
             notes.push(n);
@@ -1429,11 +1455,14 @@ fn coin_request(
     }
     // Size and shape of what goes on the wire, so a hang can be told apart from a refusal
     // without guessing (2026-09-14: an image request was blamed on gateway bandwidth
-    // before the log showed what it actually weighed).
-    log::info!(
-        "[tender] {} notes, {} coins, request {} bytes",
+    // before the log showed what it actually weighed). At WARN because a release build —
+    // which is what every phone runs — keeps warn and above, and this is exactly the
+    // number one wants when a request does not arrive.
+    log::warn!(
+        "[tender] {} notes, {} coins, {} TOKU, request {} bytes",
         tender.notes.len(),
         tender.notes.iter().map(|n| n.coins).sum::<u64>(),
+        tender.total_toku(),
         serde_json::to_vec(&req).map(|v| v.len()).unwrap_or(0)
     );
     w.pending_tenders.push(wallet::PendingTender {
@@ -2600,13 +2629,15 @@ async fn collect(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result
 /// NOT block: waiting for it is what made the boot screen sit on "connecting" for half a
 /// minute, because the account side has to bring up its own mixnet client first.
 #[tauri::command]
-fn collect_later(app: AppHandle) -> Result<Value, String> {
+fn collect_later(app: AppHandle, force: Option<bool>) -> Result<Value, String> {
     let dir = data_dir(&app)?;
-    let low = coin_value_toku(&wallet::load(&dir)) < LOW_WATER_TOKU;
-    if low {
+    // `force` is for the moment credit has just been BOUGHT: there is entitlement waiting
+    // whatever the device already holds, so "am I low?" is the wrong question then.
+    let go = force.unwrap_or(false) || coin_value_toku(&wallet::load(&dir)) < LOW_WATER_TOKU;
+    if go {
         spawn_refill_soon(&app);
     }
-    Ok(json!({ "started": low }))
+    Ok(json!({ "started": go }))
 }
 
 /// The body of `collect`, callable from the background top-up as well.
@@ -5013,6 +5044,20 @@ mod tender_tests {
             notes: t.notes.iter().map(|n| serde_json::to_value(n).unwrap()).collect(),
         });
         assert_eq!(coin_value_toku(&w), before, "a tender in flight is not a loss");
+    }
+
+    /// The epoch material is a dozen packets and can only come back in the SURBs the
+    /// request carried. When the key request grew a second variant — one per denomination
+    /// — this choice did not follow, and every key fetch went out with eight SURBs
+    /// (2026-09-15: a redeemed code showed its credit but the balance sat still).
+    #[test]
+    fn every_key_request_carries_a_full_surb_budget() {
+        use scrai_core::coconut::{COARSE_TOKU, COIN_TOKU};
+        use scrai_core::federation::FedRequest;
+        assert_eq!(surbs_for(&FedRequest::Keys), SURBS_KEYS);
+        for d in [COIN_TOKU, COARSE_TOKU] {
+            assert_eq!(surbs_for(&FedRequest::KeysFor { denom_toku: d }), SURBS_KEYS, "denomination {d}");
+        }
     }
 
     #[test]

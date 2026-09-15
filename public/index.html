@@ -2340,7 +2340,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     if(held>0 || entitlement>0){
       $("heldLine").style.display="flex";
       // nosemgrep: scrai-taint-untrusted-to-html -- reviewed 2026-08-30: only formatted numbers + static copy
-      $("heldText").innerHTML = `${esc(formatToku(Math.max(0,balance-held)))} recoverable from your phrase${held>0?` · <span style="color:var(--rust)">${esc(formatToku(held))} on this device only</span>`:``}${entitlement>0?` · ${esc(formatToku(entitlement))} waiting on your account`:``}
+      $("heldText").innerHTML = `${creditSplit()}
         <details class="why"><summary><span class="chev">›</span> What this means</summary>
           <div class="body">Coins on this device are blind-signed <b>cash</b>: not linked to your account, and a recovery phrase does not bring them back. Lose this device and that part is gone — so before you give it away or move to another one, hand them back under <b>Account &amp; recovery → Move credit back to my account</b>.</div>
         </details>`;
@@ -5248,6 +5248,21 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     const t=$("restorePhrase"); if(t) t.value=(text||"").trim();
     acctStatus("scanned ✓ — check the phrase, then tap Restore");
   }
+  // The three places credit can be, in the user's terms. Under coins there is no session
+  // balance any more, so naming "recoverable from your phrase" first was both wrong and
+  // frightening: it read as 0 while the money on the ACCOUNT is exactly what the phrase
+  // brings back (2026-09-15). Say where each part is, and which part the phrase reaches.
+  function creditSplit(){
+    const session = Math.max(0, balance - held);
+    const parts = [];
+    if(held > 0) parts.push(`<span style="color:var(--rust)">${esc(formatToku(held))} on this device only</span>`);
+    if(entitlement > 0) parts.push(`${esc(formatToku(entitlement))} on your account`);
+    if(session > 0) parts.push(`${esc(formatToku(session))} on your old session`);
+    if(!parts.length) return coinChat ? "no credit yet" : "nothing held on this device";
+    const phrase = (entitlement > 0 || session > 0) ? " · your phrase brings the account part back" : "";
+    return parts.join(" · ") + phrase;
+  }
+
   function renderAccount(){
     const b=$("acctBody");
     if(!account){
@@ -5350,7 +5365,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       <div class="fp">${esc(account.fingerprint)}</div>
       <div class="ses">${coinChat ? "paid with coins" : `session #${account.sessionIndex}`} · fingerprint</div>
       <div class="bal">${esc(tokuLine(balance + entitlement))}</div>
-      <div class="held">${esc(formatToku(Math.max(0,balance-held)))} recoverable from your phrase${held>0?` · <span style="color:var(--rust)">${esc(formatToku(held))} on this device only</span>`:` · nothing held on this device`}${entitlement>0?` · ${esc(formatToku(entitlement))} waiting on your account`:``}</div>
+      <div class="held">${creditSplit()}</div>
       ${entitlement>0 && entitlement<bookToku ? `<div class="held" style="color:var(--rust)">Coins are drawn a whole book at a time (${esc(formatToku(bookToku))} TOKU), so this rest waits here until your next top-up. It is on your recovery phrase and cannot be lost.</div>` : ``}
       ${checking
         ? `<div class="checkline busy">↻ Checking<span class="dots"></span> <span class="dim">· over the mixnet</span></div>`
@@ -6122,9 +6137,14 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         // The paid-invoice path has always done both at this exact moment; so does this.
         // Unconditional on purpose: a redeem whose collect was lost last time (crash,
         // dead route) comes back as "already redeemed" with the credit still waiting.
-        let coll=0;
-        try{ coll=Number((await Backend.collect()||{}).collected)||0; }catch(_){}
-        setInviteMsg("good", got>0 ? `redeemed — +${formatToku(got)} TOKU`
+        let coll=0, collectFailed=false;
+        try{ coll=Number((await Backend.collect()||{}).collected)||0; }
+        // A lost collect used to be swallowed here: the code said "redeemed", the balance
+        // did not move, and nothing said why (2026-09-15). Say it, and let the background
+        // top-up finish the job — the "top-up" event refreshes the balance when it lands.
+        catch(_){ collectFailed=true; try{ Backend.collectLater(true); }catch(_){} }
+        setInviteMsg("good", collectFailed ? `redeemed — fetching your coins…`
+                          : got>0 ? `redeemed — +${formatToku(got)} TOKU`
                           : coll>0 ? `already redeemed — +${formatToku(coll)} TOKU collected`
                           : "already redeemed on this account");
         await refreshState(); renderBuyBal(); renderBal();
