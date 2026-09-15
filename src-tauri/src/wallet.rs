@@ -129,11 +129,16 @@ pub struct Wallet {
     /// like it vanished. Refreshed by every account call that learns it.
     #[serde(default)]
     pub entitlement_seen: u64,
-    /// Pay chats with coins instead of a session balance (docs/unlinkability.md, block D).
-    /// A Developer-page switch while the fleet still runs the session path; it lives here
-    /// rather than in an environment variable because a phone has no environment to set.
-    #[serde(default)]
-    pub coin_chat: bool,
+    /// Pay chats with the SESSION balance instead of coins — the way back, not the way.
+    ///
+    /// Stored inverted on purpose. Coins are the payment path (docs/unlinkability.md, block
+    /// D) and the session layer is being removed, so the default has to be "coins"; written
+    /// as `coin_chat: bool` that default would have had to live in a serde attribute, while
+    /// `#[derive(Default)]` — which is what a brand-new wallet is built from — would still
+    /// have produced `false`. Two defaults, disagreeing, on the question of how the app
+    /// takes money. Inverted, both say the same thing.
+    #[serde(default, alias = "session_chat")]
+    pub legacy_session_chat: bool,
     /// Every Nym address of the CURRENT server (its multi-identity front doors, from the
     /// catalog reply's `identities`). Same server, same money — so when the one we use
     /// stops answering, the liveness check switches to another without any user action.

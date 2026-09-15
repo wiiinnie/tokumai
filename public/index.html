@@ -2342,7 +2342,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       // nosemgrep: scrai-taint-untrusted-to-html -- reviewed 2026-08-30: only formatted numbers + static copy
       $("heldText").innerHTML = `${creditSplit()}
         <details class="why"><summary><span class="chev">›</span> What this means</summary>
-          <div class="body">Coins on this device are blind-signed <b>cash</b>: not linked to your account, and a recovery phrase does not bring them back. Lose this device and that part is gone — so before you give it away or move to another one, hand them back under <b>Account &amp; recovery → Move credit back to my account</b>. What sits on your <b>account</b> has no such risk and <b>does not expire</b>: your phrase reaches it from any device.</div>
+          <div class="body">Coins on this device are blind-signed <b>cash</b>: not linked to your account, and a recovery phrase does not bring them back. Lose this device and that part is gone — so before you give it away or move to another one, hand them back under <b>Account &amp; recovery → Return to account balance</b>. What sits on your <b>account</b> has no such risk and <b>does not expire</b>: your phrase reaches it from any device.</div>
         </details>`;
     }
     else $("heldLine").style.display="none";
@@ -5342,10 +5342,12 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         <div class="hh"><span class="amt">${esc(formatToku(held))} TOKU</span><span class="where">on this device only</span></div>
         <p>${coinChat
           ? `Coins are held here, not on your account. A <b>recovery phrase does not bring them back</b> — before you
-             give this device away or move to another one, hand them back under <b>Move credit back to my account</b>.`
+             give this device away or move to another one, send them back.`
           : `Coins are held here, not on your account. A <b>recovery phrase does not bring them back</b>
              — redeeming moves them onto your balance, where it does.`}</p>
-        ${coinChat?``:`
+        ${coinChat ? `<div class="act">
+          <button class="rbtn" data-click="acctNav" data-click-pass="this" data-page="giveback">Return to account balance</button>
+        </div>` : `
         ${redeemPick&&maxD>1?`<div class="rslider">
           <input type="range" id="redeemSlider" min="1" max="${maxD}" value="${pickD}" step="1"
                  data-input="redeemSliderChanged" data-input-pass="value" class="mpslider flat">
@@ -5383,7 +5385,9 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         + `<div class="grouplbl">Keys &amp; devices</div>`
         + (phraseVerified ? "" : row("check","c-danger","⚠","Confirm your recovery phrase","three words from your notes — needed before buying", `<span class="pill warn">to do</span>`))
         + row("phrase","c-key","🔑","Recovery phrase","show &amp; copy the 24 words")
-        + row("giveback","c-migrate","⇠","Move credit back to my account", held>0 ? "hand the coins on this device back — the only way they survive it" : "nothing on this device to hand back")
+        // Not a menu row where coins are the payment path: the button sits under the coins
+        // themselves, which is where someone looking at them asks the question.
+        + (coinChat ? `` : row("giveback","c-migrate","⇠","Return to account balance", held>0 ? "hand the coins on this device back — the only way they survive it" : "nothing on this device to hand back"))
         + (phraseBackup.available
             ? row("backup","c-key","☁","Phrase in Keychain", phraseBackup.on ? "synced through iCloud, end to end" : (phraseBackup.error ? "off · the Keychain did not answer" : "off · paper only"),
                   phraseBackup.on ? `<span class="pill ok">on</span>` : `<span class="pill">off</span>`)
@@ -5477,7 +5481,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       server:  { t:"Server",                 h:`<p class="pagelead">Pick the official server, or paste one from your own tokumai server.</p>${serverControls()}<div id="srvIdents"></div>` },
       backup:  { t:"Phrase in Keychain",      h:backupPage },
       check:   { t:"Confirm your phrase",     h:checkPage },
-      giveback: { t:"Move credit back to my account", h:givebackPage },
+      giveback: { t:"Return to account balance", h:givebackPage },
       phrase:  { t:"Recovery phrase",         h:phraseBlock },
       restore: { t:"Restore account",         h:restorePage },
       migrate: { t:"Move to another device",  h:migratePage },

@@ -352,7 +352,7 @@ fn restore_from_synced_phrase(dir: &Path) {
     match wallet::synced_phrase() {
         Ok(Some(m)) => match account::from_mnemonic(&m) {
             Ok(a) => {
-                let w = wallet::Wallet { mnemonic: Some(a.mnemonic), server: w.server, entry_gateway: w.entry_gateway, entry_random: w.entry_random, coin_chat: w.coin_chat, phrase_verified: true, ..Default::default() };
+                let w = wallet::Wallet { mnemonic: Some(a.mnemonic), server: w.server, entry_gateway: w.entry_gateway, entry_random: w.entry_random, legacy_session_chat: w.legacy_session_chat, phrase_verified: true, ..Default::default() };
                 match wallet::save(dir, &w) {
                     Ok(()) => log::info!("[restore] account restored from the iCloud Keychain copy"),
                     Err(e) => log::error!("[restore] found a Keychain copy but could not save the wallet: {e}"),
@@ -1190,7 +1190,7 @@ const TENDER_MIN_TOKU: u64 = 800;
 const TENDER_MAX_TOKU: u64 = 25_000;
 
 fn coin_chat_enabled(dir: &Path) -> bool {
-    dev_env("COIN_CHAT").as_deref() == Some("1") || wallet::load(dir).coin_chat
+    dev_env("COIN_CHAT").as_deref() == Some("1") || !wallet::load(dir).legacy_session_chat
 }
 
 /// What this request could cost at worst, in TOKU — the size of the tender. In TOKU and
@@ -2147,7 +2147,7 @@ async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<V
         // Developer diagnostics (cost audit, upload readout, dev dials) exist only in a
         // debug build — a shipped binary never shows the Developer section.
         "devBuild": cfg!(debug_assertions),
-        "coinChat": w.coin_chat,
+        "coinChat": !w.legacy_session_chat,
         "appVersion": app_version(),
         "serverVersion": server_version,
         "storefront": ios_storefront(),
@@ -2259,7 +2259,7 @@ fn account_new_inner(app: &AppHandle, force: Option<bool>) -> Result<(PathBuf, S
     let a = account::create_account();
     // A NEW account starts unverified: the three-word check has to happen before this
     // wallet may buy anything. A restore sets it true — typing all twenty-four words IS the proof.
-    let w = wallet::Wallet { mnemonic: Some(a.mnemonic.clone()), server: prev.server, entry_gateway: prev.entry_gateway, entry_random: prev.entry_random, coin_chat: prev.coin_chat, phrase_verified: false, ..Default::default() };
+    let w = wallet::Wallet { mnemonic: Some(a.mnemonic.clone()), server: prev.server, entry_gateway: prev.entry_gateway, entry_random: prev.entry_random, legacy_session_chat: prev.legacy_session_chat, phrase_verified: false, ..Default::default() };
     wallet::save(&dir, &w)?;
     let fp = account::fingerprint(&a.account_id);
     Ok((dir, a.mnemonic, fp))
@@ -2298,7 +2298,7 @@ fn account_delete(app: AppHandle, force: Option<bool>) -> Result<Value, String> 
     if has_held_value(&prev) && !force.unwrap_or(false) {
         return Err(HELD_CREDIT_ERR.into());
     }
-    let w = wallet::Wallet { server: prev.server, entry_gateway: prev.entry_gateway, entry_random: prev.entry_random, coin_chat: prev.coin_chat, ..Default::default() };
+    let w = wallet::Wallet { server: prev.server, entry_gateway: prev.entry_gateway, entry_random: prev.entry_random, legacy_session_chat: prev.legacy_session_chat, ..Default::default() };
     wallet::save(&dir, &w)?;
     Ok(json!({ "ok": true }))
 }
@@ -2368,7 +2368,7 @@ fn account_restore(app: AppHandle, mnemonic: String, force: Option<bool>) -> Res
         return Err(HELD_CREDIT_ERR.into());
     }
     let a = account::from_mnemonic(&mnemonic)?;
-    let w = wallet::Wallet { mnemonic: Some(a.mnemonic.clone()), server: prev.server, entry_gateway: prev.entry_gateway, entry_random: prev.entry_random, coin_chat: prev.coin_chat, phrase_verified: true, ..Default::default() };
+    let w = wallet::Wallet { mnemonic: Some(a.mnemonic.clone()), server: prev.server, entry_gateway: prev.entry_gateway, entry_random: prev.entry_random, legacy_session_chat: prev.legacy_session_chat, phrase_verified: true, ..Default::default() };
     wallet::save(&dir, &w)?;
     Ok(json!({ "fingerprint": account::fingerprint(&a.account_id), "balance": 0 }))
 }
@@ -3890,7 +3890,7 @@ async fn set_entry_gateway(
 fn set_coin_chat(app: AppHandle, on: bool) -> Result<Value, String> {
     let dir = data_dir(&app)?;
     let mut w = wallet::load(&dir);
-    w.coin_chat = on;
+    w.legacy_session_chat = !on;
     wallet::save(&dir, &w)?;
     log::info!("[tender] coin-paid chat {}", if on { "on" } else { "off" });
     Ok(json!({ "coinChat": on }))
