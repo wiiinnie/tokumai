@@ -728,6 +728,13 @@ fn now_secs32() -> u32 {
         .unwrap_or(0)
 }
 
+/// How long before the earliest book dies the app reminds its owner. Inside the swap
+/// window, so someone who opens the app on the reminder still gets the swap rather than a
+/// lecture.
+const EXPIRY_NOTICE_DAYS: u64 = 3;
+/// One id, so a later schedule REPLACES the previous reminder instead of stacking another.
+const EXPIRY_NOTICE_ID: i32 = 1;
+
 /// How close to its expiry a book is swapped for a fresh one. It has to be WIDER than the
 /// interval at which people open the app, because the swap can only run while it is open:
 /// a three-day window protects a daily user and nobody else. Fourteen days costs a book
@@ -2570,6 +2577,67 @@ fn collect_later(app: AppHandle, force: Option<bool>) -> Result<Value, String> {
     Ok(json!({ "started": go }))
 }
 
+/// Warn, three days before the earliest book on this device dies, that opening the app
+/// keeps the money. It is a LOCAL notification, scheduled while the app runs — no server
+/// push, no device token, nothing that says a word about this device to anyone.
+///
+/// It is the only thing that reaches the one person the automatic swap cannot help: the
+/// one who does not open the app. Everyone else never sees it, because the swap will have
+/// run long before.
+fn schedule_expiry_notice(app: &AppHandle) {
+    use tauri_plugin_notification::{NotificationExt, PermissionState};
+    let Ok(dir) = data_dir(app) else { return };
+    let w = wallet::load(&dir);
+    let now = now_secs32();
+    let Some(earliest) = w
+        .coconut_purses
+        .iter()
+        .filter_map(|j| scrai_core::purse::Purse::restore(j).ok())
+        .filter(|p| p.remaining_coins() > 0)
+        .map(|p| p.expiration_date())
+        .min()
+    else {
+        return; // nothing held: nothing to lose, nothing to say
+    };
+    let at = earliest.saturating_sub(EXPIRY_NOTICE_DAYS as u32 * 86_400);
+    if at <= now {
+        return; // already inside the window — the swap is the answer now, not a warning
+    }
+    let toku = coin_value_toku(&w);
+    let when = match time::OffsetDateTime::from_unix_timestamp(at as i64) {
+        Ok(t) => t,
+        Err(_) => return,
+    };
+    let body = format!(
+        "{} TOKU on this device expire in {} days. Open tokumai once and they renew themselves.",
+        toku, EXPIRY_NOTICE_DAYS
+    );
+    // Ask for permission HERE and nowhere else: the moment credit has just landed on this
+    // device is the one moment where "may I remind you before this expires?" explains
+    // itself. A refusal is final and costs nothing else — the swap still runs.
+    match app.notification().permission_state() {
+        Ok(PermissionState::Granted) => {}
+        Ok(PermissionState::Denied) => return,
+        _ => match app.notification().request_permission() {
+            Ok(PermissionState::Granted) => {}
+            _ => return,
+        },
+    }
+    let sched = tauri_plugin_notification::Schedule::At { date: when, repeating: false, allow_while_idle: false };
+    match app
+        .notification()
+        .builder()
+        .id(EXPIRY_NOTICE_ID)
+        .title("Your tokumai credit is about to expire")
+        .body(body)
+        .schedule(sched)
+        .show()
+    {
+        Ok(()) => log::warn!("[expiry] a reminder is set for {} days before the earliest book dies", EXPIRY_NOTICE_DAYS),
+        Err(e) => log::warn!("[expiry] could not set the reminder: {e}"),
+    }
+}
+
 /// Is any book close enough to its date to be swapped?
 fn has_expiring_books(w: &wallet::Wallet, now: u32) -> bool {
     let deadline = now.saturating_add((SWAP_WINDOW_DAYS * 86_400) as u32);
@@ -2696,6 +2764,9 @@ async fn collect_now(app: AppHandle, main: Arc<Transport>) -> Result<Value, Stri
         w.entitlement_seen = left;
         let _ = wallet::save(&dir, &w);
     }
+    // The books on this device just changed, so the reminder does too: it is set for three
+    // days before the EARLIEST of them dies, and replaces whatever was set before.
+    schedule_expiry_notice(&app);
     // The coins are on the device: the purchase client has done its job for this purchase.
     drop(transport);
     close_buy_link(&app).await;
@@ -2919,7 +2990,17 @@ async fn chat_impl(
             return Err(e.to_string());
         }
         let resp = fetch_staged_images(&app, &transport, &srv, &chat_key, reply).await?;
-        let warning = overcharge_warning(&srv, &model, &messages, &resp);
+        // Two things the user has a right to know about an answer, on one channel: that it
+        // was shortened because the coins ran short, and that it cost grossly more than it
+        // should have. The first is the server's own admission, the second our check.
+        let warning = match resp.get("capped").filter(|c| c.is_object()) {
+            Some(c) => json!({
+                "kind": "capped",
+                "servedTokens": c.get("servedTokens"),
+                "askedTokens": c.get("askedTokens"),
+            }),
+            None => overcharge_warning(&srv, &model, &messages, &resp),
+        };
         return Ok(paid_chat_reply(&app, &resp, warning));
     }
 
@@ -4518,6 +4599,7 @@ pub fn run() {
         .manage(Arc::new(Transport::new()))
         .manage(BuyLink::default())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             // FIRST: nothing may touch the data directory before this — the first
             // create_dir_all would make the pre-rebrand data unreachable for good.

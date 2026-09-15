@@ -354,6 +354,12 @@ enum Paid {
 }
 struct CoinCtx {
     tender: scrai_core::tender::Tender,
+    /// The answer budget this request was CAPPED to, when the coins could not cover the
+    /// one it asked for — and what it asked for. The server has always shortened the
+    /// answer silently in that case; now it says so, because "the answer stopped early"
+    /// and "you are running low" are the same fact and only one of them is visible.
+    capped: Option<(u64, u64)>,
+    tender_toku: u64,
     /// What the tender is worth, in TOKU — the ceiling this request may cost.
     budget_toku: u64,
     /// Idempotency key: the first coin serial of the tender. Re-sending the identical
@@ -522,7 +528,8 @@ pub fn reserve(
             quorum.release(&payments);
             return err(&format!("file upload failed: {e}"));
         }
-        let mut p = match pending(Paid::Coins(CoinCtx { tender, budget_toku, key }), resolved) {
+        let capped = (afford < want).then_some((afford, want));
+        let mut p = match pending(Paid::Coins(CoinCtx { tender, budget_toku, key, capped, tender_toku: budget_toku }), resolved) {
             Reserved::Proceed(p) => p,
             other => return other,
         };
@@ -722,6 +729,12 @@ fn settle_coins(
         "coins": burned_coins,
         "burned": picked,
     });
+    // An answer that was cut short to fit the coins says so. The alternative — what this
+    // did until 2026-09-15 — is an answer that stops early for no reason the reader can
+    // see, at the exact moment their credit is running out.
+    if let Some((served, asked)) = ctx.capped {
+        r["capped"] = json!({ "servedTokens": served, "askedTokens": asked, "tenderToku": ctx.tender_toku });
+    }
     if let Some(imgs) = images {
         r["images"] = imgs;
         if p.chunked {

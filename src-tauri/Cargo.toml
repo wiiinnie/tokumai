@@ -72,6 +72,8 @@ pdf-extract = "0.9"
 # build stays light. See src/detect.rs.
 gline-rs = { version = "1", optional = true }
 orp = { version = "1", optional = true }
+tauri-plugin-notification = "2.4.0"
+time = { version = "0.3.45", features = ["formatting"] }
 
 # Android: Nym's HTTP client (reqwest 0.13) verifies TLS through rustls-platform-verifier,
 # which on Android must be handed a JNI env + app Context once at start-up — otherwise every

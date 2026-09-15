@@ -104,8 +104,21 @@ now refuses each request on its own merits, which is what a payment in anonymous
 allows. Roughly 2,500 lines. What used to be "your balance on the server" is simply the
 coins on the device; the account holds what has not been drawn yet.
 
-Still to do for D: make a capped answer visible (the server shortens an answer to fit the
-coins and says nothing), and a local notification before books expire.
+**Both built 2026-09-15.** A capped answer now says so: the server reports the budget it
+actually served (`capped` in the reply), the client turns it into the warning channel that
+already carried the C3 overcharge check — and which nothing had ever read — and the app
+prints one line under the answer. And three days before the earliest book on a device dies,
+a LOCAL notification (no server push, no device token) says that opening the app renews it;
+permission is asked at the moment credit first lands, which is the moment the question
+explains itself.
+
+Still open for D: the ANONYMOUS coin swap — hand in unspent coins, get a fresh book blind
+signed, without ever naming the account, so the expiry swap stops being two account calls.
+Weighed 2026-09-15 and deliberately deferred: it is a second path to a signed credential
+(the most dangerous code here), its failure mode loses value where the account route parks
+it, and an unbounded swap is a free CPU grinder — it needs an "only near expiry" gate and
+an atomic burn-and-issue. The leak it removes is one aggregate figure per device per 90
+days, which is noise next to a purchase.
 
 Decided parameters:
 

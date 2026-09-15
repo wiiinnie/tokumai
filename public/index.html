@@ -4094,6 +4094,19 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         // Server clamps an unsupported size to the model's largest (Lite: 1K) instead of
         // failing — say so, and that the bill is for the size actually drawn.
         if(drawn && (ai.images&&ai.images.length) && drawn!==reqSize) ai.note = `Drawn at ${drawn} — ${reqSize} isn't supported by ${reqLabel}. Billed at ${drawn}.`;
+        // Two things about an answer the reader would otherwise never learn. The server
+        // shortens an answer to fit the coins on the table rather than refusing it — which
+        // looks like a model that stopped mid-thought, at exactly the moment credit runs
+        // low. And the client's own fair-price check can catch a charge far above what the
+        // answer should have cost. Both arrived as `priceWarning` and nothing read it.
+        const warn = evt.priceWarning;
+        if(!ai.note && warn && warn.kind === "capped"){
+          ai.note = "This answer was shortened to fit the coins on this device. Top up, and the next one runs to full length.";
+          ai.noteKind = "rust";
+        } else if(!ai.note && warn && warn.kind === "overcharge"){
+          ai.note = `Charged ${formatToku(warn.charged)} TOKU for an answer that should cost about ${formatToku(warn.fairEstimate)}. This server has been flagged on this device — switch servers under Account & recovery.`;
+          ai.noteKind = "rust";
+        }
         renderThread();
         setPrice(evt.usage);
         await persist(text);
