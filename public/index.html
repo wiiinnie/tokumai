@@ -5051,7 +5051,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   function acctBack(){ acctPage=null; acctView=null; acctPhrase=null; renderAccount(); const mb=$("acctScrim").querySelector(".mb"); if(mb) mb.scrollTop=0; }
   // M-fe-2: don't leave the revealed mnemonic (or a captured restore phrase) sitting in
   // a JS variable after the modal is dismissed.
-  function closeAccount(){ acctPhrase=null; pendingRestorePhrase=null; acctView=null; acctPage=null; redeemPick=false; redeemDollars=null; redeemPartial=false; credResult=""; $("acctScrim").classList.remove("open"); }
+  function closeAccount(){ acctPhrase=null; pendingRestorePhrase=null; acctView=null; acctPage=null; credResult=""; $("acctScrim").classList.remove("open"); }
   // ONE status line for the whole sheet, and it lives in the header — outside the body
   // that scrolls. It used to be appended to the bottom of every page, which on a phone put
   // it below the fold: "Delete failed" and "Enter a phrase first" were being written to a
@@ -5296,9 +5296,6 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     // The card is the whole credit story now: what you have, when it was last checked, and
     // — when coins sit on this device — what that means and the one tap that fixes it.
     // "Credit" used to be a menu row holding two unrelated actions; a state is not a page.
-    const maxD = Math.max(1, Math.floor(held/100000));
-    const pickD = Math.min(redeemDollars!=null?redeemDollars:maxD, maxD);
-    const pickToku = pickD>=maxD ? held : pickD*100000;
     const heldBox = held>0 ? `<div class="heldbox">
         <div class="hh"><span class="amt">${esc(formatToku(held))} TOKU</span><span class="where">on this device only</span></div>
         <p>Coins are held here, not on your account. A <b>recovery phrase does not bring them back</b> — before you

@@ -205,9 +205,12 @@ impl Authority {
 /// How far in the past a spend date may lie and still verify. Two days: one for the
 /// client's own "expiration − 1 day" choice, one for clocks and day alignment.
 pub const SPEND_DATE_PAST_SECS: u32 = 2 * 86_400;
-/// How far ahead: a book issued today expires ~30 days out and the client spends with
-/// `expiration − 1 day`, so up to 31 days is a legitimate future date.
-pub const SPEND_DATE_FUTURE_SECS: u32 = 31 * 86_400;
+/// How far ahead. A client dates a payment at its book's `expiration − 1 day` — the same
+/// date for everybody in that epoch, so the day a coin is actually spent stays private —
+/// and a freshly issued book expires `BOOK_VALIDITY_DAYS` out. Derived from that, never
+/// typed beside it: when the validity changed and this did not, every new book became
+/// unspendable (2026-09-15).
+pub const SPEND_DATE_FUTURE_SECS: u32 = (crate::coconut::BOOK_VALIDITY_DAYS as u32 + 1) * 86_400;
 
 /// `spend_date` within [now − past, now + future].
 pub fn spend_date_plausible(spend_date: u32, now: u32) -> bool {
@@ -423,6 +426,32 @@ pub fn bootstrap(
 // ---------------------------------------------------------------------------
 #[cfg(test)]
 mod tests {
+    use crate::coconut::BOOK_VALIDITY_DAYS;
+
+    /// The day a freshly issued book is dated to spend on MUST still verify. The client
+    /// dates a payment at `expiration − 1 day`, so a book issued today carries a date
+    /// almost `BOOK_VALIDITY_DAYS` ahead — and when the validity grew from 30 to 90 and
+    /// this bound stayed at 31, every new book was refused as "spend date out of range"
+    /// with the money plainly visible in the app (2026-09-15).
+    #[test]
+    fn a_freshly_issued_books_spend_date_is_still_in_range() {
+        let day = 86_400u32;
+        let now = 1_760_000_000u32;
+        let issued_today_expires = now + BOOK_VALIDITY_DAYS as u32 * day;
+        let spend_date = issued_today_expires - day; // what the client signs
+        assert!(
+            spend_date_plausible(spend_date, now),
+            "a book issued today cannot be spent: {spend_date} vs limit {}",
+            now + super::SPEND_DATE_FUTURE_SECS
+        );
+        // …and the bound is not open-ended: a date past the longest possible book is not.
+        assert!(!spend_date_plausible(issued_today_expires + 2 * day, now));
+        // The past side still closes two days after a book's expiry, which is what makes
+        // pruning spend records safe.
+        assert!(spend_date_plausible(now - day, now));
+        assert!(!spend_date_plausible(now - 3 * day, now));
+    }
+
     use super::*;
     use nym_compact_ecash::generate_keypair_user;
     use serde::de::DeserializeOwned;

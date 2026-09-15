@@ -58,6 +58,16 @@ pub const COIN_TOKU: u64 = 100;
 /// says which one it belongs to only so the server knows which key to verify it against.
 /// A note that lies about it simply fails verification.
 pub const COARSE_TOKU: u64 = 1_000;
+/// How long the books of one issuing epoch stay spendable.
+///
+/// It lives HERE, in the core, because three things have to agree on it and did not: the
+/// server that stamps a book's expiry, the retention that must outlive a book, and the
+/// spend-date bound a payment is checked against. On 2026-09-15 the validity went from 30
+/// to 90 days and that bound did not follow, so every book from the new epochs was refused
+/// with "spend date out of range" — the client dates a payment at expiration − 1 day, and
+/// that was suddenly 89 days ahead of a limit of 31.
+pub const BOOK_VALIDITY_DAYS: u64 = 90;
+
 /// Denominations in use, coarsest first — the order a tender is planned in.
 pub const DENOMS: [u64; 2] = [COARSE_TOKU, COIN_TOKU];
 /// Redeem $0.10 (100 coins) into a session at a time, uniform across users. Kept at 100
