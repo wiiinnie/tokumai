@@ -6,6 +6,7 @@
 #   package.json      + package-lock.json
 #   src-tauri/tauri.conf.json   (what the app reports as `app` / shows in Settings)
 #   public/index.html           (footer fallback until the backend reports its version)
+#   src-tauri/gen/apple/project.yml   CFBundleVersion — the iOS BUILD number
 #
 # Usage:  scripts/bump-version.sh 0.4.6
 # Then:   git commit -am "0.4.6: …" && git tag v0.4.6
@@ -40,5 +41,16 @@ npm version "$V" --no-git-tag-version --allow-same-version >/dev/null
 perl -pi -e 's/(let APP_VERSION = versionLabel\(")[^"]+("\);)/${1}'"$V"'${2}/' public/index.html
 grep -q "versionLabel(\"$V\")" public/index.html || { echo "index.html: APP_VERSION fallback not updated" >&2; exit 1; }
 
-echo "✓ Cargo.toml · Cargo.lock · package.json · package-lock.json · src-tauri/tauri.conf.json · public/index.html = $V"
+# gen/apple/project.yml — CFBundleVersion. What actually reaches App Store Connect is a
+# UTC timestamp that ios-testflight.sh stamps in at archive time (Apple needs it unique and
+# rising, and a version string is neither), so this value is never uploaded. It is still
+# worth keeping in step: read on its own it says what the app is, and on 2026-09-15 it said
+# 0.6.4 while everything else said 0.6.5, which costs a minute of doubt at exactly the
+# wrong moment — the one before an app store submission.
+if [ -f src-tauri/gen/apple/project.yml ]; then
+  perl -pi -e 's/^(\s*CFBundleVersion:\s*")[^"]+(")$/${1}'"$V"'${2}/' src-tauri/gen/apple/project.yml
+  grep -q "CFBundleVersion: \"$V\"" src-tauri/gen/apple/project.yml || { echo "project.yml: CFBundleVersion not updated" >&2; exit 1; }
+fi
+
+echo "✓ Cargo.toml · Cargo.lock · package.json · package-lock.json · src-tauri/tauri.conf.json · public/index.html · gen/apple/project.yml = $V"
 git --no-pager diff --stat -- Cargo.toml Cargo.lock package.json package-lock.json src-tauri/tauri.conf.json public/index.html
