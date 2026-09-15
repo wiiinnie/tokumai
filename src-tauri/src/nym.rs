@@ -153,9 +153,7 @@ pub struct Transport {
     perf: std::sync::Mutex<(u64, u64, u64, bool)>,
     /// The last chat request that has NOT been acked with a reply, keyed by session id.
     /// A retry resends this VERBATIM (same counter/sig/id) so a server that already
-    /// processed it replies by replay instead of charging a second time (idempotent retry).
-    pending_chat: Mutex<Option<(String, Value)>>,
-    /// A chat reply whose big pictures are still being fetched chunk by chunk (see
+        /// A chat reply whose big pictures are still being fetched chunk by chunk (see
     /// `fetch_staged_images` in lib.rs), kept across a FAILED download so the UI's Retry
     /// resumes the fetch — the picture is already paid for and staged on the server —
     /// instead of generating (and charging for) a brand-new one.
@@ -191,7 +189,6 @@ impl Transport {
             geo: Mutex::new(None),
             op_lock: Mutex::new(()),
             perf: std::sync::Mutex::new((200, 15, 20, true)),
-            pending_chat: Mutex::new(None),
             staged_download: Mutex::new(None),
             cancel: tokio::sync::Notify::new(),
             progress: std::sync::Mutex::new(None),
@@ -269,27 +266,7 @@ impl Transport {
         }
     }
 
-    /// Remember the just-built chat request so a retry can resend it verbatim.
-    pub async fn set_pending_chat(&self, session_id: &str, req: Value) {
-        *self.pending_chat.lock().await = Some((session_id.to_string(), req));
-    }
-    /// The pending (unacked) chat request for this session, if any — for an idempotent retry.
-    pub async fn pending_chat(&self, session_id: &str) -> Option<Value> {
-        self.pending_chat
-            .lock()
-            .await
-            .as_ref()
-            .filter(|(s, _)| s == session_id)
-            .map(|(_, r)| r.clone())
-    }
-    /// Clear the pending chat once its reply has arrived (or it's superseded).
-    pub async fn clear_pending_chat(&self, session_id: &str) {
-        let mut g = self.pending_chat.lock().await;
-        if g.as_ref().map(|(s, _)| s == session_id).unwrap_or(false) {
-            *g = None;
-        }
-    }
-
+    
     /// Pipelined multi-send: fire ALL `requests` concurrently through a split sender, then
     /// collect their acks by request `id`. The split sender enqueues into the SAME nym send
     /// stream that paces + cover-mixes every packet, so this is NOT a privacy change vs the

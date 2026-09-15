@@ -52,7 +52,7 @@ struct Args {
     perf: Perf,
     gateway: Option<String>,
     usd: u32,
-    redeem_coins: u64,
+    tender_coins: u64,
     model: String,
     prompt_bytes: usize,
     max_tokens: u64,
@@ -79,11 +79,10 @@ scrai-loadtest — N simulated users against one scrai-server over the mixnet
   --fast             mixnet knobs at the app's performance end (default: privacy = Nym defaults)
   --gateway ID       pin every client to this entry gateway (default: SDK picks per client)
   --usd N            purchase tier per user for chat/mixed (default 5 = one ticketbook)
-  --redeem-coins N   coins redeemed into the session (default 100 = the app's chunk)
+  --tender-coins N   coins a chat puts on the table (default 31 = a text prompt's ceiling)
   --model M          chat model (default gemini-3.5-flash-lite)
   --prompt-bytes N   size of the user message (default 300)
   --max-tokens N     maxTokens on chat (default 64)
-  --no-status        skip the app's session.status round trip before each chat
   --out DIR          results root (default loadtest/results)
   --label TEXT       tag for the results directory
 ";
@@ -106,7 +105,7 @@ fn parse_args() -> Result<Args, String> {
         perf: Perf::PRIVACY,
         gateway: None,
         usd: 5,
-        redeem_coins: 100,
+        tender_coins: 31,
         model: "gemini-3.5-flash-lite".into(),
         prompt_bytes: 300,
         max_tokens: 64,
@@ -145,11 +144,10 @@ fn parse_args() -> Result<Args, String> {
             "--fast" => a.perf = Perf::FAST,
             "--gateway" => a.gateway = Some(next(&mut i, f)?),
             "--usd" => a.usd = next(&mut i, f)?.parse().map_err(|_| "--usd: number")?,
-            "--redeem-coins" => a.redeem_coins = next(&mut i, f)?.parse().map_err(|_| "--redeem-coins: number")?,
+            "--tender-coins" => a.tender_coins = next(&mut i, f)?.parse().map_err(|_| "--tender-coins: number")?,
             "--model" => a.model = next(&mut i, f)?,
             "--prompt-bytes" => a.prompt_bytes = next(&mut i, f)?.parse().map_err(|_| "--prompt-bytes: number")?,
             "--max-tokens" => a.max_tokens = next(&mut i, f)?.parse().map_err(|_| "--max-tokens: number")?,
-            "--no-status" => a.skip_status = true,
             "--out" => a.out = PathBuf::from(next(&mut i, f)?),
             "--label" => a.label = next(&mut i, f)?,
             "-h" | "--help" => {
@@ -231,7 +229,7 @@ async fn main() {
         "think_ms": args.think_ms, "ramp_ms": args.ramp_ms, "inflight": args.inflight,
         "timeout_ms": args.timeout.as_millis() as u64, "surbs": args.surbs, "surbs_chat": args.surbs_chat,
         "perf": args.perf.to_string(), "gateway": args.gateway, "usd": args.usd,
-        "redeem_coins": args.redeem_coins, "model": args.model, "prompt_bytes": args.prompt_bytes,
+        "tender_coins": args.tender_coins, "model": args.model, "prompt_bytes": args.prompt_bytes,
         "max_tokens": args.max_tokens, "status_before_chat": !args.skip_status, "app": proto::APP,
     });
     eprintln!("scrai-loadtest v{} → {} address(es)", proto::APP, servers.len());
@@ -253,7 +251,7 @@ async fn main() {
     if matches!(args.mode, Mode::Chat | Mode::Mixed) {
         eprintln!(
             "  chat: fund ${} → redeem {} coins → model {} · prompt {} B · maxTokens {} · session.status before chat: {}",
-            args.usd, args.redeem_coins, args.model, args.prompt_bytes, args.max_tokens, !args.skip_status
+            args.usd, args.tender_coins, args.model, args.prompt_bytes, args.max_tokens, !args.skip_status
         );
     }
     eprintln!("  results → {}", run_dir.display());
@@ -335,13 +333,13 @@ async fn run_client(
         }
     };
     live.connected.fetch_add(1, Ordering::Relaxed);
-    let ctx = Arc::new(Ctx::new(i, mix.clone(), server, args.surbs, args.surbs_chat, args.timeout, tx, live.clone(), t0));
+    let ctx = Arc::new(Ctx::new(i, mix.clone(), server, args.surbs, args.surbs_chat, args.tender_coins, args.timeout, tx, live.clone(), t0));
     ctx.record("connect", start, true, String::new(), 0).await;
     log::info!("client {i}: connected as {} via gateway {} → server {}", mix.address, mix.gateway, server);
 
     let mut user = User::new();
     let funded = if matches!(args.mode, Mode::Chat | Mode::Mixed) {
-        match proto::fund(&ctx, &mut user, args.usd, args.redeem_coins).await {
+        match proto::fund(&ctx, &mut user, args.usd).await {
             Ok(balance) => {
                 log::info!("client {i}: funded, session balance {balance}");
                 true
@@ -379,7 +377,7 @@ async fn run_client(
                         log::warn!("client {i}: {e}");
                         // A refused chat leaves the counter uncertain — re-sync like the app does.
                         if which == 0 && !e.starts_with("busy") && args.skip_status {
-                            let _ = proto::session_status(&ctx, &mut user).await;
+                            
                         }
                     }
                     n += 1;

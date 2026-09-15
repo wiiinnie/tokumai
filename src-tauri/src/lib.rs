@@ -84,7 +84,7 @@ const PROTO: u64 = 1;
 // measured 60 → 10 SURBs on one-packet replies halving their latency under a storm, and
 // 120 making everything worse. The SDK re-requests SURBs when a reply outgrows its budget
 // (one extra round trip), so a budget is a fast path, never a hard limit.
-/// One-packet replies: status, invoice.*, entitlement, withdraw, redeem, upload acks, ping.
+/// One-packet replies: status, invoice.*, entitlement, withdraw, upload acks, ping.
 const SURBS_SMALL: u32 = 8;
 /// For a reply that is certainly one packet (a withdrawal's blinded signature), sent in
 /// batches of a hundred: eight each would make the SURBs bigger than everything else.
@@ -116,11 +116,6 @@ const SETTLE_TIMEOUT_MS: u64 = 30_000;
 /// what once delayed the "server unreachable" verdict by minutes.
 const META_TIMEOUT_MS: u64 = 30_000;
 
-/// Coins redeemed per auto-fund when a session runs dry (1 coin = 1000 TOKU →
-/// 100 coins ≈ $1, per docs/federation-params.md). Uniform across users on
-/// purpose: not everything at once (leaks the balance and builds one big
-/// pseudonym), not tiny bits (many shows + mixnet round-trips).
-const REDEEM_CHUNK_COINS: u64 = 100;
 
 // --- C3: client-side overcharge guard (docs/security/audit-2026-08-20.md) --------
 // The server is untrusted, yet today it alone decides the price/margin/token count
@@ -173,67 +168,8 @@ fn is_flagged(srv: &str) -> bool {
     flagged_servers().lock().map(|f| f.contains(srv)).unwrap_or(false)
 }
 
-/// A transport-level failure (send dropped / no reply in time) — the server gave NO
-/// verdict, so an idempotent spend/redeem is safe to retry with the SAME pay_info.
-/// Distinguished from a definitive server *rejection* (a `kind:"error"` reply), which
-/// means retrying the same payment is pointless — clear the pending instead of looping.
-fn is_transport_error(e: &str) -> bool {
-    e.contains("mixnet") || e.contains("no reply") || e.contains("reconnect")
-}
 
-/// A cryptographic-invalidity verdict from the server: this credential cannot be
-/// verified here (e.g. it was minted by an EARLIER authority instance whose keys the
-/// server no longer has). It is worthless at this server, so drop it rather than let it
-/// block every future redeem.
-fn is_invalid_credential(e: &str) -> bool {
-    e.contains("invalid payment") || e.contains("ZK proof") || e.contains("proof failed")
-}
 
-/// A DEFINITIVE server rejection of a spend/redeem: always clear the pending (retrying
-/// the same payment is pointless). On a cryptographic-invalidity verdict, do NOT simply
-/// trust the server — a rogue server could claim a VALID credential is invalid to trick
-/// the client into discarding real money. Instead verify INDEPENDENTLY: fetch the
-/// server's current authority key and compare it to the one the credential was minted
-/// with. Different key → the credential is genuinely from an earlier authority (dead
-/// here) → discard it so it stops blocking redeems. Same key → the credential is valid
-/// and the server LIED → flag the server, keep the money. Returns the user-facing error.
-async fn handle_spend_rejection(
-    t: &Transport,
-    srv: &str,
-    dir: &Path,
-    w: &mut wallet::Wallet,
-    e: String,
-) -> String {
-    use scrai_core::federation::{FedRequest, FedResponse};
-    w.pending_spend = None;
-    let mut note = "";
-    if is_invalid_credential(&e) {
-        if let Some((idx, _purse)) = first_funded_purse(&w.coconut_purses) {
-            let server_vk = match fed_call(t, srv, FedRequest::Keys).await {
-                Ok(FedResponse::Keys { vk, .. }) => serde_json::to_string(&vk).ok(),
-                _ => None,
-            };
-            let purse_vk = epoch_keys(dir, srv, _purse.denom_toku()).and_then(|k| serde_json::to_string(&k.vk).ok());
-            match server_vk {
-                // Confirmed stale (minted under a different authority key) → safe to drop.
-                Some(sv) if Some(&sv) != purse_vk.as_ref() => {
-                    w.coconut_purses.remove(idx);
-                    log::error!("[coconut] credential was minted under a DIFFERENT authority key (stale) — discarded: {e}");
-                    note = " — discarded a stale credential (minted by an earlier server instance); redeem again for the rest";
-                }
-                // Same key, yet the server rejected it → the server is lying about valid money.
-                Some(_) => {
-                    flag_server(srv, &format!("rejected a VALID credential as invalid: {e}"));
-                    note = " — the server rejected a VALID credential and was flagged as dishonest; your credit is intact, switch servers";
-                }
-                // Couldn't confirm → keep the credential, don't guess.
-                None => note = " — could not confirm the credential against the server key; kept it",
-            }
-        }
-    }
-    let _ = wallet::save(dir, w);
-    format!("{e}{note}")
-}
 
 /// Concatenated plaintext of a chat `messages` array, or None if any message is
 /// non-text (multimodal / image parts) — where a char-based token estimate is
@@ -563,20 +499,6 @@ fn svg_first_width(svg: &str) -> Option<f64> {
 
 // ---- mixnet helpers used by several commands ------------------------------
 
-async fn session_status(t: &Transport, srv: &str, sk: &account::SessionKeys) -> Result<(u64, u64), String> {
-    let sig = sk.sign(0, "status");
-    let resp = t
-        .round_trip(
-            srv,
-            &json!({"v":PROTO,"kind":"session.status","id":rand_hex(16),"sessionId":sk.session_id,"sig":sig}),
-            SURBS_SMALL,
-            TIMEOUT_MS,
-        )
-        .await?;
-    let balance = resp.get("balance").and_then(|b| b.as_u64()).unwrap_or(0);
-    let counter = resp.get("counter").and_then(|b| b.as_u64()).unwrap_or(0);
-    Ok((balance, counter))
-}
 
 // ---- coconut federation (talks to the Rust server / issuing authority) -----
 
@@ -711,6 +633,7 @@ async fn federation_keys(
     srv: &str,
     dir: &Path,
     denom_toku: u64,
+    expiration_date: u32,
 ) -> Result<scrai_core::federation::FedResponse, String> {
     // Each denomination is its own issuing authority with its own material, so it is
     // fetched and cached apart. The cache key is the server AND the denomination; the
@@ -720,7 +643,13 @@ async fn federation_keys(
     // server rolls a new authority every week, and a book can only be spent with the keys
     // of the epoch it was issued in. Dropping them on a refresh would strand every book
     // the device still holds.
-    let cache_key = format!("{srv}#{denom_toku}");
+    // Asking for a PARTICULAR epoch (a device still holding books from it) is filed under
+    // that epoch; asking for "whatever you issue today" is filed under the denomination.
+    let cache_key = if expiration_date == 0 {
+        format!("{srv}#{denom_toku}")
+    } else {
+        epoch_key(srv, denom_toku, expiration_date)
+    };
     let cache_key = cache_key.as_str();
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) as u32;
     // Valid while the spend date the app uses (expiration − 1 day) is still ahead — AND not
@@ -751,12 +680,18 @@ async fn federation_keys(
             }
         }
     }
-    let resp = fed_call(t, srv, scrai_core::federation::FedRequest::KeysFor { denom_toku }).await?;
+    let want_epoch = expiration_date;
+    let resp = fed_call(t, srv, scrai_core::federation::FedRequest::KeysFor { denom_toku, expiration_date }).await?;
     if let scrai_core::federation::FedResponse::Keys { expiration_date, denom_toku: got, .. } = &resp {
         // A server that answers with another denomination than the one asked for is not
         // one to take money from: the book would be worth something else than the price.
         if *got != denom_toku {
             return Err(format!("the server answered with {got}-TOKU coins, not the {denom_toku} asked for"));
+        }
+        // Asked for ONE epoch and got another: that epoch is gone, and so are its books.
+        // Say so rather than filing the wrong material under its name.
+        if want_epoch != 0 && *expiration_date != want_epoch {
+            return Err("that issuing epoch is over — books from it can no longer be spent".into());
         }
         if let Ok(v) = serde_json::to_value(&resp) {
             // Twice: under the denomination (what the next withdrawal uses) and under the
@@ -848,6 +783,20 @@ fn all_epoch_keys(dir: &Path, srv: &str) -> Vec<scrai_core::purse::EpochKeys> {
     for d in scrai_core::coconut::DENOMS {
         if let Some(k) = epoch_keys(dir, srv, d) {
             add(k);
+        }
+    }
+    out
+}
+
+/// Epochs this device holds books from but has no material for — what it has to fetch
+/// before those books can be spent at all.
+fn missing_epochs(w: &wallet::Wallet, dir: &Path, srv: &str) -> Vec<(u64, u32)> {
+    let mut out: Vec<(u64, u32)> = Vec::new();
+    for j in &w.coconut_purses {
+        let Ok(p) = scrai_core::purse::Purse::restore(j) else { continue };
+        let k = (p.denom_toku(), p.expiration_date());
+        if p.remaining_coins() > 0 && !out.contains(&k) && keys_of_epoch(dir, srv, k.0, k.1).is_none() {
+            out.push(k);
         }
     }
     out
@@ -948,7 +897,7 @@ async fn withdraw_books(
     // The coin/date material is cached by `federation_keys` itself and lives in EpochKeys,
     // not in the book — a purse is built from the wallet, the user key, the size and the date.
     let (vk, auth_vks, _coin_sigs, _date_sigs, expiration_date, total_coins) =
-        match federation_keys(t, srv, dir, denom_toku).await? {
+        match federation_keys(t, srv, dir, denom_toku, 0).await? {
             FedResponse::Keys {
                 vk, auth_vks, coin_sigs, date_sigs, expiration_date, total_coins, ..
             } => (vk, auth_vks, coin_sigs, date_sigs, expiration_date, total_coins),
@@ -1146,17 +1095,6 @@ async fn withdraw_books(
 }
 
 
-fn resolve_server(app: &AppHandle, server: Option<String>) -> Result<String, String> {
-    match server {
-        // H5: a per-call server override from the frontend is validated too, so a
-        // single malicious invoke can't route a withdraw/spend to a bogus address.
-        Some(s) if !s.trim().is_empty() => {
-            Transport::validate_address(&s)?;
-            Ok(s.trim().to_string())
-        }
-        _ => server_addr(&wallet::load(&data_dir(app)?)),
-    }
-}
 
 /// The wallet's account, needed wherever a request must be account-signed.
 fn wallet_account(app: &AppHandle) -> Result<account::Account, String> {
@@ -1697,67 +1635,6 @@ fn coins_on_device(w: &wallet::Wallet) -> u64 {
     in_books + in_notes + in_flight
 }
 
-/// Move an old SESSION balance onto the account, where it becomes entitlement and from
-/// there coins. Every prompt pays with coins now, so anything still sitting on the
-/// session layer would be stranded when that layer goes (docs/unlinkability.md, block D).
-///
-/// Two signatures travel together: the session consents to being emptied and names the
-/// account, the account proves it is that destination. Both keys come from the one
-/// recovery phrase. This is the single request in the app that carries a session key and
-/// an account key at once — it therefore links the two AT THE SERVER for the length of
-/// that request. Nothing about it is stored (the session store holds a balance and a
-/// counter, no account), it goes out over the purchase client like every other account
-/// call, and it is needed exactly once per account.
-#[tauri::command]
-async fn session_drain(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<Value, String> {
-    let _op = transport.begin_op().await;
-    let dir = data_dir(&app)?;
-    let w = wallet::load(&dir);
-    let srv = server_addr(&w)?;
-    let m = w.mnemonic.clone().ok_or("no account — create one first")?;
-    let a = account::from_mnemonic(&m)?;
-    let sk = account::derive_session_keys(&m, w.session_index)?;
-    let t = buy_transport(&app, &transport).await;
-
-    let nonce = rand_hex(16);
-    let resp = t
-        .round_trip(
-            &srv,
-            &json!({ "v": PROTO, "kind": "session.drain", "id": rand_hex(16),
-                     "publicKey": a.public_key_pem, "nonce": nonce, "sig": a.sign("drain", &nonce),
-                     "sessionKey": sk.public_key_pem, "sessionId": sk.session_id,
-                     "sessionSig": sk.sign_handover(&a.account_id, &nonce) }),
-            SURBS_SMALL,
-            TIMEOUT_MS,
-        )
-        .await;
-    // The purchase client has done its job either way — an error must not leave it up.
-    let resp = match resp {
-        Ok(r) => r,
-        Err(e) => {
-            close_buy_link(&app).await;
-            return Err(e);
-        }
-    };
-    if let Some(err) = resp.get("error").and_then(|e| e.as_str()) {
-        close_buy_link(&app).await;
-        return Err(err.to_string());
-    }
-    let moved = resp.get("moved").and_then(|v| v.as_u64()).unwrap_or(0);
-    let entitlement = resp.get("entitlement").and_then(|v| v.as_u64()).unwrap_or(0);
-    {
-        let mut w = wallet::load(&dir);
-        w.entitlement_seen = entitlement;
-        let _ = wallet::save(&dir, &w);
-    }
-    close_buy_link(&app).await;
-    // What came over is entitlement, and entitlement only becomes spendable as books —
-    // so draw them now rather than leaving the user looking at "waiting on your account".
-    if moved > 0 {
-        spawn_refill_soon(&app);
-    }
-    Ok(json!({ "moved": moved, "entitlement": entitlement }))
-}
 
 /// Hand every unspent coin on this device back to the account, where it becomes
 /// entitlement again — the way to move to another device, or to empty one before giving
@@ -1770,7 +1647,8 @@ async fn session_drain(app: AppHandle, transport: State<'_, Arc<Transport>>) -> 
 #[tauri::command]
 async fn coins_return(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<Value, String> {
     let t = transport.inner().clone();
-    return_coins(app, t, Returning::Everything).await
+    let _op = t.begin_op().await;
+    return_coins(app, t.clone(), Returning::Everything).await
 }
 
 /// What a return is for: emptying the device, or only handing back what is about to expire.
@@ -1785,7 +1663,10 @@ async fn return_coins(app: AppHandle, transport: Arc<Transport>, what: Returning
     // so the batch is sized for the worst case: all of it in fine coins. Coarse books make
     // a batch worth ten times more without costing the server any more work.
     const BATCH_TOKU: u64 = MAX_RETURN_COINS * scrai_core::coconut::COIN_TOKU;
-    let _op = transport.begin_op().await;
+    // NO `begin_op` here: the caller already holds it. It is a plain mutex, so taking it
+    // twice on one transport deadlocks rather than waits — which is exactly what the swap
+    // inside `collect_now` did on 2026-09-15. "Check for credit" hung for ever and wrote
+    // no log line, because a deadlock has nothing to report.
     let dir = data_dir(&app)?;
     let srv = server_addr(&wallet::load(&dir))?;
     let a = wallet_account(&app)?;
@@ -1879,124 +1760,13 @@ async fn return_coins(app: AppHandle, transport: Arc<Transport>, what: Returning
     Ok(json!({ "credited": credited_total, "entitlement": entitlement, "held": coconut_held_toku(&app) }))
 }
 
-/// Redeem `coins` from the stored coconut credential into the ACTIVE session's TOKU
-/// balance (the credit `chat` draws down). Durable: the advanced purse is persisted
-/// BEFORE the payment leaves the device, so a crash/retry can't roll the counter back
-/// and re-spend. Returns the session balance the server reports after crediting.
-async fn redeem_coconut(app: &AppHandle, t: &Transport, srv: &str, coins: u64) -> Result<u64, String> {
-    use scrai_core::coconut::PayInfo;
 
-    let dir = data_dir(app)?;
-    let mut w = wallet::load(&dir);
-    let m = w.mnemonic.clone().ok_or("no account")?;
-    let sk = account::derive_session_keys(&m, w.session_index)?;
-
-    // H4: same idempotent shape as coconut_spend — resume a pending redeem with the
-    // SAME pay_info (benign replay), else make a fresh one and persist the advanced
-    // purse + a pending record BEFORE the payment leaves the device.
-    let (payment_json, pib, spend_date, coins, session_id): (Value, Vec<u8>, u32, u64, String) =
-        match w.pending_spend.clone() {
-            Some(p) if p.kind == "redeem" => (
-                p.payment,
-                p.pay_info,
-                p.spend_date,
-                p.coins,
-                p.session_id.unwrap_or_else(|| sk.session_id.clone()),
-            ),
-            Some(_) => return Err("a spend is still pending — retry to complete it first".into()),
-            None => {
-                // FINE books only: the session layer values a coin at COIN_TOKU flat
-                // (core/src/gateway.rs), so a coarse book cannot be redeemed there — it
-                // would fail verification against the fine authority. The session path is
-                // on its way out anyway (docs/unlinkability.md, block D).
-                let (idx, mut purse) = first_funded_purse_of(&w.coconut_purses, scrai_core::coconut::COIN_TOKU)
-                    .ok_or("no coconut credential — buy credit first")?;
-                // Clamp to what this book still holds; the next redeem rolls to the next book.
-                let coins = coins.min(purse.remaining_coins());
-                let mut pib = [0u8; 72];
-                rand::thread_rng().fill_bytes(&mut pib);
-                let spend_date = purse.expiration_date().saturating_sub(86_400);
-                let keys = epoch_keys(&dir, srv, purse.denom_toku())
-                    .ok_or("the server's issuing keys are not on this device yet — check for credit first")?;
-                let payment = purse.spend(&keys, coins, &PayInfo { pay_info_bytes: pib }, spend_date)?;
-                let emptied = purse.remaining_coins() == 0;
-                w.coconut_purses[idx] = purse.persist()?;
-                if emptied {
-                    w.coconut_purses.remove(idx);
-                }
-                let payment_json = serde_json::to_value(&payment).map_err(|e| e.to_string())?;
-                w.pending_spend = Some(wallet::PendingSpend {
-                    payment: payment_json.clone(),
-                    pay_info: pib.to_vec(),
-                    spend_date,
-                    coins,
-                    kind: "redeem".into(),
-                    session_id: Some(sk.session_id.clone()),
-                });
-                wallet::save(&dir, &w)?;
-                (payment_json, pib.to_vec(), spend_date, coins, sk.session_id.clone())
-            }
-        };
-
-    let env = json!({
-        "v": PROTO, "kind": "redeem", "id": rand_hex(16),
-        "sessionId": session_id,
-        "payment": payment_json,
-        "pay_info": pib, "spend_date": spend_date,
-    });
-    match t.round_trip(srv, &env, SURBS_SMALL, TIMEOUT_MS).await {
-        // Credited (or a benign replay) — the retry window is closed, drop the pending.
-        Ok(reply) => {
-            w.pending_spend = None;
-            wallet::save(&dir, &w)?;
-            let balance = reply.get("balance").and_then(|b| b.as_u64()).unwrap_or(0);
-            log::info!("[coconut] redeemed {coins} coin(s) → session balance {balance}");
-            Ok(balance)
-        }
-        // No server verdict — keep the pending record so the next call retries with the
-        // SAME pay_info (a benign quorum replay), never a fresh spend.
-        Err(e) if is_transport_error(&e) => Err(e),
-        // Definitive server rejection — clear the pending and, only if the credential is
-        // provably stale (its key differs from the server's), discard it. See the helper.
-        Err(e) => Err(handle_spend_rejection(t, srv, &dir, &mut w, e).await),
-    }
-}
-
-/// TOKU value of coconut coins NOT yet redeemed (0 if no credential). Local-only —
-/// added to the funded session balance so the UI shows total spendable credit.
-/// The first held book that still has coins, restored — spends drain the books
-/// in order, and emptied ones are dropped by the spender.
-fn first_funded_purse(purses: &[String]) -> Option<(usize, scrai_core::purse::Purse)> {
-    for (i, pj) in purses.iter().enumerate() {
-        if let Ok(p) = scrai_core::purse::Purse::restore(pj) {
-            if p.remaining_coins() > 0 {
-                return Some((i, p));
-            }
-        }
-    }
-    None
-}
 
 fn coconut_held_toku(app: &AppHandle) -> u64 {
     let Ok(dir) = data_dir(app) else { return 0 };
     coin_value_toku(&wallet::load(&dir))
 }
 
-/// Manually redeem coconut coins into the session balance (chat also does this
-/// automatically when a session runs dry).
-#[tauri::command]
-async fn coconut_redeem(
-    app: AppHandle,
-    transport: State<'_, Arc<Transport>>,
-    server: Option<String>,
-    coins: Option<u64>,
-) -> Result<Value, String> {
-    let _op = transport.begin_op().await;
-    let srv = resolve_server(&app, server)?;
-    let coins = coins.unwrap_or(REDEEM_CHUNK_COINS);
-    let balance = redeem_coconut(&app, &transport, &srv, coins).await?;
-    Ok(json!({ "ok": true, "coins": coins, "balance": balance }))
-}
 
 // ---- commands -------------------------------------------------------------
 
@@ -2037,11 +1807,9 @@ async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<V
     };
     let server = server_addr(&w).ok();
     let mut models = json!([]);
-    let mut balance: u64 = 0;
 
     if let Some(srv) = &server {
         // Assume the server answers until a fetch below says otherwise.
-        let mut server_answered = true;
         // Models: cached after first fetch. META_TIMEOUT_MS, not the chat TIMEOUT_MS:
         // a catalogue reply is small and normally takes seconds — waiting the full
         // 120 s here is what once delayed the "server unreachable" verdict to ~4 min.
@@ -2052,7 +1820,7 @@ async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<V
                 .round_trip(srv, &json!({"v":PROTO,"kind":"models","id":rand_hex(16)}), SURBS_META, META_TIMEOUT_MS)
                 .await
             {
-                Err(_) => server_answered = false,
+                Err(_) => {}
                 Ok(resp) => {
                     if let Some(m) = resp.get("models") {
                         models = m.clone();
@@ -2118,24 +1886,11 @@ async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<V
                 }
             }
         }
-        // Balance for the active session — skipped when the catalogue fetch above already
-        // got no answer: the balance request would only stack a second long timeout onto
-        // a server that is clearly not answering right now.
-        if server_answered {
-            if let Some(m) = &w.mnemonic {
-                if let Ok(sk) = account::derive_session_keys(m, w.session_index) {
-                    if let Ok((b, _)) = session_status(&transport, srv, &sk).await {
-                        balance = b;
-                    }
-                }
-            }
-        }
     }
 
-    // Show TOTAL spendable credit: the funded session balance PLUS coconut coins not
-    // yet redeemed (redeem is lazy — it happens on first chat — but the money is
-    // already the user's, so a fresh credential shouldn't read as "0").
-    balance = balance.saturating_add(coconut_held_toku(&app));
+    // The balance IS the coins on this device. There is no server-side balance any more —
+    // no call to make, and nothing the server could tell us about what we hold.
+    let balance = coconut_held_toku(&app);
     let (testnet, faucet_url) = SERVER_TESTNET.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let update = SERVER_UPDATE.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let card = SERVER_CARD.lock().unwrap_or_else(|e| e.into_inner()).clone();
@@ -2244,7 +1999,7 @@ fn has_held_value(w: &wallet::Wallet) -> bool {
 
 /// Distinct, machine-parseable prefix so the frontend can recognise "you'd lose held
 /// credit" and turn it into an explicit confirm instead of a generic failure.
-const HELD_CREDIT_ERR: &str = "HELD_CREDIT: switching accounts here discards un-redeemed held ecash (bearer money, not recoverable from the seed). Redeem it into your session balance first, or confirm to discard it.";
+const HELD_CREDIT_ERR: &str = "HELD_CREDIT: switching accounts here discards the coins on this device (bearer money, not recoverable from the phrase). Return them to your account balance first, or confirm to discard them.";
 
 /// Create + persist a fresh account, refusing to silently discard held bearer ecash
 /// unless the UI has confirmed the loss (M-cl-1). Returns (data dir, mnemonic, fingerprint).
@@ -2835,6 +2590,18 @@ async fn collect_now(app: AppHandle, main: Arc<Transport>) -> Result<Value, Stri
     let srv = server_addr(&w0)?;
     let a = wallet_account(&app)?;
 
+    // A book can only be spent with the material of the epoch it was issued in, and that
+    // material is not rebuildable — so when a device holds a book whose keys it no longer
+    // has (a cleared cache, an app that changed how it files them), it must ask for that
+    // epoch by date. Without this the books are money the device can see and never touch;
+    // the Mac hit exactly that on 2026-09-15.
+    for (denom, exp) in missing_epochs(&wallet::load(&dir), &dir, &srv) {
+        match federation_keys(&transport, &srv, &dir, denom, exp).await {
+            Ok(_) => log::warn!("[coconut] fetched the material for an older epoch this device still holds books from"),
+            Err(e) => log::warn!("[coconut] an older epoch's material could not be fetched: {e}"),
+        }
+    }
+
     // Books near their date go back FIRST, so their value is part of what this sweep then
     // draws again — out of the current epoch, with a full life ahead of it. Best effort: a
     // swap that cannot reach the server leaves the books alone and tries again next time,
@@ -2881,7 +2648,7 @@ async fn collect_now(app: AppHandle, main: Arc<Transport>) -> Result<Value, Stri
     // withdrawals through the mixnet once already (2026-09-14).
     let mut book_of: std::collections::BTreeMap<u64, u64> = std::collections::BTreeMap::new();
     for denom in scrai_core::coconut::DENOMS {
-        if let Ok(FedResponse::Keys { total_coins, .. }) = federation_keys(&transport, &srv, &dir, denom).await {
+        if let Ok(FedResponse::Keys { total_coins, .. }) = federation_keys(&transport, &srv, &dir, denom, 0).await {
             if total_coins > 0 {
                 book_of.insert(denom, total_coins * denom);
             }
@@ -3004,17 +2771,6 @@ fn books_size_toku(w: &wallet::Wallet, dir: &Path, srv: &str) -> u64 {
     epoch_keys(dir, srv, COIN_TOKU).map(|k| k.book_toku()).unwrap_or(0)
 }
 
-/// Manually redeem one chunk of held coconut credit into the session balance
-/// (chat also does this automatically when the session runs dry).
-#[tauri::command]
-async fn redeem(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<Value, String> {
-    let _op = transport.begin_op().await;
-    let w = wallet::load(&data_dir(&app)?);
-    let srv = server_addr(&w)?;
-    let balance = redeem_coconut(&app, &transport, &srv, REDEEM_CHUNK_COINS).await?;
-    let held = coconut_held_toku(&app);
-    Ok(json!({ "balance": balance.saturating_add(held), "held": held }))
-}
 
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
@@ -3107,13 +2863,20 @@ async fn chat_impl(
 
     let m = w.mnemonic.clone().ok_or("no account — create one and buy credit")?;
 
-    let sk = account::derive_session_keys(&m, w.session_index)?;
+    // A LOCAL key for the two in-app maps that remember an interrupted request: an
+    // unanswered chat and a half-fetched picture. It never leaves the device — it used to
+    // be the session id, which did, and which is exactly what coins replaced. Derived from
+    // the phrase so it survives a restart and a reinstall alike.
+    let chat_key = {
+        use sha2::{Digest, Sha256};
+        hex::encode(&Sha256::digest(format!("tokumai/chat-key/v1{m}").as_bytes())[..16])
+    };
 
     // Retry after an INTERRUPTED picture download: the picture was generated, charged
     // and staged server-side — resume fetching its missing chunks instead of signing a
     // fresh request that would draw (and bill) a second one.
     if retry.unwrap_or(false) {
-        if let Some(dl) = transport.take_staged_download(&sk.session_id).await {
+        if let Some(dl) = transport.take_staged_download(&chat_key).await {
             let resp = finish_staged_download(&app, &transport, &srv, dl).await?;
             return Ok(paid_chat_reply(&app, &resp, Value::Null));
         }
@@ -3155,153 +2918,48 @@ async fn chat_impl(
         if let Some(e) = reply.get("error").and_then(|e| e.as_str()) {
             return Err(e.to_string());
         }
-        let resp = fetch_staged_images(&app, &transport, &srv, &sk.session_id, reply).await?;
-        return Ok(paid_chat_reply(&app, &resp, Value::Null));
+        let resp = fetch_staged_images(&app, &transport, &srv, &chat_key, reply).await?;
+        let warning = overcharge_warning(&srv, &model, &messages, &resp);
+        return Ok(paid_chat_reply(&app, &resp, warning));
     }
 
-    let req = match (retry.unwrap_or(false), transport.pending_chat(&sk.session_id).await) {
-        (true, Some(prev)) => prev,
-        _ => {
-            let (balance0, mut counter0) = session_status(&transport, &srv, &sk).await?;
-            // Fund the session from a held coconut book when it runs dry.
-            if balance0 == 0 {
-                // C3: never pour more coins into a server this run caught cheating (overcharge
-                // or invalid issuance).
-                if is_flagged(&srv) {
-                    return Err("this server was flagged as dishonest — not redeeming more \
-                        credit into it. Switch servers (or restart the app) to retry.".into());
-                }
-                if !w.coconut_purses.is_empty() {
-                    redeem_coconut(&app, &transport, &srv, REDEEM_CHUNK_COINS).await?;
-                    counter0 = session_status(&transport, &srv, &sk).await?.1;
-                } else {
-                    return Err("no TOKU credit — buy credit first".into());
-                }
-            }
-            let counter = counter0 + 1;
+    // Nothing follows: coins are the only way to pay. The session path — a seed-derived
+    // balance the server held, a counter and a signature per request — was what made a
+    // person's prompts one story on the server, and it went on 2026-09-15
+    // (docs/unlinkability.md, block D). `coin_chat_enabled` is a way BACK for a moment,
+    // not a way: without it there is simply nothing to pay with.
+    Err("this app is set to the old session payment path, which this server no longer \
+         serves — switch \"pay with coins\" back on under Developer".into())
+}
 
-            // The signed body must serialise exactly like the server's canonicalBody:
-            // {model, messages, maxTokens} in that key order (preserve_order is on).
-            let max_val = maxTokens.map(|v| json!(v)).unwrap_or(Value::Null);
-            let body = serde_json::to_string(&json!({"model": model, "messages": messages, "maxTokens": max_val}))
-                .map_err(|e| e.to_string())?;
-            let sig = sk.sign(counter, &body);
-
-            let mut req = json!({
-                "v":PROTO,"kind":"chat","id":rand_hex(16),"model":model,"messages":messages,
-                "stream":false,"sessionId":sk.session_id,"counter":counter,"sig":sig,
-                // The session's public key rides along so the server can verify the
-                // signature statelessly: id_for(publicKey) must equal sessionId.
-                "publicKey":sk.public_key_pem
-            });
-            if let Some(mt) = maxTokens {
-                req["maxTokens"] = json!(mt);
-            }
-            // Unsigned live flag — outside canonicalBody, so it doesn't affect the sig.
-            if live.unwrap_or(false) {
-                req["live"] = json!(true);
-            }
-            if let Some(tb) = thinkingBudget {
-                req["thinkingBudget"] = json!(tb);
-            }
-            if let Some(s) = &imageSize {
-                req["imageSize"] = json!(s);
-            }
-            req["chunkedImages"] = json!(true);
-            req
-        }
-    };
-    // Send — and AUTO-REDEEM on the way. The proactive top-up above only fires when the
-    // session is fully empty, so a partial balance that's below THIS request's worst-case
-    // reserve (e.g. a big image) used to just fail with "not enough TOKU". Instead: if the
-    // server rejects for insufficient balance (a fast rejection at the reserve step, BEFORE
-    // any provider work), redeem a held coconut chunk and resend the SAME still-signed
-    // request. A failed reserve never advances the counter, and redeem only tops up the
-    // balance, so the resend is valid and fits. Loop until it fits or the held credit is gone.
-    let resp;
-    let mut redeems = 0u32;
-    loop {
-        // Remember the in-flight request BEFORE it leaves, so a failed send can be retried
-        // without re-signing (and re-charging). Cleared once its reply actually arrives.
-        transport.set_pending_chat(&sk.session_id, req.clone()).await;
-        // Tell the UI the instant the request has fully left for the mixnet, so its
-        // status line flips from "Sending…" to "Thinking" at the real moment.
-        let sent_app = app.clone();
-        // RAW round trip: a delivered server error arrives as Ok(reply) so it can be told
-        // apart from a lost reply. (The plain `round_trip_notify` folded both into Err —
-        // which left the pending request set after e.g. a provider refusal, so the UI's
-        // Retry resent the SAME counter and got "counter N was already used".)
-        let reply = transport
-            .round_trip_raw_notify(&srv, &req, surbs, chat_timeout_ms, move || {
-                let _ = sent_app.emit("chat-sent", ());
-            })
-            .await?;
-        let server_error = (reply.get("kind").and_then(|k| k.as_str()) == Some("error"))
-            .then(|| reply.get("error").and_then(|e| e.as_str()).unwrap_or("server error").to_string());
-        // Both spellings: old servers say SCRAI, renamed ones TOKU.
-        let insufficient = server_error
-            .as_deref()
-            .is_some_and(|s| s.contains("not enough SCRAI") || s.contains("not enough TOKU"));
-        if insufficient && redeems < 64 && !is_flagged(&srv) && !wallet::load(&dir).coconut_purses.is_empty() {
-            // Session credit ran short mid-request → auto-redeem a held $1 chunk and resend.
-            // A failed reserve never consumed the counter, so the verbatim resend is valid.
-            let _ = app.emit("chat-redeeming", ());
-            redeem_coconut(&app, &transport, &srv, REDEEM_CHUNK_COINS).await?;
-            redeems += 1;
-            continue;
-        }
-        if let Some(e) = server_error {
-            // The unit was renamed in the UI; an older server still says SCRAI.
-            let e = e.replace("SCRAI", "TOKU");
-            // The server answered — this request is spent (its counter is used, or it was
-            // refused for good), so the next attempt must be a FRESH one, not a replay.
-            transport.clear_pending_chat(&sk.session_id).await;
-            return Err(e);
-        }
-        resp = reply;
-        break;
-    }
-    // A reply arrived (success OR a server-side error): the request was delivered, so
-    // the next chat should be a fresh one — drop the pending so it isn't resent.
-    transport.clear_pending_chat(&sk.session_id).await;
-    // Big generated pictures arrive as chunk references — fetch + reassemble them so
-    // the UI sees plain `{mimeType, data}` images exactly as before.
-    let resp = fetch_staged_images(&app, &transport, &srv, &sk.session_id, resp).await?;
-
-    // C3: independent overcharge check. Recompute a fair upper-bound from the client's
-    // OWN token estimate + bundled retail table; a charge grossly above it means the
-    // operator inflated margin or token counts. Fully additive + fail-open — any
-    // inability to estimate just skips the check, never blocking a legitimate chat.
+/// C3: independent overcharge check. Recompute a fair upper bound from the client's OWN
+/// token estimate and bundled retail table; a charge grossly above it means the operator
+/// inflated the margin or the token counts. Additive and fail-open — any inability to
+/// estimate just skips the check, and never blocks a legitimate answer.
+fn overcharge_warning(srv: &str, model: &str, messages: &Value, resp: &Value) -> Value {
     let charged = resp.pointer("/usage/billing/priceScrai").and_then(|v| v.as_u64());
     let has_images = resp
         .get("images")
         .and_then(|v| v.as_array())
         .map(|a| !a.is_empty())
         .unwrap_or(false);
-    let mut price_warning = Value::Null;
-    if let (Some(charged), false) = (charged, has_images) {
-        let reply_text = resp.get("text").and_then(|t| t.as_str()).unwrap_or("");
-        if let Some(fair) = fair_price_estimate(&model, &messages, reply_text) {
-            // The comparison is against the rounded-up price, because that is what the
-            // server may legitimately take: a 0.17 ¢ answer costs 0.2 ¢ when coins pay.
-            let coin = scrai_core::coconut::COIN_TOKU;
-            let ceiling = ((fair as f64 * OVERCHARGE_FACTOR).ceil() as u64).div_ceil(coin) * coin;
-            if charged > MIN_FLAG_SCRAI && charged > ceiling {
-                flag_server(
-                    &srv,
-                    &format!("overcharge: charged {charged} TOKU vs ~{fair} fair (>{OVERCHARGE_FACTOR}×)"),
-                );
-                price_warning = json!({
-                    "kind": "overcharge",
-                    "charged": charged,
-                    "fairEstimate": fair,
-                    "factor": OVERCHARGE_FACTOR,
-                });
-            }
-        }
+    let (Some(charged), false) = (charged, has_images) else { return Value::Null };
+    let reply_text = resp.get("text").and_then(|t| t.as_str()).unwrap_or("");
+    let Some(fair) = fair_price_estimate(model, messages, reply_text) else { return Value::Null };
+    // The comparison is against the rounded-up price, because that is what the server may
+    // legitimately take: a 0.17 ¢ answer costs 0.2 ¢ when coins pay.
+    let coin = scrai_core::coconut::COIN_TOKU;
+    let ceiling = ((fair as f64 * OVERCHARGE_FACTOR).ceil() as u64).div_ceil(coin) * coin;
+    if charged > MIN_FLAG_SCRAI && charged > ceiling {
+        flag_server(srv, &format!("overcharge: charged {charged} TOKU vs ~{fair} fair (>{OVERCHARGE_FACTOR}×)"));
+        return json!({
+            "kind": "overcharge",
+            "charged": charged,
+            "fairEstimate": fair,
+            "factor": OVERCHARGE_FACTOR,
+        });
     }
-
-    Ok(paid_chat_reply(&app, &resp, price_warning))
+    Value::Null
 }
 
 /// Shape a paid chat reply for the UI. Reports TOTAL spendable credit (funded session
@@ -4916,9 +4574,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             state, local_state, set_server, account_new, account_reveal, account_restore, account_delete, account_migrate_qr,
-            invoice, invoice_status, invoice_cancel, invite_check, ocr_scan, pdf_text, pdf_ocr, pdf_pages, collect, redeem, chat,
-            smart_available, smart_detect, coconut_redeem,
-            mixnet_route, mixnet_ping, cancel_chat, app_resumed, app_hidden, resume_stats, list_entry_gateways, server_identities, set_entry_gateway, set_entry_random, set_mixnet_perf, buy_close, set_coin_chat, coins_return, collect_later, session_drain, open_external, save_image, save_file, voucher_redeem,
+            invoice, invoice_status, invoice_cancel, invite_check, ocr_scan, pdf_text, pdf_ocr, pdf_pages, collect, chat,
+            smart_available, smart_detect,
+            mixnet_route, mixnet_ping, cancel_chat, app_resumed, app_hidden, resume_stats, list_entry_gateways, server_identities, set_entry_gateway, set_entry_random, set_mixnet_perf, buy_close, set_coin_chat, coins_return, collect_later, open_external, save_image, save_file, voucher_redeem,
             phrase_backup_get, iap_products, iap_purchase, iap_restore,
             phrase_check_start,
             phrase_check_verify,
@@ -5305,7 +4963,9 @@ mod tender_tests {
         use scrai_core::federation::FedRequest;
         assert_eq!(surbs_for(&FedRequest::Keys), SURBS_KEYS);
         for d in [COIN_TOKU, COARSE_TOKU] {
-            assert_eq!(surbs_for(&FedRequest::KeysFor { denom_toku: d }), SURBS_KEYS, "denomination {d}");
+            assert_eq!(surbs_for(&FedRequest::KeysFor { denom_toku: d, expiration_date: 0 }), SURBS_KEYS, "denomination {d}");
+            // …and asking for an OLDER epoch's material is the same size of answer.
+            assert_eq!(surbs_for(&FedRequest::KeysFor { denom_toku: d, expiration_date: 1_760_400_000 }), SURBS_KEYS);
         }
     }
 

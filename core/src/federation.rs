@@ -42,9 +42,16 @@ pub enum FedRequest {
     /// epoch material, so a client can verify shares and spend. Bare `Keys` means the
     /// FINE denomination — the only one that existed before 2026-09-15.
     Keys,
-    /// The same, for one denomination (`coconut::DENOMS`). Each denomination is its own
-    /// issuing authority with its own material, so they are fetched — and cached — apart.
-    KeysFor { denom_toku: u64 },
+    /// The same, for one denomination (`coconut::DENOMS`) and optionally one EPOCH. Each
+    /// denomination is its own issuing authority with its own material, so they are fetched
+    /// — and cached — apart. `expiration_date` 0 means the epoch that issues today; naming
+    /// one is how a client that still holds books from an older epoch gets the material to
+    /// spend them, which it cannot reconstruct and cannot do without.
+    KeysFor {
+        denom_toku: u64,
+        #[serde(default)]
+        expiration_date: u32,
+    },
     /// Ask this authority to blind-sign a withdrawal request with its key share.
     /// `denom_toku` picks which issuing key signs it; absent means the fine one.
     /// `expiration_date` names the EPOCH the request was built for — a withdrawal request

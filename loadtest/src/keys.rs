@@ -6,7 +6,6 @@
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use ed25519_dalek::{Signer as _, SigningKey};
 use rand::RngCore;
-use sha2::{Digest, Sha256};
 
 /// ASN.1 SPKI prefix for an Ed25519 public key; the 32 key bytes follow.
 const SPKI_ED25519_PREFIX: [u8; 12] =
@@ -39,12 +38,6 @@ impl Signer {
         B64.encode(self.sk.sign(msg.as_bytes()).to_bytes())
     }
 
-    /// Authorise one chat spend: (sessionId ‖ counter ‖ sha256(body)).
-    pub fn sign_session(&self, counter: u64, body: &str) -> String {
-        let body_hash = hex::encode(Sha256::digest(body.as_bytes()));
-        let msg = format!("{}:{}:{}", self.id, counter, body_hash);
-        B64.encode(self.sk.sign(msg.as_bytes()).to_bytes())
-    }
 }
 
 pub fn rand_hex(n: usize) -> String {
@@ -64,9 +57,5 @@ mod tests {
         let s = Signer::random();
         let sig = s.sign_account("invoice:5", "n1");
         assert_eq!(scrai_core::auth::account_owns(&s.pem, "invoice:5", "n1", &sig), Some(s.id.clone()));
-        let body = r#"{"model":"m","messages":[],"maxTokens":64}"#;
-        let sig = s.sign_session(7, body);
-        assert!(scrai_core::auth::session_authorises(&s.pem, &s.id, 7, body, &sig));
-        assert!(!scrai_core::auth::session_authorises(&s.pem, &s.id, 8, body, &sig));
     }
 }

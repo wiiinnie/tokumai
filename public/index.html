@@ -1452,7 +1452,6 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       <div class="mpage" data-page="dev">
       <p class="pagelead" id="devSectionNote">Diagnostics for testing. Hidden in release builds.</p>
       <div class="setrow" id="hideDevRow" data-click="hideDev" style="cursor:pointer"><span><b>Hide this section</b><small>Takes the Developer row out of the settings list again. Seven taps on the version line bring it back.</small></span><span class="chev">›</span></div>
-      <label class="setrow" id="coinChatRow"><input type="checkbox" id="coinChatChk" data-change="toggleCoinChat"><span><b>Pay with coins, not a session</b><small>Each answer is paid for with blind-signed coins attached to the request — no session, no counter, no signature. The server burns exactly what the answer cost and the rest comes back. Testing only until every platform has it.</small></span></label>
       <label class="setrow" id="devCostRow"><input type="checkbox" id="devCostChk"><span><b>Developer diagnostics</b><small>Master switch for inline developer diagnostics: the per-answer cost/margin audit and the real upload transfer speed (size ÷ transfer time). Everything meant to be removed later lives here — local-only, toggle any time.</small></span></label>
       <div class="mprow" id="dlSizeRow">
         <div class="mptop"><b>Image upload size</b></div>
@@ -1701,8 +1700,6 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   let currentModel = null, modelVendor = "", modelTrains = false, modelRate = null, modelAcceptsImages = false, modelKind = "text";
   let account = null;                    // { fingerprint, sessionIndex } | null
   let balance = 0, held = 0;             // TOKU: funded session, and held ecash
-  let redeeming = false;                 // re-entrancy guard for the manual redeem button
-  let redeemDollars = null;              // chosen redeem amount in $ (null = default to max held)
   let migrateData = null;                // {mnemonic, qr} for the "migrate to device" view
   // Assume REAL money until the server says otherwise. This used to default to the fake
   // gateway, so an app that had not heard from the server yet announced "dev mode — settles
@@ -1835,7 +1832,6 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
 
       fakePayments = s.fakePayments === true;    // only when the server SAYS so
       devBuild = s.devBuild === true;
-      coinChat = s.coinChat === true;
       if(!devBuild && !devUnlocked) devCost = false;   // diagnostics need a debug build or the unlock gesture
       if(s.update && s.update.required) showUpdateGate(s.update);
       // Settings footer: app + server version (server absent on the web dev bridge / old servers).
@@ -2022,7 +2018,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     const raw = (m.kind||'text')==='image'
       ? (Number(r.image)||Number(r.out)||Infinity)
       : (Number(r.in)||0)/500 + (Number(r.out)||0)*(800+thinkTokens())/1e6;
-    if(!coinChat || !isFinite(raw)) return raw;
+    if(!isFinite(raw)) return raw;
     return Math.ceil(raw / coinToku) * coinToku;
   }
   function costLabel(m){
@@ -2335,7 +2331,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     // The session pseudonym is meaningless once coins pay for each answer — nothing is
     // billed to it — so it is only named while the session path is the one in use.
     $("acctLine").textContent = account
-      ? `account ${account.fingerprint}` + (coinChat ? " · paid with coins" : ` · session #${account.sessionIndex}`)
+      ? `account ${account.fingerprint} · paid with coins`
       : "no account — open Account & recovery";
     if(held>0 || entitlement>0){
       $("heldLine").style.display="flex";
@@ -2667,7 +2663,6 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // all until a purchase tops it up — it is still the user's money and is shown as such.
   let entitlement = 0, bookToku = 100000, coinToku = 100;
   // Developer switch: pay each answer with coins instead of a session balance.
-  let coinChat = false;
   // The Developer section is a debug-build thing, but a phone has no way to run a debug
   // build sensibly (a debug nym-sdk is enormous) and no environment to set — so seven taps
   // on the version line reveal it. Nothing behind it leaks: the per-answer cost audit is
@@ -4060,7 +4055,6 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       onPhase:(p,info)=>{
         if(p==="route"){ updateRouteUI(); return; }                 // queued behind a route rebuild
         if(p==="sent"){ setMixPhase(1); tSent=performance.now(); }
-        else if(p==="redeeming"){ setStatus("session credit low — redeeming held credit…"); }
         else if(p==="image"&&info){
           // The picture was generated (and charged) — now its chunks trickle through the
           // mixnet. Replace the held "Thinking…" with live progress; the first event is
@@ -4387,7 +4381,6 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     $("grText").checked    = !!g.scanText;
     $("grImages").checked  = !!g.scanImages;
     $("devCostChk").checked = devCost;
-    $("coinChatChk").checked = coinChat;
     $("setStatus").textContent = "";
     ["prCtx","prTopic","prWhite","prReq","prHand"].forEach(id=>{ $(id).onchange = persistSettings; });
     syncRowTint();
@@ -5004,24 +4997,8 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // positions are re-drawn afterwards, so nothing can be copied off the old ones.
   async function showPhraseAgain(){ acctPage = "phrase"; acctView = null; acctPhrase = null; renderAccount(); if(isIOSNative()) await doAccountReveal(); }
 
-  // ---- coins go home -------------------------------------------------------------
-  // Coins live on this device only; a recovery phrase does not bring them back. Returning
-  // them turns them into account credit again, which is how a device is moved or emptied
-  // before it is given away. (The trickle that used to dribble them onto the session
-  // balance is gone: it spent the very coins a coin-paid request has to tender.)
-  // Developer: coins instead of a session. The backend keeps the flag in the wallet, so it
-  // survives a restart and works on a phone, where there is no environment to set.
-  async function toggleCoinChat(){
-    const el = $("coinChatChk");
-    coinChat = !!(el && el.checked);
-    try{ await Backend.setCoinChat(coinChat); }
-    catch(e){ coinChat = !coinChat; if(el) el.checked = coinChat; $("setStatus").textContent = "could not switch: " + e; return; }
-    $("setStatus").textContent = "paying with " + (coinChat ? "coins" : "a session balance");
-    renderBal();
-  }
 
   let returning = false, returnPct = 0, returnDone = 0;
-  let draining = false, drainMsg = "";   // moving an old session balance onto the account
   async function returnCoins(){
     if(returning || !account) return;
     if(!(held > 0)){ acctStatus("Nothing on this device to return.", ""); return; }
@@ -5258,7 +5235,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     if(held > 0) parts.push(`<span style="color:var(--rust)">${esc(formatToku(held))} on this device only</span>`);
     if(entitlement > 0) parts.push(`${esc(formatToku(entitlement))} on your account`);
     if(session > 0) parts.push(`${esc(formatToku(session))} on your old session`);
-    if(!parts.length) return coinChat ? "no credit yet" : "nothing held on this device";
+    if(!parts.length) return "no credit yet";
     const phrase = (entitlement > 0 || session > 0) ? " · your phrase brings the account part back" : "";
     return parts.join(" · ") + phrase;
   }
@@ -5322,57 +5299,23 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     const maxD = Math.max(1, Math.floor(held/100000));
     const pickD = Math.min(redeemDollars!=null?redeemDollars:maxD, maxD);
     const pickToku = pickD>=maxD ? held : pickD*100000;
-    // Credit left on the old session layer. Prompts pay with coins now, so nothing spends
-    // this any more — it has to come back to the account before that layer goes.
-    const sessionToku = Math.max(0, balance - held);
-    const drainBox = (coinChat && sessionToku>0) ? `<div class="heldbox">
-        <div class="hh"><span class="amt">${esc(formatToku(sessionToku))} TOKU</span><span class="where">on your old session</span></div>
-        <p>Credit from before prompts paid with coins. It is still yours, but nothing spends it any more.
-           Move it to your account and it comes back as coins on this device.</p>
-        ${draining ? `<div class="act">
-          <button class="rbtn busy" disabled>Moving<span class="dots"></span></button>
-          <span class="rsmall">over the mixnet</span>
-        </div>`
-        : `<div class="act">
-          <button class="rbtn" data-click="doDrain">Move to my account</button>
-          ${drainMsg?`<span class="rsmall">${esc(drainMsg)}</span>`:``}
-        </div>`}
-      </div>` : ``;
     const heldBox = held>0 ? `<div class="heldbox">
         <div class="hh"><span class="amt">${esc(formatToku(held))} TOKU</span><span class="where">on this device only</span></div>
-        <p>${coinChat
-          ? `Coins are held here, not on your account. A <b>recovery phrase does not bring them back</b> — before you
-             give this device away or move to another one, send them back.`
-          : `Coins are held here, not on your account. A <b>recovery phrase does not bring them back</b>
-             — redeeming moves them onto your balance, where it does.`}</p>
-        ${coinChat ? `<div class="act">
+        <p>Coins are held here, not on your account. A <b>recovery phrase does not bring them back</b> — before you
+           give this device away or move to another one, send them back.</p>
+        <div class="act">
           <button class="rbtn" data-click="acctNav" data-click-pass="this" data-page="giveback">Return to account balance</button>
-        </div>` : `
-        ${redeemPick&&maxD>1?`<div class="rslider">
-          <input type="range" id="redeemSlider" min="1" max="${maxD}" value="${pickD}" step="1"
-                 data-input="redeemSliderChanged" data-input-pass="value" class="mpslider flat">
-          <div class="mpticks"><span>$1</span><span id="redeemLabel">${esc(formatToku(pickToku))} TOKU ($${pickD}${pickD>=maxD?" · all":""})</span><span>$${maxD} · all</span></div>
-        </div>`:``}
-        ${redeeming ? `<div class="act">
-          <button class="rbtn busy" disabled>Redeeming<span class="dots"></span></button>
-          <span class="rsmall">${esc(redeemStep)}</span>
         </div>
-        <div class="prog"><i style="width:${redeemPct}%"></i></div>`
-        : `<div class="act">
-          <button class="rbtn" data-click="doRedeem">${redeemPartial?"Redeem the rest":`Redeem ${redeemPick&&maxD>1?`$${pickD}`:`now`}`}</button>
-          ${maxD>1&&!redeemPartial?`<span class="rlink" data-click="toggleRedeemPick">${redeemPick?"all of it":"choose amount"}</span>`:``}
-        </div>`}`}
       </div>` : ``;
     const idcard = `<div class="idcard">
       <div class="fp">${esc(account.fingerprint)}</div>
-      <div class="ses">${coinChat ? "paid with coins" : `session #${account.sessionIndex}`} · fingerprint</div>
+      <div class="ses">paid with coins · fingerprint</div>
       <div class="bal">${esc(tokuLine(balance + entitlement))}</div>
       <div class="held">${creditSplit()}</div>
       ${entitlement>0 && entitlement<bookToku ? `<div class="held" style="color:var(--rust)">Coins are drawn a whole book at a time (${esc(formatToku(bookToku))} TOKU), so this rest waits here until your next top-up. It is on your recovery phrase and cannot be lost.</div>` : ``}
       ${checking
         ? `<div class="checkline busy">↻ Checking<span class="dots"></span> <span class="dim">· over the mixnet</span></div>`
         : `<div class="checkline" data-click="checkCredit">↻ Check for credit <span class="dim">· ${esc(credResult||checkedAgo())}</span></div>`}
-      ${drainBox}
       ${heldBox}
     </div>`;
 
@@ -5387,7 +5330,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         + row("phrase","c-key","🔑","Recovery phrase","show &amp; copy the 24 words")
         // Not a menu row where coins are the payment path: the button sits under the coins
         // themselves, which is where someone looking at them asks the question.
-        + (coinChat ? `` : row("giveback","c-migrate","⇠","Return to account balance", held>0 ? "hand the coins on this device back — the only way they survive it" : "nothing on this device to hand back"))
+
         + (phraseBackup.available
             ? row("backup","c-key","☁","Phrase in Keychain", phraseBackup.on ? "synced through iCloud, end to end" : (phraseBackup.error ? "off · the Keychain did not answer" : "off · paper only"),
                   phraseBackup.on ? `<span class="pill ok">on</span>` : `<span class="pill">off</span>`)
@@ -5428,16 +5371,16 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
 
     const dangerPage = acctView==="confirmNew"
       ? `<p class="hint" style="color:var(--rust)">A new account ABANDONS any balance on the current one. Sure?</p>
-         ${redeeming ? redeemingBlock("the new account is created") : held>0?`<p class="hint">This device still holds <b>${formatToku(held)} TOKU</b> as coins. Redeeming moves them to your recoverable balance first — they are gone otherwise.</p>
-         <div class="btnrow"><button class="btn primary" data-click="redeemThen" data-args="&quot;new&quot;">Redeem ${formatToku(held)}, then create</button></div>
+         ${returning ? returningBlock("the new account is created") : held>0?`<p class="hint">This device still holds <b>${formatToku(held)} TOKU</b> as coins. Sending them back to your account keeps them — they are gone otherwise.</p>
+         <div class="btnrow"><button class="btn primary" data-click="returnThen" data-args="&quot;new&quot;">Send ${formatToku(held)} back, then create</button></div>
          <div class="btnrow"><button class="btn danger" data-click="doAccountNew" data-args="true">Discard and create</button>
            <button class="btn" data-click="cancelAcctView">Cancel</button></div>`
          :`<div class="btnrow"><button class="btn primary" data-click="doAccountNew" data-args="true">Yes, overwrite</button>
            <button class="btn" data-click="cancelAcctView">Cancel</button></div>`}`
       : acctView==="confirmDelete"
       ? `<p class="hint" style="color:var(--rust)">Deleting wipes the recovery phrase AND any coins still held on this device (bearer money — not recoverable). Sure?</p>
-         ${redeeming ? redeemingBlock("the account is deleted") : held>0?`<p class="hint">Held here: <b>${formatToku(held)} TOKU</b>. Redeeming moves it to your recoverable balance first, where the phrase can bring it back.</p>
-         <div class="btnrow"><button class="btn primary" data-click="redeemThen" data-args="&quot;delete&quot;">Redeem ${formatToku(held)}, then delete</button></div>
+         ${returning ? returningBlock("the account is deleted") : held>0?`<p class="hint">Held here: <b>${formatToku(held)} TOKU</b>. Sending it back to your account keeps it, where the phrase can bring it back.</p>
+         <div class="btnrow"><button class="btn primary" data-click="returnThen" data-args="&quot;delete&quot;">Send ${formatToku(held)} back, then delete</button></div>
          <div class="btnrow"><button class="btn danger" data-click="doAccountDelete" data-args="true">Discard and delete</button>
            <button class="btn" data-click="cancelAcctView">Cancel</button></div>`
          :`<div class="btnrow"><button class="btn primary" data-click="doAccountDelete" data-args="true">Yes, delete</button>
@@ -5447,9 +5390,9 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
            <button class="btn danger" data-click="doAccountDelete">Delete account</button></div>`;
 
     const restorePage = acctView==="confirmRestore"
-      ? `<p class="hint" style="color:var(--rust)">This device holds <b>${formatToku(held)} TOKU</b> as un-redeemed coins. They are bearer money: a recovery phrase cannot bring them back, and restoring another account here discards them.</p>
-         ${redeeming ? redeemingBlock("the other account is restored") : `<p class="hint">Redeeming first moves them onto this account’s recoverable balance — then the restore costs you nothing.</p>
-         <div class="btnrow"><button class="btn primary" data-click="redeemThen" data-args="&quot;restore&quot;">Redeem ${formatToku(held)}, then restore</button></div>
+      ? `<p class="hint" style="color:var(--rust)">This device holds <b>${formatToku(held)} TOKU</b> as coins. They are bearer money: a recovery phrase cannot bring them back, and restoring another account here discards them.</p>
+         ${returning ? returningBlock("the other account is restored") : `<p class="hint">Sending them back to this account first costs you nothing — then restore.</p>
+         <div class="btnrow"><button class="btn primary" data-click="returnThen" data-args="&quot;restore&quot;">Send ${formatToku(held)} back, then restore</button></div>
          <div class="btnrow"><button class="btn danger" data-click="doAccountRestore" data-args="true">Discard and restore</button>
            <button class="btn" data-click="cancelAcctView">Cancel</button></div>`}`
       : `<p class="pagelead">Enter or scan a 24-word recovery phrase to restore that account on this device.</p>${restoreForm()}`;
@@ -5507,16 +5450,13 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // uniform $1 chunks over the mixnet — a larger amount just loops more of them.
   // "choose amount" is closed by default: the normal case is one tap that redeems
   // everything, and a slider that offers a choice of $1 out of $1 is noise.
-  let redeemPick = false;
   // What the button says while it works. The old code reported progress to acctStatus —
   // the hint line at the BOTTOM of the sheet, often off screen on a phone: you tapped a
   // button that then did nothing visible for ten seconds (tester, 2026-09-07).
-  let redeemStep = "", redeemPct = 0, redeemPartial = false;
   // Same story as the redeem button: checkCredit reported to acctStatus, the hint line at
   // the BOTTOM of the sheet, while the thing you clicked sits at the top. The line carries
   // its own state now, and keeps the answer until the next check (tester, 2026-09-07).
   let checking = false, credResult = "";
-  function toggleRedeemPick(){ redeemPick = !redeemPick; if(!redeemPick) redeemDollars = null; renderAccount(); }
   // When the balance was last confirmed with the server. The server settles on its own now
   // (a chain watch every 15 s), so this line mostly exists to say "yes, it looked".
   let lastCredCheck = 0;
@@ -5526,15 +5466,6 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     return m<1 ? "checked just now" : m===1 ? "checked a minute ago" : `checked ${m} min ago`;
   }
 
-  function redeemSliderChanged(v){
-    paintFlat($("redeemSlider"));
-    redeemDollars = parseInt(v,10)||1;
-    const maxD = Math.max(1, Math.floor(held/100000));
-    const d = Math.min(redeemDollars, maxD);
-    const scrai = d>=maxD ? held : d*100000;
-    const lbl = $("redeemLabel"); if(lbl) lbl.textContent = `${formatToku(scrai)} TOKU ($${d}${d>=maxD?" · all":""})`;
-    const btn = document.querySelector('.heldbox .rbtn'); if(btn) btn.textContent = `Redeem $${d}`;
-  }
   function showRestore(){ acctView="restore"; acctPhrase=null; renderAccount(); }
   function askNew(){ acctView="confirmNew"; acctPhrase=null; renderAccount(); }
   function cancelAcctView(){ acctView=null; pendingRestorePhrase=null; renderAccount(); }
@@ -5574,19 +5505,18 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // "Redeem it first" has to be an ACTION, not advice. Held coins are bearer money and the
   // three destructive paths (new / delete / restore) each offered only "discard" — the app
   // named the safe way out and then did not offer it (2026-09-06).
-  // While redeemThen() runs, the confirm page shows what is happening — before, only the
+  // While returnThen() runs, the confirm page shows what is happening — before, only the
   // number in the button ticked down, book by book, and it looked like nothing was
   // happening (2026-09-10).
-  function redeemingBlock(next){
+  function returningBlock(next){
     return `<div class="heldbox" style="margin-top:4px"><div class="hh"><span class="amt">${esc(formatToku(held))} TOKU</span><span class="where">still on this device</span></div>
-      <p>Redeeming onto your recoverable balance, one $1 book at a time over the mixnet — then ${esc(next)}. Keep the app open.</p>
-      <div class="act"><button class="rbtn busy" disabled>Redeeming<span class="dots"></span></button><span class="rsmall">${esc(redeemStep)}</span></div>
-      <div class="prog"><i style="width:${Math.max(0, Math.min(100, Number(redeemPct)||0))}%"></i></div></div>`;
+      <p>Sending the coins back to your account, a batch at a time over the mixnet — then ${esc(next)}. Keep the app open.</p>
+      <div class="act"><button class="rbtn busy" disabled>Sending back<span class="dots"></span></button><span class="rsmall">${esc(formatToku(returnDone))} TOKU so far</span></div>
+      <div class="prog"><i style="width:${Math.max(0, Math.min(100, Number(returnPct)||0))}%"></i></div></div>`;
   }
-  async function redeemThen(what){
-    redeemDollars = null;                 // everything, not whatever the slider last held
-    await doRedeem();
-    if(held > 0) return;                  // doRedeem reported why; nothing was discarded
+  async function returnThen(what){
+    await returnCoins();
+    if(held > 0) return;                  // returnCoins reported why; nothing was discarded
     if(what === "restore") return doAccountRestore(true);
     if(what === "new")     return doAccountNew(true);
     if(what === "delete")  return doAccountDelete(true);
@@ -5640,62 +5570,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   }
   // Strip the machine prefix off a HELD_CREDIT error for display.
   function heldMsg(e){ const m=e&&e.message?e.message:String(e); return m.replace(/^HELD_CREDIT:\s*/,""); }
-  /// Move an old session balance onto the account. One request, once per account: the
-  /// session says "empty me onto this account", the account says "that is me". What lands
-  /// is entitlement, and the app then draws it as books by itself.
-  async function doDrain(){
-    if(draining) return;
-    draining = true; drainMsg = ""; renderAccount();
-    try{
-      const r = await Backend.sessionDrain();
-      const moved = Number(r && r.moved) || 0;
-      await refreshState();
-      drainMsg = moved > 0 ? `${formatToku(moved)} TOKU moved — drawing coins` : "nothing left to move";
-    }catch(e){
-      drainMsg = String((e && e.message) || e || "could not reach the server");
-    }
-    draining = false; renderAccount(); renderBal();
-  }
 
-  async function doRedeem(){
-    if(redeeming) return;                       // ignore rapid double-clicks
-    redeeming = true;
-    const maxD = Math.max(1, Math.floor(held/100000));
-    const d = Math.min(redeemDollars!=null?redeemDollars:maxD, maxD);
-    const target = d>=maxD ? held : d*100000;   // TOKU to move onto the session layer
-    const startHeld = held;
-    const totalChunks = Math.max(1, Math.ceil(target/100000));
-    redeemPartial = false;
-    try{
-      // Always in uniform $1 chunks (anonymity + small proofs) — just loop for more. Each
-      // chunk is its own mixnet round trip, so the count is the honest progress: re-render
-      // the card between chunks and the held/session figures move with it, which is the
-      // real proof that something is happening.
-      while(held>0 && (startHeld-held)<target){
-        const done = Math.floor((startHeld-held)/100000);
-        redeemStep = totalChunks>1 ? `$${done+1} of $${totalChunks}` : "redeeming over the mixnet";
-        redeemPct = Math.round((done/totalChunks)*100) + Math.round(100/totalChunks/3);
-        renderAccount();
-        const r=await Backend.redeem();
-        balance=r.balance; if(typeof r.held==="number") held=r.held;
-        renderBal();
-      }
-      redeemDollars=null; redeemPick=false; redeeming=false;
-      renderAccount();
-    }catch(e){
-      // A stale credential discarded mid-loop (or any error) stops here; refresh + report.
-      // Whatever already went through is ON the session — say so, or people read a failure
-      // as a loss. The button then offers the REST, because that is what is left to do.
-      try{ await refreshState(); }catch(_){}
-      const moved = Math.max(0, startHeld-held);
-      redeemDollars=null; redeemPick=false; redeeming=false;
-      redeemPartial = moved>0 && held>0;
-      renderBal(); renderAccount();
-      acctStatus(moved>0
-        ? `stopped after ${formatToku(moved)} — that part is on your session balance, the rest is still held. ${e.message||e}`
-        : ""+(e.message||e));
-    }finally{ redeeming = false; redeemStep = ""; redeemPct = 0; }
-  }
   function askDelete(){ acctView="confirmDelete"; acctPhrase=null; renderAccount(); }
   async function doAccountDelete(confirmed){
     if(!confirmed){ askDelete(); return; }
@@ -5703,23 +5578,19 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     try{ await Backend.accountDelete(true); await refreshState(); acctBack(); acctStatus("Account deleted"); }
     catch(e){ acctStatus("Delete failed: "+heldMsg(e), "bad"); }
   }
-  // Migrate to another device: redeem ALL held credit onto the seed-recoverable session
-  // layer FIRST (so nothing device-local is left behind and there is no double-spend
-  // risk), then export just the mnemonic (as a QR + text). The session balance + any
-  // entitlement come back on the other device from the seed alone.
+  // Migrate to another device: send ALL coins back to the account FIRST (nothing
+  // device-local is left behind, and a copied wallet could not double-spend anyway), then
+  // export just the mnemonic (as a QR + text). The account balance comes back on the other
+  // device from the phrase alone.
   function askMigrate(){ acctView="confirmMigrate"; acctPhrase=null; renderAccount(); }
   async function doMigrate(confirmed){
     if(!confirmed){ askMigrate(); return; }
-    if(redeeming) return;
-    redeeming = true;
+    if(returning) return;
     try{
-      const startHeld = held;
-      const totalChunks = Math.max(1, Math.ceil(held/100000));
-      while(held>0){
-        acctStatus(`preparing… redeeming $${Math.floor((startHeld-held)/100000)+1} of $${totalChunks} to your recoverable balance`);
-        const r=await Backend.redeem();
-        balance=r.balance; if(typeof r.held==="number") held=r.held;
-        renderBal();
+      if(held > 0){
+        acctStatus("preparing… sending your coins back to your account");
+        await returnCoins();
+        if(held > 0) return;             // returnCoins said why; nothing was exported
       }
       migrateData = await Backend.accountMigrateQr();
       acctView="migrate"; acctPhrase=null; renderAccount();
@@ -5727,7 +5598,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       try{ await refreshState(); }catch(_){}
       renderBal(); renderAccount();
       acctStatus("Migration prep failed: "+(e.message||e), "bad");
-    }finally{ redeeming=false; }
+    }
   }
   // A payment that settles while the app is closed arrives through the sweep, never
   // through the payment panel's poll. Without this, whether a buyer gets their receipt
@@ -6896,12 +6767,12 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   function pickModel(i){ selectModelIdx(i); toggleMenu(); }
 
   // expose for inline handlers
-  Object.assign(window,{ toggleGwRandom, pickServerIdentity, returnCoins, toggleCoinChat, tapVersion, hideDev, selectIap, loadIap, toggleIapConsent, buyIap, restoreIap, codeTyped,
+  Object.assign(window,{ toggleGwRandom, pickServerIdentity, returnCoins, tapVersion, hideDev, selectIap, loadIap, toggleIapConsent, buyIap, restoreIap, codeTyped,
     pickModel, copyPhrase, newChat, openSession, deleteSession, exportSession, toggleMenu, selectModelIdx,
     autogrow, onKey, sendMsg, retryMsg, showHandover, downloadHandover, closeHandover, pickImport, importHandover,
     cancelMsg, resendMsg, showDismissed, retrieveMsg, openConnSheet, closeConnSheet, rebuildRoute, rebuildRouteFromSheet, copyResumeLog, routeDismiss, useOfficialServer, iterateImg,
-    openBuy, closeBuy, buyTier, buyOrInvoice, checkInvite, selectCoin, pickVariant, copyUri, copyTopupId, openTopupSheet, closeTopupSheet, confirmTopup, openAccount, closeAccount, doAccountNew, doAccountReveal, doAccountRestore, doAccountDelete, doMigrate, doDrain, doRedeem, redeemSliderChanged, toggleRedeemPick, askCancelInvoice, dismissCancelAsk, confirmCancelInvoice, toggleConsent, downloadReceipt, startQrScan, stopQrScan,
-    showRestore, askNew, redeemThen, cancelAcctView, saveServer, srvSelected, qNav, scrollToBottom, reopenGuard, checkCredit,
+    openBuy, closeBuy, buyTier, buyOrInvoice, checkInvite, selectCoin, pickVariant, copyUri, copyTopupId, openTopupSheet, closeTopupSheet, confirmTopup, openAccount, closeAccount, doAccountNew, doAccountReveal, doAccountRestore, doAccountDelete, doMigrate, askCancelInvoice, dismissCancelAsk, confirmCancelInvoice, toggleConsent, downloadReceipt, startQrScan, stopQrScan,
+    showRestore, askNew, returnThen, cancelAcctView, saveServer, srvSelected, qNav, scrollToBottom, reopenGuard, checkCredit,
     openEntryPicker, showExitInfo, chooseGateway, closeGw, filterGw, toggleGwOpt,
     acceptTerms, declineTerms, termsAgreeToggle, chooseModel, openLink, openSite, writeSupport, paymentSupport, setPhraseBackup, askPhraseBackupYes, askPhraseBackupNo, startPhraseCheck, submitPhraseCheck, showPhraseAgain, toggleImgOvl, saveImgTap, liveNudgeUse, liveNudgeSkip, reconnectMix, runMixPing, resetMixPerf,
     pickImage, attachTap, pickNative, pickFile, closeAttachMenu, onImagePicked, clearImage, setMenuKind, toggleLatest, startMode, imgSettled,

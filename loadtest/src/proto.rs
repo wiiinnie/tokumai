@@ -10,7 +10,7 @@ use crate::keys::{rand_hex, Signer};
 use crate::mix::{CallError, Mix};
 use crate::stats::{Live, Sample};
 use nym_sdk::mixnet::Recipient;
-use scrai_core::coconut::{self, PayInfo};
+use scrai_core::coconut::{self};
 use scrai_core::federation::{FedRequest, FedResponse};
 use scrai_core::purse::Purse;
 use serde_json::{json, Value};
@@ -42,6 +42,8 @@ pub struct Ctx {
     pub server: Recipient,
     pub surbs: u32,
     pub surbs_chat: u32,
+    /// Coins a chat puts on the table — the app's ceiling, in coins.
+    pub tender_coins: u64,
     pub timeout: Duration,
     pub tx: mpsc::Sender<Sample>,
     pub live: Arc<Live>,
@@ -57,12 +59,13 @@ impl Ctx {
         server: Recipient,
         surbs: u32,
         surbs_chat: u32,
+        tender_coins: u64,
         timeout: Duration,
         tx: mpsc::Sender<Sample>,
         live: Arc<Live>,
         t0: Instant,
     ) -> Self {
-        Self { client, mix, server, surbs, surbs_chat, timeout, tx, live, t0, seq: AtomicU64::new(0) }
+        Self { client, mix, server, surbs, surbs_chat, tender_coins, timeout, tx, live, t0, seq: AtomicU64::new(0) }
     }
 
     pub async fn record(&self, op: &str, start: Instant, ok: bool, err: String, reply_bytes: usize) {
@@ -118,8 +121,6 @@ impl Ctx {
 /// expects next, and the coconut book withdrawn against the fake payment.
 pub struct User {
     pub account: Signer,
-    pub session: Signer,
-    pub counter: u64,
     pub balance: u64,
     pub purse: Option<Purse>,
     /// The issuing epoch's material — one copy for every book this user holds.
@@ -128,7 +129,7 @@ pub struct User {
 
 impl User {
     pub fn new() -> Self {
-        Self { account: Signer::random(), session: Signer::random(), counter: 0, balance: 0, purse: None, keys: None }
+        Self { account: Signer::random(), balance: 0, purse: None, keys: None }
     }
 }
 
@@ -146,18 +147,10 @@ pub async fn models(ctx: &Ctx) -> Result<Value, String> {
     Ok(r)
 }
 
-pub async fn session_status(ctx: &Ctx, user: &mut User) -> Result<(), String> {
-    let r = ctx
-        .call("session.status", with(envelope("session.status"), json!({ "sessionId": user.session.id })))
-        .await?;
-    user.counter = r.get("counter").and_then(|c| c.as_u64()).unwrap_or(0);
-    user.balance = r.get("balance").and_then(|b| b.as_u64()).unwrap_or(0);
-    Ok(())
-}
 
 /// Buy `usd` on the FAKE rail, withdraw the ticketbook, redeem `redeem_coins` into the
 /// session — the app's `invoice` + `collect` + `redeem`, each leg recorded as its own op.
-pub async fn fund(ctx: &Ctx, user: &mut User, usd: u32, redeem_coins: u64) -> Result<u64, String> {
+pub async fn fund(ctx: &Ctx, user: &mut User, usd: u32) -> Result<u64, String> {
     // invoice.create — account-signed over `invoice:<usd>`
     let nonce = rand_hex(16);
     let req = with(envelope("invoice.create"), json!({
@@ -230,35 +223,13 @@ pub async fn fund(ctx: &Ctx, user: &mut User, usd: u32, redeem_coins: u64) -> Re
     user.keys = Some(scrai_core::purse::EpochKeys { vk, coin_sigs, date_sigs, expiration_date, total_coins, denom_toku: scrai_core::coconut::COIN_TOKU });
     user.purse = Some(Purse::new(wallet, user_kp, total_coins, expiration_date, scrai_core::coconut::COIN_TOKU));
 
-    redeem(ctx, user, redeem_coins).await
-}
-
-/// Spend `coins` of the held book into the session (the app's REDEEM_CHUNK_COINS = 100).
-pub async fn redeem(ctx: &Ctx, user: &mut User, coins: u64) -> Result<u64, String> {
-    let purse = user.purse.as_mut().ok_or("no coconut book to redeem from")?;
-    let coins = coins.min(purse.remaining_coins());
-    if coins == 0 {
-        return Err("coconut book is empty".into());
-    }
-    let mut pib = [0u8; 72];
-    rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut pib);
-    let spend_date = purse.expiration_date().saturating_sub(86_400);
-    let keys = user.keys.clone().ok_or("no epoch keys for this book")?;
-    let purse = user.purse.as_mut().ok_or("no coconut book to redeem from")?;
-    let payment = purse.spend(&keys, coins, &PayInfo { pay_info_bytes: pib }, spend_date)?;
-    let req = with(envelope("redeem"), json!({
-        "sessionId": user.session.id,
-        "payment": serde_json::to_value(&payment).map_err(|e| e.to_string())?,
-        "pay_info": pib.to_vec(), "spend_date": spend_date,
-    }));
-    let r = ctx.call("redeem", req).await?;
-    user.balance = r.get("balance").and_then(|b| b.as_u64()).unwrap_or(0);
-    // A redeem does not touch the counter, but syncing here is what the app effectively
-    // does before its first chat (session.status runs before every chat).
+    // Nothing to redeem into: the coins on the book ARE the money now.
+    user.balance = total_coins * scrai_core::coconut::COIN_TOKU;
     Ok(user.balance)
 }
 
-/// One signed chat turn. Like the app: `session.status` first (unless `skip_status`),
+
+/// One chat turn, paid the way the app pays: a tender on the table.
 /// then the request signed over the canonical body {model, messages, maxTokens}.
 pub async fn chat(
     ctx: &Ctx,
@@ -266,27 +237,34 @@ pub async fn chat(
     model: &str,
     prompt: &str,
     max_tokens: u64,
-    skip_status: bool,
+    _skip_status: bool,
 ) -> Result<Value, String> {
-    if !skip_status {
-        session_status(ctx, user).await?;
+    // Coins, like the app: a tender of 1,2,4,… notes rides with the request and the server
+    // burns exactly what the answer cost. There is no session, no counter and no signature
+    // to keep in step any more (docs/unlinkability.md, block D).
+    let keys = user.keys.clone().ok_or("no epoch material — withdraw a book first")?;
+    let purse = user.purse.as_mut().ok_or("no coconut book to pay with")?;
+    let want = ctx.tender_coins.min(purse.remaining_coins());
+    if want == 0 {
+        return Err("coconut book is empty".into());
     }
-    let counter = user.counter + 1;
-    let messages = json!([{ "role": "user", "content": prompt }]);
-    let body = serde_json::to_string(&json!({ "model": model, "messages": messages, "maxTokens": max_tokens }))
-        .map_err(|e| e.to_string())?;
-    let sig = user.session.sign_session(counter, &body);
+    let spend_date = purse.expiration_date().saturating_sub(86_400);
+    let notes = purse.spend_tender(&keys, &scrai_core::tender::plan_coins(want), spend_date)?;
+    let tender = scrai_core::tender::Tender { notes };
     let req = with(envelope("chat"), json!({
-        "model": model, "messages": messages, "stream": false,
-        "sessionId": user.session.id, "counter": counter, "sig": sig,
-        "publicKey": user.session.pem, "maxTokens": max_tokens,
+        "model": model,
+        "messages": json!([{ "role": "user", "content": prompt }]),
+        "stream": false,
+        "maxTokens": max_tokens,
+        "tender": serde_json::to_value(&tender).map_err(|e| e.to_string())?,
     }));
-    // The counter is consumed the moment the request leaves (the server may process it
-    // even when our reply is lost); a following session.status re-syncs regardless.
-    user.counter = counter;
     let r = ctx.call_surbs("chat", req, ctx.surbs_chat).await?;
-    if let Some(b) = r.get("balance").and_then(|b| b.as_u64()) {
-        user.balance = b;
-    }
+    // What the server did NOT burn is still good; this harness simply drops it (a run is
+    // throwaway money), but the coins it did burn are gone from the book either way.
+    user.balance = user
+        .purse
+        .as_ref()
+        .map(|p| p.remaining_coins() * scrai_core::coconut::COIN_TOKU)
+        .unwrap_or(0);
     Ok(r)
 }

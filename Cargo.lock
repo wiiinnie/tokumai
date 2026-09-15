@@ -9084,21 +9084,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "scrai-ledger"
-version = "0.6.4"
-dependencies = [
- "async-trait",
- "ed25519-dalek",
- "futures",
- "hex",
- "rand 0.8.7",
- "rusqlite",
- "scrai-core",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "scrai-loadtest"
 version = "0.6.4"
 dependencies = [

@@ -26,8 +26,7 @@
 use scrai_core::billing::TokenUsage;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 
 const RESPONSES_URL: &str = "https://api.openai.com/v1/responses";
 const MODERATIONS_URL: &str = "https://api.openai.com/v1/moderations";
@@ -133,38 +132,11 @@ pub fn strikes_per_day() -> u32 {
     crate::cfg("ABUSE_STRIKES_PER_DAY").ok().and_then(|v| v.trim().parse().ok()).filter(|n| *n > 0).unwrap_or(3)
 }
 
-/// (session, provider) → (day, strikes today).
-fn strikes() -> &'static Mutex<HashMap<(String, &'static str), (u64, u32)>> {
-    static S: OnceLock<Mutex<HashMap<(String, &'static str), (u64, u32)>>> = OnceLock::new();
-    S.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-/// Record one decline at `provider` for the session today; returns today's count there.
-pub fn strike(session_id: &str, provider: &'static str, day: u64) -> u32 {
-    let mut m = strikes().lock().unwrap_or_else(|e| e.into_inner());
-    // Drop yesterday's entries on the way past (bounded growth; strikes are daily).
-    m.retain(|_, (d, _)| *d == day);
-    let e = m.entry((session_id.to_string(), provider)).or_insert((day, 0));
-    e.1 += 1;
-    eprintln!(
-        "scrai-server: ABUSE strike {}/{} at {provider} for session {}… (day {day})",
-        e.1,
-        strikes_per_day(),
-        &session_id[..session_id.len().min(8)]
-    );
-    e.1
-}
-
-/// Has the session used up today's strikes at this provider?
-pub fn blocked(session_id: &str, provider: &'static str, day: u64) -> bool {
-    strikes()
-        .lock()
-        .map(|m| {
-            m.get(&(session_id.to_string(), provider))
-                .is_some_and(|(d, n)| *d == day && *n >= strikes_per_day())
-        })
-        .unwrap_or(false)
-}
+/// Abuse strikes lived on the session id: a caller that collected too many policy
+/// declines in a day was paused for that provider. With the session layer gone there is
+/// nothing to count them against — a coin-paid request is anonymous cash, by design. The
+/// providers' own moderation prefilter refuses each such request on its own merits, which
+/// is what we rely on now (decided 2026-09-15).
 
 // ---- request / response shapes ------------------------------------------------------
 
@@ -452,17 +424,4 @@ mod tests {
         assert!(!a.contains("session"));
     }
 
-    #[test]
-    fn strikes_block_one_provider_for_the_day_and_reset_tomorrow() {
-        let n = strikes_per_day();
-        for i in 1..n {
-            assert_eq!(strike("s-block", "openai", 500), i);
-            assert!(!blocked("s-block", "openai", 500));
-        }
-        strike("s-block", "openai", 500);
-        assert!(blocked("s-block", "openai", 500));
-        assert!(!blocked("s-block", "gemini", 500)); // other provider unaffected
-        assert!(!blocked("s-block", "openai", 501)); // a new day
-        assert!(!blocked("s-other", "openai", 500));
-    }
 }

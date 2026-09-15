@@ -2,7 +2,7 @@
 # and the Rust server binary (server) — client and server share the SAME crypto core.
 [workspace]
 resolver = "2"
-members = ["core", "src-tauri", "server", "ledger", "mixbench", "loadtest"]
+members = ["core", "src-tauri", "server", "mixbench", "loadtest"]
 
 # ONE version for the whole repo: the app (package.json + tauri.conf.json), the server and
 # the shared crates move together and are tagged together (v0.4.5, …). Every member crate

@@ -97,9 +97,15 @@ dispatch, `SessionStore::drain`, `auth::session_hands_over`, the client command 
 card's box. It is the only place in the app where the two key kinds meet, so leaving it in
 after the layer is gone would keep a link alive that nothing needs any more.
 
-Still to do for D: expiry return, removing the session path itself
-(and with it `redeem`, `session.drain`, the session id in chat, and the moderation strikes
-that hang on it).
+**The session layer is gone (2026-09-15).** With it went `redeem`, `session.status`,
+`session.drain`, the SessionStore and its shared-ledger crate, the counter and signature on
+every chat, and the abuse strikes that hung on the session id — the moderation prefilter
+now refuses each request on its own merits, which is what a payment in anonymous cash
+allows. Roughly 2,500 lines. What used to be "your balance on the server" is simply the
+coins on the device; the account holds what has not been drawn yet.
+
+Still to do for D: make a capped answer visible (the server shortens an answer to fit the
+coins and says nothing), and a local notification before books expire.
 
 Decided parameters:
 

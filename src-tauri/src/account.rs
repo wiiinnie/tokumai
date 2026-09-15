@@ -52,12 +52,6 @@ pub struct Account {
     pub account_id: String,
 }
 
-pub struct SessionKeys {
-    signing: SigningKey,
-    pub public_key_pem: String,
-    pub session_id: String,
-}
-
 /// A fresh account, as 24 words (256-bit entropy — see the TS note on 12 vs 24).
 pub fn create_account() -> Account {
     let m = Mnemonic::generate_in(bip39::Language::English, 24).expect("mnemonic generation");
@@ -84,18 +78,6 @@ pub fn from_mnemonic(phrase: &str) -> Result<Account, String> {
     Ok(Account { mnemonic: norm, signing, public_key_pem: pem, account_id })
 }
 
-/// Derive session keys from the phrase by index (HD-style, unlinkable siblings).
-pub fn derive_session_keys(mnemonic: &str, index: u32) -> Result<SessionKeys, String> {
-    let acct = from_mnemonic(mnemonic)?;
-    let seed = Mnemonic::parse_in_normalized(bip39::Language::English, &acct.mnemonic)
-        .map_err(|_| "invalid mnemonic".to_string())?
-        .to_seed("");
-    let material = sha256(&[b"scrai/session/v1", &seed, index.to_string().as_bytes()]);
-    let signing = SigningKey::from_bytes(&material);
-    let pem = spki_pem(&signing.verifying_key().to_bytes());
-    let session_id = id_for(&pem);
-    Ok(SessionKeys { signing, public_key_pem: pem, session_id })
-}
 
 /// The account's public short name: to compare after restoring, and to receive credit
 /// (the "top-up ID" — safe to share, it can only receive).
@@ -124,22 +106,6 @@ impl Account {
     }
 }
 
-impl SessionKeys {
-    /// Sign (sessionId ‖ counter ‖ sha256(body)) — the spending authorisation.
-    pub fn sign(&self, counter: u64, body: &str) -> String {
-        let body_hash = hex::encode(sha256(&[body.as_bytes()]));
-        let msg = format!("{}:{}:{}", self.session_id, counter, body_hash);
-        B64.encode(self.signing.sign(msg.as_bytes()).to_bytes())
-    }
-
-    /// Consent to this session being emptied onto an account. The destination is inside
-    /// the signed message, so the signature cannot be replayed to move the balance
-    /// anywhere else. Counterpart of `auth::session_hands_over` on the server.
-    pub fn sign_handover(&self, account_id: &str, nonce: &str) -> String {
-        let msg = format!("{}:drain:{}:{}", self.session_id, account_id, nonce);
-        B64.encode(self.signing.sign(msg.as_bytes()).to_bytes())
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -157,11 +123,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn session_id_matches_ts() {
-        assert_eq!(
-            derive_session_keys(M, 0).unwrap().session_id,
-            "b5b200590c277aeb599deab366f8035d2a1923af73eca7d80ee693a953188022"
-        );
-    }
 }

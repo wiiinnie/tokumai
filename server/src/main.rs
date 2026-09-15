@@ -24,7 +24,6 @@ use tokio::sync::Semaphore;
 use scrai_core::federation;
 use scrai_core::pricing::PricingTable;
 use scrai_core::quorum::QuorumStore;
-use scrai_core::session::SessionStore;
 
 // One issued ticketbook = 1000 coins × 100 TOKU = 100,000 TOKU = $1, the smallest
 // thing this server sells. Every tier is a whole number of books ($5 = 5, $50 = 50).
@@ -375,19 +374,7 @@ async fn main() {
         }),
         None => QuorumStore::with_index(scrai_core::quorum::Policy::default(), Box::new(serial_index), next_idx),
     };
-    let mut sessions = match db.load("sessions") {
-        None => SessionStore::default(),
-        Some(j) => serde_json::from_str(&j).unwrap_or_else(|e| {
-            eprintln!("scrai-server: FATAL: sessions snapshot present but unparseable ({e}) — refusing \
-                to start (a silent reset would zero every funded balance). Restore a good state.db.");
-            std::process::exit(1);
-        }),
-    };
-    println!(
-        "scrai-server: state loaded (quorum rev {}, sessions rev {})",
-        quorum.revision(),
-        sessions.revision()
-    );
+    println!("scrai-server: state loaded (quorum rev {})", quorum.revision());
 
     // Per-model pricing (USD/1M) + retail margin — drives the catalog rates AND chat
     // billing, so displayed price == charged price.
@@ -429,14 +416,13 @@ async fn main() {
     // Revision marks of what is already on disk — persist_changed() re-saves a store
     // only when its revision moved past these.
     let mut saved = SavedRevs {
-        sessions: sessions.revision(),
         quorum_meta: quorum.meta_revision(),
         pay: paywall.revision(),
     };
     // A meta from before the lifetime counter: seed it from the rows once and write it now,
     // so the admin's "burned" does not restart at the next spend and pruning cannot shrink it.
     quorum.seed_burned(db.spent_coins_total());
-    persist_changed(&mut db, &sessions, &mut quorum, &paywall, &mut saved);
+    persist_changed(&mut db, &mut quorum, &paywall, &mut saved);
     let books: Vec<String> = mint
         .denoms()
         .iter()
@@ -526,7 +512,6 @@ async fn main() {
     // on the loop, crypto in spawn_blocking, apply/persist/reply back here.
     enum CryptoKind {
         Withdraw { id: serde_json::Value, account_id: String, req_key: String, book_toku: u64, result: Result<federation::FedResponse, String> },
-        Redeem { id: serde_json::Value, req: scrai_core::gateway::RedeemRequest, verified: Result<(), String> },
         /// Coins handed back to an account (docs/unlinkability.md, block D).
         Return { id: serde_json::Value, account: String, tender: scrai_core::tender::Tender, verified: Result<(), String> },
     }
@@ -573,9 +558,8 @@ const ORDER_TICK_MS: u64 = 1000;
     println!("scrai-server: concurrency caps — chats {max_chats} (openai {max_openai}), gateway calls {max_gateway}, coconut crypto {max_crypto}");
     if scrai_server::cfg("OPENAI_API_KEY").is_ok_and(|k| !k.trim().is_empty()) {
         println!(
-            "scrai-server: OpenAI enabled — moderation prefilter {}, {} strikes/day per session, retention badge {} days, web search ${:.3}/call",
+            "scrai-server: OpenAI enabled — moderation prefilter {}, retention badge {} days, web search ${:.3}/call",
             if chat::openai_prefilter() { "ON" } else { "off" },
-            scrai_server::openai::strikes_per_day(),
             scrai_server::openai::retention_days(),
             scrai_server::openai::search_usd_per_call()
         );
@@ -620,7 +604,7 @@ const ORDER_TICK_MS: u64 = 1000;
     // app could cause (2026-09-06). Now the server checks a few open invoices itself.
     // Before serving anything: a voucher burned in a run that did not survive to credit it.
     if credit_pending_vouchers(&db, &mut paywall) {
-        persist_changed(&mut db, &sessions, &mut quorum, &paywall, &mut saved);
+        persist_changed(&mut db, &mut quorum, &paywall, &mut saved);
     }
     // One second, because a person is looking at a spinner. See the arm below.
     let mut order_tick = tokio::time::interval(std::time::Duration::from_millis(ORDER_TICK_MS));
@@ -647,7 +631,7 @@ const ORDER_TICK_MS: u64 = 1000;
                 for (order_id, invoice) in db.web_orders_to_cancel() {
                     paywall.cancel_invoice(&invoice);
                     db.web_order_answer(&order_id, Some(&invoice), None, Some("cancelled"));
-                    persist_changed(&mut db, &sessions, &mut quorum, &paywall, &mut saved);
+                    persist_changed(&mut db, &mut quorum, &paywall, &mut saved);
                 }
                 // Bearer money must not outlive its window. Unconditional: a buyer who never
                 // pressed "I have written it down" is exactly the one whose code would
@@ -690,7 +674,7 @@ const ORDER_TICK_MS: u64 = 1000;
                 // that fails without taking the process with it would otherwise leave a
                 // buyer waiting for a restart that may be weeks away.
                 if credit_pending_vouchers(&db, &mut paywall) {
-                    persist_changed(&mut db, &sessions, &mut quorum, &paywall, &mut saved);
+                    persist_changed(&mut db, &mut quorum, &paywall, &mut saved);
                 }
                 // Mirror settlement into the order row, so the faucet can answer "paid yet?"
                 // without ever parsing the pay snapshot.
@@ -758,7 +742,7 @@ const ORDER_TICK_MS: u64 = 1000;
             // A spawned chat's provider call returned → price + settle it here on the loop.
             Some(done) = http_rx.recv() => {
                 let session_of_chat = done.pending.session_id().map(str::to_string);
-                let settled = chat::settle(done.pending, done.result, &mut sessions, &mut quorum, &mut chat_replies);
+                let settled = chat::settle(done.pending, done.result, &mut quorum, &mut chat_replies);
                 let mut response = settled.reply;
                 // Per-day chat metrics from the reply (spent = charged, cost = provider price).
                 if let Ok(mut rv) = serde_json::from_slice::<serde_json::Value>(&response) {
@@ -805,7 +789,7 @@ const ORDER_TICK_MS: u64 = 1000;
                     }
                 }
                 // Durability: persist any changed store before acknowledging (same as below).
-                persist_changed(&mut db, &sessions, &mut quorum, &paywall, &mut saved);
+                persist_changed(&mut db, &mut quorum, &paywall, &mut saved);
                 if let Err(e) = senders[done.to.idx].read().await.send_reply(done.to.tag, response).await {
                     eprintln!("scrai-server: chat reply failed: {e}");
                 }
@@ -858,20 +842,13 @@ const ORDER_TICK_MS: u64 = 1000;
                         };
                         ("coins.return", serde_json::to_vec(&reply).unwrap_or_default())
                     }
-                    CryptoKind::Redeem { id, req, verified } => {
-                        let reply = match verified {
-                            Err(e) => scrai_core::gateway::redeem_error(&id, e),
-                            Ok(()) => scrai_core::gateway::redeem_apply(&mut quorum, &mut sessions, req, id).await,
-                        };
-                        ("redeem", serde_json::to_vec(&reply).unwrap_or_default())
-                    }
                 };
                 let (c0, c1) = label_color(label);
                 println!(
                     "scrai-server: handled {c0}{label}{c1} (→ {} bytes · crypto wait {} ms, work {} ms)",
                     response.len(), done.timing.0, done.timing.1
                 );
-                persist_changed(&mut db, &sessions, &mut quorum, &paywall, &mut saved);
+                persist_changed(&mut db, &mut quorum, &paywall, &mut saved);
                 if let Err(e) = senders[done.to.idx].read().await.send_reply(done.to.tag, response).await {
                     eprintln!("scrai-server: {label} reply failed: {e}");
                 }
@@ -888,7 +865,7 @@ const ORDER_TICK_MS: u64 = 1000;
                 if delta > 0 {
                     db.bump_daily(&today_utc(), 0, 0, 0, 1, delta);
                 }
-                persist_changed(&mut db, &sessions, &mut quorum, &paywall, &mut saved);
+                persist_changed(&mut db, &mut quorum, &paywall, &mut saved);
                 match done.to {
                     Some(to) => {
                         if let Err(e) = senders[to.idx].read().await.send_reply(to.tag, response).await {
@@ -1021,7 +998,7 @@ const ORDER_TICK_MS: u64 = 1000;
                 let g_month_key = format!("grounding:{}", &today_utc()[..7]);
                 let g_used: u64 = db.load(&g_month_key).and_then(|s| s.parse().ok()).unwrap_or(0);
                 let grounding_free = chat::GROUNDING_FREE_PER_MONTH.saturating_sub(g_used);
-                match chat::reserve(&m.message, &mut sessions, &mut quorum, &mut uploads, &pricing, margin, &mut chat_replies, grounding_free) {
+                match chat::reserve(&m.message, &mut quorum, &mut uploads, &pricing, margin, &mut chat_replies, grounding_free) {
                     // Validation error or an idempotent replay hit — no provider call, and
                     // reserve() never mutates the money state on this path.
                     chat::Reserved::Reply(response) => {
@@ -1087,7 +1064,7 @@ const ORDER_TICK_MS: u64 = 1000;
                         }
                     }
                 };
-                persist_changed(&mut db, &sessions, &mut quorum, &paywall, &mut saved);
+                persist_changed(&mut db, &mut quorum, &paywall, &mut saved);
                 let out = serde_json::to_vec(&reply).unwrap_or_default();
                 if let Err(e) = senders[to.idx].read().await.send_reply(to.tag, out).await {
                     eprintln!("scrai-server: purchase reply failed: {e}");
@@ -1163,7 +1140,7 @@ const ORDER_TICK_MS: u64 = 1000;
                 };
                 // The credit lives in the snapshot, so it must reach disk before the ack —
                 // same rule as a cancelled invoice a few lines below.
-                persist_changed(&mut db, &sessions, &mut quorum, &paywall, &mut saved);
+                persist_changed(&mut db, &mut quorum, &paywall, &mut saved);
                 let out = serde_json::to_vec(&reply).unwrap_or_default();
                 if let Err(e) = senders[to.idx].read().await.send_reply(to.tag, out).await {
                     eprintln!("scrai-server: voucher reply failed: {e}");
@@ -1194,47 +1171,9 @@ const ORDER_TICK_MS: u64 = 1000;
                 // cancelled invoice must still hit disk before the ack.
                 let (c0, c1) = label_color(&kind);
                 println!("scrai-server: handled {c0}{kind}{c1} ({} → {} bytes)", m.message.len(), response.len());
-                persist_changed(&mut db, &sessions, &mut quorum, &paywall, &mut saved);
+                persist_changed(&mut db, &mut quorum, &paywall, &mut saved);
                 if let Err(e) = senders[to.idx].read().await.send_reply(to.tag, response).await {
                     eprintln!("scrai-server: reply failed: {e}");
-                }
-                continue;
-            }
-            // The old session layer handing its balance back. Every prompt pays with coins
-            // now, so a balance left on a session would simply be stranded when that path
-            // goes (docs/unlinkability.md, block D). Two signatures: the SESSION consents
-            // to being emptied and names where the money goes, the ACCOUNT proves it is
-            // that destination. Both keys come from one recovery phrase, so only its owner
-            // can produce the pair — the server learns nothing new about who is who, it
-            // just sees the two proofs it already understands.
-            if kind == "session.drain" {
-                let id = envelope.get("id").cloned().unwrap_or(serde_json::Value::Null);
-                let bad = |e: &str| serde_json::to_vec(&serde_json::json!({ "id": id, "kind": "error", "error": e })).unwrap_or_default();
-                let field = |k: &str| envelope.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let (skey, sid, ssig, nonce) = (field("sessionKey"), field("sessionId"), field("sessionSig"), field("nonce"));
-                let response = match paywall.drain_claimant(&envelope) {
-                    None => bad("account signature does not check out, or the nonce was reused"),
-                    Some(account) if !scrai_core::auth::session_hands_over(&skey, &sid, &account, &nonce, &ssig) => {
-                        bad("the session did not authorise this hand-over")
-                    }
-                    Some(account) => {
-                        // Drain first, credit second, and persist before the ack: a crash
-                        // between them would lose the money, which is why the reply waits
-                        // for the disk write below like every other credit.
-                        let moved = sessions.drain(&sid);
-                        paywall.credit_voucher(&account, moved);
-                        if moved > 0 {
-                            println!("scrai-server: a session balance moved to its account — {moved} TOKU");
-                        }
-                        serde_json::to_vec(&serde_json::json!({ "id": id, "kind": "drain.ok", "moved": moved,
-                            "entitlement": paywall.entitlement(&account) })).unwrap_or_default()
-                    }
-                };
-                let (c0, c1) = label_color(&kind);
-                println!("scrai-server: handled {c0}{kind}{c1} ({} → {} bytes)", m.message.len(), response.len());
-                persist_changed(&mut db, &sessions, &mut quorum, &paywall, &mut saved);
-                if let Err(e) = senders[to.idx].read().await.send_reply(to.tag, response).await {
-                    eprintln!("scrai-server: session.drain reply failed: {e}");
                 }
                 continue;
             }
@@ -1290,45 +1229,9 @@ const ORDER_TICK_MS: u64 = 1000;
                     },
                 };
                 if let Some(out) = response {
-                    persist_changed(&mut db, &sessions, &mut quorum, &paywall, &mut saved);
+                    persist_changed(&mut db, &mut quorum, &paywall, &mut saved);
                     if let Err(e) = senders[to.idx].read().await.send_reply(to.tag, out).await {
                         eprintln!("scrai-server: coins.return reply failed: {e}");
-                    }
-                }
-                continue;
-            }
-            // redeem: parse on the loop, verify (BLS) in a blocking task, apply back here.
-            if kind == "redeem" {
-                let id = envelope.get("id").cloned().unwrap_or(serde_json::Value::Null);
-                match scrai_core::gateway::redeem_parse(&envelope) {
-                    Err(e) => {
-                        let reply = serde_json::to_vec(&scrai_core::gateway::redeem_error(&id, e)).unwrap_or_default();
-                        if let Err(e) = senders[to.idx].read().await.send_reply(to.tag, reply).await {
-                            eprintln!("scrai-server: redeem reply failed: {e}");
-                        }
-                    }
-                    Ok(req) => {
-                        let (tx, auth, slots) = (crypto_tx.clone(), authority.clone(), crypto_slots.clone());
-                        let guard = inflight.enter(to);
-                        note_peak(&db, &inflight, &mut peak_written);
-                        tokio::spawn(async move {
-                            let t0 = std::time::Instant::now();
-                            let (req, verified, waited) = match tokio::time::timeout(QUEUE_WAIT, slots.acquire_owned()).await {
-                                Ok(Ok(_permit)) => {
-                                    let waited = t0.elapsed().as_millis();
-                                    let (req, v) = tokio::task::spawn_blocking(move || {
-                                        let v = scrai_core::gateway::redeem_verify(&auth, &req);
-                                        (req, v)
-                                    })
-                                    .await
-                                    .unwrap_or_else(|e| panic!("redeem verify task failed: {e}"));
-                                    (req, v, waited)
-                                }
-                                _ => (req, Err("the server is busy verifying payments right now — please try again in a moment".into()), t0.elapsed().as_millis()),
-                            };
-                            let timing = (waited, t0.elapsed().as_millis() - waited);
-                            let _ = tx.send(CryptoDone { kind: CryptoKind::Redeem { id, req, verified }, to, timing, _guard: guard }).await;
-                        });
                     }
                 }
                 continue;
@@ -1347,7 +1250,7 @@ const ORDER_TICK_MS: u64 = 1000;
                 "coconut" => match paywall.gate_withdraw(&m.message, |d| ticketbook_coins() * mint.for_request(d).denom_toku()) {
                     pay::Gate::Denied(reply) => reply,
                     pay::Gate::NotAWithdraw => {
-                        scrai_core::gateway::handle(&mint.for_request(fed_denom(&envelope)), &mut quorum, &mut sessions, &m.message).await
+                        scrai_core::gateway::handle(&mint_for(&mint, &envelope), &mut quorum, &m.message).await
                     }
                     pay::Gate::Authorized { account_id, req_key, prepaid } => {
                         let id = envelope.get("id").cloned().unwrap_or(serde_json::Value::Null);
@@ -1416,16 +1319,16 @@ const ORDER_TICK_MS: u64 = 1000;
                                         let _ = tx.send(CryptoDone { kind: CryptoKind::Withdraw { id, account_id, req_key, book_toku, result }, to, timing, _guard: guard }).await;
                                     });
                                     // The reservation must be on disk before anything else happens.
-                                    persist_changed(&mut db, &sessions, &mut quorum, &paywall, &mut saved);
+                                    persist_changed(&mut db, &mut quorum, &paywall, &mut saved);
                                     continue;
                                 }
                             }
-                            Ok(_) => scrai_core::gateway::handle(&mint.for_request(fed_denom(&envelope)), &mut quorum, &mut sessions, &m.message).await,
+                            Ok(_) => scrai_core::gateway::handle(&mint_for(&mint, &envelope), &mut quorum, &m.message).await,
                             Err(e) => fed_error(&id, format!("bad request: {e}")),
                         }
                     }
                 },
-                _ => scrai_core::gateway::handle(&mint.for_request(fed_denom(&envelope)), &mut quorum, &mut sessions, &m.message).await,
+                _ => scrai_core::gateway::handle(&mint_for(&mint, &envelope), &mut quorum, &m.message).await,
             };
             // Label each line with the request kind so the log reads as a story;
             // coconut envelopes additionally name their federation op.
@@ -1455,7 +1358,7 @@ const ORDER_TICK_MS: u64 = 1000;
             // acknowledging — so a session credit and the burned-coin serial that backs
             // it commit together (never one without the other), and a crash after the
             // reply can't lose a credit the client already advanced its purse for.
-            persist_changed(&mut db, &sessions, &mut quorum, &paywall, &mut saved);
+            persist_changed(&mut db, &mut quorum, &paywall, &mut saved);
                     if let Err(e) = senders[to.idx].read().await.send_reply(to.tag, response).await {
                         eprintln!("scrai-server: reply failed: {e}");
                     }
@@ -1482,7 +1385,6 @@ struct ReplyTo {
 
 /// Revision marks of the last persisted snapshot per store.
 struct SavedRevs {
-    sessions: u64,
     /// Quorum: revision of the small meta blob (records are pending-until-written, no mark).
     quorum_meta: u64,
     pay: u64,
@@ -1495,21 +1397,16 @@ struct SavedRevs {
 /// unadvanced so the change remains dirty and is retried on the next request.
 fn persist_changed(
     db: &mut store::Store,
-    sessions: &SessionStore,
     quorum: &mut QuorumStore,
     paywall: &pay::Pay,
     saved: &mut SavedRevs,
 ) {
-    let sess_snap = (sessions.revision() != saved.sessions).then(|| sessions.snapshot());
     let quorum_meta = (quorum.meta_revision() != saved.quorum_meta).then(|| quorum.meta_json());
     let pay_snap = (paywall.revision() != saved.pay).then(|| paywall.snapshot());
     // Spends accepted since the last persist — rows + their serials, never a re-snapshot.
     // They stay pending (answerable from RAM) until the batch commits.
     let new_records = quorum.pending_records();
     let mut changed: Vec<(&str, &str)> = Vec::new();
-    if let Some(s) = &sess_snap {
-        changed.push(("sessions", s));
-    }
     if let Some(s) = &quorum_meta {
         changed.push(("quorum_meta", s));
     }
@@ -1524,7 +1421,6 @@ fn persist_changed(
         + new_records.iter().map(|r| r.json.len()).sum::<usize>();
     match db.save_batch(&changed, &new_records) {
         Ok(()) => {
-            saved.sessions = sessions.revision();
             quorum.clear_pending();
             saved.quorum_meta = quorum.meta_revision();
             saved.pay = paywall.revision();
@@ -1596,6 +1492,25 @@ fn fed_denom(envelope: &serde_json::Value) -> u64 {
         .or_else(|| envelope.pointer("/fed/Withdraw/denom_toku"))
         .and_then(|d| d.as_u64())
         .unwrap_or(0)
+}
+
+/// The authority to answer a federation envelope with: its denomination, and — for a key
+/// request — its epoch. An epoch this server no longer has falls back to the issuer, which
+/// answers honestly with a different date, and the client sees that its books are gone.
+fn mint_for(mint: &scrai_server::mint::Mint, envelope: &serde_json::Value) -> std::sync::Arc<federation::Authority> {
+    let denom = fed_denom(envelope);
+    let denom = if denom == 0 { scrai_core::coconut::COIN_TOKU } else { denom };
+    mint.at(denom, fed_epoch(envelope)).unwrap_or_else(|| mint.issuer(denom))
+}
+
+/// Which EPOCH a key request is about, 0 for "the one that issues today". A client that
+/// still holds books from an older epoch asks by date: it cannot rebuild that material and
+/// cannot spend those books without it.
+fn fed_epoch(envelope: &serde_json::Value) -> u32 {
+    envelope
+        .pointer("/fed/KeysFor/expiration_date")
+        .and_then(|d| d.as_u64())
+        .unwrap_or(0) as u32
 }
 
 /// A positive usize from the environment, or the default.

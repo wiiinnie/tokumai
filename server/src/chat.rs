@@ -347,17 +347,10 @@ pub struct PendingChat {
 enum Paid {
     /// Genuinely-free tier: no session, no reserve, nothing to settle.
     Free,
-    /// A funded, seed-derived session: reserve the ceiling now, settle the rest back.
-    Session(PaidCtx),
     /// Coins on the table (docs/unlinkability.md, block D): no session, no counter, no
     /// signature — the tender IS the authorisation, and settle burns exactly the notes
     /// the answer cost. The rest go home with the client.
     Coins(CoinCtx),
-}
-struct PaidCtx {
-    session_id: String,
-    counter: u64,
-    ceiling: u64,
 }
 struct CoinCtx {
     tender: scrai_core::tender::Tender,
@@ -370,14 +363,13 @@ struct CoinCtx {
 
 /// Outcome of the synchronous, loop-side reserve step.
 impl PendingChat {
-    /// The paying session behind this chat (None on the genuinely-free tier). Used only
-    /// for the per-day distinct-users count — hashed before it touches the metrics table.
+    /// What stands in for "who paid" in the per-day distinct-payer count (None on the
+    /// genuinely-free tier) — hashed before it touches the metrics table.
     pub fn session_id(&self) -> Option<&str> {
         match &self.paid {
-            Paid::Session(p) => Some(p.session_id.as_str()),
-            // A coin-paid request has no session at all; for the day's distinct-payer
-            // count the tender key stands in — it is a coin serial, so it identifies the
-            // request, never the person, and is hashed again before it is counted.
+            // There are no sessions any more. For the day's distinct-payer count the
+            // tender key stands in — it is a coin serial, so it identifies the REQUEST,
+            // never the person, and is hashed again before it is counted.
             Paid::Coins(c) => Some(c.key.as_str()),
             Paid::Free => None,
         }
@@ -396,12 +388,11 @@ pub enum Reserved {
     Proceed(Box<PendingChat>),
 }
 
-/// PHASE 1 (loop side, fast): validate, verify the session signature, reserve the
-/// worst-case ceiling, and consume staged uploads — everything that mutates the money
-/// state. The slow provider call happens AFTER this returns, off the loop.
+/// PHASE 1 (loop side, fast): validate, hold the coins against a double-spend, cap the
+/// answer to what they cover, and consume staged uploads — everything that touches the
+/// money state. The slow provider call happens AFTER this returns, off the loop.
 pub fn reserve(
     request: &[u8],
-    sessions: &mut scrai_core::session::SessionStore,
     quorum: &mut scrai_core::quorum::QuorumStore,
     uploads: &mut crate::uploads::UploadStore,
     pricing: &PricingTable,
@@ -423,7 +414,6 @@ pub fn reserve(
         return err("too many messages in one request");
     }
 
-    let session_id = v.get("sessionId").and_then(|s| s.as_str()).unwrap_or("").to_string();
     let model = v.get("model").and_then(|m| m.as_str()).unwrap_or("").to_string();
     // OpenAI web search has no monthly free allowance — every call is billable. Decided
     // HERE, before the `pending` closure below captures it: until 2026-09-04 the override
@@ -541,73 +531,11 @@ pub fn reserve(
         return Reserved::Proceed(p);
     }
 
-    let (Some(counter), Some(sig), Some(pem)) = (
-        v.get("counter").and_then(|c| c.as_u64()),
-        v.get("sig").and_then(|s| s.as_str()),
-        v.get("publicKey").and_then(|p| p.as_str()),
-    ) else {
-        return err("this server requires a funded, signed session");
-    };
-    // The signature covers the canonical body, so it authorises this request and
-    // no other. Field set + order must match the client exactly.
-    let max_val = max_tokens.map(|m| json!(m)).unwrap_or(Value::Null);
-    let body = serde_json::to_string(&json!({"model": model, "messages": messages, "maxTokens": max_val}))
-        .unwrap_or_default();
-    if !scrai_core::auth::session_authorises(pem, &session_id, counter, &body, sig) {
-        return err("signature does not match this request");
-    }
-
-    // Reserve the worst case — this is what keeps two in-flight requests from
-    // jointly overspending, and the counter check is the replay protection.
-    use scrai_core::session::Reserve;
-    // Abuse strikes: a session that collected today's quota of declines AT THIS PROVIDER
-    // is refused that provider's models until tomorrow (openai.rs) — before anything is
-    // reserved or sent anywhere. Other providers stay available.
-    let provider = provider_of(&model);
-    if crate::openai::blocked(&session_id, provider, crate::openai::day_number()) {
-        return err(&format!(
-            "{} models are paused for this session for the rest of the day after repeated policy declines — they work again tomorrow (UTC); other models are unaffected",
-            provider_label(provider)
-        ));
-    }
-    let ceiling = ceiling_for(&price, margin, &messages, max_tokens, live, grounding_free, thinking, image_size, &model);
-    match sessions.reserve(&session_id, counter, ceiling) {
-        Reserve::Ok => {}
-        Reserve::Unknown => return err("unknown session — redeem coconut coins into it first"),
-        Reserve::Replay { server_counter } => {
-            // Idempotent retry: the client resent the request whose reply was lost. If
-            // this exact counter is the one the server last processed and we still hold
-            // its reply, hand it back — same answer, no second charge.
-            if counter == server_counter {
-                if let Some((c, bytes, _)) = replies.get(&session_id) {
-                    if *c == counter {
-                        return Reserved::Reply(bytes.clone());
-                    }
-                }
-            }
-            return err(&format!(
-                "counter {counter} was already used (server is at {server_counter}) — resync and retry"
-            ));
-        }
-        Reserve::Insufficient { balance } => {
-            return err(&format!(
-                // Wire string. 0.4.x clients match `contains("not enough SCRAI")` to trigger the
-                // auto-redeem; keep that phrase until they are gated out (MIN_APP).
-                "not enough SCRAI: this request reserves up to {ceiling}, balance is {balance}"
-            ))
-        }
-    }
-
-    // Swap uploadId references for the staged image bytes (consuming them) —
-    // after the signature check + reservation, so the signed body carried the
-    // small references, not the megabytes.
-    let mut resolved = messages;
-    if let Err(e) = uploads.resolve(&mut resolved) {
-        sessions.refund(&session_id, ceiling);
-        return err(&format!("file upload failed: {e}"));
-    }
-
-    pending(Paid::Session(PaidCtx { session_id, counter, ceiling }), resolved)
+    // Nothing else pays for a chat any more. The session layer — a seed-derived balance
+    // with a counter and a signature per request — is gone (docs/unlinkability.md, block
+    // D): it was the thing that made a person's prompts one story on this server, and
+    // coins replaced it. A request without a tender is simply not paid for.
+    err("this request carries no coins — top up in the app and try again")
 }
 
 /// PHASE 3 (loop side, fast): price the real usage, settle the reservation (or refund
@@ -625,17 +553,16 @@ pub struct Settled {
 pub fn settle(
     p: PendingChat,
     result: Result<(String, TokenUsage, Images), String>,
-    sessions: &mut scrai_core::session::SessionStore,
     quorum: &mut scrai_core::quorum::QuorumStore,
     replies: &mut HashMap<String, (u64, Vec<u8>, std::time::Instant)>,
 ) -> Settled {
     if matches!(p.paid, Paid::Coins(_)) {
         return settle_coins(p, result, quorum, replies);
     }
+    // ---- genuinely-free tier: nothing was reserved, nothing is cached ----
     let id = p.id;
     let mut provider_cost: Option<f64> = None;
-    let Paid::Session(paid) = p.paid else {
-        // ---- genuinely-free tier: no session, no cache ----
+    {
         let reply = match result {
             Ok((text, usage, images)) => {
                 let frame = compute_billing(&p.price, &usage, p.margin, 0, usage.estimated);
@@ -672,96 +599,7 @@ pub fn settle(
             Err(e) => json!({ "id": id, "kind": "error", "error": e }),
         };
         return Settled { reply: encode(&reply), provider_cost };
-    };
-
-    // ---- paid session ----
-    let reply = match result {
-        Ok((text, usage, images)) => {
-            let mut frame = compute_billing(&p.price, &usage, p.margin, min_charge(), usage.estimated);
-            // Live grounding: only queries BEYOND the monthly free allowance cost us
-            // anything, so only those are billed (per query, on top of tokens). Within
-            // the allowance grounding is genuinely free → nothing added.
-            let billable_queries = usage.grounding_queries.saturating_sub(p.grounding_free);
-            let (g_cost, g_retail) = grounding_charge_at(billable_queries, search_usd_per_query(&p.model), p.margin);
-            frame.cost_toku += g_cost;
-            provider_cost = Some(frame.cost_toku);
-            // One line per answer, the numbers the provider's console shows — so a spend
-            // mismatch is a journal grep, not a reconstruction. No content, no identifiers.
-            eprintln!(
-                "scrai-server: usage {} in={} cached={} out={} img={} searches={} (billable {}) cost={:.0} charged={}{}",
-                p.model,
-                usage.input,
-                usage.cached_input,
-                usage.output,
-                usage.output_image,
-                usage.grounding_queries,
-                billable_queries,
-                frame.cost_toku,
-                frame.price_toku + g_retail,
-                if usage.estimated { " ESTIMATED" } else { "" }
-            );
-            // Token cost + per-image cost (image models report zero tokens) + grounding.
-            let n_images = images.as_ref().and_then(|i| i.as_array()).map(|a| a.len()).unwrap_or(0) as u64;
-            let cost = frame.price_toku + n_images * per_image_toku(&p.price, p.margin) + g_retail;
-            // Settle: the unused part of the reservation comes back.
-            let balance = sessions.settle(&paid.session_id, paid.ceiling, cost);
-            // Canonical usage the UI expects (camelCase) + a billing frame whose
-            // priceScrai IS the amount charged, so footer + price + balance all agree.
-            let usage_json = json!({
-                "inputTokens": usage.input,
-                "cachedInputTokens": usage.cached_input,
-                "audioInputTokens": usage.audio_input,
-                "outputTokens": usage.output,
-                "outputImageTokens": usage.output_image,
-                "imageSize": p.image_size,
-                "groundingQueries": usage.grounding_queries,
-                "billing": {
-                    "priceToku": cost,
-                    "costToku": dev_audit_cost(frame.cost_toku),
-                    "priceScrai": cost,
-                    "costScrai": dev_audit_cost(frame.cost_toku),
-                    "model": p.model,
-                    "pricingVersion": p.pricing_version,
-                    "estimated": frame.estimated,
-                    "fallbackPrice": frame.fallback_price,
-                },
-            });
-            let mut r =
-                json!({ "id": id, "text": text, "usage": usage_json, "cost": cost, "balance": balance });
-            if let Some(imgs) = images {
-                r["images"] = imgs;
-                if p.chunked {
-                    r["chunked"] = json!(true); // main.rs may stage big pictures (replies.rs)
-                }
-            }
-            r
-        }
-        Err(e) => {
-            // Provider failed → the user pays nothing.
-            sessions.refund(&paid.session_id, paid.ceiling);
-            // A policy decline (any provider, or our moderation prefilter) is a strike
-            // against the session; today's quota reached = paused until tomorrow.
-            if e.starts_with("Declined by") {
-                crate::openai::strike(&paid.session_id, provider_of(&p.model), crate::openai::day_number());
-            }
-            json!({ "id": id, "kind": "error", "error": e })
-        }
-    };
-    let out = encode(&reply);
-    // Cache this reply against (session, counter) so a lost-reply retry replays it — but
-    // ONLY a real answer. A provider failure was refunded, so a retry on the same counter
-    // should report the counter as used (client advances + retries for a fresh attempt),
-    // not replay the stale error. Bounded: skip large (image) replies and cap the map.
-    let is_error = reply.get("kind").and_then(|k| k.as_str()) == Some("error");
-    if !is_error && out.len() <= MAX_CACHED_REPLY {
-        if replies.len() >= MAX_CACHED_SESSIONS && !replies.contains_key(&paid.session_id) {
-            if let Some(k) = replies.keys().next().cloned() {
-                replies.remove(&k);
-            }
-        }
-        replies.insert(paid.session_id.clone(), (paid.counter, out.clone(), std::time::Instant::now()));
     }
-    Settled { reply: out, provider_cost }
 }
 
 /// Settle a coin-paid request (block D): price the real usage, burn exactly the notes it
@@ -985,14 +823,6 @@ pub fn openai_prefilter() -> bool {
     crate::openai::prefilter_enabled()
 }
 
-/// User-facing name of a provider key.
-fn provider_label(provider: &str) -> &'static str {
-    match provider {
-        "gemini" => "Google",
-        "openai" => "OpenAI",
-        _ => "This provider's",
-    }
-}
 
 /// Which provider serves a model — the key for per-provider concurrency caps.
 pub fn provider_of(model: &str) -> &'static str {
@@ -1383,316 +1213,6 @@ mod tests {
 
     use super::*;
 
-    /// Test-only stand-in for the three phases in one call. Production runs them apart on
-    /// purpose (reserve and settle on the dispatch loop, the provider call in between);
-    /// these tests only exercise the session-paid path, which carries no tender, so no
-    /// authority is needed and `chat` can be called directly.
-    async fn handle(
-        request: &[u8],
-        sessions: &mut scrai_core::session::SessionStore,
-        uploads: &mut crate::uploads::UploadStore,
-        pricing: &PricingTable,
-        margin: f64,
-        replies: &mut HashMap<String, (u64, Vec<u8>, std::time::Instant)>,
-        grounding_free: u64,
-    ) -> Vec<u8> {
-        let mut quorum = scrai_core::quorum::QuorumStore::default();
-        match reserve(request, sessions, &mut quorum, uploads, pricing, margin, replies, grounding_free) {
-            Reserved::Reply(bytes) => bytes,
-            Reserved::Proceed(p) => {
-                let result = chat(&p.v, p.messages.clone(), p.live, p.thinking, p.image_size).await;
-                settle(*p, result, sessions, &mut quorum, replies).reply
-            }
-        }
-    }
-    use scrai_core::billing::{ModelPrice, Tier};
-
-    #[test]
-    fn gemini_usage_bills_thoughts_as_output_and_splits_cached_input() {
-        let meta = json!({
-            "promptTokenCount": 1000,
-            "cachedContentTokenCount": 400,
-            "candidatesTokenCount": 200,
-            "thoughtsTokenCount": 300,
-            "totalTokenCount": 1500
-        });
-        let u = gemini_usage(&meta, false);
-        assert_eq!(u.input, 600); // prompt minus cached
-        assert_eq!(u.cached_input, 400);
-        assert_eq!(u.output, 500); // candidates + thoughts — NOT candidates alone
-        assert_eq!(u.audio_input, 0);
-    }
-
-    #[test]
-    fn gemini_usage_counts_audio_input_separately() {
-        let meta = json!({
-            "promptTokenCount": 100,
-            "candidatesTokenCount": 10,
-            "promptTokensDetails": [
-                { "modality": "TEXT", "tokenCount": 70 },
-                { "modality": "AUDIO", "tokenCount": 30 }
-            ]
-        });
-        let u = gemini_usage(&meta, false);
-        assert_eq!(u.input, 70);
-        assert_eq!(u.audio_input, 30);
-    }
-
-    #[test]
-    fn gemini_usage_splits_image_tokens_from_text_and_thinking() {
-        // VERBATIM usageMetadata of a real gemini-3.1-flash-image call (2026-08-27,
-        // scripts/gemini-usage-probe.sh, prompt "A small red circle on white
-        // background.", one 1K jpeg, no text part). Note the shape: the details
-        // list ONLY the IMAGE modality (1120 = Google's published 1K count), yet
-        // candidatesTokenCount is 1466 — the 346 extra are neither a text part nor
-        // in the details. They stay in `output` (text rate): Google's own per-image
-        // price ($0.067 = 1120 × $60/1M) proves they are NOT billed as image tokens.
-        let meta = json!({
-            "promptTokenCount": 9,
-            "candidatesTokenCount": 1466,
-            "totalTokenCount": 1812,
-            "promptTokensDetails": [{ "modality": "TEXT", "tokenCount": 9 }],
-            "candidatesTokensDetails": [{ "modality": "IMAGE", "tokenCount": 1120 }],
-            "thoughtsTokenCount": 337,
-            "serviceTier": "standard"
-        });
-        let u = gemini_usage(&meta, true);
-        assert_eq!(u.input, 9);
-        assert_eq!(u.output_image, 1120); // billed at the image rate
-        assert_eq!(u.output, 346 + 337); // non-image candidates + thoughts — text rate
-        // Priced like pricing.json's Nano Banana 2: $0.5 in, $60 image, $3 text.
-        let nb2 = ModelPrice {
-            input: 0.5,
-            output: 60.0,
-            output_text: Some(3.0),
-            cached: None,
-            audio: None,
-            fallback: false,
-            tier: Tier::Paid,
-            per_image: None,
-        };
-        let usd = scrai_core::billing::cost_usd(&u, &nb2);
-        // 9×0.5 + 1120×60 + 683×3 = 4.5 + 67_200 + 2_049 = 69_253.5 → $0.0692535
-        assert!((usd - 0.0692535).abs() < 1e-12, "{usd}");
-        // The pre-fix accounting billed (1466 + 337) × $60/1M = $0.10818 for the same
-        // reply — 1.56× Google's price; on Nano Banana 2 Lite (same shape, 1449 + 539
-        // candidates/thoughts at $30 image / $1.50 text) it was 3.4×.
-        assert!(usd < 0.0693);
-    }
-
-    #[test]
-    fn gemini_usage_without_modality_details_keeps_everything_as_text_output() {
-        // A text model never sends candidatesTokensDetails with IMAGE → output_image 0.
-        let meta = json!({ "promptTokenCount": 10, "candidatesTokenCount": 20 });
-        let u = gemini_usage(&meta, false);
-        assert_eq!(u.output, 20);
-        assert_eq!(u.output_image, 0);
-    }
-
-    #[test]
-    fn a_returned_image_without_modality_split_is_billed_entirely_as_image_tokens() {
-        // Never-undercharge: Google sent a picture but no candidatesTokensDetails →
-        // the whole candidates count is image tokens; thinking stays text.
-        let meta = json!({ "promptTokenCount": 10, "candidatesTokenCount": 1180, "thoughtsTokenCount": 500 });
-        let u = gemini_usage(&meta, true);
-        assert_eq!(u.output_image, 1180);
-        assert_eq!(u.output, 500);
-    }
-
-    #[test]
-    fn image_model_reserve_uses_the_text_rate_for_thinking_plus_one_worst_case_image() {
-        let text = ModelPrice {
-            input: 0.5,
-            output: 60.0,
-            output_text: None,
-            cached: None,
-            audio: None,
-            fallback: false,
-            tier: Tier::Paid,
-            per_image: None,
-        };
-        let nb2 = ModelPrice { output_text: Some(3.0), ..text };
-        let msgs = json!([{ "role": "user", "content": "a cat" }]);
-        let old = ceiling_for(&text, 1.0, &msgs, Some(1024), false, 5000, 2048, "4K", "gemini-x");
-        let new = ceiling_for(&nb2, 1.0, &msgs, Some(1024), false, 5000, 2048, "4K", "gemini-x");
-        // old: 3072 output tokens × $60/1M = $0.184 (≈ 18_432 TOKU) — all at the image rate
-        // new: 3072 × $3/1M + 2520 × $60/1M = $0.0092 + $0.1512 ≈ 16_044 TOKU
-        assert!(new < old, "split reserve {new} should be below the all-image-rate reserve {old}");
-        assert!(new >= 2520 * 60 / 10, "reserve must still cover a 4K image: {new}");
-        // The reserve follows the requested size: 1K (1120 tokens) reserves less than 4K.
-        let one_k = ceiling_for(&nb2, 1.0, &msgs, Some(1024), false, 5000, 2048, "1K", "gemini-x");
-        assert!(one_k < new, "1K reserve {one_k} must be below 4K reserve {new}");
-        assert!(one_k >= 1120 * 60 / 10);
-    }
-
-    #[test]
-    fn image_size_is_validated_and_defaults_to_1k() {
-        assert_eq!(image_size_of(&json!({})), "1K");
-        assert_eq!(image_size_of(&json!({ "imageSize": "4K" })), "4K");
-        assert_eq!(image_size_of(&json!({ "imageSize": "2k" })), "2K");
-        assert_eq!(image_size_of(&json!({ "imageSize": "512" })), "512");
-        assert_eq!(image_size_of(&json!({ "imageSize": "8K" })), "1K");
-        assert_eq!(image_size_of(&json!({ "imageSize": 7 })), "1K");
-        assert_eq!(image_tokens_for("512"), 747);
-        assert_eq!(image_tokens_for("4K"), 2520);
-        assert!(model_takes_image_size("gemini-3.1-flash-image"));
-        assert!(model_takes_image_size("gemini-3.1-flash-lite-image"));
-        assert!(!model_takes_image_size("gemini-2.5-flash-image"));
-        assert!(!model_takes_image_size("gemini-3.5-flash"));
-    }
-
-    #[test]
-    fn unsupported_sizes_degrade_to_the_models_largest_supported_size() {
-        // Nano Banana 2 Lite: Google refuses 2K/4K → 1K; 512 and 1K pass through.
-        assert_eq!(effective_image_size("gemini-3.1-flash-lite-image", "2K"), "1K");
-        assert_eq!(effective_image_size("gemini-3.1-flash-lite-image", "4K"), "1K");
-        assert_eq!(effective_image_size("gemini-3.1-flash-lite-image", "512"), "512");
-        assert_eq!(effective_image_size("gemini-3.1-flash-lite-image", "1K"), "1K");
-        // Nano Banana 2 takes everything.
-        assert_eq!(effective_image_size("gemini-3.1-flash-image", "4K"), "4K");
-        assert_eq!(effective_image_size("gemini-3.1-flash-image", "2K"), "2K");
-    }
-
-    #[test]
-    fn gemini_usage_never_underflows_on_inconsistent_counts() {
-        // A cached count larger than prompt must clamp, not wrap around u64.
-        let meta = json!({ "promptTokenCount": 10, "cachedContentTokenCount": 50 });
-        let u = gemini_usage(&meta, false);
-        assert_eq!(u.input, 0);
-        assert_eq!(u.cached_input, 10);
-    }
-
-    #[test]
-    fn to_gemini_maps_roles_system_and_attachments() {
-        let messages = json!([
-            { "role": "system", "content": "be brief" },
-            { "role": "user", "content": "hi", "attachments": [
-                { "mimeType": "image/png", "data": "AAAA" }
-            ]},
-            { "role": "assistant", "content": "hello" }
-        ]);
-        let body = to_gemini(&messages, 4096, 2048, false);
-
-        assert_eq!(body.pointer("/systemInstruction/parts/0/text").unwrap(), "be brief");
-        assert!(body.get("tools").is_none()); // no grounding tool unless live
-        // attachment part precedes the text part
-        assert_eq!(body.pointer("/contents/0/role").unwrap(), "user");
-        assert_eq!(body.pointer("/contents/0/parts/0/inlineData/mimeType").unwrap(), "image/png");
-        assert_eq!(body.pointer("/contents/0/parts/1/text").unwrap(), "hi");
-        assert_eq!(body.pointer("/contents/1/role").unwrap(), "model");
-        // answer budget sits ON TOP of the thinking budget, and thinking is capped
-        assert_eq!(body.pointer("/generationConfig/maxOutputTokens").unwrap(), 4096 + 2048);
-        assert_eq!(body.pointer("/generationConfig/thinkingConfig/thinkingBudget").unwrap(), 2048);
-    }
-
-    #[test]
-    fn to_gemini_omits_system_instruction_when_there_is_none() {
-        let body = to_gemini(&json!([{ "role": "user", "content": "hi" }]), 100, 0, false);
-        assert!(body.get("systemInstruction").is_none());
-        assert_eq!(body.pointer("/contents/0/parts/0/text").unwrap(), "hi");
-    }
-
-    #[test]
-    fn to_gemini_attaches_google_search_tool_when_live() {
-        let body = to_gemini(&json!([{ "role": "user", "content": "weather tomorrow?" }]), 100, 0, true);
-        assert_eq!(body.pointer("/tools/0/google_search").unwrap(), &json!({}));
-    }
-
-    #[test]
-    fn grounding_charge_bills_per_query_and_zero_is_free() {
-        assert_eq!(grounding_charge_at(0, GROUNDING_USD_PER_QUERY, 1.1), (0.0, 0));
-        // 2 queries × $0.014 = $0.028 → provider TOKU > 0, retail = ceil(cost×1.1)
-        let (cost, retail) = grounding_charge_at(2, GROUNDING_USD_PER_QUERY, 1.1);
-        assert!(cost > 0.0);
-        assert!(retail as f64 >= cost); // margin never lowers the charge
-    }
-
-    // ---- payment path: signature → reserve → refund -------------------------
-
-    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
-    use ed25519_dalek::{Signer, SigningKey};
-    use scrai_core::auth;
-
-    fn session_keypair() -> (SigningKey, String, String) {
-        let sk = SigningKey::from_bytes(&[3u8; 32]);
-        let mut der = vec![0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00];
-        der.extend_from_slice(&sk.verifying_key().to_bytes());
-        let pem = format!("-----BEGIN PUBLIC KEY-----\n{}\n-----END PUBLIC KEY-----\n", B64.encode(der));
-        let sid = auth::id_for(&pem);
-        (sk, pem, sid)
-    }
-
-    /// Build a chat envelope the way the CLIENT does (same json! field order,
-    /// same canonical-body construction) — this is the byte-compat contract.
-    fn signed_chat(sk: &SigningKey, pem: &str, sid: &str, counter: u64, model: &str) -> Vec<u8> {
-        let messages = json!([{ "role": "user", "content": "hi" }]);
-        let body = serde_json::to_string(
-            &json!({"model": model, "messages": messages, "maxTokens": json!(64)}),
-        )
-        .unwrap();
-        let body_hash = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(body.as_bytes()));
-        let sig = B64.encode(sk.sign(format!("{sid}:{counter}:{body_hash}").as_bytes()).to_bytes());
-        json!({"kind":"chat","id":"t1","model":model,"messages":messages,"maxTokens":64,
-            "sessionId":sid,"counter":counter,"sig":sig,"publicKey":pem})
-        .to_string()
-        .into_bytes()
-    }
-
-    #[tokio::test]
-    async fn chat_verifies_signature_reserves_and_refunds_on_provider_failure() {
-        let (sk, pem, sid) = session_keypair();
-        let mut sessions = scrai_core::session::SessionStore::default();
-        let mut uploads = crate::uploads::UploadStore::default();
-        let mut replies: std::collections::HashMap<String, (u64, Vec<u8>, std::time::Instant)> = std::collections::HashMap::new();
-        let pricing = PricingTable::parse(
-            r#"{"version":"t","default":{"in":1.0,"out":4.0,"fallback":true},
-                "models":{"gemini-m":{"in":1.0,"out":4.0},"gemini-m2":{"in":1.0,"out":4.0}}}"#,
-        )
-        .unwrap();
-        sessions.credit(&sid, 100_000);
-
-        // Unsigned → refused before anything happens. (The ids are `gemini-*` so the
-        // request is one this server actually routes — `catalog::model_offered` refuses
-        // an unroutable id before the paywall is reached at all.)
-        let bare = json!({"kind":"chat","id":"x","model":"gemini-m","messages":[]}).to_string();
-        let r: Value = serde_json::from_slice(
-            &handle(bare.as_bytes(), &mut sessions, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH).await,
-        )
-        .unwrap();
-        assert!(r["error"].as_str().unwrap().contains("signed session"));
-
-        // Tampered model (signature covers the body) → refused, balance untouched.
-        // (Tampers to another PRICED model — an unpriced one is rejected by the
-        // price check before the signature is even looked at.)
-        let mut env: Value = serde_json::from_slice(&signed_chat(&sk, &pem, &sid, 1, "gemini-m")).unwrap();
-        env["model"] = json!("gemini-m2");
-        let r: Value = serde_json::from_slice(
-            &handle(env.to_string().as_bytes(), &mut sessions, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH).await,
-        )
-        .unwrap();
-        assert!(r["error"].as_str().unwrap().contains("signature"));
-        assert_eq!(sessions.balance(&sid), 100_000);
-
-        // Valid signature: reserve happens, provider fails (no Gemini key in the test
-        // env) → FULL refund, but the counter is consumed.
-        let r: Value = serde_json::from_slice(
-            &handle(&signed_chat(&sk, &pem, &sid, 1, "gemini-m"), &mut sessions, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH).await,
-        )
-        .unwrap();
-        assert!(r.get("error").is_some());
-        assert_eq!(sessions.balance(&sid), 100_000); // refunded
-        assert_eq!(sessions.status(&sid).1, 1); // counter advanced
-
-        // Replaying the same counter is now refused.
-        let r: Value = serde_json::from_slice(
-            &handle(&signed_chat(&sk, &pem, &sid, 1, "gemini-m"), &mut sessions, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH).await,
-        )
-        .unwrap();
-        assert!(r["error"].as_str().unwrap().contains("already used"));
-    }
-
-    // ---- coins instead of a session (docs/unlinkability.md, block D) -------------------
-
     fn coin_pricing() -> PricingTable {
         PricingTable::parse(
             r#"{"version":"t","default":{"in":1.0,"out":4.0,"fallback":true},"models":{"gemini-b":{"in":1.0,"out":4.0}}}"#,
@@ -1707,11 +1227,21 @@ mod tests {
         ceiling_coins: u64,
         spend_date: u32,
     ) -> (Vec<u8>, scrai_core::tender::Tender) {
+        coin_chat_for(purse, keys, ceiling_coins, spend_date, "gemini-b")
+    }
+
+    fn coin_chat_for(
+        purse: &mut scrai_core::purse::Purse,
+        keys: &scrai_core::purse::EpochKeys,
+        ceiling_coins: u64,
+        spend_date: u32,
+        model: &str,
+    ) -> (Vec<u8>, scrai_core::tender::Tender) {
         let values = scrai_core::tender::plan_coins(ceiling_coins);
         let notes = purse.spend_tender(keys, &values, spend_date).unwrap();
         let tender = scrai_core::tender::Tender { notes };
         let req = json!({
-            "v": 1, "kind": "chat", "id": "c1", "model": "gemini-b",
+            "v": 1, "kind": "chat", "id": "c1", "model": model,
             "messages": [{ "role": "user", "content": "hi" }],
             "tender": serde_json::to_value(&tender).unwrap(),
         });
@@ -1723,14 +1253,13 @@ mod tests {
         use scrai_core::coconut::{testkit, COIN_TOKU};
         let fk = testkit::funded();
         let mut purse = fk.new_purse();
-        let mut sessions = scrai_core::session::SessionStore::default();
         let mut quorum = scrai_core::quorum::QuorumStore::default();
         let mut uploads = crate::uploads::UploadStore::default();
         let mut replies: std::collections::HashMap<String, (u64, Vec<u8>, std::time::Instant)> = std::collections::HashMap::new();
         let pricing = coin_pricing();
 
         let (req, tender) = coin_chat(&mut purse, &fk.keys(), 31, fk.spend_date());
-        let Reserved::Proceed(p) = reserve(&req, &mut sessions, &mut quorum, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH)
+        let Reserved::Proceed(p) = reserve(&req, &mut quorum, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH)
         else {
             panic!("coins should reserve");
         };
@@ -1741,7 +1270,7 @@ mod tests {
 
         let usage = TokenUsage { input: 1_000, output: 1_000, ..Default::default() };
         let r: Value = serde_json::from_slice(
-            &settle(*p, Ok(("hi".to_string(), usage, None)), &mut sessions, &mut quorum, &mut replies).reply,
+            &settle(*p, Ok(("hi".to_string(), usage, None)), &mut quorum, &mut replies).reply,
         )
         .unwrap();
 
@@ -1777,22 +1306,21 @@ mod tests {
         use scrai_core::coconut::testkit;
         let fk = testkit::funded();
         let mut purse = fk.new_purse();
-        let mut sessions = scrai_core::session::SessionStore::default();
         let mut quorum = scrai_core::quorum::QuorumStore::default();
         let mut uploads = crate::uploads::UploadStore::default();
         let mut replies: std::collections::HashMap<String, (u64, Vec<u8>, std::time::Instant)> = std::collections::HashMap::new();
         let pricing = coin_pricing();
 
         let (req, _) = coin_chat(&mut purse, &fk.keys(), 31, fk.spend_date());
-        let Reserved::Proceed(p) = reserve(&req, &mut sessions, &mut quorum, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH)
+        let Reserved::Proceed(p) = reserve(&req, &mut quorum, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH)
         else {
             panic!("coins should reserve");
         };
         let usage = TokenUsage { input: 1_000, output: 1_000, ..Default::default() };
-        let first = settle(*p, Ok(("hi".to_string(), usage, None)), &mut sessions, &mut quorum, &mut replies).reply;
+        let first = settle(*p, Ok(("hi".to_string(), usage, None)), &mut quorum, &mut replies).reply;
 
         // The reply was lost; the client re-sends the identical tender.
-        let Reserved::Reply(again) = reserve(&req, &mut sessions, &mut quorum, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH)
+        let Reserved::Reply(again) = reserve(&req, &mut quorum, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH)
         else {
             panic!("a repeated tender must replay, not re-charge");
         };
@@ -1804,7 +1332,6 @@ mod tests {
         use scrai_core::coconut::testkit;
         let fk = testkit::funded();
         let mut purse = fk.new_purse();
-        let mut sessions = scrai_core::session::SessionStore::default();
         let mut quorum = scrai_core::quorum::QuorumStore::default();
         let mut uploads = crate::uploads::UploadStore::default();
         let mut replies: std::collections::HashMap<String, (u64, Vec<u8>, std::time::Instant)> = std::collections::HashMap::new();
@@ -1821,7 +1348,7 @@ mod tests {
             "tender": serde_json::to_value(&tender).unwrap(),
         }))
         .unwrap();
-        let Reserved::Reply(bytes) = reserve(&req, &mut sessions, &mut quorum, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH)
+        let Reserved::Reply(bytes) = reserve(&req, &mut quorum, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH)
         else {
             panic!("a tender that cannot pay must be refused");
         };
@@ -1839,7 +1366,6 @@ mod tests {
         use scrai_core::coconut::testkit;
         let fk = testkit::funded();
         let mut purse = fk.new_purse();
-        let mut sessions = scrai_core::session::SessionStore::default();
         let mut quorum = scrai_core::quorum::QuorumStore::default();
         let mut uploads = crate::uploads::UploadStore::default();
         let mut replies: std::collections::HashMap<String, (u64, Vec<u8>, std::time::Instant)> = std::collections::HashMap::new();
@@ -1848,7 +1374,7 @@ mod tests {
         // 31 coins = 3.1 ¢ — enough to cover the thinking budget alone, which a smaller
         // tender is not (that path is the "not enough coins" test above).
         let (req, tender) = coin_chat(&mut purse, &fk.keys(), 31, fk.spend_date());
-        let Reserved::Proceed(_p) = reserve(&req, &mut sessions, &mut quorum, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH)
+        let Reserved::Proceed(_p) = reserve(&req, &mut quorum, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH)
         else {
             panic!("first request reserves");
         };
@@ -1860,7 +1386,7 @@ mod tests {
             "tender": serde_json::to_value(&tender).unwrap(),
         }))
         .unwrap();
-        let Reserved::Reply(bytes) = reserve(&req2, &mut sessions, &mut quorum, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH)
+        let Reserved::Reply(bytes) = reserve(&req2, &mut quorum, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH)
         else {
             panic!("the same coins must not pay twice at once");
         };
@@ -1872,23 +1398,21 @@ mod tests {
     // reading *Scrai and a newer one reading *Toku. Same number under both names.
     #[tokio::test]
     async fn a_reply_carries_the_billing_numbers_under_both_names() {
-        let (sk, pem, sid) = session_keypair();
-        let mut sessions = scrai_core::session::SessionStore::default();
+        use scrai_core::coconut::testkit;
+        let fk = testkit::funded();
+        let mut purse = fk.new_purse();
         let mut quorum = scrai_core::quorum::QuorumStore::default();
         let mut uploads = crate::uploads::UploadStore::default();
         let mut replies: std::collections::HashMap<String, (u64, Vec<u8>, std::time::Instant)> = std::collections::HashMap::new();
-        let pricing = PricingTable::parse(
-            r#"{"version":"t","default":{"in":1.0,"out":4.0,"fallback":true},"models":{"gemini-b":{"in":1.0,"out":4.0}}}"#,
-        )
-        .unwrap();
-        sessions.credit(&sid, 1_000_000);
-        let Reserved::Proceed(p) = reserve(&signed_chat(&sk, &pem, &sid, 1, "gemini-b"), &mut sessions, &mut quorum, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH)
+        let pricing = coin_pricing();
+        let (req, _tender) = coin_chat(&mut purse, &fk.keys(), 31, fk.spend_date());
+        let Reserved::Proceed(p) = reserve(&req, &mut quorum, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH)
         else {
             panic!("should reserve");
         };
-        let usage = TokenUsage { input: 5_000, output: 5_000, ..Default::default() };
+        let usage = TokenUsage { input: 1_000, output: 1_000, ..Default::default() };
         let r: Value = serde_json::from_slice(
-            &settle(*p, Ok(("hi".to_string(), usage, None)), &mut sessions, &mut quorum, &mut replies).reply,
+            &settle(*p, Ok(("hi".to_string(), usage, None)), &mut quorum, &mut replies).reply,
         )
         .unwrap();
         let b = &r["usage"]["billing"];
@@ -1902,8 +1426,9 @@ mod tests {
     // carries grounding_free into settle() had already captured the Gemini value.
     #[tokio::test]
     async fn openai_search_calls_are_billed_despite_gemini_free_allowance() {
-        let (sk, pem, sid) = session_keypair();
-        let mut sessions = scrai_core::session::SessionStore::default();
+        use scrai_core::coconut::testkit;
+        let fk = testkit::funded();
+        let mut purse = fk.new_purse();
         let mut quorum = scrai_core::quorum::QuorumStore::default();
         let mut uploads = crate::uploads::UploadStore::default();
         let mut replies: std::collections::HashMap<String, (u64, Vec<u8>, std::time::Instant)> = std::collections::HashMap::new();
@@ -1911,15 +1436,15 @@ mod tests {
             r#"{"version":"t","default":{"in":1.0,"out":4.0,"fallback":true},"models":{"gpt-5.6-luna":{"in":0.2,"out":1.20}}}"#,
         )
         .unwrap();
-        sessions.credit(&sid, 1_000_000);
-        // 4,990 Gemini queries still free this month — must not leak into OpenAI billing
-        let Reserved::Proceed(p) = reserve(&signed_chat(&sk, &pem, &sid, 1, "gpt-5.6-luna"), &mut sessions, &mut quorum, &mut uploads, &pricing, 1.4, &mut replies, 4_990)
+        // 4,990 Gemini queries still free this month — must not leak into OpenAI billing.
+        let (req, _t) = coin_chat_for(&mut purse, &fk.keys(), 31, fk.spend_date(), "gpt-5.6-luna");
+        let Reserved::Proceed(p) = reserve(&req, &mut quorum, &mut uploads, &pricing, 1.4, &mut replies, 4_990)
         else {
             panic!("should reserve");
         };
         assert_eq!(p.grounding_free, 0, "OpenAI has no free search allowance");
         let usage = TokenUsage { input: 32_000, output: 4_000, grounding_queries: 3, ..Default::default() };
-        let settled = settle(*p, Ok(("hi".to_string(), usage, None)), &mut sessions, &mut quorum, &mut replies);
+        let settled = settle(*p, Ok(("hi".to_string(), usage, None)), &mut quorum, &mut replies);
         let cost = settled.provider_cost.unwrap();
         // tokens: 32k × $0.20/M + 4k × $1.25/M = $0.0114 = 1,140 TOKU; searches: 3 × $0.01 = 3,000 TOKU
         assert!(cost >= 4_100.0 && cost < 4_200.0, "provider cost must include the three search calls, got {cost}");
@@ -1927,110 +1452,9 @@ mod tests {
         assert!(r["cost"].as_u64().unwrap() > 3_000, "the user is charged for the searches too");
     }
 
-    // ---- H2 concurrency: reserve() and settle() are split so the provider call can run
-    // off the dispatch loop; these prove the money math stays exact when two chats overlap.
-
     #[tokio::test]
-    async fn concurrent_reserves_hold_both_then_settle_without_double_spend() {
-        let (sk, pem, sid) = session_keypair();
-        let mut sessions = scrai_core::session::SessionStore::default();
+    async fn unpriced_models_are_rejected_and_every_priced_model_needs_coins() {
         let mut quorum = scrai_core::quorum::QuorumStore::default();
-        let mut uploads = crate::uploads::UploadStore::default();
-        let mut replies: std::collections::HashMap<String, (u64, Vec<u8>, std::time::Instant)> = std::collections::HashMap::new();
-        let pricing = PricingTable::parse(
-            r#"{"version":"t","default":{"in":1.0,"out":4.0,"fallback":true},"models":{"gemini-m":{"in":1.0,"out":4.0}}}"#,
-        )
-        .unwrap();
-        sessions.credit(&sid, 1_000_000);
-        let start = sessions.balance(&sid);
-
-        // Two chats reserved back-to-back (counter 1 then 2) — the H2 window where BOTH
-        // worst-case reservations are held at once, before either provider call returns.
-        let Reserved::Proceed(a) = reserve(&signed_chat(&sk, &pem, &sid, 1, "gemini-m"), &mut sessions, &mut quorum, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH)
-        else {
-            panic!("A should reserve");
-        };
-        let Reserved::Proceed(b) = reserve(&signed_chat(&sk, &pem, &sid, 2, "gemini-m"), &mut sessions, &mut quorum, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH)
-        else {
-            panic!("B should reserve");
-        };
-        let held = sessions.balance(&sid);
-        assert!(held < start, "both reservations are held at the same time");
-        assert_eq!(sessions.status(&sid).1, 2, "counter advanced by both reserves");
-
-        // Settle both as if the provider returned a tiny answer (order A then B).
-        let usage = TokenUsage { input: 5, output: 5, ..Default::default() };
-        let sa = settle(*a, Ok(("hi".to_string(), usage, None)), &mut sessions, &mut quorum, &mut replies);
-        let ra: Value = serde_json::from_slice(&sa.reply).unwrap();
-        // the provider cost travels beside the reply, never inside it (release servers)
-        assert!(sa.provider_cost.unwrap() > 0.0);
-        assert!(ra["usage"]["billing"]["costScrai"].is_null() || crate::cfg("DEV_AUDIT").as_deref() == Ok("1"));
-        let rb: Value = serde_json::from_slice(&settle(*b, Ok(("hi".to_string(), usage, None)), &mut sessions, &mut quorum, &mut replies).reply).unwrap();
-
-        let cost_a = ra["cost"].as_u64().unwrap();
-        let cost_b = rb["cost"].as_u64().unwrap();
-        assert!(cost_a > 0 && cost_b > 0, "each real turn charges something");
-        let end = sessions.balance(&sid);
-        // No double-spend, no leaked reservation: final == start − (costA + costB).
-        assert_eq!(end, start - cost_a - cost_b);
-        assert_eq!(rb["balance"].as_u64().unwrap(), end, "reported balance matches the store");
-    }
-
-    #[tokio::test]
-    async fn replay_after_settle_returns_cached_reply_without_recharging() {
-        let (sk, pem, sid) = session_keypair();
-        let mut sessions = scrai_core::session::SessionStore::default();
-        let mut quorum = scrai_core::quorum::QuorumStore::default();
-        let mut uploads = crate::uploads::UploadStore::default();
-        let mut replies: std::collections::HashMap<String, (u64, Vec<u8>, std::time::Instant)> = std::collections::HashMap::new();
-        let pricing = PricingTable::parse(
-            r#"{"version":"t","default":{"in":1.0,"out":4.0,"fallback":true},"models":{"gemini-m":{"in":1.0,"out":4.0}}}"#,
-        )
-        .unwrap();
-        sessions.credit(&sid, 1_000_000);
-
-        // A first, successful turn (counter 1): reserve → settle.
-        let Reserved::Proceed(p) = reserve(&signed_chat(&sk, &pem, &sid, 1, "gemini-m"), &mut sessions, &mut quorum, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH)
-        else {
-            panic!("should reserve");
-        };
-        let usage = TokenUsage { input: 5, output: 5, ..Default::default() };
-        let first = settle(*p, Ok(("hi".to_string(), usage, None)), &mut sessions, &mut quorum, &mut replies).reply;
-        let bal_after = sessions.balance(&sid);
-
-        // A lost-reply retry resends the SAME counter → the cached reply, and NO second charge.
-        match reserve(&signed_chat(&sk, &pem, &sid, 1, "gemini-m"), &mut sessions, &mut quorum, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH) {
-            Reserved::Reply(bytes) => assert_eq!(bytes, first, "replay returns the exact cached reply"),
-            Reserved::Proceed(_) => panic!("replay must NOT re-run the provider"),
-        }
-        assert_eq!(sessions.balance(&sid), bal_after, "replay does not charge again");
-    }
-
-    #[test]
-    fn free_tier_models_bill_at_the_reduced_rate_and_paid_models_do_not() {
-        let pricing = PricingTable::parse(
-            r#"{"version":"t","default":{"in":1.5,"out":9.0,"fallback":true},
-                "models":{
-                  "ft":{"in":1.0,"out":4.0,"tier":"free-tier","per_image":0.001},
-                  "pd":{"in":1.0,"out":4.0}
-                }}"#,
-        )
-        .unwrap();
-        let ft = effective_price(pricing.price("ft"));
-        assert_eq!(ft.input, 0.5); // default FREE_TIER_FACTOR = 0.5
-        assert_eq!(ft.output, 2.0);
-        assert_eq!(ft.per_image, Some(0.0005));
-        let pd = effective_price(pricing.price("pd"));
-        assert_eq!(pd.input, 1.0); // paid: untouched
-        assert_eq!(pd.output, 4.0);
-        // Per-image retail: 0.0005 USD × 100_000 TOKU/USD × margin 1.4 = 70 TOKU.
-        assert_eq!(per_image_toku(&ft, 1.4), 70);
-        assert_eq!(per_image_toku(&pd, 1.4), 0);
-    }
-
-    #[tokio::test]
-    async fn unpriced_models_are_rejected_and_every_priced_model_needs_a_session() {
-        let mut sessions = scrai_core::session::SessionStore::default();
         let mut uploads = crate::uploads::UploadStore::default();
         let mut replies: std::collections::HashMap<String, (u64, Vec<u8>, std::time::Instant)> = std::collections::HashMap::new();
         let pricing = PricingTable::parse(
@@ -2038,34 +1462,46 @@ mod tests {
                 "models":{"gemini-3.5-flash":{"in":0.3,"out":2.5},"free-thing":{"in":0.0,"out":0.0,"tier":"free"}}}"#,
         )
         .unwrap();
+        let refuse = |req: Value,
+                      quorum: &mut scrai_core::quorum::QuorumStore,
+                      uploads: &mut crate::uploads::UploadStore,
+                      replies: &mut HashMap<String, (u64, Vec<u8>, std::time::Instant)>| {
+            let bytes = serde_json::to_vec(&req).unwrap();
+            match reserve(&bytes, quorum, uploads, &pricing, 1.4, replies, GROUNDING_FREE_PER_MONTH) {
+                Reserved::Reply(b) => serde_json::from_slice::<Value>(&b).unwrap(),
+                Reserved::Proceed(_) => panic!("must not reach a provider"),
+            }
+        };
 
-        // Fallback-priced model → refused outright, even before the auth check.
-        let req = json!({"kind":"chat","id":"x","model":"mystery","messages":[]}).to_string();
-        let r: Value = serde_json::from_slice(
-            &handle(req.as_bytes(), &mut sessions, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH).await,
-        )
-        .unwrap();
+        // Fallback-priced model → refused outright, before anything else is considered.
+        let r = refuse(
+            json!({"kind":"chat","id":"x","model":"mystery","messages":[]}),
+            &mut quorum,
+            &mut uploads,
+            &mut replies,
+        );
         assert!(r["error"].as_str().unwrap().contains("no price entry"));
 
-        // A priced model with no signature: refused. There is no longer ANY request
-        // shape that reaches a provider unauthenticated — the keyless test providers
-        // and their `Tier::Free` shortcut were removed before mainnet (2026-09-04).
-        let req = json!({"kind":"chat","id":"x","model":"gemini-3.5-flash","messages":[]}).to_string();
-        let r: Value = serde_json::from_slice(
-            &handle(req.as_bytes(), &mut sessions, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH).await,
-        )
-        .unwrap();
-        assert!(r["error"].as_str().unwrap().contains("funded, signed session"));
+        // A priced model with no coins: refused. There is no request shape that reaches a
+        // provider unpaid — the keyless test providers went before mainnet (2026-09-04),
+        // and the session path went with the session layer (2026-09-15).
+        let r = refuse(
+            json!({"kind":"chat","id":"x","model":"gemini-3.5-flash","messages":[]}),
+            &mut quorum,
+            &mut uploads,
+            &mut replies,
+        );
+        assert!(r["error"].as_str().unwrap().contains("carries no coins"), "got: {}", r["error"]);
 
-        // …and a leftover `"tier":"free"` in a pricing file no longer opens that door:
-        // the string now parses as Paid, so this model needs a session like any other.
-        let req = json!({"kind":"chat","id":"x","model":"free-thing","messages":[]}).to_string();
-        let r: Value = serde_json::from_slice(
-            &handle(req.as_bytes(), &mut sessions, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH).await,
-        )
-        .unwrap();
+        // …and a leftover `"tier":"free"` in a pricing file does not open that door either.
+        let r = refuse(
+            json!({"kind":"chat","id":"x","model":"free-thing","messages":[]}),
+            &mut quorum,
+            &mut uploads,
+            &mut replies,
+        );
         let e = r["error"].as_str().unwrap();
-        assert!(e.contains("funded, signed session") || e.contains("not offered"), "got: {e}");
+        assert!(e.contains("carries no coins") || e.contains("not offered"), "got: {e}");
     }
 }
 

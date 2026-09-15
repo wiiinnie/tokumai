@@ -110,7 +110,6 @@ const httpBackend = {
   smartAvailable: () => Promise.resolve(false),           // no native GLiNER engine in dev
   smartDetect: () => Promise.reject(new Error("no native semantic guard in dev")),
   collect: () => jsonCall("POST", "/api/collect"),
-  redeem: () => jsonCall("POST", "/api/redeem"),
   chat: (body, handlers) => streamChat(body, handlers),
   // No mixnet in the dev web backend — report an empty route.
   mixnetRoute: () => Promise.resolve({ entry: null, exit: null, chosen: null }),
@@ -126,10 +125,8 @@ const httpBackend = {
   serverIdentities: () => Promise.resolve([]),
   setEntryGateway: () => Promise.resolve({ entry_gateway: null }),
   setEntryRandom: (on) => Promise.resolve({ entry_gateway: null, entry_random: !!on }),
-  setCoinChat: (on) => Promise.resolve({ coinChat: !!on }),
   coinsReturn: () => Promise.resolve({ credited: 0, entitlement: 0, held: 0 }),
   collectLater: (force) => Promise.resolve({ started: false, force }),
-  sessionDrain: () => Promise.resolve({ moved: 0, entitlement: 0 }),
   onCoinsReturn: async () => () => {},
   onTopUp: async () => () => {},
   setMixnetPerf: () => Promise.resolve({}), // dev backend has no mixnet
@@ -205,7 +202,6 @@ const tauriBackend = (invoke) => ({
   smartAvailable: () => invoke("smart_available"),        // engine built AND model installed?
   smartDetect: (texts, labels) => invoke("smart_detect", { texts, labels }),  // zero-shot NER batch
   collect: () => invoke("collect"),
-  redeem: () => invoke("redeem"),
   mixnetRoute: () => invoke("mixnet_route"),
   mixnetPing: () => invoke("mixnet_ping"),
   // Stop waiting for the in-flight reply; the pending request stays replayable.
@@ -225,10 +221,8 @@ const tauriBackend = (invoke) => ({
   serverIdentities: () => invoke("server_identities"),
   setEntryGateway: (id) => invoke("set_entry_gateway", { id }),
   setEntryRandom: (on) => invoke("set_entry_random", { on: !!on }),
-  setCoinChat: (on) => invoke("set_coin_chat", { on: !!on }),
   coinsReturn: () => invoke("coins_return"),
   collectLater: (force) => invoke("collect_later", { force: !!force }),
-  sessionDrain: () => invoke("session_drain"),
   // Progress while coins go home — one event per batch, so a long return does not look frozen.
   onCoinsReturn: async (cb) => { const ev = window.__TAURI__ && window.__TAURI__.event; if (ev && ev.listen) return ev.listen("coins-return", (e) => { try { cb(e.payload); } catch (_) {} }); return () => {}; },
   onTopUp: async (cb) => { const ev = window.__TAURI__ && window.__TAURI__.event; if (ev && ev.listen) return ev.listen("top-up", (e) => { try { cb(e.payload); } catch (_) {} }); return () => {}; },
@@ -329,7 +323,6 @@ export const Backend = {
   smartAvailable: () => pick("smartAvailable"),
   smartDetect: (texts, labels) => pick("smartDetect", texts, labels),
   collect: () => pick("collect"),
-  redeem: () => pick("redeem"),
   mixnetRoute: () => pick("mixnetRoute"),
   mixnetPing: () => pick("mixnetPing"),
   cancelChat: () => pick("cancelChat"),
@@ -343,10 +336,8 @@ export const Backend = {
   serverIdentities: () => pick("serverIdentities"),
   setEntryGateway: (id) => pick("setEntryGateway", id),
   setEntryRandom: (on) => pick("setEntryRandom", on),
-  setCoinChat: (on) => pick("setCoinChat", on),
   coinsReturn: () => pick("coinsReturn"),
   collectLater: (...a) => pick("collectLater", ...a),
-  sessionDrain: () => pick("sessionDrain"),
   onCoinsReturn: (...a) => pick("onCoinsReturn", ...a),
   onTopUp: (...a) => pick("onTopUp", ...a),
   setMixnetPerf: (coverMs, mixMs, sendMs, continuous) => pick("setMixnetPerf", coverMs, mixMs, sendMs, continuous),
