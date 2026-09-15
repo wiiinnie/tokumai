@@ -47,11 +47,16 @@ pub enum FedRequest {
     KeysFor { denom_toku: u64 },
     /// Ask this authority to blind-sign a withdrawal request with its key share.
     /// `denom_toku` picks which issuing key signs it; absent means the fine one.
+    /// `expiration_date` names the EPOCH the request was built for — a withdrawal request
+    /// is bound to it, so signing with another epoch's key produces a credential the
+    /// client cannot unblind. 0 means "whatever you issue today".
     Withdraw {
         user_pk: PublicKeyUser,
         req: WithdrawalRequest,
         #[serde(default)]
         denom_toku: u64,
+        #[serde(default)]
+        expiration_date: u32,
     },
     /// Spend a payment: the server verifies it offline and records its serials in
     /// the double-spend quorum. `pay_info` is the raw 72 bytes (PayInfo isn't serde).
@@ -125,6 +130,13 @@ impl Authority {
 
     pub fn index(&self) -> u64 {
         self.index
+    }
+
+    /// The day this authority's books stop being spendable. Fixed when it is created and
+    /// shared by every book it issues, which is why a server runs several at once
+    /// (server/src/mint.rs).
+    pub fn expiration_date(&self) -> u32 {
+        self.expiration_date
     }
 
     /// Coins per issued ticketbook — what one authorized Withdraw hands out.
@@ -305,14 +317,14 @@ pub fn dispatch_enveloped(
         // M1: a key the quorum has caught double-spending (its ban is computed + persisted in
         // `submit`) is locked out of withdrawing FRESH ticketbooks. Per-coin protection already
         // refuses reused serials; this shuts the anti-griefing door the audit found inert.
-        Ok(FedRequest::Withdraw { user_pk, req, denom_toku }) => {
+        Ok(FedRequest::Withdraw { user_pk, req, denom_toku, expiration_date }) => {
             if store.is_blacklisted(&user_pk) {
                 FedResponse::Error {
                     message: "blacklisted: this key was caught double-spending and may not withdraw".into(),
                 }
             } else {
                 authority
-                    .handle(FedRequest::Withdraw { user_pk, req, denom_toku })
+                    .handle(FedRequest::Withdraw { user_pk, req, denom_toku, expiration_date })
                     .unwrap_or_else(|e| FedResponse::Error { message: e })
             }
         }
@@ -440,6 +452,7 @@ mod tests {
         for (i, a) in authorities.iter().enumerate() {
             let request = wire(&FedRequest::Withdraw {
                 denom_toku: crate::coconut::COIN_TOKU,
+                expiration_date: 0,
                 user_pk: user.public_key(),
                 req: req.clone(),
             });
@@ -499,7 +512,7 @@ mod tests {
         let mut shares = Vec::new();
         for (i, a) in auth.iter().enumerate() {
             let blinded = match a
-                .handle(FedRequest::Withdraw { user_pk: user.public_key(), req: req.clone(), denom_toku: crate::coconut::COIN_TOKU })
+                .handle(FedRequest::Withdraw { user_pk: user.public_key(), req: req.clone(), denom_toku: crate::coconut::COIN_TOKU, expiration_date: 0 })
                 .unwrap()
             {
                 FedResponse::Withdraw { blinded } => blinded,
@@ -574,7 +587,7 @@ mod tests {
         let (req, req_info) =
             coconut::make_withdrawal_request(user.secret_key(), exp, coconut::DEFAULT_T_TYPE).unwrap();
         let blinded = match auth[0]
-            .handle(FedRequest::Withdraw { user_pk: user.public_key(), req, denom_toku: crate::coconut::COIN_TOKU })
+            .handle(FedRequest::Withdraw { user_pk: user.public_key(), req, denom_toku: crate::coconut::COIN_TOKU, expiration_date: 0 })
             .unwrap()
         {
             FedResponse::Withdraw { blinded } => blinded,

@@ -208,7 +208,7 @@ pub async fn fund(ctx: &Ctx, user: &mut User, usd: u32, redeem_coins: u64) -> Re
         coconut::make_withdrawal_request(user_kp.secret_key(), expiration_date, coconut::DEFAULT_T_TYPE)?;
     let mut shares = Vec::new();
     for (i, vk_auth) in auth_vks.iter().enumerate() {
-        let fed = FedRequest::Withdraw { user_pk: user_kp.public_key(), req: wreq.clone(), denom_toku: scrai_core::coconut::COIN_TOKU };
+        let fed = FedRequest::Withdraw { user_pk: user_kp.public_key(), req: wreq.clone(), denom_toku: scrai_core::coconut::COIN_TOKU, expiration_date };
         let nonce = rand_hex(16);
         let req = with(envelope("coconut"), json!({
             "fed": serde_json::to_value(&fed).map_err(|e| e.to_string())?,

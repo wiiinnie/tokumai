@@ -252,7 +252,7 @@ mod tests {
         let (req, req_info) =
             coconut::make_withdrawal_request(user.secret_key(), exp, coconut::DEFAULT_T_TYPE).unwrap();
         let blinded = match auth[0]
-            .handle(FedRequest::Withdraw { user_pk: user.public_key(), req, denom_toku: crate::coconut::COIN_TOKU })
+            .handle(FedRequest::Withdraw { user_pk: user.public_key(), req, denom_toku: crate::coconut::COIN_TOKU, expiration_date: 0 })
             .unwrap()
         {
             FedResponse::Withdraw { blinded } => blinded,

@@ -159,6 +159,7 @@ impl Purse {
                 pay_info: bytes.to_vec(),
                 spend_date,
                 denom_toku: self.denom_toku,
+                exp_date: self.expiration_date,
             });
         }
         *self = probe;

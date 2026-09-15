@@ -13,6 +13,16 @@ pub mod iap;
 pub mod inflight;
 pub mod nyx;
 pub mod openai;
+/// How long the books of one issuing epoch stay spendable.
+///
+/// It is a property of the scheme, not a commercial choice: a coin that could be spent for
+/// ever would have to be remembered for ever by every server that must refuse it a second
+/// time — `QUORUM_RETAIN_DAYS` has to outlive it. Ninety days (terms §6a) so that opening
+/// the app once a quarter is enough to keep every coin alive; at thirty it was once a
+/// month, and the date is shared by every book of the epoch, so a book drawn late in one
+/// lived only days.
+pub const BOOK_VALIDITY_DAYS: u64 = 90;
+
 pub mod mint;
 pub mod pay;
 pub mod replies;

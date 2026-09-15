@@ -41,6 +41,14 @@ pub struct Note {
     /// fine coins simply fails verification against the coarse authority's key.
     #[serde(default = "default_denom")]
     pub denom_toku: u64,
+    /// The expiration date of the book this note came out of — which issuing EPOCH it
+    /// belongs to. A server serves several at once (an old epoch stays verifiable until
+    /// its own date while new books come from the newest), so without this the server
+    /// would have to try every key it holds. Like the denomination it only selects a key:
+    /// a note that names the wrong epoch fails verification. 0 = whatever the server
+    /// issues today, for notes written before epochs rolled.
+    #[serde(default)]
+    pub exp_date: u32,
 }
 
 fn default_denom() -> u64 {

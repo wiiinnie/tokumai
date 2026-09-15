@@ -18,7 +18,6 @@ use scrai_server::{catalog, chat, http, iap, inflight, pay, replies, store, uplo
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use nym_sdk::mixnet::{AnonymousSenderTag, MixnetClient, MixnetClientBuilder, MixnetClientSender, MixnetMessageSender, ReconstructedMessage, StoragePaths};
 use tokio::sync::Semaphore;
@@ -130,13 +129,8 @@ async fn main() {
     let data_dir = PathBuf::from(scrai_server::cfg("DATA").unwrap_or_else(|_| "./data".into()));
     // One authority per denomination (server/src/mint.rs). The fine one keeps the old
     // file name, so an existing deployment only gains the coarse one beside it.
-    let mint = Arc::new(scrai_server::mint::load(
-        &data_dir,
-        ticketbook_coins(),
-        future_expiration_date(),
-        AUTHORITY_N,
-    ));
-    let authority = mint.fine().clone();
+    let mint = Arc::new(scrai_server::mint::Mint::load(&data_dir, ticketbook_coins(), AUTHORITY_N));
+    let authority = mint.issuer(scrai_core::coconut::COIN_TOKU);
 
     // Persistent Nym identity so the server keeps ONE address across restarts.
     // Entry gateways. GATEWAY_MASTER pins the primary identity (the address the app
@@ -448,8 +442,9 @@ async fn main() {
         .iter()
         .map(|d| {
             let book = ticketbook_coins() * d;
+            let epochs = mint.epochs().iter().filter(|(dd, _)| dd == d).count();
             // Integer dollars would print a ten-cent book as "$0".
-            format!("{d} TOKU/coin → ${:.2}", book as f64 / scrai_core::coconut::TOKU_PER_USD as f64)
+            format!("{d} TOKU/coin → ${:.2} ({epochs} epoch(s))", book as f64 / scrai_core::coconut::TOKU_PER_USD as f64)
         })
         .collect();
     println!(
@@ -683,6 +678,11 @@ const ORDER_TICK_MS: u64 = 1000;
                     Ok((rows, coins)) => println!("scrai-server: pruned {rows} spend record(s) / {coins} coins past retention"),
                     Err(e) => eprintln!("scrai-server: spend-record prune failed ({e})"),
                 }
+                // Same beat: start the next issuing epoch when the current one is a week
+                // old, and retire one whose books nobody can spend any more. Cheap and
+                // idempotent — a bootstrap for a ten-coin book is milliseconds, and on a
+                // tick where nothing is due this does nothing at all.
+                mint.roll();
             }
             _ = watch_tick.tick() => {
                 // A voucher whose burn landed but whose credit did not — the crash window
@@ -1347,7 +1347,7 @@ const ORDER_TICK_MS: u64 = 1000;
                 "coconut" => match paywall.gate_withdraw(&m.message, |d| ticketbook_coins() * mint.for_request(d).denom_toku()) {
                     pay::Gate::Denied(reply) => reply,
                     pay::Gate::NotAWithdraw => {
-                        scrai_core::gateway::handle(mint.for_request(fed_denom(&envelope)), &mut quorum, &mut sessions, &m.message).await
+                        scrai_core::gateway::handle(&mint.for_request(fed_denom(&envelope)), &mut quorum, &mut sessions, &m.message).await
                     }
                     pay::Gate::Authorized { account_id, req_key, prepaid } => {
                         let id = envelope.get("id").cloned().unwrap_or(serde_json::Value::Null);
@@ -1360,7 +1360,7 @@ const ORDER_TICK_MS: u64 = 1000;
                                 .unwrap_or_default()
                         };
                         match fed {
-                            Ok(federation::FedRequest::Withdraw { user_pk, req, denom_toku }) => {
+                            Ok(federation::FedRequest::Withdraw { user_pk, req, denom_toku, expiration_date }) => {
                                 // M1: a key caught double-spending may not withdraw fresh books.
                                 if quorum.is_blacklisted(&user_pk) {
                                     fed_error(&id, "blacklisted: this key was caught double-spending and may not withdraw".into())
@@ -1372,9 +1372,22 @@ const ORDER_TICK_MS: u64 = 1000;
                                 } else if inflight_withdraws.contains(&req_key) {
                                     fed_error(&id, "this credential is still being issued — please retry in a moment".into())
                                 } else {
+                                    // The epoch the client built its request for. Signing with
+                                    // another one produces a credential it cannot unblind, so a
+                                    // request for an epoch this server no longer holds is refused
+                                    // — BEFORE any entitlement is taken, or the refusal would
+                                    // cost the account a book.
+                                    let want_denom = if denom_toku == 0 { scrai_core::coconut::COIN_TOKU } else { denom_toku };
+                                    let Some(issuing) = mint.at(want_denom, expiration_date) else {
+                                        let out = fed_error(&id, "that issuing epoch is over — fetch fresh keys and try again".into());
+                                        if let Err(e) = senders[to.idx].read().await.send_reply(to.tag, out).await {
+                                            eprintln!("scrai-server: reply failed: {e}");
+                                        }
+                                        continue;
+                                    };
                                     // `prepaid`: charged earlier, but the server went down before
                                     // issuing — issue now without charging again.
-                                    let book_toku = ticketbook_coins() * mint.for_request(denom_toku).denom_toku();
+                                    let book_toku = ticketbook_coins() * issuing.denom_toku();
                                     if !prepaid {
                                         paywall.consume_entitlement(&account_id, book_toku);
                                     } else {
@@ -1382,7 +1395,7 @@ const ORDER_TICK_MS: u64 = 1000;
                                     }
                                     paywall.begin_issuance(&req_key, &account_id);
                                     inflight_withdraws.insert(req_key.clone());
-                                    let (tx, auth, slots) = (crypto_tx.clone(), mint.for_request(denom_toku).clone(), crypto_slots.clone());
+                                    let (tx, auth, slots) = (crypto_tx.clone(), issuing, crypto_slots.clone());
                                     let guard = inflight.enter(to);
                                     note_peak(&db, &inflight, &mut peak_written);
                                     tokio::spawn(async move {
@@ -1391,7 +1404,7 @@ const ORDER_TICK_MS: u64 = 1000;
                                             Ok(Ok(_permit)) => {
                                                 let waited = t0.elapsed().as_millis();
                                                 let r = tokio::task::spawn_blocking(move || {
-                                                    auth.handle(federation::FedRequest::Withdraw { user_pk, req, denom_toku })
+                                                    auth.handle(federation::FedRequest::Withdraw { user_pk, req, denom_toku, expiration_date })
                                                 })
                                                 .await
                                                 .unwrap_or_else(|e| Err(format!("issuance task failed: {e}")));
@@ -1407,12 +1420,12 @@ const ORDER_TICK_MS: u64 = 1000;
                                     continue;
                                 }
                             }
-                            Ok(_) => scrai_core::gateway::handle(mint.for_request(fed_denom(&envelope)), &mut quorum, &mut sessions, &m.message).await,
+                            Ok(_) => scrai_core::gateway::handle(&mint.for_request(fed_denom(&envelope)), &mut quorum, &mut sessions, &m.message).await,
                             Err(e) => fed_error(&id, format!("bad request: {e}")),
                         }
                     }
                 },
-                _ => scrai_core::gateway::handle(mint.for_request(fed_denom(&envelope)), &mut quorum, &mut sessions, &m.message).await,
+                _ => scrai_core::gateway::handle(&mint.for_request(fed_denom(&envelope)), &mut quorum, &mut sessions, &m.message).await,
             };
             // Label each line with the request kind so the log reads as a story;
             // coconut envelopes additionally name their federation op.
@@ -1914,7 +1927,7 @@ const MAX_RETURN_COINS: u64 = 200;
 /// date, so the floor is the book's life plus three days of slack — derived from
 /// `BOOK_VALIDITY_DAYS` rather than typed twice, because the two must never drift apart.
 fn quorum_retain_days_floor() -> u64 {
-    BOOK_VALIDITY_DAYS + 3
+    scrai_server::BOOK_VALIDITY_DAYS + 3
 }
 
 fn quorum_retain_secs() -> u64 {
@@ -2017,23 +2030,4 @@ fn pricing_margin() -> f64 {
         .unwrap_or(1.4)
 }
 
-/// A day-aligned (00:00:00 UTC) expiration ~30 days out, as the scheme requires.
-fn future_expiration_date() -> u32 {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    const DAY: u64 = 86_400;
-    let today_midnight = (now / DAY) * DAY;
-    (today_midnight + BOOK_VALIDITY_DAYS * DAY) as u32
-}
 
-/// How long the books of one issuing epoch stay spendable.
-///
-/// It is a property of the scheme, not a commercial choice: a coin that could be spent for
-/// ever would have to be remembered for ever by every server that must refuse it a second
-/// time — `QUORUM_RETAIN_DAYS` has to outlive it. Ninety days (terms §6a) so that opening
-/// the app once a quarter is enough to keep every coin alive; at thirty it was once a
-/// month, and the date is shared by every book of the epoch, so a book drawn late in one
-/// lived only days.
-const BOOK_VALIDITY_DAYS: u64 = 90;

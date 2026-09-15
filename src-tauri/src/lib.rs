@@ -715,11 +715,20 @@ async fn federation_keys(
     // Each denomination is its own issuing authority with its own material, so it is
     // fetched and cached apart. The cache key is the server AND the denomination; the
     // ADDRESS stays what it was — that is what the request is sent to.
+    //
+    // The material of OLDER epochs is kept beside it (`keys-<hash>.json` per epoch): the
+    // server rolls a new authority every week, and a book can only be spent with the keys
+    // of the epoch it was issued in. Dropping them on a refresh would strand every book
+    // the device still holds.
     let cache_key = format!("{srv}#{denom_toku}");
     let cache_key = cache_key.as_str();
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) as u32;
-    // Valid while the spend date the app uses (expiration − 1 day) is still ahead.
-    let fresh = |exp: u32| now + 2 * 86_400 < exp;
+    // Valid while the spend date the app uses (expiration − 1 day) is still ahead — AND not
+    // older than a roll. The server starts a new epoch every week; without the second half
+    // the app would keep withdrawing from the epoch it first met, and its books would have
+    // less and less life left in them.
+    let max_age = (BOOK_VALIDITY_DAYS_HINT - ROLL_EVERY_DAYS_HINT) * 86_400;
+    let fresh = |exp: u32| now + 2 * 86_400 < exp && exp.saturating_sub(now) as u64 > max_age;
     let parse = |v: Value| serde_json::from_value::<scrai_core::federation::FedResponse>(v).ok();
     if let Some((exp, v)) = keys_cache().lock().ok().and_then(|c| c.get(cache_key).cloned()) {
         if fresh(exp) {
@@ -750,7 +759,10 @@ async fn federation_keys(
             return Err(format!("the server answered with {got}-TOKU coins, not the {denom_toku} asked for"));
         }
         if let Ok(v) = serde_json::to_value(&resp) {
+            // Twice: under the denomination (what the next withdrawal uses) and under the
+            // epoch (what the books of that epoch are spent with).
             write_keys_file(dir, cache_key, *expiration_date, &v);
+            write_keys_file(dir, &epoch_key(srv, denom_toku, *expiration_date), *expiration_date, &v);
             if let Ok(mut c) = keys_cache().lock() {
                 c.insert(cache_key.to_string(), (*expiration_date, v));
             }
@@ -769,6 +781,19 @@ fn keys_file(dir: &Path, srv: &str) -> std::path::PathBuf {
 
 /// The epoch material for a server, from the on-disk cache, in the form a book needs to
 /// spend. Held once per server and epoch rather than inside every book.
+/// How long the SERVER says its books live, and how often it starts a new epoch. Only a
+/// hint: the real numbers come with the keys (`expiration_date`), and these just decide
+/// when the app goes and asks again. Too small costs a key fetch; too large means books
+/// drawn late in an epoch, which is the thing rolling epochs exist to avoid.
+const BOOK_VALIDITY_DAYS_HINT: u64 = 90;
+const ROLL_EVERY_DAYS_HINT: u64 = 7;
+
+/// Where one epoch's material is filed. Keyed by the epoch, not just the denomination, so
+/// a refresh never drops the keys a book on this device still needs.
+fn epoch_key(srv: &str, denom_toku: u64, expiration_date: u32) -> String {
+    format!("{srv}#{denom_toku}#{expiration_date}")
+}
+
 fn epoch_keys(dir: &Path, srv: &str, denom_toku: u64) -> Option<scrai_core::purse::EpochKeys> {
     use scrai_core::federation::FedResponse;
     let (_, v) = read_keys_file(dir, &format!("{srv}#{denom_toku}"))?;
@@ -780,9 +805,44 @@ fn epoch_keys(dir: &Path, srv: &str, denom_toku: u64) -> Option<scrai_core::purs
     }
 }
 
-/// The epoch material for every denomination this device has seen from `srv`.
+/// Every epoch's material this device has from `srv`, for every denomination — a book is
+/// spent with the keys of the epoch it was issued in, and a device can hold books from
+/// more than one at a time.
 fn all_epoch_keys(dir: &Path, srv: &str) -> Vec<scrai_core::purse::EpochKeys> {
-    scrai_core::coconut::DENOMS.iter().filter_map(|d| epoch_keys(dir, srv, *d)).collect()
+    use scrai_core::purse::EpochKeys;
+    let mut out: Vec<EpochKeys> = Vec::new();
+    let mut add = |k: EpochKeys| {
+        if !out.iter().any(|o| o.denom_toku == k.denom_toku && o.expiration_date == k.expiration_date) {
+            out.push(k);
+        }
+    };
+    // What the books on this device were issued in, first…
+    for w in wallet::load(dir).coconut_purses.iter() {
+        if let Ok(p) = scrai_core::purse::Purse::restore(w) {
+            if let Some(k) = keys_of_epoch(dir, srv, p.denom_toku(), p.expiration_date()) {
+                add(k);
+            }
+        }
+    }
+    // …and the current one per denomination, which is what a fresh book will need.
+    for d in scrai_core::coconut::DENOMS {
+        if let Some(k) = epoch_keys(dir, srv, d) {
+            add(k);
+        }
+    }
+    out
+}
+
+/// The material of ONE epoch, if this device kept it.
+fn keys_of_epoch(dir: &Path, srv: &str, denom_toku: u64, expiration_date: u32) -> Option<scrai_core::purse::EpochKeys> {
+    use scrai_core::federation::FedResponse;
+    let (_, v) = read_keys_file(dir, &epoch_key(srv, denom_toku, expiration_date))?;
+    match serde_json::from_value::<FedResponse>(v).ok()? {
+        FedResponse::Keys { vk, coin_sigs, date_sigs, expiration_date, total_coins, denom_toku, .. } => {
+            Some(scrai_core::purse::EpochKeys { vk, coin_sigs, date_sigs, expiration_date, total_coins, denom_toku })
+        }
+        _ => None,
+    }
 }
 
 fn read_keys_file(dir: &Path, srv: &str) -> Option<(u32, Value)> {
@@ -944,7 +1004,10 @@ async fn withdraw_books(
             requests.push(json!({
                 "v": PROTO, "kind": "coconut", "id": id,
                 "publicKey": auth.public_key_pem, "nonce": nonce, "sig": sig,
-                "fed": serde_json::to_value(FedRequest::Withdraw { user_pk: user.public_key(), req: req.clone(), denom_toku })
+                // The epoch this request was BUILT for: a withdrawal request is bound to
+                // its expiration date, so an authority from another epoch would sign
+                // something the device cannot unblind.
+                "fed": serde_json::to_value(FedRequest::Withdraw { user_pk: user.public_key(), req: req.clone(), denom_toku, expiration_date })
                     .map_err(|e| e.to_string())?,
             }));
             route.push((id, slot, k));
@@ -1178,7 +1241,14 @@ fn build_tender(
     use scrai_core::coconut::{COARSE_TOKU, COIN_TOKU};
     use scrai_core::tender::{plan_coins, Note, Tender, MAX_NOTES};
 
-    let keys_for = |denom: u64| keys.iter().find(|k| k.denom_toku == denom);
+    // For SIZING, the newest epoch of a denomination: that is what a fresh book will be.
+    let keys_for = |denom: u64| {
+        keys.iter().filter(|k| k.denom_toku == denom).max_by_key(|k| k.expiration_date)
+    };
+    // For SPENDING, the material of the epoch a book was actually issued in — a device can
+    // hold books from several at once, and the wrong epoch's keys only make a payment no
+    // server accepts (`EpochKeys::fits`).
+    let keys_of = |p: &scrai_core::purse::Purse| keys.iter().find(|k| k.fits(p));
     let fine_book_coins = keys_for(COIN_TOKU).map(|k| k.total_coins).unwrap_or(0);
     let coarse_book_toku = keys_for(COARSE_TOKU).map(|k| k.book_toku()).unwrap_or(0);
     // How far the fine plan has to reach: just under ONE coarse coin. Anything above that
@@ -1247,7 +1317,9 @@ fn build_tender(
         if denom == COIN_TOKU {
             continue; // the fine side is the granularity plan below
         }
-        let Some(k) = keys_for(denom) else { continue };
+        if keys_for(denom).is_none() {
+            continue;
+        }
         if have >= ceiling_toku {
             break;
         }
@@ -1265,11 +1337,12 @@ fn build_tender(
                 .enumerate()
                 .find_map(|(i, pj)| {
                     let p = scrai_core::purse::Purse::restore(pj).ok()?;
-                    (p.denom_toku() == denom && p.remaining_coins() >= v).then_some((i, p))
+                    (p.denom_toku() == denom && p.remaining_coins() >= v && keys_of(&p).is_some()).then_some((i, p))
                 })
             else {
                 break;
             };
+            let Some(k) = keys_of(&purse) else { break };
             let spend_date = purse.expiration_date().saturating_sub(86_400);
             let mut fresh = purse.spend_tender(k, &[v], spend_date)?;
             notes.append(&mut fresh);
@@ -1291,9 +1364,14 @@ fn build_tender(
     let small_value: u64 = notes.iter().map(|n| n.value_toku()).filter(|v| *v < COARSE_TOKU).sum();
     let need_granularity = small_value < COARSE_TOKU.saturating_sub(COIN_TOKU);
     if need_granularity && fine_span_coins > 0 && notes.len() + fine_slots <= MAX_NOTES {
-        if let (Some(k), Some((idx, mut purse))) =
-            (keys_for(COIN_TOKU), first_funded_purse_of(&w.coconut_purses, COIN_TOKU))
-        {
+        if let Some((idx, mut purse)) = first_funded_purse_of(&w.coconut_purses, COIN_TOKU) {
+            // No material for that book's epoch: it cannot be spent here. Leave it alone
+            // and carry on with what the tender already has.
+            let k = keys_of(&purse);
+            if k.is_none() {
+                log::warn!("[tender] a fine book's epoch material is not on this device — skipping it");
+            }
+            if let Some(k) = k {
             let coins = purse.remaining_coins().min(fine_span_coins);
             let spend_date = purse.expiration_date().saturating_sub(86_400);
             let mut fresh = purse.spend_tender(k, &plan_coins(coins), spend_date)?;
@@ -1304,14 +1382,15 @@ fn build_tender(
             if emptied {
                 w.coconut_purses.remove(idx);
             }
+            }
         }
     }
 
     // --- still short? then there are no coarse books, only fine ones --------------------
     // Same plan, one book at a time, until the ceiling is covered or the slots run out.
     while have < ceiling_toku && notes.len() < MAX_NOTES {
-        let Some(k) = keys_for(COIN_TOKU) else { break };
         let Some((idx, mut purse)) = first_funded_purse_of(&w.coconut_purses, COIN_TOKU) else { break };
+        let Some(k) = keys_of(&purse) else { break };
         let coins = (ceiling_toku - have).div_ceil(COIN_TOKU).min(purse.remaining_coins());
         if coins == 0 || notes.len() + 1 > MAX_NOTES {
             break;
@@ -4742,7 +4821,6 @@ pub fn run() {
 #[cfg(test)]
 mod migration_tests {
     use super::pick_migration_source;
-    use std::path::PathBuf;
 
     /// Windows moves Roaming → Local once. The rule is small enough to state exactly: never
     /// when Local already exists (a second run must not clobber it), otherwise the first
