@@ -5608,6 +5608,21 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       // empty textarea still in front of you reads as "nothing happened", status line or
       // not (tester, 2026-09-06). Same for delete below.
       await refreshState(); acctBack(); acctStatus("Account restored ✓");
+      // A restored account has its credit on the ACCOUNT, never on this device — coins are
+      // bearer money and do not travel with a phrase. So fetch it right away instead of
+      // showing a zero balance and waiting for the user to find "Check for credit"
+      // (2026-09-15). If the round trip fails, the background top-up finishes the job and
+      // its event refreshes the balance.
+      acctStatus("Account restored ✓ · fetching your credit…");
+      try{
+        const r = await Backend.collect();
+        const got = Number(r && r.collected) || 0;
+        acctStatus(got > 0 ? `Account restored ✓ · +${formatToku(got)} TOKU` : "Account restored ✓");
+      }catch(_){
+        try{ Backend.collectLater(true); }catch(_){}
+        acctStatus("Account restored ✓ · fetching your credit…");
+      }
+      await refreshState(); renderBal(); renderAccount();
     }catch(e){
       const msg=e&&e.message?e.message:String(e);
       if(msg.indexOf("HELD_CREDIT")===0){
