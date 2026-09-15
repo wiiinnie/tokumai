@@ -847,7 +847,7 @@ const ORDER_TICK_MS: u64 = 1000;
                                     if let scrai_core::quorum::Verdict::Accepted =
                                         quorum.submit(&n.payment, pi, federation::this_server())
                                     {
-                                        credited += n.coins * scrai_core::coconut::COIN_TOKU;
+                                        credited += n.value_toku();
                                     }
                                 }
                                 paywall.credit_voucher(&account, credited);
@@ -1259,7 +1259,10 @@ const ORDER_TICK_MS: u64 = 1000;
                             Some(bad("too many coins in one return — send them in smaller batches"))
                         }
                         Ok(()) => {
-                            let (tx, auth, slots) = (crypto_tx.clone(), authority.clone(), crypto_slots.clone());
+                            // Coins coming home can be of EITHER denomination, so each note is
+                            // checked against the key of its own (the mint refuses one that
+                            // names a denomination this server does not issue).
+                            let (tx, auth, slots) = (crypto_tx.clone(), mint.clone(), crypto_slots.clone());
                             let guard = inflight.enter(to);
                             note_peak(&db, &inflight, &mut peak_written);
                             tokio::spawn(async move {
@@ -1268,10 +1271,7 @@ const ORDER_TICK_MS: u64 = 1000;
                                     Ok(Ok(_permit)) => {
                                         let waited = t0.elapsed().as_millis();
                                         let (tender, v) = tokio::task::spawn_blocking(move || {
-                                            let v = tender.notes.iter().try_for_each(|n| {
-                                                let pi = n.pay_info()?;
-                                                auth.verify_payment(&n.payment, &pi, n.spend_date).map_err(|e| format!("invalid coin: {e}"))
-                                            });
+                                            let v = tender.notes.iter().try_for_each(|n| auth.verify(n));
                                             (tender, v)
                                         })
                                         .await
@@ -1347,7 +1347,7 @@ const ORDER_TICK_MS: u64 = 1000;
                 "coconut" => match paywall.gate_withdraw(&m.message, |d| ticketbook_coins() * mint.for_request(d).denom_toku()) {
                     pay::Gate::Denied(reply) => reply,
                     pay::Gate::NotAWithdraw => {
-                        scrai_core::gateway::handle(&authority, &mut quorum, &mut sessions, &m.message).await
+                        scrai_core::gateway::handle(mint.for_request(fed_denom(&envelope)), &mut quorum, &mut sessions, &m.message).await
                     }
                     pay::Gate::Authorized { account_id, req_key, prepaid } => {
                         let id = envelope.get("id").cloned().unwrap_or(serde_json::Value::Null);
@@ -1407,12 +1407,12 @@ const ORDER_TICK_MS: u64 = 1000;
                                     continue;
                                 }
                             }
-                            Ok(_) => scrai_core::gateway::handle(&authority, &mut quorum, &mut sessions, &m.message).await,
+                            Ok(_) => scrai_core::gateway::handle(mint.for_request(fed_denom(&envelope)), &mut quorum, &mut sessions, &m.message).await,
                             Err(e) => fed_error(&id, format!("bad request: {e}")),
                         }
                     }
                 },
-                _ => scrai_core::gateway::handle(&authority, &mut quorum, &mut sessions, &m.message).await,
+                _ => scrai_core::gateway::handle(mint.for_request(fed_denom(&envelope)), &mut quorum, &mut sessions, &m.message).await,
             };
             // Label each line with the request kind so the log reads as a story;
             // coconut envelopes additionally name their federation op.
@@ -1568,6 +1568,21 @@ fn note_peak(db: &store::Store, inflight: &inflight::Inflight<ReplyTo>, written:
         db.bump_peak(&today, now);
         *written = (today, now);
     }
+}
+
+/// Which denomination a federation envelope is about, or 0 for "did not say".
+///
+/// Every authority answers only for its own denomination, so this is what decides WHICH
+/// one handles a request. Withdraw was routed by it from the start; Keys was not, so an
+/// app asking for the coarse material got the fine authority's answer and — because the
+/// client checks that the answer matches what it asked for — drew no coarse books at all
+/// (2026-09-15).
+fn fed_denom(envelope: &serde_json::Value) -> u64 {
+    envelope
+        .pointer("/fed/KeysFor/denom_toku")
+        .or_else(|| envelope.pointer("/fed/Withdraw/denom_toku"))
+        .and_then(|d| d.as_u64())
+        .unwrap_or(0)
 }
 
 /// A positive usize from the environment, or the default.

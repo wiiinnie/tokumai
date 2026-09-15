@@ -1740,7 +1740,11 @@ async fn redeem_coconut(app: &AppHandle, t: &Transport, srv: &str, coins: u64) -
             ),
             Some(_) => return Err("a spend is still pending — retry to complete it first".into()),
             None => {
-                let (idx, mut purse) = first_funded_purse(&w.coconut_purses)
+                // FINE books only: the session layer values a coin at COIN_TOKU flat
+                // (core/src/gateway.rs), so a coarse book cannot be redeemed there — it
+                // would fail verification against the fine authority. The session path is
+                // on its way out anyway (docs/unlinkability.md, block D).
+                let (idx, mut purse) = first_funded_purse_of(&w.coconut_purses, scrai_core::coconut::COIN_TOKU)
                     .ok_or("no coconut credential — buy credit first")?;
                 // Clamp to what this book still holds; the next redeem rolls to the next book.
                 let coins = coins.min(purse.remaining_coins());
@@ -4746,6 +4750,9 @@ mod migration_tests {
     }
 }
 
+// Gated like every other test module: without this the module compiled into the shipped
+// app (and its imports showed up as "unused" in every release build).
+#[cfg(test)]
 mod c3_tests {
     use super::*;
     use serde_json::json;
