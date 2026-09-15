@@ -407,6 +407,11 @@ pub mod testkit {
         pub fn vk(&self) -> &VerificationKeyAuth {
             &self.vk
         }
+        /// The date the books of this fixture expire on — what the swap window counts from.
+        pub fn expiration_date(&self) -> u32 {
+            self.expiration_date
+        }
+
         pub fn spend_date(&self) -> u32 {
             self.spend_date
         }

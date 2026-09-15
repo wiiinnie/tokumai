@@ -781,6 +781,26 @@ fn keys_file(dir: &Path, srv: &str) -> std::path::PathBuf {
 
 /// The epoch material for a server, from the on-disk cache, in the form a book needs to
 /// spend. Held once per server and epoch rather than inside every book.
+/// Most coins one `coins.return` may carry — the server's own bound (it costs ~4 ms of
+/// pairings per coin), so a device hands its books back in several batches.
+const MAX_RETURN_COINS: u64 = 200;
+
+/// Seconds since the epoch, as the expiration dates are counted.
+fn now_secs32() -> u32 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as u32)
+        .unwrap_or(0)
+}
+
+/// How close to its expiry a book is swapped for a fresh one. It has to be WIDER than the
+/// interval at which people open the app, because the swap can only run while it is open:
+/// a three-day window protects a daily user and nobody else. Fourteen days costs a book
+/// the last sixth of its life and covers anyone who opens the app every other week; what
+/// is not swapped in time expires, and expired coins cannot be refunded — the server
+/// cannot tell which of them were spent.
+const SWAP_WINDOW_DAYS: u64 = 14;
+
 /// How long the SERVER says its books live, and how often it starts a new epoch. Only a
 /// hint: the real numbers come with the keys (`expiration_date`), and these just decide
 /// when the app goes and asks again. Too small costs a key fetch; too large means books
@@ -1421,6 +1441,52 @@ fn books_of_denom(w: &wallet::Wallet, denom_toku: u64) -> usize {
         .count()
 }
 
+/// One batch of coins out of the books that are about to expire: everything left in them,
+/// a whole book per note (a note is cheapest per coin that way), bounded by what one
+/// `coins.return` may carry. `None` when nothing is close enough to its date.
+///
+/// The purses are advanced here, so the caller MUST persist the wallet before the request
+/// leaves the device — same durability contract as every other spend.
+fn drain_expiring(
+    w: &mut wallet::Wallet,
+    keys: &[scrai_core::purse::EpochKeys],
+    now: u32,
+) -> Result<Option<scrai_core::tender::Tender>, String> {
+    use scrai_core::tender::{Tender, MAX_NOTES};
+    let deadline = now.saturating_add((SWAP_WINDOW_DAYS * 86_400) as u32);
+    let mut notes = Vec::new();
+    let mut coins = 0u64;
+    loop {
+        if notes.len() >= MAX_NOTES || coins >= MAX_RETURN_COINS {
+            break;
+        }
+        let Some((idx, mut purse)) = w.coconut_purses.iter().enumerate().find_map(|(i, pj)| {
+            let p = scrai_core::purse::Purse::restore(pj).ok()?;
+            (p.expiration_date() <= deadline && p.remaining_coins() > 0).then_some((i, p))
+        }) else {
+            break;
+        };
+        let Some(k) = keys.iter().find(|k| k.fits(&purse)) else {
+            // No material for its epoch: it cannot be spent, so it cannot be swapped
+            // either. Drop it rather than looping on it for ever — it is already dead.
+            log::warn!("[swap] a book's epoch material is gone; it cannot be handed back");
+            w.coconut_purses.remove(idx);
+            continue;
+        };
+        let take = purse.remaining_coins().min(MAX_RETURN_COINS - coins);
+        let spend_date = purse.expiration_date().saturating_sub(86_400);
+        let mut fresh = purse.spend_tender(k, &[take], spend_date)?;
+        notes.append(&mut fresh);
+        coins += take;
+        let emptied = purse.remaining_coins() == 0;
+        w.coconut_purses[idx] = purse.persist()?;
+        if emptied {
+            w.coconut_purses.remove(idx);
+        }
+    }
+    Ok((!notes.is_empty()).then_some(Tender { notes }))
+}
+
 /// The oldest book of one denomination that still holds coins.
 fn first_funded_purse_of(purses: &[String], denom_toku: u64) -> Option<(usize, scrai_core::purse::Purse)> {
     purses.iter().enumerate().find_map(|(i, pj)| {
@@ -1703,10 +1769,22 @@ async fn session_drain(app: AppHandle, transport: State<'_, Arc<Transport>>) -> 
 /// re-sent verbatim until the server answers, so a lost reply can never lose the coins.
 #[tauri::command]
 async fn coins_return(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<Value, String> {
+    let t = transport.inner().clone();
+    return_coins(app, t, Returning::Everything).await
+}
+
+/// What a return is for: emptying the device, or only handing back what is about to expire.
+#[derive(Clone, Copy, PartialEq)]
+enum Returning {
+    Everything,
+    Expiring,
+}
+
+async fn return_coins(app: AppHandle, transport: Arc<Transport>, what: Returning) -> Result<Value, String> {
     // The server bounds a return by COINS (its pairings cost per coin, MAX_RETURN_COINS),
     // so the batch is sized for the worst case: all of it in fine coins. Coarse books make
     // a batch worth ten times more without costing the server any more work.
-    const BATCH_TOKU: u64 = 200 * scrai_core::coconut::COIN_TOKU;
+    const BATCH_TOKU: u64 = MAX_RETURN_COINS * scrai_core::coconut::COIN_TOKU;
     let _op = transport.begin_op().await;
     let dir = data_dir(&app)?;
     let srv = server_addr(&wallet::load(&dir))?;
@@ -1748,7 +1826,15 @@ async fn coins_return(app: AppHandle, transport: State<'_, Arc<Transport>>) -> R
                 if keys.is_empty() {
                     return Err("the server's issuing keys are not on this device yet — check for credit first".into());
                 }
-                let tender = build_tender(&mut w, &keys, left.min(BATCH_TOKU))?;
+                let tender = match what {
+                    Returning::Everything => build_tender(&mut w, &keys, left.min(BATCH_TOKU))?,
+                    // The swap hands back WHOLE books that are near their date, so it takes
+                    // them as they are rather than planning a tender out of the wallet.
+                    Returning::Expiring => match drain_expiring(&mut w, &keys, now_secs32())? {
+                        Some(t) => t,
+                        None => break,
+                    },
+                };
                 let nonce = rand_hex(16);
                 let sig = a.sign("return", &nonce);
                 let req = json!({
@@ -2714,13 +2800,28 @@ async fn collect(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result
 #[tauri::command]
 fn collect_later(app: AppHandle, force: Option<bool>) -> Result<Value, String> {
     let dir = data_dir(&app)?;
-    // `force` is for the moment credit has just been BOUGHT: there is entitlement waiting
-    // whatever the device already holds, so "am I low?" is the wrong question then.
-    let go = force.unwrap_or(false) || coin_value_toku(&wallet::load(&dir)) < LOW_WATER_TOKU;
+    let w = wallet::load(&dir);
+    // Three reasons to sweep. `force` is the moment credit has just been BOUGHT: there is
+    // entitlement waiting whatever the device already holds, so "am I low?" is the wrong
+    // question then. Being low is the ordinary one. And a book near its date has to be
+    // swapped even on a FULL device — that is the one case where the money is at stake and
+    // nothing else would ever trigger the sweep.
+    let go = force.unwrap_or(false)
+        || coin_value_toku(&w) < LOW_WATER_TOKU
+        || has_expiring_books(&w, now_secs32());
     if go {
         spawn_refill_soon(&app);
     }
     Ok(json!({ "started": go }))
+}
+
+/// Is any book close enough to its date to be swapped?
+fn has_expiring_books(w: &wallet::Wallet, now: u32) -> bool {
+    let deadline = now.saturating_add((SWAP_WINDOW_DAYS * 86_400) as u32);
+    w.coconut_purses
+        .iter()
+        .filter_map(|j| scrai_core::purse::Purse::restore(j).ok())
+        .any(|p| p.remaining_coins() > 0 && p.expiration_date() <= deadline)
 }
 
 /// The body of `collect`, callable from the background top-up as well.
@@ -2733,6 +2834,20 @@ async fn collect_now(app: AppHandle, main: Arc<Transport>) -> Result<Value, Stri
     let w0 = wallet::load(&dir);
     let srv = server_addr(&w0)?;
     let a = wallet_account(&app)?;
+
+    // Books near their date go back FIRST, so their value is part of what this sweep then
+    // draws again — out of the current epoch, with a full life ahead of it. Best effort: a
+    // swap that cannot reach the server leaves the books alone and tries again next time,
+    // which is why the window is wide enough for several attempts.
+    match return_coins(app.clone(), main.clone(), Returning::Expiring).await {
+        Ok(v) => {
+            let credited = v.get("credited").and_then(|c| c.as_u64()).unwrap_or(0);
+            if credited > 0 {
+                log::warn!("[swap] {credited} TOKU of expiring books handed back for fresh ones");
+            }
+        }
+        Err(e) => log::warn!("[swap] could not hand back expiring books: {e}"),
+    }
 
     // How much is owed?
     let nonce = rand_hex(16);
@@ -5131,6 +5246,36 @@ mod tender_tests {
             "tendered {} TOKU for a {ceiling} ceiling with {on_device} on the device",
             t.total_toku()
         );
+    }
+
+    /// The swap only runs while the app is open, so what it picks up decides whether a
+    /// user loses money. It must take a book inside the window, leave one outside it, and
+    /// hand back WHOLE books rather than planning a tender out of them.
+    #[test]
+    fn the_swap_takes_the_books_that_are_about_to_expire_and_leaves_the_rest() {
+        let fk = testkit::funded();
+        let keys = both_keys(&fk);
+        let now = fk.expiration_date().saturating_sub((SWAP_WINDOW_DAYS * 86_400) as u32) + 86_400;
+        let mut w = wallet::Wallet::default();
+        w.coconut_purses.push(fk.new_purse().persist().unwrap());
+        let value_before = coin_value_toku(&w);
+
+        assert!(has_expiring_books(&w, now), "a book one day inside the window counts");
+        let t = drain_expiring(&mut w, &keys, now).unwrap().expect("something to hand back");
+        t.well_formed().expect("a tender the server would accept");
+        // A whole book per note is the cheapest shape: one serial's worth of proof per coin,
+        // but only one note to carry.
+        assert_eq!(t.notes.len(), 1, "one note for one book: {:?}", t.notes.len());
+        assert_eq!(t.total_toku(), value_before, "the whole book went back");
+        assert!(w.coconut_purses.is_empty(), "an emptied book is dropped");
+        assert!(drain_expiring(&mut w, &keys, now).unwrap().is_none(), "nothing left to hand back");
+
+        // The same book, a day BEFORE the window opens: left alone.
+        let mut w2 = wallet::Wallet::default();
+        w2.coconut_purses.push(fk.new_purse().persist().unwrap());
+        let early = now.saturating_sub(2 * 86_400);
+        assert!(!has_expiring_books(&w2, early), "a book outside the window is not due");
+        assert!(drain_expiring(&mut w2, &keys, early).unwrap().is_none(), "and is not taken");
     }
 
     /// Coins on the table for an unanswered question are still the user's money: the
