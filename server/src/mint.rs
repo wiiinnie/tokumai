@@ -27,10 +27,11 @@ use scrai_core::coconut::{COARSE_TOKU, COIN_TOKU, DENOMS};
 use scrai_core::federation::{self, Authority};
 use scrai_core::tender::Note;
 
-/// How often a fresh authority is created. Shorter means books are drawn with more of
-/// their life ahead of them (the newest epoch is at most this old), at the cost of one
-/// bootstrap and one more key set held per denomination.
-pub const ROLL_EVERY_DAYS: u64 = 7;
+/// How often a fresh authority is created. It is half of the promise in the terms: an
+/// epoch is stamped with the promised validity PLUS one roll, so the OLDEST a book can be
+/// when drawn is one roll, and it still has the full promise ahead of it. Defined beside
+/// the promise in the core, never separately.
+pub use scrai_core::coconut::ROLL_EVERY_DAYS;
 /// Kept past its expiration for as long as a payment from it can still verify
 /// (`federation::SPEND_DATE_PAST_SECS` is two days), plus a day of slack.
 const KEEP_PAST_EXPIRY_DAYS: u64 = 3;
@@ -291,6 +292,23 @@ mod tests {
 
     /// A fresh server must come up able to issue BOTH denominations, and calling roll again
     /// must not mint a second epoch of anything — it runs on a timer.
+    /// The terms promise a number of days (§6a). Every book of an epoch dies on the same
+    /// date, and one can be drawn the moment before the next epoch starts — so the WORST
+    /// case a customer can be handed must still be the full promise. This is a legal
+    /// statement as much as a technical one: the stamp carries the promise plus a roll.
+    #[test]
+    fn the_shortest_life_a_book_can_be_given_is_the_one_the_terms_promise() {
+        use scrai_core::coconut::{BOOK_VALIDITY_DAYS, PROMISED_VALIDITY_DAYS, ROLL_EVERY_DAYS};
+        let worst = BOOK_VALIDITY_DAYS - ROLL_EVERY_DAYS; // drawn just before the next roll
+        assert!(
+            worst >= PROMISED_VALIDITY_DAYS,
+            "a book drawn at the worst moment lives {worst} days, the terms say {PROMISED_VALIDITY_DAYS}"
+        );
+        // …and the best case is the promise plus one roll, not more: books should not
+        // quietly live twice as long as the document says either.
+        assert_eq!(BOOK_VALIDITY_DAYS, PROMISED_VALIDITY_DAYS + ROLL_EVERY_DAYS);
+    }
+
     #[test]
     fn a_fresh_mint_has_one_live_epoch_per_denomination_and_rolling_is_idempotent() {
         let dir = tmp();

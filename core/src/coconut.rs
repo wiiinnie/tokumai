@@ -58,7 +58,18 @@ pub const COIN_TOKU: u64 = 100;
 /// says which one it belongs to only so the server knows which key to verify it against.
 /// A note that lies about it simply fails verification.
 pub const COARSE_TOKU: u64 = 1_000;
-/// How long the books of one issuing epoch stay spendable.
+/// What the terms promise (§6a): coins drawn onto a device are spendable for at least this
+/// long, whenever they were drawn. It is a LOWER bound, and it is a legal statement — the
+/// two constants below exist to make it true rather than approximately true.
+pub const PROMISED_VALIDITY_DAYS: u64 = 90;
+
+/// How often the server starts a new issuing epoch (server/src/mint.rs).
+pub const ROLL_EVERY_DAYS: u64 = 7;
+
+/// What an epoch is stamped with. NOT the promise: every book of an epoch dies on the same
+/// day, and one can be drawn the moment before the next epoch starts — so the stamp has to
+/// carry the promise PLUS a full roll. A book therefore lives 90 to 97 days: never less
+/// than promised, sometimes more, and the doubt falls the customer's way.
 ///
 /// It lives HERE, in the core, because three things have to agree on it and did not: the
 /// server that stamps a book's expiry, the retention that must outlive a book, and the
@@ -66,7 +77,7 @@ pub const COARSE_TOKU: u64 = 1_000;
 /// to 90 days and that bound did not follow, so every book from the new epochs was refused
 /// with "spend date out of range" — the client dates a payment at expiration − 1 day, and
 /// that was suddenly 89 days ahead of a limit of 31.
-pub const BOOK_VALIDITY_DAYS: u64 = 90;
+pub const BOOK_VALIDITY_DAYS: u64 = PROMISED_VALIDITY_DAYS + ROLL_EVERY_DAYS;
 
 /// Denominations in use, coarsest first — the order a tender is planned in.
 pub const DENOMS: [u64; 2] = [COARSE_TOKU, COIN_TOKU];
