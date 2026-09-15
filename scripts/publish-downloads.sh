@@ -54,7 +54,7 @@ REMOTE=$(ssh "${SSH_OPTS[@]}" "$TARGET" 'cat /opt/tokumai/site/dl/manifest.json 
 # Decide what to upload and build the merged manifest (python: JSON without extra tools).
 MANIFEST="$SRC/target/manifest.json"
 mkdir -p "$(dirname "$MANIFEST")"
-UPLOAD=$(REMOTE="$REMOTE" VER="$ver" FORCE="$FORCE" MANIFEST="$MANIFEST" python3 - "${files[@]}" <<'PY'
+UPLOAD=$(REMOTE="$REMOTE" VER="$ver" FORCE="$FORCE" MANIFEST="$MANIFEST" ALLOW_MIXED="${ALLOW_MIXED:-0}" python3 - "${files[@]}" <<'PY'
 import hashlib, json, os, sys, datetime
 try:
     remote = json.loads(os.environ["REMOTE"] or "{}")
@@ -81,6 +81,20 @@ for path in sys.argv[1:]:
     files[key] = {"name": name, "sha256": sha, "bytes": os.path.getsize(path)}
     upload.append(path)
     print(f"   ^ {name} {'new' if not prev else 'changed'}", file=sys.stderr)
+# A kept entry is a file from an EARLIER version that the server still serves. Publishing
+# those under a new version number is how the site came to advertise 0.6.5 while handing
+# out 0.5.6 binaries on 2026-09-15 — harmless until the server's SCRAI_MIN_APP catches up,
+# and then every download is a dead app. Name the stale platforms and stop.
+stale = [k for k, v in files.items() if f"_{os.environ['VER']}_" not in v.get("name", "")
+         and not v.get("name", "").endswith(f"_{os.environ['VER']}.apk")]
+if stale and os.environ.get("ALLOW_MIXED") != "1":
+    print("", file=sys.stderr)
+    print(f"   ! the manifest would claim version {os.environ['VER']} while these platforms keep an older build:", file=sys.stderr)
+    for k in sorted(stale):
+        print(f"       {k}: {files[k]['name']}", file=sys.stderr)
+    print("     Put the missing bundles in dist/downloads/ (the .dmg is read from", file=sys.stderr)
+    print("     target/release/bundle/dmg/), or set ALLOW_MIXED=1 if that mix is intended.", file=sys.stderr)
+    sys.exit(3)
 manifest = {"version": os.environ["VER"], "published": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "files": files}
 with open(os.environ["MANIFEST"], "w") as out:
     json.dump(manifest, out, indent=2); out.write("\n")
