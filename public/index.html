@@ -2706,7 +2706,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // "Mr Nice". The fallback string is rewritten by scripts/bump-version.sh.
   const APP_CODENAMES = { "0.2": "kash", "0.3": "peroni", "0.4": "ichnusa", "0.5": "moretti", "0.6": "sassicaia" };
   const versionLabel = v => { const m = /^(\d+\.\d+)\.\d+/.exec(v); const c = m && APP_CODENAMES[m[1]]; return c ? v + " (" + c + ")" : v; };
-  let APP_VERSION = versionLabel("0.6.4");   // bump-version.sh: fallback
+  let APP_VERSION = versionLabel("0.6.5");   // bump-version.sh: fallback
   let devCost = false;
   // DEV upload readout: real file size ÷ pure transfer time (excludes chunk-split +
   // uploadBegin setup). Shown under a sent image only when the dev cost-audit is on.
