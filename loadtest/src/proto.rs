@@ -208,7 +208,7 @@ pub async fn fund(ctx: &Ctx, user: &mut User, usd: u32, redeem_coins: u64) -> Re
         coconut::make_withdrawal_request(user_kp.secret_key(), expiration_date, coconut::DEFAULT_T_TYPE)?;
     let mut shares = Vec::new();
     for (i, vk_auth) in auth_vks.iter().enumerate() {
-        let fed = FedRequest::Withdraw { user_pk: user_kp.public_key(), req: wreq.clone() };
+        let fed = FedRequest::Withdraw { user_pk: user_kp.public_key(), req: wreq.clone(), denom_toku: scrai_core::coconut::COIN_TOKU };
         let nonce = rand_hex(16);
         let req = with(envelope("coconut"), json!({
             "fed": serde_json::to_value(&fed).map_err(|e| e.to_string())?,
@@ -227,8 +227,8 @@ pub async fn fund(ctx: &Ctx, user: &mut User, usd: u32, redeem_coins: u64) -> Re
     }
     let wallet = coconut::aggregate(&vk, user_kp.secret_key(), &shares, &req_info)?;
     // The epoch material is the same for every book, so it is held beside them.
-    user.keys = Some(scrai_core::purse::EpochKeys { vk, coin_sigs, date_sigs, expiration_date, total_coins });
-    user.purse = Some(Purse::new(wallet, user_kp, total_coins, expiration_date));
+    user.keys = Some(scrai_core::purse::EpochKeys { vk, coin_sigs, date_sigs, expiration_date, total_coins, denom_toku: scrai_core::coconut::COIN_TOKU });
+    user.purse = Some(Purse::new(wallet, user_kp, total_coins, expiration_date, scrai_core::coconut::COIN_TOKU));
 
     redeem(ctx, user, redeem_coins).await
 }

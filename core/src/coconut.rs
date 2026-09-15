@@ -44,6 +44,22 @@ pub const TOKU_PER_USD: u64 = 100_000;
 /// not its cost (core/src/tender.rs). At 0.1 ¢ an ordinary text prompt tenders ~8 coins
 /// (4 KB, 32 ms); at 0.01 ¢ it would tender 80 (40 KB, 320 ms). Measured 2026-09-13/14.
 pub const COIN_TOKU: u64 = 100;
+/// The COARSE coin: 1 ¢, ten fine ones carried by a single serial.
+///
+/// Why two sizes at all. A payment costs ~490 bytes and ~4 ms of server pairings PER
+/// COIN, and a request must tender its CEILING, not its cost — so a 9 ¢ picture put
+/// ninety coins (44 KB) on the table, more notes than a tender may even carry. Paying
+/// the bulk in coarse coins and only the remainder in fine ones keeps the exactness at
+/// 0.1 ¢ while cutting the coins on the table roughly fivefold: the same 9 ¢ ceiling is
+/// nine coarse coins plus at most nine fine ones.
+///
+/// The value of a coin is NOT a field inside it — compact ecash has no such field. It is
+/// the issuing key that decides, so each denomination is its own authority, and a note
+/// says which one it belongs to only so the server knows which key to verify it against.
+/// A note that lies about it simply fails verification.
+pub const COARSE_TOKU: u64 = 1_000;
+/// Denominations in use, coarsest first — the order a tender is planned in.
+pub const DENOMS: [u64; 2] = [COARSE_TOKU, COIN_TOKU];
 /// Redeem $0.10 (100 coins) into a session at a time, uniform across users. Kept at 100
 /// coins rather than a whole dollar because a payment grows with its coin count: a
 /// 1000-coin redeem would be half a megabyte over the mixnet. The session path is on its
@@ -397,18 +413,29 @@ pub mod testkit {
 
         /// A client purse built from this federation's material (for purse tests).
         pub fn new_purse(&self) -> crate::purse::Purse {
-            crate::purse::Purse::new(self.wallet(), self.user.clone(), 32, self.expiration_date)
+            self.new_purse_of(COIN_TOKU)
+        }
+
+        /// The same, of a chosen denomination — the testkit's material is denomination
+        /// agnostic, so this is what a second issuing authority would hand out.
+        pub fn new_purse_of(&self, denom_toku: u64) -> crate::purse::Purse {
+            crate::purse::Purse::new(self.wallet(), self.user.clone(), 32, self.expiration_date, denom_toku)
         }
 
         /// The epoch material a purse needs in order to spend — held once, beside the
         /// books rather than inside each of them.
         pub fn keys(&self) -> crate::purse::EpochKeys {
+            self.keys_of(COIN_TOKU)
+        }
+
+        pub fn keys_of(&self, denom_toku: u64) -> crate::purse::EpochKeys {
             crate::purse::EpochKeys {
                 vk: self.vk.clone(),
                 coin_sigs: self.coin_sigs.clone(),
                 date_sigs: self.date_sigs.clone(),
                 expiration_date: self.expiration_date,
                 total_coins: 32,
+                denom_toku,
             }
         }
     }

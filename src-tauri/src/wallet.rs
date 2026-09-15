@@ -42,6 +42,10 @@ pub struct PendingSpend {
 #[derive(Serialize, Deserialize, Clone)]
 pub struct PendingWithdraw {
     pub server: String,
+    /// TOKU per coin of the book being drawn. Absent in a wallet written before there
+    /// were two denominations — those were all fine ones.
+    #[serde(default = "scrai_core::purse::fine_denom")]
+    pub denom_toku: u64,
     /// `scrai_core::coconut::KeyPairUser` (JSON).
     pub user: serde_json::Value,
     /// `WithdrawalRequest` — the exact body the server keys its issued cache on.

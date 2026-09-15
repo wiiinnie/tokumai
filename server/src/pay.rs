@@ -1494,7 +1494,9 @@ impl Pay {
     /// Only `Withdraw` is gated (Keys and Spend stay open): it must carry a valid
     /// account signature and the account must hold a full ticketbook's worth of
     /// entitlement. Returns who to charge on success.
-    pub fn gate_withdraw(&mut self, request: &[u8], book_toku: u64) -> Gate {
+    /// `book_of` gives the price of one ticketbook for a denomination (TOKU per coin) —
+    /// a coarse book costs ten times a fine one, so the gate cannot hold one number.
+    pub fn gate_withdraw(&mut self, request: &[u8], book_of: impl Fn(u64) -> u64) -> Gate {
         let v: Value = serde_json::from_slice(request).unwrap_or(Value::Null);
         let is_withdraw = v
             .pointer("/fed/Withdraw")
@@ -1502,6 +1504,11 @@ impl Pay {
         if !is_withdraw {
             return Gate::NotAWithdraw;
         }
+        // Which denomination is being bought. Absent (an app from before there were two)
+        // means the fine one, which is what `book_of` falls back to.
+        let book_toku = book_of(
+            v.pointer("/fed/Withdraw/denom_toku").and_then(|d| d.as_u64()).unwrap_or(0),
+        );
         let id = v.get("id").cloned().unwrap_or(Value::Null);
         let Some(account) = self.account_owns(&v, "withdraw:coconut") else {
             return Gate::Denied(encode(&err(
@@ -2703,16 +2710,16 @@ mod tests {
 
         // a non-withdraw coconut envelope passes untouched
         let keys_env = json!({"kind":"coconut","id":"x","fed":"Keys"});
-        assert!(matches!(pay.gate_withdraw(keys_env.to_string().as_bytes(), book), Gate::NotAWithdraw));
+        assert!(matches!(pay.gate_withdraw(keys_env.to_string().as_bytes(), |_| book), Gate::NotAWithdraw));
 
         // unsigned withdraw → denied
         let w = json!({"kind":"coconut","id":"x","fed":{"Withdraw":{}}});
-        assert!(matches!(pay.gate_withdraw(w.to_string().as_bytes(), book), Gate::Denied(_)));
+        assert!(matches!(pay.gate_withdraw(w.to_string().as_bytes(), |_| book), Gate::Denied(_)));
 
         // signed but broke → denied
         let w = json!({"kind":"coconut","id":"x","fed":{"Withdraw":{}},"publicKey":pem,
             "nonce":"w1","sig":signed(&sk,&aid,"withdraw:coconut","w1")});
-        assert!(matches!(pay.gate_withdraw(w.to_string().as_bytes(), book), Gate::Denied(_)));
+        assert!(matches!(pay.gate_withdraw(w.to_string().as_bytes(), |_| book), Gate::Denied(_)));
 
         // fund via fake invoice, then the gate authorizes and consumption empties it
         let gw = Gateway { rail: Rail::Fake, nyx: None, card: CardRail::None };
@@ -2725,7 +2732,7 @@ mod tests {
 
         let w = json!({"kind":"coconut","id":"x","fed":{"Withdraw":{}},"publicKey":pem,
             "nonce":"w2","sig":signed(&sk,&aid,"withdraw:coconut","w2")});
-        let req_key = match pay.gate_withdraw(w.to_string().as_bytes(), book) {
+        let req_key = match pay.gate_withdraw(w.to_string().as_bytes(), |_| book) {
             Gate::Authorized { account_id, req_key, prepaid } => {
                 assert_eq!(account_id, aid);
                 assert!(!prepaid);
@@ -2741,7 +2748,7 @@ mod tests {
         // entitlement, marked prepaid, and once issued the cached reply is there.
         let w2 = json!({"kind":"coconut","id":"y","fed":{"Withdraw":{}},"publicKey":pem,
             "nonce":"w3","sig":signed(&sk,&aid,"withdraw:coconut","w3")});
-        match pay.gate_withdraw(w2.to_string().as_bytes(), book) {
+        match pay.gate_withdraw(w2.to_string().as_bytes(), |_| book) {
             Gate::Authorized { req_key: k2, prepaid, .. } => {
                 assert_eq!(k2, req_key);
                 assert!(prepaid);
@@ -2755,7 +2762,7 @@ mod tests {
         // a DIFFERENT body from the same broke account is a new purchase → denied
         let w3 = json!({"kind":"coconut","id":"z","fed":{"Withdraw":{"user_pk":"other"}},"publicKey":pem,
             "nonce":"w4","sig":signed(&sk,&aid,"withdraw:coconut","w4")});
-        assert!(matches!(pay.gate_withdraw(w3.to_string().as_bytes(), book), Gate::Denied(_)));
+        assert!(matches!(pay.gate_withdraw(w3.to_string().as_bytes(), |_| book), Gate::Denied(_)));
 
         // the record survives a snapshot round-trip and abort drops it
         let mut back: Pay = serde_json::from_str(&pay.snapshot()).unwrap();

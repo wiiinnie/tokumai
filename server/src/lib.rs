@@ -2,6 +2,8 @@
 //! the binary (`main.rs`), the admin TUI and the fuzz targets (`fuzz/`) share one code
 //! path. Nothing here opens a socket — the binary owns the Nym client.
 
+use std::path::Path;
+
 pub mod admin;
 pub mod catalog;
 pub mod chat;
@@ -11,6 +13,7 @@ pub mod iap;
 pub mod inflight;
 pub mod nyx;
 pub mod openai;
+pub mod mint;
 pub mod pay;
 pub mod replies;
 pub mod store;
@@ -264,4 +267,25 @@ mod release_gate_tests {
         assert!(url.starts_with("https://"));
         std::env::remove_var("MIN_APP");
     }
+}
+
+/// Write a secret file (the authority share — it can forge money) with owner-only
+/// 0600 permissions on Unix, instead of the umask default (~0644) (H10).
+#[cfg(unix)]
+pub fn write_secret(path: &Path, contents: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
+    f.write_all(contents.as_bytes())?;
+    // mode() only applies on creation — also tighten a pre-existing looser file.
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+}
+#[cfg(not(unix))]
+pub fn write_secret(path: &Path, contents: &str) -> std::io::Result<()> {
+    std::fs::write(path, contents)
 }

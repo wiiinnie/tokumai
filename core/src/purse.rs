@@ -38,6 +38,20 @@ pub struct EpochKeys {
     pub expiration_date: u32,
     /// Coins per ticketbook this epoch issues.
     pub total_coins: u64,
+    /// TOKU one coin of this epoch is worth. The value lives in the KEY, not in the coin
+    /// (see `coconut::COARSE_TOKU`), so a server runs one of these per denomination and
+    /// material from one never spends a book from the other.
+    #[serde(default = "default_denom")]
+    pub denom_toku: u64,
+}
+
+/// A book written before denominations existed is a fine one.
+pub fn fine_denom() -> u64 {
+    coconut::COIN_TOKU
+}
+
+fn default_denom() -> u64 {
+    fine_denom()
 }
 
 impl EpochKeys {
@@ -45,7 +59,14 @@ impl EpochKeys {
     /// another epoch's material only produces a payment no server will accept, so it is
     /// refused here rather than burned.
     pub fn fits(&self, purse: &Purse) -> bool {
-        self.expiration_date == purse.expiration_date() && self.total_coins == purse.total_coins()
+        self.expiration_date == purse.expiration_date()
+            && self.total_coins == purse.total_coins()
+            && self.denom_toku == purse.denom_toku()
+    }
+
+    /// What a whole book of this epoch is worth.
+    pub fn book_toku(&self) -> u64 {
+        self.total_coins.saturating_mul(self.denom_toku)
     }
 }
 
@@ -55,11 +76,29 @@ pub struct Purse {
     user: KeyPairUser,
     total_coins: u64,
     expiration_date: u32,
+    #[serde(default = "default_denom")]
+    denom_toku: u64,
 }
 
 impl Purse {
-    pub fn new(wallet: Wallet, user: KeyPairUser, total_coins: u64, expiration_date: u32) -> Self {
-        Self { wallet, user, total_coins, expiration_date }
+    pub fn new(
+        wallet: Wallet,
+        user: KeyPairUser,
+        total_coins: u64,
+        expiration_date: u32,
+        denom_toku: u64,
+    ) -> Self {
+        Self { wallet, user, total_coins, expiration_date, denom_toku }
+    }
+
+    /// TOKU one coin of this book is worth.
+    pub fn denom_toku(&self) -> u64 {
+        self.denom_toku
+    }
+
+    /// TOKU still in this book.
+    pub fn remaining_toku(&self) -> u64 {
+        self.remaining_coins().saturating_mul(self.denom_toku)
     }
 
     /// Spend `coins` from the purse, advancing its counter and returning a payment
@@ -119,6 +158,7 @@ impl Purse {
                 payment,
                 pay_info: bytes.to_vec(),
                 spend_date,
+                denom_toku: self.denom_toku,
             });
         }
         *self = probe;
@@ -199,9 +239,11 @@ mod tests {
         let tender = Tender { notes };
         tender.well_formed().unwrap();
         assert_eq!(tender.total_coins(), 7);
+        assert_eq!(tender.total_toku(), 7 * coconut::COIN_TOKU);
         assert_eq!(purse.remaining_coins(), fk_total(&purse) - 7);
 
-        let picked = tender.select(3).unwrap();
+        // The cost is TOKU now, not coins: three fine coins are 3 × COIN_TOKU.
+        let picked = tender.select(3 * coconut::COIN_TOKU).unwrap();
         assert_eq!(picked.iter().map(|i| tender.notes[*i].coins).sum::<u64>(), 3);
         for i in &picked {
             let n = &tender.notes[*i];

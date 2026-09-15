@@ -274,17 +274,16 @@ pub fn effective_price(p: scrai_core::billing::ModelPrice) -> scrai_core::billin
 /// state, so main.rs can run it in a spawned task and hand the result back to settle().
 pub async fn run_provider(
     p: &PendingChat,
-    authority: &scrai_core::federation::Authority,
+    mint: &crate::mint::Mint,
 ) -> Result<(String, TokenUsage, Images), String> {
     // Coin-paid: the offline payment check (O(coins) BLS pairings) happens HERE, off the
     // dispatch loop, before a single token is bought from a provider. The coins were
     // already held against double-spend on the loop; this proves they are real.
     if let Paid::Coins(c) = &p.paid {
+        // Each note against the key of ITS denomination: the denomination a note claims
+        // only picks the key, so one that lies about it fails here (server/src/mint.rs).
         for n in &c.tender.notes {
-            let pi = n.pay_info()?;
-            authority
-                .verify_payment(&n.payment, &pi, n.spend_date)
-                .map_err(|e| format!("invalid coin: {e}"))?;
+            mint.verify(n)?;
         }
     }
     chat(&p.v, p.messages.clone(), p.live, p.thinking, p.image_size).await
@@ -504,7 +503,9 @@ pub fn reserve(
         if let Err(e) = quorum.hold(&payments) {
             return err(&e);
         }
-        let budget_toku = tender.total_coins().saturating_mul(scrai_core::coconut::COIN_TOKU);
+        // Notes of different denominations sit side by side, so the budget is the sum of
+        // what they are worth — never a coin count times one size.
+        let budget_toku = tender.total_toku();
         // Cap the answer to what the coins cover, so the bill can never exceed the tender.
         let want = max_tokens.unwrap_or_else(default_max_tokens);
         let afford = affordable_tokens(
@@ -789,13 +790,14 @@ fn settle_coins(
     provider_cost = Some(frame.cost_toku);
     let n_images = images.as_ref().and_then(|i| i.as_array()).map(|a| a.len()).unwrap_or(0) as u64;
     let price_toku = frame.price_toku + n_images * per_image_toku(&p.price, p.margin) + g_retail;
-    // Coins are the unit of payment, so the bill rounds UP to a whole coin (0.1 ¢).
-    let want_coins = price_toku.div_ceil(COIN_TOKU);
+    // Coins are the unit of payment, so the bill rounds UP to a whole FINE coin (0.1 ¢) —
+    // the coarse ones carry the bulk, the fine ones make the amount exact.
+    let want_toku = price_toku.div_ceil(COIN_TOKU).saturating_mul(COIN_TOKU);
 
     // What the user ACTUALLY pays is the rounded-up coin amount, not the raw price — the
     // coin is the smallest thing that can change hands. Reporting the raw price would put a
     // number in the app that the balance then contradicts.
-    let picked = ctx.tender.select(want_coins).unwrap_or_else(|| {
+    let picked = ctx.tender.select(want_toku).unwrap_or_else(|| {
         // The cap in reserve() is computed from the same ceiling settle bills against, so
         // this is a bug or a provider that ignored maxTokens. Take everything tendered and
         // say so — the alternative is serving for free and never noticing.
@@ -807,7 +809,7 @@ fn settle_coins(
         (0..ctx.tender.notes.len()).collect()
     });
     let burned_coins: u64 = picked.iter().map(|i| ctx.tender.notes[*i].coins).sum();
-    let charged_toku = burned_coins.saturating_mul(COIN_TOKU);
+    let charged_toku: u64 = picked.iter().map(|i| ctx.tender.notes[*i].value_toku()).sum();
 
     for i in &picked {
         let n = &ctx.tender.notes[*i];

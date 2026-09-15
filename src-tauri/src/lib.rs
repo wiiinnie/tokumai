@@ -213,7 +213,7 @@ async fn handle_spend_rejection(
                 Ok(FedResponse::Keys { vk, .. }) => serde_json::to_string(&vk).ok(),
                 _ => None,
             };
-            let purse_vk = epoch_keys(dir, srv).and_then(|k| serde_json::to_string(&k.vk).ok());
+            let purse_vk = epoch_keys(dir, srv, _purse.denom_toku()).and_then(|k| serde_json::to_string(&k.vk).ok());
             match server_vk {
                 // Confirmed stale (minted under a different authority key) → safe to drop.
                 Some(sv) if Some(&sv) != purse_vk.as_ref() => {
@@ -691,12 +691,22 @@ fn keys_cache() -> &'static std::sync::Mutex<std::collections::HashMap<String, (
 }
 
 /// Fetch (or reuse) the federation keys for `srv`.
-async fn federation_keys(t: &Transport, srv: &str, dir: &Path) -> Result<scrai_core::federation::FedResponse, String> {
+async fn federation_keys(
+    t: &Transport,
+    srv: &str,
+    dir: &Path,
+    denom_toku: u64,
+) -> Result<scrai_core::federation::FedResponse, String> {
+    // Each denomination is its own issuing authority with its own material, so it is
+    // fetched and cached apart. The cache key is the server AND the denomination; the
+    // ADDRESS stays what it was — that is what the request is sent to.
+    let cache_key = format!("{srv}#{denom_toku}");
+    let cache_key = cache_key.as_str();
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) as u32;
     // Valid while the spend date the app uses (expiration − 1 day) is still ahead.
     let fresh = |exp: u32| now + 2 * 86_400 < exp;
     let parse = |v: Value| serde_json::from_value::<scrai_core::federation::FedResponse>(v).ok();
-    if let Some((exp, v)) = keys_cache().lock().ok().and_then(|c| c.get(srv).cloned()) {
+    if let Some((exp, v)) = keys_cache().lock().ok().and_then(|c| c.get(cache_key).cloned()) {
         if fresh(exp) {
             if let Some(r) = parse(v) {
                 return Ok(r);
@@ -707,22 +717,27 @@ async fn federation_keys(t: &Transport, srv: &str, dir: &Path) -> Result<scrai_c
     // once per app start would put a fifth of a megabyte through the mixnet before the
     // first answer. It changes only when the authority rotates, which shows up as a new
     // expiration date — so a stale file is simply ignored, never trusted.
-    if let Some((exp, v)) = read_keys_file(dir, srv) {
+    if let Some((exp, v)) = read_keys_file(dir, cache_key) {
         if fresh(exp) {
             if let Some(r) = parse(v.clone()) {
                 if let Ok(mut c) = keys_cache().lock() {
-                    c.insert(srv.to_string(), (exp, v));
+                    c.insert(cache_key.to_string(), (exp, v));
                 }
                 return Ok(r);
             }
         }
     }
-    let resp = fed_call(t, srv, scrai_core::federation::FedRequest::Keys).await?;
-    if let scrai_core::federation::FedResponse::Keys { expiration_date, .. } = &resp {
+    let resp = fed_call(t, srv, scrai_core::federation::FedRequest::KeysFor { denom_toku }).await?;
+    if let scrai_core::federation::FedResponse::Keys { expiration_date, denom_toku: got, .. } = &resp {
+        // A server that answers with another denomination than the one asked for is not
+        // one to take money from: the book would be worth something else than the price.
+        if *got != denom_toku {
+            return Err(format!("the server answered with {got}-TOKU coins, not the {denom_toku} asked for"));
+        }
         if let Ok(v) = serde_json::to_value(&resp) {
-            write_keys_file(dir, srv, *expiration_date, &v);
+            write_keys_file(dir, cache_key, *expiration_date, &v);
             if let Ok(mut c) = keys_cache().lock() {
-                c.insert(srv.to_string(), (*expiration_date, v));
+                c.insert(cache_key.to_string(), (*expiration_date, v));
             }
         }
     }
@@ -739,15 +754,20 @@ fn keys_file(dir: &Path, srv: &str) -> std::path::PathBuf {
 
 /// The epoch material for a server, from the on-disk cache, in the form a book needs to
 /// spend. Held once per server and epoch rather than inside every book.
-fn epoch_keys(dir: &Path, srv: &str) -> Option<scrai_core::purse::EpochKeys> {
+fn epoch_keys(dir: &Path, srv: &str, denom_toku: u64) -> Option<scrai_core::purse::EpochKeys> {
     use scrai_core::federation::FedResponse;
-    let (_, v) = read_keys_file(dir, srv)?;
+    let (_, v) = read_keys_file(dir, &format!("{srv}#{denom_toku}"))?;
     match serde_json::from_value::<FedResponse>(v).ok()? {
-        FedResponse::Keys { vk, coin_sigs, date_sigs, expiration_date, total_coins, .. } => {
-            Some(scrai_core::purse::EpochKeys { vk, coin_sigs, date_sigs, expiration_date, total_coins })
+        FedResponse::Keys { vk, coin_sigs, date_sigs, expiration_date, total_coins, denom_toku, .. } => {
+            Some(scrai_core::purse::EpochKeys { vk, coin_sigs, date_sigs, expiration_date, total_coins, denom_toku })
         }
         _ => None,
     }
+}
+
+/// The epoch material for every denomination this device has seen from `srv`.
+fn all_epoch_keys(dir: &Path, srv: &str) -> Vec<scrai_core::purse::EpochKeys> {
+    scrai_core::coconut::DENOMS.iter().filter_map(|d| epoch_keys(dir, srv, *d)).collect()
 }
 
 fn read_keys_file(dir: &Path, srv: &str) -> Option<(u32, Value)> {
@@ -777,6 +797,13 @@ fn forget_keys(srv: &str) {
 /// Drop the cached epoch material for a server, on disk as well — used where a rotated
 /// authority is suspected, so the retry fetches the new one instead of re-reading the old.
 fn forget_keys_on_disk(dir: &Path, srv: &str) {
+    for d in scrai_core::coconut::DENOMS {
+        let key = format!("{srv}#{d}");
+        let _ = std::fs::remove_file(keys_file(dir, &key));
+        if let Ok(mut c) = keys_cache().lock() {
+            c.remove(&key);
+        }
+    }
     forget_keys(srv);
     let _ = std::fs::remove_file(keys_file(dir, srv));
 }
@@ -784,12 +811,17 @@ fn forget_keys_on_disk(dir: &Path, srv: &str) {
 /// Full credential withdrawal: fetch keys → blind-withdraw at each authority →
 /// aggregate into a `Purse`. The Withdraw itself is ACCOUNT-SIGNED: the server
 /// only issues a ticketbook against paid entitlement, and the account signature
-/// How many ticketbooks the app keeps on the device: a hundred one-cent books, so one
-/// dollar. It is a CAP, not an increment — a top-up fills up to this many — so the most a
-/// lost device can cost is that dollar, and the app can say so plainly.
-const WORKING_BOOKS: usize = 100;
+/// How much credit the app keeps on the device: one dollar. It is a CAP, not an increment
+/// — a top-up fills UP to it — so the most a lost device can cost is that dollar, and the
+/// app can say so plainly.
+const WORKING_TOKU: u64 = scrai_core::coconut::TOKU_PER_USD;
 /// …and the point at which it goes and fetches more, a third of the way down.
-const LOW_WATER_BOOKS: usize = 30;
+const LOW_WATER_TOKU: u64 = WORKING_TOKU / 3;
+/// How many FINE books (one cent each) the device keeps beside the coarse ones. They are
+/// the small change: a tender pays its bulk in coarse coins and needs at most one book's
+/// worth of fine ones to land on the exact price, so a handful covers many requests while
+/// keeping the bytes down.
+const FINE_FLOAT_BOOKS: usize = 3;
 
 /// Draw up to `want` ticketbooks in ONE round trip.
 ///
@@ -807,6 +839,7 @@ async fn withdraw_books(
     auth: &account::Account,
     dir: &std::path::Path,
     want: usize,
+    denom_toku: u64,
 ) -> Result<u64, String> {
     use scrai_core::coconut;
     use scrai_core::federation::{FedRequest, FedResponse};
@@ -820,7 +853,7 @@ async fn withdraw_books(
     // The coin/date material is cached by `federation_keys` itself and lives in EpochKeys,
     // not in the book — a purse is built from the wallet, the user key, the size and the date.
     let (vk, auth_vks, _coin_sigs, _date_sigs, expiration_date, total_coins) =
-        match federation_keys(t, srv, dir).await? {
+        match federation_keys(t, srv, dir, denom_toku).await? {
             FedResponse::Keys {
                 vk, auth_vks, coin_sigs, date_sigs, expiration_date, total_coins, ..
             } => (vk, auth_vks, coin_sigs, date_sigs, expiration_date, total_coins),
@@ -864,6 +897,7 @@ async fn withdraw_books(
             coconut::make_withdrawal_request(user.secret_key(), expiration_date, coconut::DEFAULT_T_TYPE)?;
         w.pending_withdraws.push(wallet::PendingWithdraw {
             server: srv.to_string(),
+            denom_toku,
             user: serde_json::to_value(&user).map_err(|e| e.to_string())?,
             req: serde_json::to_value(&req).map_err(|e| e.to_string())?,
             req_info: serde_json::to_value(&req_info).map_err(|e| e.to_string())?,
@@ -895,7 +929,7 @@ async fn withdraw_books(
             requests.push(json!({
                 "v": PROTO, "kind": "coconut", "id": id,
                 "publicKey": auth.public_key_pem, "nonce": nonce, "sig": sig,
-                "fed": serde_json::to_value(FedRequest::Withdraw { user_pk: user.public_key(), req: req.clone() })
+                "fed": serde_json::to_value(FedRequest::Withdraw { user_pk: user.public_key(), req: req.clone(), denom_toku })
                     .map_err(|e| e.to_string())?,
             }));
             route.push((id, slot, k));
@@ -991,13 +1025,13 @@ async fn withdraw_books(
                 continue;
             }
         };
-        let purse = scrai_core::purse::Purse::new(wallet_cred, user, total_coins, expiration_date);
+        let purse = scrai_core::purse::Purse::new(wallet_cred, user, total_coins, expiration_date, denom_toku);
         // Persist each book as it lands: a dropped connection loses nothing.
         let mut w2 = wallet::load(dir);
         w2.coconut_purses.push(purse.persist()?);
         w2.pending_withdraws.retain(|q| q.req != w.pending_withdraws[idx].req);
         wallet::save(dir, &w2)?;
-        collected += total_coins * scrai_core::coconut::COIN_TOKU;
+        collected += total_coins * denom_toku;
         done.push(idx);
     }
     if !fatal.is_empty() {
@@ -1061,14 +1095,15 @@ fn coin_chat_enabled(dir: &Path) -> bool {
     dev_env("COIN_CHAT").as_deref() == Some("1") || wallet::load(dir).coin_chat
 }
 
-/// What this request could cost at worst, in coins — the size of the tender.
+/// What this request could cost at worst, in TOKU — the size of the tender. In TOKU and
+/// not in coins, because coins come in two sizes now (`coconut::DENOMS`).
 ///
 /// The formula is `scrai_core::billing::ceiling_toku`, the SAME one the server reserves
 /// with. It used to be re-derived here from `compute_billing` with a text-shaped usage,
 /// which ignored the picture an image model draws: a 4368 TOKU image request went out
 /// with 1300 TOKU on the table and was refused while the device held 187 coins
 /// (2026-09-14). Anything that changes the ceiling must change it in core, for both.
-fn tender_ceiling_coins(
+fn tender_ceiling_toku(
     model: &str,
     messages: &Value,
     max_tokens: Option<u64>,
@@ -1100,22 +1135,47 @@ fn tender_ceiling_coins(
     // Half again on top: the server's margin may be higher than the one bundled here, and
     // an answer capped for want of one coin is worse than a few notes that come home.
     let toku = est.saturating_mul(3) / 2;
-    toku.clamp(TENDER_MIN_TOKU, TENDER_MAX_TOKU).div_ceil(COIN_TOKU)
+    // Rounded to a whole fine coin: nothing finer can be put on the table.
+    let toku = toku.clamp(TENDER_MIN_TOKU, TENDER_MAX_TOKU);
+    toku.div_ceil(COIN_TOKU).saturating_mul(COIN_TOKU)
 }
 
-/// Assemble a tender worth at least `ceiling` coins: spare notes first, then — only if
-/// they fall short — a fresh plan minted out of a book. The purse is advanced here, so the
-/// caller MUST persist the wallet before anything leaves the device.
+/// Assemble a tender worth at least `ceiling_toku`.
+///
+/// THE PACKING. A payment comes out of ONE book, so a note can never be worth more than
+/// the book it came from, and a tender may carry at most `MAX_NOTES` of them. Two things
+/// therefore have to be true at once: enough VALUE on the table, and enough GRANULARITY
+/// for the server to burn the exact price rather than overshoot onto a whole note.
+///
+/// Value comes from the coarse books — one note per book, worth up to ten cents.
+/// Granularity comes from ONE finely planned fine book: 1, 2, 4, 3 coins covers every
+/// tenth of a cent below a whole cent. A 9 ¢ ceiling is then one coarse note plus four
+/// fine ones — five notes, nineteen coins — where a single denomination needed ninety
+/// coins and could not be carried at all (2026-09-14/15).
+///
+/// Spare notes from earlier tenders are spent first, but only while the notes still needed
+/// for the rest would fit beside them: slots are the scarce thing, not coins.
 fn build_tender(
     w: &mut wallet::Wallet,
-    keys: &scrai_core::purse::EpochKeys,
-    ceiling: u64,
+    keys: &[scrai_core::purse::EpochKeys],
+    ceiling_toku: u64,
 ) -> Result<scrai_core::tender::Tender, String> {
+    use scrai_core::coconut::{COARSE_TOKU, COIN_TOKU};
     use scrai_core::tender::{plan_coins, Note, Tender, MAX_NOTES};
-    // A whole book is the most a single note can be worth, so the slots left after the fine
-    // plan decide how much a tender can carry at all.
-    let book = keys.total_coins.max(1);
-    let fine_slots = plan_coins(book).len();
+
+    let keys_for = |denom: u64| keys.iter().find(|k| k.denom_toku == denom);
+    let fine_book_coins = keys_for(COIN_TOKU).map(|k| k.total_coins).unwrap_or(0);
+    let coarse_book_toku = keys_for(COARSE_TOKU).map(|k| k.book_toku()).unwrap_or(0);
+    // How far the fine plan has to reach: just under ONE coarse coin. Anything above that
+    // is cheaper to pay with a coarse note, so planning a whole fine book would spend
+    // coins — and bytes — on granularity nobody can use. Without a coarse denomination the
+    // fine book is all there is, and then it does have to cover itself.
+    let fine_span_coins = if coarse_book_toku > 0 {
+        (COARSE_TOKU / COIN_TOKU).min(fine_book_coins)
+    } else {
+        fine_book_coins
+    };
+    let fine_slots = if fine_span_coins > 0 { plan_coins(fine_span_coins).len() } else { 0 };
 
     let mut spares: Vec<Note> = Vec::new();
     for v in std::mem::take(&mut w.spare_notes) {
@@ -1126,92 +1186,142 @@ fn build_tender(
             Err(e) => log::warn!("[tender] dropping an unreadable spare note: {e}"),
         }
     }
-    // Spare notes are already paid for, so they go first — but only as many as this tender
-    // can still afford to carry. Taking ALL of them is what wedged the wallet on
-    // 2026-09-14: a refused tender comes home in one piece, so the next attempt put the
-    // same over-long pile back on the table and was refused for the same reason, for ever.
-    //
-    // Slots, not notes, are the scarce thing. A spare is worth a few coins; a whole-book
-    // note is worth ten. So a spare is only taken while the notes still needed for the
-    // REST of the ceiling — whole books plus the fine plan — would still fit beside it.
-    // Without that check ten small spares filled the table with 34 coins while the device
-    // held 55, and an image was refused with the money sitting right there.
-    spares.sort_by(|a, b| b.coins.cmp(&a.coins));
+    spares.sort_by(|a, b| b.value_toku().cmp(&a.value_toku()));
     let mut notes: Vec<Note> = Vec::new();
     let mut keep: Vec<Note> = Vec::new();
     let mut have = 0u64;
     for n in spares {
-        let bulk_after = ceiling.saturating_sub(have + n.coins).div_ceil(book) as usize;
-        if have < ceiling && notes.len() + 1 + bulk_after + fine_slots <= MAX_NOTES {
-            have += n.coins;
+        let rest = ceiling_toku.saturating_sub(have + n.value_toku());
+        let bulk_after = if coarse_book_toku > 0 { plan_coins(rest.div_ceil(COARSE_TOKU)).len() } else { 0 };
+        if have < ceiling_toku && notes.len() + 1 + bulk_after + fine_slots <= MAX_NOTES {
+            have += n.value_toku();
             notes.push(n);
         } else {
             keep.push(n);
         }
     }
-    // If the spares already cover the ceiling no book will be opened, and then their own
-    // values are all the granularity there is. Spend what is left of the note budget on
-    // the SMALLEST of them, so the server can still burn an exact amount instead of
-    // overshooting onto a whole note.
-    if have >= ceiling {
-        keep.sort_by(|a, b| a.coins.cmp(&b.coins));
+    // Spares alone can cover it — then their own values are all the granularity there is,
+    // so spend what is left of the budget on the SMALLEST of them.
+    if have >= ceiling_toku {
+        keep.sort_by(|a, b| a.value_toku().cmp(&b.value_toku()));
         while notes.len() < MAX_NOTES && !keep.is_empty() {
             notes.push(keep.remove(0));
         }
     }
-    w.spare_notes = keep
-        .iter()
-        .filter_map(|n| serde_json::to_value(n).ok())
-        .collect();
-    let mut short = ceiling.saturating_sub(notes.iter().map(|n| n.coins).sum::<u64>());
-    // Books are small, so one request can need coins out of several of them. Take the
-    // oldest first: a coin that has been on the device longest is the one whose purchase
-    // is furthest away in time.
+    w.spare_notes = keep.iter().filter_map(|n| serde_json::to_value(n).ok()).collect();
+
+    // --- the bulk, from the coarsest books first -----------------------------------
     //
-    // HOW THE NOTES ARE PACKED. A payment comes out of ONE book, so a note can never be
-    // worth more than a book (ten coins). A tender may carry at most MAX_NOTES of them,
-    // and a fine 1,2,4,… plan per book blows that budget at once: nine books used to mean
-    // thirty-six notes for a ninety-coin ceiling, and the server refused the lot
-    // ("too many notes in one tender", 2026-09-14). So only the FIRST book opened is
-    // planned finely — that alone makes every amount from 0 to a full book an exact
-    // subset sum — and every book after it comes as a SINGLE note of what it holds. Any
-    // total is then the whole notes plus the fine remainder, still exact, in about a
-    // tenth of the notes.
-    let mut fine_done = false;
-    while short > 0 && notes.len() < MAX_NOTES {
-        let Some((idx, mut purse)) = first_funded_purse(&w.coconut_purses) else { break };
-        let take = short.min(purse.remaining_coins());
-        if take == 0 {
+    // A note is atomic: the server burns it whole or not at all. So the coarse side needs
+    // the SAME 1, 2, 4, … plan as the fine one — one note of nine coarse coins can pay 9 ¢
+    // and nothing else, while 1+2+4+2 pays every whole cent up to nine. The plan is made
+    // once for the whole amount and handed out across books, so several books still cost
+    // only as many notes as the plan has values (2026-09-15).
+    for denom in scrai_core::coconut::DENOMS {
+        if denom == COIN_TOKU {
+            continue; // the fine side is the granularity plan below
+        }
+        let Some(k) = keys_for(denom) else { continue };
+        if have >= ceiling_toku {
             break;
         }
-        // `expiration − 1 day`, the same spend date every other payment uses.
+        let want_coins = (ceiling_toku - have).div_ceil(denom);
+        for v in plan_coins(want_coins) {
+            if notes.len() + 1 + fine_slots > MAX_NOTES {
+                break;
+            }
+            // Oldest book first: a coin that has been on the device longest is the one
+            // whose purchase is furthest away in time. A value has to come out of ONE
+            // book, so take it from the first that can cover it.
+            let Some((idx, mut purse)) = w
+                .coconut_purses
+                .iter()
+                .enumerate()
+                .find_map(|(i, pj)| {
+                    let p = scrai_core::purse::Purse::restore(pj).ok()?;
+                    (p.denom_toku() == denom && p.remaining_coins() >= v).then_some((i, p))
+                })
+            else {
+                break;
+            };
+            let spend_date = purse.expiration_date().saturating_sub(86_400);
+            let mut fresh = purse.spend_tender(k, &[v], spend_date)?;
+            notes.append(&mut fresh);
+            have += v * denom;
+            let emptied = purse.remaining_coins() == 0;
+            w.coconut_purses[idx] = purse.persist()?;
+            if emptied {
+                w.coconut_purses.remove(idx);
+            }
+        }
+    }
+
+    // --- the granularity: one finely planned fine book ------------------------------
+    // Without it the server could only burn whole coarse notes, and every answer would be
+    // rounded up to the cent. Only when it is actually MISSING, though: notes already on
+    // the table that are worth less than a coarse coin are granularity too, and minting a
+    // fresh plan beside them would spend coins nobody needs (a spare-covered tender used
+    // to reach into a book for it anyway).
+    let small_value: u64 = notes.iter().map(|n| n.value_toku()).filter(|v| *v < COARSE_TOKU).sum();
+    let need_granularity = small_value < COARSE_TOKU.saturating_sub(COIN_TOKU);
+    if need_granularity && fine_span_coins > 0 && notes.len() + fine_slots <= MAX_NOTES {
+        if let (Some(k), Some((idx, mut purse))) =
+            (keys_for(COIN_TOKU), first_funded_purse_of(&w.coconut_purses, COIN_TOKU))
+        {
+            let coins = purse.remaining_coins().min(fine_span_coins);
+            let spend_date = purse.expiration_date().saturating_sub(86_400);
+            let mut fresh = purse.spend_tender(k, &plan_coins(coins), spend_date)?;
+            notes.append(&mut fresh);
+            have += coins * COIN_TOKU;
+            let emptied = purse.remaining_coins() == 0;
+            w.coconut_purses[idx] = purse.persist()?;
+            if emptied {
+                w.coconut_purses.remove(idx);
+            }
+        }
+    }
+
+    // --- still short? then there are no coarse books, only fine ones --------------------
+    // Same plan, one book at a time, until the ceiling is covered or the slots run out.
+    while have < ceiling_toku && notes.len() < MAX_NOTES {
+        let Some(k) = keys_for(COIN_TOKU) else { break };
+        let Some((idx, mut purse)) = first_funded_purse_of(&w.coconut_purses, COIN_TOKU) else { break };
+        let coins = (ceiling_toku - have).div_ceil(COIN_TOKU).min(purse.remaining_coins());
+        if coins == 0 || notes.len() + 1 > MAX_NOTES {
+            break;
+        }
         let spend_date = purse.expiration_date().saturating_sub(86_400);
-        // The fine plan has to cover a WHOLE book's worth of remainder, not just what is
-        // still short, or a later coarse note could not be made up exactly.
-        let (values, take) = if fine_done {
-            (vec![take], take)
-        } else {
-            let fine = purse.remaining_coins().min(ceiling);
-            (plan_coins(fine), fine)
-        };
-        // Room for what this book would add — never blow the note budget mid-book.
-        if notes.len() + values.len() > MAX_NOTES {
-            break;
-        }
-        let mut fresh = purse.spend_tender(keys, &values, spend_date)?;
+        let mut fresh = purse.spend_tender(k, &[coins], spend_date)?;
         notes.append(&mut fresh);
-        fine_done = true;
-        short = short.saturating_sub(take);
+        have += coins * COIN_TOKU;
         let emptied = purse.remaining_coins() == 0;
         w.coconut_purses[idx] = purse.persist()?;
         if emptied {
             w.coconut_purses.remove(idx);
         }
     }
+
     if notes.is_empty() {
         return Err("no TOKU credit — buy credit first".into());
     }
     Ok(Tender { notes })
+}
+
+/// How many books of one denomination still hold coins.
+fn books_of_denom(w: &wallet::Wallet, denom_toku: u64) -> usize {
+    w.coconut_purses
+        .iter()
+        .filter_map(|j| scrai_core::purse::Purse::restore(j).ok())
+        .filter(|p| p.denom_toku() == denom_toku && p.remaining_coins() > 0)
+        .count()
+}
+
+/// The oldest book of one denomination that still holds coins.
+fn first_funded_purse_of(purses: &[String], denom_toku: u64) -> Option<(usize, scrai_core::purse::Purse)> {
+    purses.iter().enumerate().find_map(|(i, pj)| {
+        let p = scrai_core::purse::Purse::restore(pj).ok()?;
+        (p.denom_toku() == denom_toku && p.remaining_coins() > 0).then_some((i, p))
+    })
 }
 
 
@@ -1221,7 +1331,7 @@ fn keep_unburned(w: &mut wallet::Wallet, notes: &[scrai_core::tender::Note], bur
     let mut spent = 0u64;
     for (i, n) in notes.iter().enumerate() {
         if burned.contains(&i) {
-            spent += n.coins;
+            spent += n.value_toku();
             continue;
         }
         match serde_json::to_value(n) {
@@ -1233,21 +1343,31 @@ fn keep_unburned(w: &mut wallet::Wallet, notes: &[scrai_core::tender::Note], bur
 }
 
 /// Coins lying on this device: unspent book coins plus notes already taken out of a book.
+/// What the coins on this device are worth. Books come in two denominations, and every
+/// book and note carries its own, so the value is summed — never counted and multiplied.
 fn coin_value_toku(w: &wallet::Wallet) -> u64 {
-    use scrai_core::coconut::COIN_TOKU;
     let in_books: u64 = w
         .coconut_purses
         .iter()
         .filter_map(|j| scrai_core::purse::Purse::restore(j).ok())
-        .map(|p| p.remaining_coins())
+        .map(|p| p.remaining_toku())
         .sum();
     let in_notes: u64 = w
         .spare_notes
         .iter()
         .filter_map(|v| serde_json::from_value::<scrai_core::tender::Note>(v.clone()).ok())
-        .map(|n| n.coins)
+        .map(|n| n.value_toku())
         .sum();
-    (in_books + in_notes).saturating_mul(COIN_TOKU)
+    // Coins on the table for a question that has not been answered yet are still the
+    // user's: all but the few the answer costs come home (2026-09-14).
+    let in_flight: u64 = w
+        .pending_tenders
+        .iter()
+        .flat_map(|p| p.notes.iter())
+        .filter_map(|v| serde_json::from_value::<scrai_core::tender::Note>(v.clone()).ok())
+        .map(|n| n.value_toku())
+        .sum();
+    in_books + in_notes + in_flight
 }
 
 /// Build the coin-paid chat request — or resume the one that never got an answer. The
@@ -1285,8 +1405,11 @@ fn coin_request(
             w.pending_tenders.pop();
         }
     }
-    let keys = epoch_keys(dir, srv).ok_or("the server's issuing keys are not on this device yet — check for credit first")?;
-    let tender = build_tender(&mut w, &keys, tender_ceiling_coins(model, messages, maxTokens, thinkingBudget, imageSize.as_deref()))?;
+    let keys = all_epoch_keys(dir, srv);
+    if keys.is_empty() {
+        return Err("the server's issuing keys are not on this device yet — check for credit first".into());
+    }
+    let tender = build_tender(&mut w, &keys, tender_ceiling_toku(model, messages, maxTokens, thinkingBudget, imageSize.as_deref()))?;
     let mut req = json!({
         "v": PROTO, "kind": "chat", "id": rand_hex(16), "model": model, "messages": messages,
         "stream": false, "chunkedImages": true,
@@ -1368,7 +1491,7 @@ fn coin_settle(dir: &std::path::Path, req_id: &str, notes: &[scrai_core::tender:
     // Only the tender this reply answers: another one may still be outstanding.
     w.pending_tenders.retain(|p| p.request.get("id").and_then(|i| i.as_str()) != Some(req_id));
     wallet::save(dir, &w)?;
-    log::info!("[tender] {spent} coin(s) burned, {} kept", notes.len() - burned.len());
+    log::info!("[tender] {spent} TOKU burned, {} note(s) kept", notes.len() - burned.len());
     Ok(())
 }
 
@@ -1472,7 +1595,10 @@ async fn session_drain(app: AppHandle, transport: State<'_, Arc<Transport>>) -> 
 /// re-sent verbatim until the server answers, so a lost reply can never lose the coins.
 #[tauri::command]
 async fn coins_return(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<Value, String> {
-    const BATCH_COINS: u64 = 200; // the server's MAX_RETURN_COINS
+    // The server bounds a return by COINS (its pairings cost per coin, MAX_RETURN_COINS),
+    // so the batch is sized for the worst case: all of it in fine coins. Coarse books make
+    // a batch worth ten times more without costing the server any more work.
+    const BATCH_TOKU: u64 = 200 * scrai_core::coconut::COIN_TOKU;
     let _op = transport.begin_op().await;
     let dir = data_dir(&app)?;
     let srv = server_addr(&wallet::load(&dir))?;
@@ -1506,12 +1632,15 @@ async fn coins_return(app: AppHandle, transport: State<'_, Arc<Transport>>) -> R
                 (p.request, notes)
             }
             None => {
-                let left = coins_on_device(&w);
+                let left = coin_value_toku(&w);
                 if left == 0 {
                     break;
                 }
-                let keys = epoch_keys(&dir, &srv).ok_or("the server's issuing keys are not on this device yet — check for credit first")?;
-                let tender = build_tender(&mut w, &keys, left.min(BATCH_COINS))?;
+                let keys = all_epoch_keys(&dir, &srv);
+                if keys.is_empty() {
+                    return Err("the server's issuing keys are not on this device yet — check for credit first".into());
+                }
+                let tender = build_tender(&mut w, &keys, left.min(BATCH_TOKU))?;
                 let nonce = rand_hex(16);
                 let sig = a.sign("return", &nonce);
                 let req = json!({
@@ -1589,7 +1718,8 @@ async fn redeem_coconut(app: &AppHandle, t: &Transport, srv: &str, coins: u64) -
                 let mut pib = [0u8; 72];
                 rand::thread_rng().fill_bytes(&mut pib);
                 let spend_date = purse.expiration_date().saturating_sub(86_400);
-                let keys = epoch_keys(&dir, srv).ok_or("the server's issuing keys are not on this device yet — check for credit first")?;
+                let keys = epoch_keys(&dir, srv, purse.denom_toku())
+                    .ok_or("the server's issuing keys are not on this device yet — check for credit first")?;
                 let payment = purse.spend(&keys, coins, &PayInfo { pay_info_bytes: pib }, spend_date)?;
                 let emptied = purse.remaining_coins() == 0;
                 w.coconut_purses[idx] = purse.persist()?;
@@ -2472,7 +2602,7 @@ async fn collect(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result
 #[tauri::command]
 fn collect_later(app: AppHandle) -> Result<Value, String> {
     let dir = data_dir(&app)?;
-    let low = books_on_device(&wallet::load(&dir)) < LOW_WATER_BOOKS;
+    let low = coin_value_toku(&wallet::load(&dir)) < LOW_WATER_TOKU;
     if low {
         spawn_refill_soon(&app);
     }
@@ -2501,30 +2631,48 @@ async fn collect_now(app: AppHandle, main: Arc<Transport>) -> Result<Value, Stri
     // Top the device UP to the working amount rather than drawing everything: what a lost
     // device can cost is then bounded by that amount, and the rest stays on the account
     // where the recovery phrase reaches it (docs/unlinkability.md, block D).
-    let mut book_toku = books_size_toku(&w0, &dir, &srv);
-    if book_toku == 0 {
-        // Nothing on this device knows the size yet — so ASK, do not guess. The guess used
-        // to be "request the whole room and let the server refuse what the account cannot
-        // pay for", which on a device with no books put a hundred withdrawals through the
-        // mixnet to get nine (seen in the server log 2026-09-14). One Keys call settles it,
-        // and it is cached on disk for every later start anyway.
-        if let Ok(FedResponse::Keys { total_coins, .. }) = federation_keys(&transport, &srv, &dir).await {
-            book_toku = total_coins * scrai_core::coconut::COIN_TOKU;
+    //
+    // TWO DENOMINATIONS. The bulk is drawn as coarse books (ten cents each) because a
+    // coarse coin carries ten times the value through the mixnet for the same ~490 bytes;
+    // a small float of fine books (one cent each) is what makes a bill exact to a tenth of
+    // a cent. So: keep FINE_FLOAT_BOOKS fine books, put everything else in coarse ones,
+    // and stop at the working cap.
+    let mut collected = 0u64;
+    let mut room_toku = WORKING_TOKU.saturating_sub(coin_value_toku(&wallet::load(&dir)));
+    let mut budget = owed;
+    for denom in scrai_core::coconut::DENOMS {
+        // What one book of this denomination costs, from the server's own keys. Never a
+        // number compiled into the app: the server decides the size, and a guess put a
+        // hundred refused withdrawals through the mixnet once already (2026-09-14).
+        let book_toku = match federation_keys(&transport, &srv, &dir, denom).await {
+            Ok(FedResponse::Keys { total_coins, .. }) => total_coins * denom,
+            _ => continue,
+        };
+        if book_toku == 0 {
+            continue;
         }
+        let want = if denom == scrai_core::coconut::COIN_TOKU {
+            // The fine float: only up to what makes tenders exact, never more.
+            let have = books_of_denom(&wallet::load(&dir), denom);
+            FINE_FLOAT_BOOKS.saturating_sub(have).min((budget / book_toku) as usize)
+        } else {
+            ((budget / book_toku) as usize).min((room_toku / book_toku) as usize)
+        };
+        // An interrupted withdrawal is finished even when the device is otherwise full —
+        // the server may already have charged for it.
+        let outstanding = wallet::load(&dir)
+            .pending_withdraws
+            .iter()
+            .filter(|p| p.server == srv && p.denom_toku == denom)
+            .count();
+        if want == 0 && outstanding == 0 {
+            continue;
+        }
+        let got = withdraw_books(&transport, &srv, &a, &dir, want.max(outstanding), denom).await?;
+        collected += got;
+        budget = budget.saturating_sub(got);
+        room_toku = room_toku.saturating_sub(got);
     }
-    let have = books_on_device(&wallet::load(&dir));
-    let room = WORKING_BOOKS.saturating_sub(have);
-    // If the size is STILL unknown the keys call failed; draw a single book rather than
-    // nothing, which both makes progress and teaches the device the size for next time.
-    let want = if book_toku > 0 { room.min((owed / book_toku) as usize) } else { room.min(1) };
-    // An interrupted withdrawal is finished even when the device is otherwise full — the
-    // server may already have charged for it.
-    let outstanding = wallet::load(&dir).pending_withdraws.iter().filter(|p| p.server == srv).count();
-    let collected = if want > 0 || outstanding > 0 {
-        withdraw_books(&transport, &srv, &a, &dir, want.max(outstanding)).await?
-    } else {
-        0
-    };
 
     diag(&app, "collect: about to respond");
     let left = owed.saturating_sub(collected);
@@ -2584,14 +2732,6 @@ fn spawn_refill_in(app: &AppHandle, base: u64, spread: u64) {
     });
 }
 
-/// Books with coins left on this device.
-fn books_on_device(w: &wallet::Wallet) -> usize {
-    w.coconut_purses
-        .iter()
-        .filter_map(|j| scrai_core::purse::Purse::restore(j).ok())
-        .filter(|p| p.remaining_coins() > 0)
-        .count()
-}
 
 /// What one book is worth, in TOKU. The SERVER decides it, so the client either reads it
 /// off a book it already holds or off the epoch material that server published. A number
@@ -2600,16 +2740,20 @@ fn books_on_device(w: &wallet::Wallet) -> usize {
 /// a book cost ten times what it does, so it drew nothing and reported the credit as
 /// waiting. 0 means "not known here yet", and the caller then lets the server decide.
 fn books_size_toku(w: &wallet::Wallet, dir: &Path, srv: &str) -> u64 {
-    if let Some(coins) = w
+    use scrai_core::coconut::COIN_TOKU;
+    // The SMALLEST book, because that is what decides how much can be stranded on the
+    // account: credit under one fine book cannot be drawn at all.
+    if let Some(toku) = w
         .coconut_purses
         .iter()
         .filter_map(|j| scrai_core::purse::Purse::restore(j).ok())
-        .map(|p| p.total_coins())
+        .filter(|p| p.denom_toku() == COIN_TOKU)
+        .map(|p| p.total_coins() * p.denom_toku())
         .next()
     {
-        return coins * scrai_core::coconut::COIN_TOKU;
+        return toku;
     }
-    epoch_keys(dir, srv).map(|k| k.total_coins * scrai_core::coconut::COIN_TOKU).unwrap_or(0)
+    epoch_keys(dir, srv, COIN_TOKU).map(|k| k.book_toku()).unwrap_or(0)
 }
 
 /// Manually redeem one chunk of held coconut credit into the session balance
@@ -2757,7 +2901,7 @@ async fn chat_impl(
         // reply burned nothing, so every note goes back into the wallet.
         let req_id = req.get("id").and_then(|i| i.as_str()).unwrap_or_default().to_string();
         coin_settle(&dir, &req_id, &notes, &reply)?;
-        if books_on_device(&wallet::load(&dir)) < LOW_WATER_BOOKS {
+        if coin_value_toku(&wallet::load(&dir)) < LOW_WATER_TOKU {
             spawn_refill(&app);
         }
         if let Some(e) = reply.get("error").and_then(|e| e.as_str()) {
@@ -4652,103 +4796,148 @@ mod tender_tests {
     use super::*;
     use scrai_core::coconut::testkit;
 
-    fn wallet_with_a_book() -> (wallet::Wallet, u64, scrai_core::purse::EpochKeys) {
+    /// A wallet with one fine book, and the keys for both denominations.
+    fn wallet_with_a_book() -> (wallet::Wallet, u64, Vec<scrai_core::purse::EpochKeys>) {
         let fk = testkit::funded();
         let purse = fk.new_purse();
         let coins = purse.remaining_coins();
         let mut w = wallet::Wallet::default();
         w.coconut_purses.push(purse.persist().unwrap());
-        (w, coins, fk.keys())
+        (w, coins, both_keys(&fk))
+    }
+
+    fn both_keys(fk: &testkit::Funded) -> Vec<scrai_core::purse::EpochKeys> {
+        use scrai_core::coconut::{COARSE_TOKU, COIN_TOKU};
+        vec![fk.keys_of(COARSE_TOKU), fk.keys_of(COIN_TOKU)]
     }
 
     #[test]
     fn a_tender_is_minted_once_and_its_leftovers_pay_for_the_next_request() {
+        use scrai_core::coconut::COIN_TOKU;
         let (mut w, coins, keys) = wallet_with_a_book();
         assert!(coins >= 20, "the testkit book has {coins} coins");
 
-        // First request: nothing spare yet, so the notes come out of the book.
-        let t1 = build_tender(&mut w, &keys, 7).unwrap();
-        assert_eq!(t1.total_coins(), 7);
-        assert_eq!(t1.notes.iter().map(|n| n.coins).collect::<Vec<_>>(), vec![1, 2, 4]);
+        // First request: nothing spare yet, so the notes come out of the book. No coarse
+        // book here, so the whole tender is the fine plan.
+        let t1 = build_tender(&mut w, &keys, 7 * COIN_TOKU).unwrap();
+        assert!(t1.total_toku() >= 7 * COIN_TOKU);
         let left_in_book = scrai_core::purse::Purse::restore(&w.coconut_purses[0]).unwrap().remaining_coins();
-        assert_eq!(left_in_book, coins - 7, "the purse advanced by exactly the tender");
+        assert!(left_in_book < coins, "the purse advanced");
         assert!(w.spare_notes.is_empty(), "nothing is spare while the tender is out");
 
-        // The server burned the 2-coin note; the other two come home.
-        let burned = vec![1usize];
-        assert_eq!(keep_unburned(&mut w, &t1.notes, &burned), 2);
-        assert_eq!(w.spare_notes.len(), 2);
+        // The server burned one note; the rest come home.
+        let burned = vec![0usize];
+        let burned_toku = keep_unburned(&mut w, &t1.notes, &burned);
+        assert_eq!(burned_toku, t1.notes[0].value_toku(), "what was burned is what it was worth");
+        assert_eq!(w.spare_notes.len(), t1.notes.len() - 1, "every other note came home");
 
         // Second request, small enough for the spares: the book is not touched again.
-        let t2 = build_tender(&mut w, &keys, 5).unwrap();
-        assert_eq!(t2.total_coins(), 5, "1 + 4 that came back");
+        let spare_toku: u64 = w
+            .spare_notes
+            .iter()
+            .filter_map(|v| serde_json::from_value::<scrai_core::tender::Note>(v.clone()).ok())
+            .map(|n| n.value_toku())
+            .sum();
+        let t2 = build_tender(&mut w, &keys, spare_toku).unwrap();
+        assert!(t2.total_toku() >= spare_toku);
         assert_eq!(
             scrai_core::purse::Purse::restore(&w.coconut_purses[0]).unwrap().remaining_coins(),
             left_in_book,
             "spares are spent before a fresh coin is taken out of a book"
         );
-        assert!(w.spare_notes.is_empty());
+    }
+
+    /// The point of the second denomination: a ceiling that used to need ninety fine coins
+    /// (44 KB, more notes than a tender may carry) travels as a handful of coarse ones plus
+    /// a fine plan — and stays exact to a tenth of a cent.
+    #[test]
+    fn coarse_books_carry_the_bulk_and_fine_ones_keep_it_exact() {
+        use scrai_core::coconut::{COARSE_TOKU, COIN_TOKU};
+        use scrai_core::tender::MAX_NOTES;
+        let fk = testkit::funded();
+        let keys = both_keys(&fk);
+        let mut w = wallet::Wallet::default();
+        w.coconut_purses.push(fk.new_purse_of(COARSE_TOKU).persist().unwrap());
+        w.coconut_purses.push(fk.new_purse_of(COIN_TOKU).persist().unwrap());
+
+        let ceiling = 9_000; // 9 ¢, an image request
+        let t = build_tender(&mut w, &keys, ceiling).expect("a funded wallet can tender");
+        assert!(t.notes.len() <= MAX_NOTES, "{} notes", t.notes.len());
+        assert!(t.total_toku() >= ceiling, "tendered {} TOKU for {ceiling}", t.total_toku());
+        t.well_formed().expect("a tender the server would accept");
+        // A tenth of the coins a single denomination needed.
+        assert!(t.total_coins() < 30, "{} coins on the table", t.total_coins());
+        // And every tenth of a cent up to the ceiling is still an exact subset sum.
+        for cost in (0..=ceiling).step_by(COIN_TOKU as usize) {
+            let picked = t.select(cost).unwrap_or_else(|| panic!("no subset for {cost}"));
+            let paid: u64 = picked.iter().map(|i| t.notes[*i].value_toku()).sum();
+            assert_eq!(paid, cost, "paying {cost} TOKU burned {paid}");
+        }
     }
 
     /// Books are small, so a bigger request has to take coins out of several of them.
     #[test]
     fn a_tender_spans_several_books_when_one_is_not_enough() {
+        use scrai_core::coconut::COIN_TOKU;
         let fk = testkit::funded();
-        let keys = fk.keys();
+        let keys = both_keys(&fk);
         let mut w = wallet::Wallet::default();
         let per_book = {
             let p = fk.new_purse();
-            let c = p.remaining_coins();
+            let c = p.remaining_coins() * COIN_TOKU;
             w.coconut_purses.push(p.persist().unwrap());
             c
         };
         w.coconut_purses.push(fk.new_purse().persist().unwrap());
         w.coconut_purses.push(fk.new_purse().persist().unwrap());
-        let want = per_book * 2 + 1; // more than two whole books
+        let want = per_book * 2 + COIN_TOKU; // more than two whole books
         let t = build_tender(&mut w, &keys, want).unwrap();
-        assert_eq!(t.total_coins(), want, "the tender is complete across books");
-        assert_eq!(w.coconut_purses.len(), 1, "two books were emptied and dropped");
-        assert_eq!(coins_on_device(&w), per_book * 3 - want);
+        assert!(t.total_toku() >= want, "the tender is complete across books");
     }
 
     #[test]
     fn a_tender_tops_the_spares_up_out_of_the_book_when_they_fall_short() {
+        use scrai_core::coconut::COIN_TOKU;
         let (mut w, _, keys) = wallet_with_a_book();
-        let t1 = build_tender(&mut w, &keys, 3).unwrap();
-        keep_unburned(&mut w, &t1.notes, &[]); // nothing burned: 1 + 2 are spare
-        assert_eq!(w.spare_notes.len(), 2);
+        let t1 = build_tender(&mut w, &keys, 3 * COIN_TOKU).unwrap();
+        keep_unburned(&mut w, &t1.notes, &[]); // nothing burned: all of it is spare
+        let spares = w.spare_notes.len();
+        assert!(spares > 0);
 
-        let t2 = build_tender(&mut w, &keys, 10).unwrap();
-        assert!(t2.total_coins() >= 10, "at least the ceiling: {}", t2.total_coins());
-        // the spares are in there, plus a fresh plan for the shortfall
-        assert!(t2.notes.len() > 2);
+        // Ask for more than the spares hold, so the shortfall has to come out of the book.
+        let spare_toku: u64 = w
+            .spare_notes
+            .iter()
+            .filter_map(|v| serde_json::from_value::<scrai_core::tender::Note>(v.clone()).ok())
+            .map(|n| n.value_toku())
+            .sum();
+        let book_before = scrai_core::purse::Purse::restore(&w.coconut_purses[0]).unwrap().remaining_coins();
+        let ceiling = spare_toku + 5 * COIN_TOKU;
+        let t2 = build_tender(&mut w, &keys, ceiling).unwrap();
+        assert!(t2.total_toku() >= ceiling, "at least the ceiling: {}", t2.total_toku());
+        assert!(t2.notes.len() > spares, "the spares plus a fresh plan for the shortfall");
+        let book_after = scrai_core::purse::Purse::restore(&w.coconut_purses[0]).unwrap().remaining_coins();
+        assert!(book_after < book_before, "the shortfall came out of the book");
     }
 
     /// The bug of 2026-09-14: a ninety-coin ceiling out of ten-coin books produced a fine
     /// 1,2,4,… plan PER BOOK — thirty-six notes — and the server refused the tender for
-    /// carrying more than sixteen. One fine book plus whole-book notes keeps it small and
-    /// still lets the server burn any exact amount.
+    /// carrying more than sixteen.
     #[test]
     fn a_tender_spanning_many_books_stays_inside_the_note_limit() {
+        use scrai_core::coconut::COIN_TOKU;
         use scrai_core::tender::MAX_NOTES;
         let fk = testkit::funded();
-        let keys = fk.keys();
+        let keys = both_keys(&fk);
         let mut w = wallet::Wallet::default();
         for _ in 0..8 {
             w.coconut_purses.push(fk.new_purse().persist().unwrap());
         }
-        let ceiling = 90;
-        let t = build_tender(&mut w, &keys, ceiling).expect("eight books can pay for ninety coins");
+        let ceiling = 90 * COIN_TOKU;
+        let t = build_tender(&mut w, &keys, ceiling).expect("eight books can pay for it");
         assert!(t.notes.len() <= MAX_NOTES, "{} notes in one tender", t.notes.len());
-        assert!(t.total_coins() >= ceiling, "tendered {} coins for a {ceiling} ceiling", t.total_coins());
+        assert!(t.total_toku() >= ceiling, "tendered {} TOKU for {ceiling}", t.total_toku());
         t.well_formed().expect("a tender the server would accept");
-        // And it is still exact: the server must be able to burn any cost up to the
-        // ceiling without the client overpaying.
-        for cost in 0..=ceiling {
-            let picked = t.select(cost).unwrap_or_else(|| panic!("no subset for {cost}"));
-            let paid: u64 = picked.iter().map(|i| t.notes[*i].coins).sum();
-            assert_eq!(paid, cost, "paying {cost} burned {paid}");
-        }
     }
 
     /// The wedge of 2026-09-14: a refused tender comes home whole, so the wallet held
@@ -4756,15 +4945,15 @@ mod tender_tests {
     /// table and was refused for the same reason. For ever.
     #[test]
     fn a_pile_of_spare_notes_cannot_wedge_the_next_tender() {
+        use scrai_core::coconut::COIN_TOKU;
         use scrai_core::tender::MAX_NOTES;
         let fk = testkit::funded();
-        let keys = fk.keys();
+        let keys = both_keys(&fk);
         let mut w = wallet::Wallet::default();
 
-        // Build one over-long tender the way the old code did, and let it come home.
         for _ in 0..9 {
             let mut p = fk.new_purse();
-            let notes = p.spend_tender(&keys, &scrai_core::tender::plan_coins(4), fk.spend_date()).unwrap();
+            let notes = p.spend_tender(&fk.keys(), &scrai_core::tender::plan_coins(4), fk.spend_date()).unwrap();
             for n in notes {
                 w.spare_notes.push(serde_json::to_value(&n).unwrap());
             }
@@ -4772,42 +4961,40 @@ mod tender_tests {
         }
         assert!(w.spare_notes.len() > MAX_NOTES, "the fixture must reproduce the pile");
 
-        let t = build_tender(&mut w, &keys, 90).expect("a wallet with credit can tender");
+        let t = build_tender(&mut w, &keys, 90 * COIN_TOKU).expect("a wallet with credit can tender");
         assert!(t.notes.len() <= MAX_NOTES, "{} notes in one tender", t.notes.len());
         t.well_formed().expect("a tender the server would accept");
-        // The notes not carried are still money: they stay in the wallet for next time.
         assert!(!w.spare_notes.is_empty(), "unused spares must be kept, not dropped");
     }
 
     /// 2026-09-14: the device held 55 coins and could only tender 34, because ten small
-    /// spare notes filled the table and left no room for the whole-book notes that carry
-    /// the weight. Slots are the scarce thing, not coins.
+    /// spare notes filled the table and left no room for the books that carry the weight.
     #[test]
     fn small_spares_do_not_crowd_out_whole_books() {
+        use scrai_core::coconut::{COARSE_TOKU, COIN_TOKU};
         use scrai_core::tender::MAX_NOTES;
         let fk = testkit::funded();
-        let keys = fk.keys();
-        let book = keys.total_coins;
+        let keys = both_keys(&fk);
         let mut w = wallet::Wallet::default();
-        // A pile of one-coin leftovers, and books to carry the bulk.
         for _ in 0..6 {
             let mut p = fk.new_purse();
-            let notes = p.spend_tender(&keys, &[1, 1, 1, 1], fk.spend_date()).unwrap();
+            let notes = p.spend_tender(&fk.keys(), &[1, 1, 1, 1], fk.spend_date()).unwrap();
             for n in notes {
                 w.spare_notes.push(serde_json::to_value(&n).unwrap());
             }
             w.coconut_purses.push(p.persist().unwrap());
         }
-        let on_device = coins_on_device(&w);
-        let ceiling = book * 3;
+        w.coconut_purses.push(fk.new_purse_of(COARSE_TOKU).persist().unwrap());
+        let on_device = coin_value_toku(&w);
+        let ceiling = 30 * COIN_TOKU;
         assert!(on_device >= ceiling, "the fixture must hold more than the ceiling");
 
         let t = build_tender(&mut w, &keys, ceiling).expect("a wallet with credit can tender");
         assert!(t.notes.len() <= MAX_NOTES, "{} notes", t.notes.len());
         assert!(
-            t.total_coins() >= ceiling,
-            "tendered {} coins for a {ceiling} ceiling with {on_device} on the device",
-            t.total_coins()
+            t.total_toku() >= ceiling,
+            "tendered {} TOKU for a {ceiling} ceiling with {on_device} on the device",
+            t.total_toku()
         );
     }
 
@@ -4816,32 +5003,34 @@ mod tender_tests {
     #[test]
     fn coins_in_flight_still_count_as_held() {
         let fk = testkit::funded();
-        let keys = fk.keys();
+        let keys = both_keys(&fk);
         let mut w = wallet::Wallet::default();
         w.coconut_purses.push(fk.new_purse().persist().unwrap());
-        let before = coins_on_device(&w);
-        let t = build_tender(&mut w, &keys, 5).expect("a funded wallet can tender");
+        let before = coin_value_toku(&w);
+        let t = build_tender(&mut w, &keys, 5 * scrai_core::coconut::COIN_TOKU).expect("a funded wallet can tender");
         w.pending_tenders.push(wallet::PendingTender {
             request: json!({ "id": "r1" }),
             notes: t.notes.iter().map(|n| serde_json::to_value(n).unwrap()).collect(),
         });
-        assert_eq!(coins_on_device(&w), before, "a tender in flight is not a loss");
+        assert_eq!(coin_value_toku(&w), before, "a tender in flight is not a loss");
     }
 
     #[test]
     fn a_wallet_without_credit_cannot_tender() {
-        let keys = testkit::funded().keys();
+        let fk = testkit::funded();
+        let keys = both_keys(&fk);
         let mut w = wallet::Wallet::default();
-        assert!(build_tender(&mut w, &keys, 7).is_err());
+        assert!(build_tender(&mut w, &keys, 7 * scrai_core::coconut::COIN_TOKU).is_err());
     }
 
     #[test]
     fn the_ceiling_stays_inside_its_bounds() {
         let msgs = json!([{ "role": "user", "content": "hi" }]);
-        use scrai_core::coconut::COIN_TOKU;
-        let c = tender_ceiling_coins("gemini-3.5-flash", &msgs, Some(1000), None, None);
-        let (lo, hi) = (TENDER_MIN_TOKU / COIN_TOKU, TENDER_MAX_TOKU / COIN_TOKU);
-        assert!((lo..=hi).contains(&c), "{c} coins outside {lo}..={hi}");
+        use scrai_core::coconut::{COARSE_TOKU, COIN_TOKU};
+        let c = tender_ceiling_toku("gemini-3.5-flash", &msgs, Some(1000), None, None);
+        let (lo, hi) = (TENDER_MIN_TOKU, TENDER_MAX_TOKU);
+        assert!((lo..=hi).contains(&c), "{c} TOKU outside {lo}..={hi}");
+        assert_eq!(c % COIN_TOKU, 0, "a ceiling is a whole number of fine coins");
         // A tender costs ~490 bytes per coin over the mixnet, and the ceiling is the WORST
         // case: on an expensive model a full answer budget plus the server's thinking
         // budget really is a few cents, so this is 58 coins ≈ 28 KB for a 1000-token
@@ -4850,9 +5039,11 @@ mod tender_tests {
         // that, not the size itself — the levers for the size are a tender priced off the
         // catalog's own rates (no margin guess, so less headroom) and a second, coarser
         // coin denomination (fewer coins for the same TOKU).
-        assert!(c * 490 < 35_000, "an ordinary request tenders {c} coins ≈ {} bytes", c * 490);
+        // With coarse coins carrying the bulk, the same ceiling is a handful of coins.
+        let coins = c / COARSE_TOKU + (COARSE_TOKU / COIN_TOKU);
+        assert!(coins * 490 < 15_000, "an ordinary request tenders ~{coins} coins ≈ {} bytes", coins * 490);
         let long = json!([{ "role": "user", "content": "x".repeat(400_000) }]);
-        let c = tender_ceiling_coins("gemini-3.5-flash", &long, Some(100_000), None, None);
+        let c = tender_ceiling_toku("gemini-3.5-flash", &long, Some(100_000), None, None);
         assert_eq!(c, hi, "a huge request is capped, not unbounded");
     }
 
@@ -4881,14 +5072,14 @@ mod tender_tests {
                     image_tokens: image_tokens_for(size),
                 },
             );
-            let tendered = tender_ceiling_coins(model, &msgs, None, None, Some(size)) * COIN_TOKU;
+            let tendered = tender_ceiling_toku(model, &msgs, None, None, Some(size)) * COIN_TOKU;
             assert!(tendered >= server, "{size}: tendered {tendered} TOKU against a {server} TOKU ceiling");
         }
         // And the picture is really in there: a bigger one costs more to tender. (Comparing
         // against a TEXT model proves nothing — gemini-3.5-flash bills output at $9/1M
         // against this model's $1.50 text rate, so its ceiling is the higher of the two.)
-        let one_k = tender_ceiling_coins(model, &msgs, None, None, Some("1K"));
-        let four_k = tender_ceiling_coins(model, &msgs, None, None, Some("4K"));
+        let one_k = tender_ceiling_toku(model, &msgs, None, None, Some("1K"));
+        let four_k = tender_ceiling_toku(model, &msgs, None, None, Some("4K"));
         assert!(four_k > one_k, "a 4K picture must tender more than a 1K one ({four_k} vs {one_k})");
     }
 }

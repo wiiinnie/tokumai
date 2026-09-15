@@ -39,12 +39,19 @@ fn err<E: std::fmt::Display>(e: E) -> String {
 #[derive(Serialize, Deserialize)]
 pub enum FedRequest {
     /// Publish the federation's aggregated verification key + per-authority keys +
-    /// epoch material, so a client can verify shares and spend.
+    /// epoch material, so a client can verify shares and spend. Bare `Keys` means the
+    /// FINE denomination — the only one that existed before 2026-09-15.
     Keys,
+    /// The same, for one denomination (`coconut::DENOMS`). Each denomination is its own
+    /// issuing authority with its own material, so they are fetched — and cached — apart.
+    KeysFor { denom_toku: u64 },
     /// Ask this authority to blind-sign a withdrawal request with its key share.
+    /// `denom_toku` picks which issuing key signs it; absent means the fine one.
     Withdraw {
         user_pk: PublicKeyUser,
         req: WithdrawalRequest,
+        #[serde(default)]
+        denom_toku: u64,
     },
     /// Spend a payment: the server verifies it offline and records its serials in
     /// the double-spend quorum. `pay_info` is the raw 72 bytes (PayInfo isn't serde).
@@ -70,6 +77,9 @@ pub enum FedResponse {
         expiration_date: u32,
         /// Ticketbook size (coins per credential) — the client needs it to spend.
         total_coins: u64,
+        /// TOKU one coin of this set is worth (see `coconut::DENOMS`).
+        #[serde(default = "crate::purse::fine_denom")]
+        denom_toku: u64,
     },
     Withdraw {
         blinded: BlindedSignature,
@@ -97,9 +107,22 @@ pub struct Authority {
     date_sigs: Vec<ExpirationDateSignature>,
     expiration_date: u32,
     total_coins: u64,
+    /// TOKU one coin this authority issues is worth. The value is NOT inside the coin —
+    /// this key is what makes it worth that much (see `coconut::COARSE_TOKU`).
+    denom_toku: u64,
 }
 
 impl Authority {
+    /// TOKU per coin this authority issues.
+    pub fn denom_toku(&self) -> u64 {
+        self.denom_toku
+    }
+
+    /// What one whole ticketbook of this authority is worth.
+    pub fn book_toku(&self) -> u64 {
+        self.total_coins.saturating_mul(self.denom_toku)
+    }
+
     pub fn index(&self) -> u64 {
         self.index
     }
@@ -114,7 +137,7 @@ impl Authority {
     /// Handle a client request. This is the whole authority-side protocol surface.
     pub fn handle(&self, req: FedRequest) -> Result<FedResponse, String> {
         match req {
-            FedRequest::Keys => Ok(FedResponse::Keys {
+            FedRequest::Keys | FedRequest::KeysFor { .. } => Ok(FedResponse::Keys {
                 vk: self.vk.clone(),
                 auth_vks: self.auth_vks.clone(),
                 indices: self.indices.clone(),
@@ -122,8 +145,11 @@ impl Authority {
                 date_sigs: self.date_sigs.clone(),
                 expiration_date: self.expiration_date,
                 total_coins: self.total_coins,
+                denom_toku: self.denom_toku,
             }),
-            FedRequest::Withdraw { user_pk, req } => {
+            // Which denomination a withdrawal belongs to is decided BEFORE this point, by
+            // picking the authority — an authority only ever signs its own.
+            FedRequest::Withdraw { user_pk, req, .. } => {
                 let blinded = coconut::issue_share(
                     &self.sk,
                     user_pk,
@@ -199,6 +225,9 @@ struct PersistedAuthority {
     date_sigs: Vec<ExpirationDateSignature>,
     expiration_date: u32,
     total_coins: u64,
+    /// Absent in a file written before denominations existed — that one is fine coins.
+    #[serde(default = "crate::purse::fine_denom")]
+    denom_toku: u64,
 }
 
 impl Authority {
@@ -215,6 +244,7 @@ impl Authority {
             date_sigs: self.date_sigs.clone(),
             expiration_date: self.expiration_date,
             total_coins: self.total_coins,
+            denom_toku: self.denom_toku,
         })
         .map_err(err)
     }
@@ -233,6 +263,7 @@ impl Authority {
             date_sigs: p.date_sigs,
             expiration_date: p.expiration_date,
             total_coins: p.total_coins,
+            denom_toku: p.denom_toku,
         })
     }
 }
@@ -274,14 +305,14 @@ pub fn dispatch_enveloped(
         // M1: a key the quorum has caught double-spending (its ban is computed + persisted in
         // `submit`) is locked out of withdrawing FRESH ticketbooks. Per-coin protection already
         // refuses reused serials; this shuts the anti-griefing door the audit found inert.
-        Ok(FedRequest::Withdraw { user_pk, req }) => {
+        Ok(FedRequest::Withdraw { user_pk, req, denom_toku }) => {
             if store.is_blacklisted(&user_pk) {
                 FedResponse::Error {
                     message: "blacklisted: this key was caught double-spending and may not withdraw".into(),
                 }
             } else {
                 authority
-                    .handle(FedRequest::Withdraw { user_pk, req })
+                    .handle(FedRequest::Withdraw { user_pk, req, denom_toku })
                     .unwrap_or_else(|e| FedResponse::Error { message: e })
             }
         }
@@ -341,6 +372,7 @@ pub fn bootstrap(
     t: u64,
     total_coins: u64,
     expiration_date: u32,
+    denom_toku: u64,
 ) -> Result<Vec<Authority>, String> {
     let params = Parameters::new(total_coins);
     let auths = ttp_keygen(t, n as u64).map_err(err)?;
@@ -364,6 +396,7 @@ pub fn bootstrap(
             date_sigs: date_sigs.clone(),
             expiration_date,
             total_coins,
+            denom_toku,
         })
         .collect())
 }
@@ -383,7 +416,7 @@ mod tests {
     #[test]
     fn client_withdraws_across_authorities_over_the_wire() {
         let expiration_date = 1702166400u32;
-        let authorities = bootstrap(2, 2, 32, expiration_date).unwrap();
+        let authorities = bootstrap(2, 2, 32, expiration_date, crate::coconut::COIN_TOKU).unwrap();
 
         // 1) client fetches the published keys (request + response cross the wire)
         let req0 = wire(&FedRequest::Keys);
@@ -406,6 +439,7 @@ mod tests {
         let mut shares = Vec::new();
         for (i, a) in authorities.iter().enumerate() {
             let request = wire(&FedRequest::Withdraw {
+                denom_toku: crate::coconut::COIN_TOKU,
                 user_pk: user.public_key(),
                 req: req.clone(),
             });
@@ -443,7 +477,7 @@ mod tests {
     #[test]
     fn authority_persists_and_a_restored_federation_still_issues() {
         let expiration_date = 1702166400u32;
-        let live = bootstrap(2, 2, 32, expiration_date).unwrap();
+        let live = bootstrap(2, 2, 32, expiration_date, crate::coconut::COIN_TOKU).unwrap();
         // persist → restore BOTH authorities (models a server restart)
         let auth: Vec<Authority> = live
             .iter()
@@ -465,7 +499,7 @@ mod tests {
         let mut shares = Vec::new();
         for (i, a) in auth.iter().enumerate() {
             let blinded = match a
-                .handle(FedRequest::Withdraw { user_pk: user.public_key(), req: req.clone() })
+                .handle(FedRequest::Withdraw { user_pk: user.public_key(), req: req.clone(), denom_toku: crate::coconut::COIN_TOKU })
                 .unwrap()
             {
                 FedResponse::Withdraw { blinded } => blinded,
@@ -488,7 +522,7 @@ mod tests {
 
     #[test]
     fn dispatch_round_trips_and_never_panics() {
-        let auth = bootstrap(2, 2, 32, 1702166400).unwrap();
+        let auth = bootstrap(2, 2, 32, 1702166400, crate::coconut::COIN_TOKU).unwrap();
         // a well-formed Keys request → a Keys response
         let bytes = dispatch(&auth[0], &serde_json::to_vec(&FedRequest::Keys).unwrap());
         match serde_json::from_slice::<FedResponse>(&bytes).unwrap() {
@@ -505,7 +539,7 @@ mod tests {
 
     #[test]
     fn enveloped_dispatch_echoes_id_and_wraps_fed() {
-        let auth = bootstrap(1, 1, 32, 1702166400).unwrap();
+        let auth = bootstrap(1, 1, 32, 1702166400, crate::coconut::COIN_TOKU).unwrap();
         let env = json!({
             "v": 1, "kind": "coconut", "id": "req-123",
             "fed": serde_json::to_value(FedRequest::Keys).unwrap(),
@@ -526,7 +560,7 @@ mod tests {
         let exp = 1702166400u32;
         let spend_date = 1701907200u32;
         set_test_clock(spend_date);
-        let auth = bootstrap(1, 1, 32, exp).unwrap();
+        let auth = bootstrap(1, 1, 32, exp, crate::coconut::COIN_TOKU).unwrap();
         let mut store = QuorumStore::default();
 
         // fetch keys + withdraw a wallet from the single authority
@@ -540,7 +574,7 @@ mod tests {
         let (req, req_info) =
             coconut::make_withdrawal_request(user.secret_key(), exp, coconut::DEFAULT_T_TYPE).unwrap();
         let blinded = match auth[0]
-            .handle(FedRequest::Withdraw { user_pk: user.public_key(), req })
+            .handle(FedRequest::Withdraw { user_pk: user.public_key(), req, denom_toku: crate::coconut::COIN_TOKU })
             .unwrap()
         {
             FedResponse::Withdraw { blinded } => blinded,

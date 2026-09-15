@@ -22,7 +22,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use nym_sdk::mixnet::{AnonymousSenderTag, MixnetClient, MixnetClientBuilder, MixnetClientSender, MixnetMessageSender, ReconstructedMessage, StoragePaths};
 use tokio::sync::Semaphore;
-use scrai_core::federation::{self, Authority};
+use scrai_core::federation;
 use scrai_core::pricing::PricingTable;
 use scrai_core::quorum::QuorumStore;
 use scrai_core::session::SessionStore;
@@ -128,7 +128,15 @@ async fn main() {
         .try_init()
         .ok();
     let data_dir = PathBuf::from(scrai_server::cfg("DATA").unwrap_or_else(|_| "./data".into()));
-    let authority = Arc::new(load_or_bootstrap(&data_dir.join("authority.json")));
+    // One authority per denomination (server/src/mint.rs). The fine one keeps the old
+    // file name, so an existing deployment only gains the coarse one beside it.
+    let mint = Arc::new(scrai_server::mint::load(
+        &data_dir,
+        ticketbook_coins(),
+        future_expiration_date(),
+        AUTHORITY_N,
+    ));
+    let authority = mint.fine().clone();
 
     // Persistent Nym identity so the server keeps ONE address across restarts.
     // Entry gateways. GATEWAY_MASTER pins the primary identity (the address the app
@@ -435,14 +443,20 @@ async fn main() {
     // so the admin's "burned" does not restart at the next spend and pruning cannot shrink it.
     quorum.seed_burned(db.spent_coins_total());
     persist_changed(&mut db, &sessions, &mut quorum, &paywall, &mut saved);
-    let book_toku = ticketbook_coins() * scrai_core::coconut::COIN_TOKU;
+    let books: Vec<String> = mint
+        .denoms()
+        .iter()
+        .map(|d| {
+            let book = ticketbook_coins() * d;
+            // Integer dollars would print a ten-cent book as "$0".
+            format!("{d} TOKU/coin → ${:.2}", book as f64 / scrai_core::coconut::TOKU_PER_USD as f64)
+        })
+        .collect();
     println!(
-        "scrai-server: gateway {} · ticketbook {} coins ({} TOKU = ${:.2}){}",
+        "scrai-server: gateway {} · ticketbooks of {} coins · {}{}",
         gateway.name(),
         ticketbook_coins(),
-        book_toku,
-        // Integer dollars would print a ten-cent book as "$0".
-        book_toku as f64 / scrai_core::coconut::TOKU_PER_USD as f64,
+        books.join(" · "),
         if pay::is_testnet_server() { " · testnet $1 books" } else { "" }
     );
     // Codes sold on the website are bearer money whose only trace here is a fingerprint.
@@ -516,7 +530,7 @@ async fn main() {
     // and every chat/status waited with them (load test 2026-09-02). Now: gate + reserve
     // on the loop, crypto in spawn_blocking, apply/persist/reply back here.
     enum CryptoKind {
-        Withdraw { id: serde_json::Value, account_id: String, req_key: String, result: Result<federation::FedResponse, String> },
+        Withdraw { id: serde_json::Value, account_id: String, req_key: String, book_toku: u64, result: Result<federation::FedResponse, String> },
         Redeem { id: serde_json::Value, req: scrai_core::gateway::RedeemRequest, verified: Result<(), String> },
         /// Coins handed back to an account (docs/unlinkability.md, block D).
         Return { id: serde_json::Value, account: String, tender: scrai_core::tender::Tender, verified: Result<(), String> },
@@ -799,7 +813,7 @@ const ORDER_TICK_MS: u64 = 1000;
             // A spawned BLS job returned → apply its outcome to the money state here.
             Some(done) = crypto_rx.recv() => {
                 let (label, response) = match done.kind {
-                    CryptoKind::Withdraw { id, account_id, req_key, result } => {
+                    CryptoKind::Withdraw { id, account_id, req_key, book_toku, result } => {
                         inflight_withdraws.remove(&req_key);
                         let resp = match result {
                             Ok(r) => r,
@@ -1021,7 +1035,7 @@ const ORDER_TICK_MS: u64 = 1000;
                         let slots = if pending.provider() == "openai" { openai_slots.clone() } else { chat_slots.clone() };
                         let guard = inflight.enter(to);
                         note_peak(&db, &inflight, &mut peak_written);
-                        let auth = authority.clone();
+                        let auth = mint.clone();
                         tokio::spawn(async move {
                             let result = match tokio::time::timeout(QUEUE_WAIT, slots.acquire_owned()).await {
                                 // The permit lives for the whole provider call.
@@ -1327,7 +1341,10 @@ const ORDER_TICK_MS: u64 = 1000;
                 // The entitlement is RESERVED here (so two in-flight withdraws of one
                 // account can't both pass), the 500-signature issuance runs in a blocking
                 // task, and a failed issuance restores the entitlement (crypto_rx above).
-                "coconut" => match paywall.gate_withdraw(&m.message, book_toku) {
+                // The price of a withdrawal is the book of ITS denomination: a coarse book
+                // is ten times a fine one, and charging one for the other would either
+                // give money away or overcharge.
+                "coconut" => match paywall.gate_withdraw(&m.message, |d| ticketbook_coins() * mint.for_request(d).denom_toku()) {
                     pay::Gate::Denied(reply) => reply,
                     pay::Gate::NotAWithdraw => {
                         scrai_core::gateway::handle(&authority, &mut quorum, &mut sessions, &m.message).await
@@ -1343,7 +1360,7 @@ const ORDER_TICK_MS: u64 = 1000;
                                 .unwrap_or_default()
                         };
                         match fed {
-                            Ok(federation::FedRequest::Withdraw { user_pk, req }) => {
+                            Ok(federation::FedRequest::Withdraw { user_pk, req, denom_toku }) => {
                                 // M1: a key caught double-spending may not withdraw fresh books.
                                 if quorum.is_blacklisted(&user_pk) {
                                     fed_error(&id, "blacklisted: this key was caught double-spending and may not withdraw".into())
@@ -1357,6 +1374,7 @@ const ORDER_TICK_MS: u64 = 1000;
                                 } else {
                                     // `prepaid`: charged earlier, but the server went down before
                                     // issuing — issue now without charging again.
+                                    let book_toku = ticketbook_coins() * mint.for_request(denom_toku).denom_toku();
                                     if !prepaid {
                                         paywall.consume_entitlement(&account_id, book_toku);
                                     } else {
@@ -1364,7 +1382,7 @@ const ORDER_TICK_MS: u64 = 1000;
                                     }
                                     paywall.begin_issuance(&req_key, &account_id);
                                     inflight_withdraws.insert(req_key.clone());
-                                    let (tx, auth, slots) = (crypto_tx.clone(), authority.clone(), crypto_slots.clone());
+                                    let (tx, auth, slots) = (crypto_tx.clone(), mint.for_request(denom_toku).clone(), crypto_slots.clone());
                                     let guard = inflight.enter(to);
                                     note_peak(&db, &inflight, &mut peak_written);
                                     tokio::spawn(async move {
@@ -1373,7 +1391,7 @@ const ORDER_TICK_MS: u64 = 1000;
                                             Ok(Ok(_permit)) => {
                                                 let waited = t0.elapsed().as_millis();
                                                 let r = tokio::task::spawn_blocking(move || {
-                                                    auth.handle(federation::FedRequest::Withdraw { user_pk, req })
+                                                    auth.handle(federation::FedRequest::Withdraw { user_pk, req, denom_toku })
                                                 })
                                                 .await
                                                 .unwrap_or_else(|e| Err(format!("issuance task failed: {e}")));
@@ -1382,7 +1400,7 @@ const ORDER_TICK_MS: u64 = 1000;
                                             _ => (Err("the server is busy issuing credentials right now — please try again in a moment".into()), t0.elapsed().as_millis()),
                                         };
                                         let timing = (waited, t0.elapsed().as_millis() - waited);
-                                        let _ = tx.send(CryptoDone { kind: CryptoKind::Withdraw { id, account_id, req_key, result }, to, timing, _guard: guard }).await;
+                                        let _ = tx.send(CryptoDone { kind: CryptoKind::Withdraw { id, account_id, req_key, book_toku, result }, to, timing, _guard: guard }).await;
                                     });
                                     // The reservation must be on disk before anything else happens.
                                     persist_changed(&mut db, &sessions, &mut quorum, &paywall, &mut saved);
@@ -1555,65 +1573,6 @@ fn note_peak(db: &store::Store, inflight: &inflight::Inflight<ReplyTo>, written:
 /// A positive usize from the environment, or the default.
 fn env_usize(name: &str, default: usize) -> usize {
     scrai_server::cfg(name).ok().and_then(|v| v.trim().parse().ok()).filter(|n| *n > 0).unwrap_or(default)
-}
-
-/// Load the persisted authority, or bootstrap + persist one on first run.
-fn load_or_bootstrap(path: &Path) -> Authority {
-    let want = ticketbook_coins();
-    if let Ok(json) = std::fs::read_to_string(path) {
-        match Authority::restore(&json) {
-            // The book size lives in the keys: a persisted authority with a different size
-            // must NOT be silently replaced (every held book would die unannounced).
-            Ok(a) if a.total_coins() != want => {
-                eprintln!(
-                    "scrai-server: {} holds a {}-coin authority but this mode needs {}-coin books \
-                     (TESTNET={}). Re-bootstrapping invalidates every ticketbook clients hold. \
-                     To proceed on purpose: stop the server, move that file away, start again.",
-                    path.display(),
-                    a.total_coins(),
-                    want,
-                    if pay::is_testnet_server() { "1" } else { "unset" }
-                );
-                std::process::exit(1);
-            }
-            Ok(a) => return a,
-            Err(e) => eprintln!("scrai-server: couldn't restore authority ({e}) — re-bootstrapping"),
-        }
-    }
-    println!("scrai-server: bootstrapping a {want}-coin authority");
-    let authority = federation::bootstrap(AUTHORITY_N, AUTHORITY_N as u64, want, future_expiration_date())
-        .expect("bootstrap authority")
-        .into_iter()
-        .next()
-        .expect("one authority");
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    write_secret(path, &authority.persist().expect("persist authority"))
-        .expect("write authority file");
-    println!("scrai-server: bootstrapped a fresh authority → {}", path.display());
-    authority
-}
-
-/// Write a secret file (the authority share — it can forge money) with owner-only
-/// 0600 permissions on Unix, instead of the umask default (~0644) (H10).
-#[cfg(unix)]
-fn write_secret(path: &Path, contents: &str) -> std::io::Result<()> {
-    use std::io::Write;
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(path)?;
-    f.write_all(contents.as_bytes())?;
-    // mode() only applies on creation — also tighten a pre-existing looser file.
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-}
-#[cfg(not(unix))]
-fn write_secret(path: &Path, contents: &str) -> std::io::Result<()> {
-    std::fs::write(path, contents)
 }
 
 /// The metrics day the current moment falls into, as `YYYY-MM-DD`, in the operator's

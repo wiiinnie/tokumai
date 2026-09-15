@@ -195,7 +195,7 @@ mod tests {
 
     #[test]
     fn models_kind_returns_a_catalog() {
-        let auth = federation::bootstrap(1, 1, 32, 1702166400).unwrap();
+        let auth = federation::bootstrap(1, 1, 32, 1702166400, crate::coconut::COIN_TOKU).unwrap();
         let reply = route(&auth[0], &json!({ "v": 1, "kind": "models", "id": "x" }));
         assert_eq!(reply["id"], "x");
         let models = reply["models"].as_array().unwrap();
@@ -206,7 +206,7 @@ mod tests {
 
     #[test]
     fn coconut_kind_routes_to_federation() {
-        let auth = federation::bootstrap(1, 1, 32, 1702166400).unwrap();
+        let auth = federation::bootstrap(1, 1, 32, 1702166400, crate::coconut::COIN_TOKU).unwrap();
         let reply = route(&auth[0], &json!({
             "v": 1, "kind": "coconut", "id": "y",
             "fed": serde_json::to_value(federation::FedRequest::Keys).unwrap(),
@@ -217,14 +217,14 @@ mod tests {
 
     #[test]
     fn unknown_kind_is_an_error_reply() {
-        let auth = federation::bootstrap(1, 1, 32, 1702166400).unwrap();
+        let auth = federation::bootstrap(1, 1, 32, 1702166400, crate::coconut::COIN_TOKU).unwrap();
         let reply = route(&auth[0], &json!({ "v": 1, "kind": "nonsense", "id": "z" }));
         assert_eq!(reply["kind"], "error");
     }
 
     #[test]
     fn session_status_starts_empty() {
-        let auth = federation::bootstrap(1, 1, 32, 1702166400).unwrap();
+        let auth = federation::bootstrap(1, 1, 32, 1702166400, crate::coconut::COIN_TOKU).unwrap();
         let reply = route(&auth[0], &json!({
             "v": 1, "kind": "session.status", "id": "s", "sessionId": "sess-abc"
         }));
@@ -241,7 +241,7 @@ mod tests {
         let exp = 1702166400u32;
         let spend_date = 1701907200u32;
         crate::federation::set_test_clock(spend_date);
-        let auth = federation::bootstrap(1, 1, 32, exp).unwrap();
+        let auth = federation::bootstrap(1, 1, 32, exp, crate::coconut::COIN_TOKU).unwrap();
 
         // withdraw a wallet from the single authority
         let (vk, auth_vks, coin_sigs, date_sigs) = match auth[0].handle(FedRequest::Keys).unwrap() {
@@ -252,7 +252,7 @@ mod tests {
         let (req, req_info) =
             coconut::make_withdrawal_request(user.secret_key(), exp, coconut::DEFAULT_T_TYPE).unwrap();
         let blinded = match auth[0]
-            .handle(FedRequest::Withdraw { user_pk: user.public_key(), req })
+            .handle(FedRequest::Withdraw { user_pk: user.public_key(), req, denom_toku: crate::coconut::COIN_TOKU })
             .unwrap()
         {
             FedResponse::Withdraw { blinded } => blinded,

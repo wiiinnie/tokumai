@@ -36,9 +36,23 @@ pub struct Note {
     pub payment: Payment,
     pub pay_info: Vec<u8>,
     pub spend_date: u32,
+    /// TOKU one coin of this note is worth. It names which issuing key the payment
+    /// belongs to, nothing more: a note claiming the coarse denomination while carrying
+    /// fine coins simply fails verification against the coarse authority's key.
+    #[serde(default = "default_denom")]
+    pub denom_toku: u64,
+}
+
+fn default_denom() -> u64 {
+    crate::coconut::COIN_TOKU
 }
 
 impl Note {
+    /// What this note is worth.
+    pub fn value_toku(&self) -> u64 {
+        self.coins.saturating_mul(self.denom_toku)
+    }
+
     pub fn pay_info(&self) -> Result<PayInfo, String> {
         let bytes: [u8; 72] = self.pay_info.as_slice().try_into().map_err(|_| "bad pay_info length".to_string())?;
         Ok(PayInfo { pay_info_bytes: bytes })
@@ -62,6 +76,13 @@ impl Tender {
         self.notes.iter().map(|n| n.coins).sum()
     }
 
+    /// What the whole tender is worth. Notes of different denominations sit side by side —
+    /// the coarse ones carry the bulk, the fine ones make the amount exact — so the value
+    /// is the sum of the notes' values, never a coin count times one size.
+    pub fn total_toku(&self) -> u64 {
+        self.notes.iter().map(|n| n.value_toku()).sum()
+    }
+
     /// Shape check before any crypto: bounded, non-empty, every note internally consistent.
     pub fn well_formed(&self) -> Result<(), String> {
         if self.notes.is_empty() {
@@ -74,6 +95,9 @@ impl Tender {
             if n.coins == 0 {
                 return Err("a note with no coins".into());
             }
+            if !crate::coconut::DENOMS.contains(&n.denom_toku) {
+                return Err(format!("a note of an unknown denomination ({} TOKU)", n.denom_toku));
+            }
             if !n.coins_match() {
                 return Err("a note's face value does not match its payment".into());
             }
@@ -82,12 +106,13 @@ impl Tender {
         Ok(())
     }
 
-    /// Indices of the notes to burn for `cost` coins: the cheapest subset whose value is
-    /// at least `cost`. With a plan from `plan_coins` the sum is EXACT; with an arbitrary
-    /// set it can overshoot, and then the client overpaid by design (it chose the notes).
-    /// `None` when the tender is worth less than the cost.
-    pub fn select(&self, cost: u64) -> Option<Vec<usize>> {
-        select_from(&self.notes.iter().map(|n| n.coins).collect::<Vec<_>>(), cost)
+    /// Indices of the notes to burn for `cost` TOKU: the cheapest subset worth at least
+    /// that much. With a planned tender (coarse notes for the bulk, a fine 1,2,4,… plan
+    /// for the remainder) the sum is EXACT; with an arbitrary set it can overshoot, and
+    /// then the client overpaid by design — it chose the notes. `None` when the tender is
+    /// worth less than the cost.
+    pub fn select(&self, cost_toku: u64) -> Option<Vec<usize>> {
+        select_from(&self.notes.iter().map(|n| n.value_toku()).collect::<Vec<_>>(), cost_toku)
     }
 }
 
@@ -174,6 +199,32 @@ mod tests {
         assert_eq!(plan_coins(10), vec![1, 2, 4, 3]);
         assert_eq!(plan_coins(1000).len(), 10);
         assert!(plan_coins(30_000).len() <= MAX_NOTES);
+    }
+
+    /// Coarse notes for the bulk, a fine plan for the remainder: every tenth of a cent up
+    /// to the ceiling must still be payable EXACTLY, in a fraction of the coins. This is
+    /// the whole point of the second denomination — a 9 ¢ ceiling used to be ninety coins
+    /// on the table (44 KB); here it is nine coarse plus a fine plan.
+    #[test]
+    fn coarse_notes_carry_the_bulk_and_fine_ones_keep_it_exact() {
+        use crate::coconut::{COARSE_TOKU, COIN_TOKU};
+        let ceiling_toku = 9_000; // 9 ¢
+        // What the client builds: whole coarse coins, then one fine book's plan.
+        let coarse = ceiling_toku / COARSE_TOKU;
+        let mut values: Vec<u64> = (0..coarse).map(|_| COARSE_TOKU).collect();
+        values.extend(plan_coins(COARSE_TOKU / COIN_TOKU).iter().map(|c| c * COIN_TOKU));
+        assert!(values.len() <= MAX_NOTES, "{} notes", values.len());
+        assert_eq!(values.iter().filter(|v| **v == COARSE_TOKU).count(), 9);
+
+        // Every tenth of a cent from nothing up to the ceiling is an exact subset sum.
+        for cost in (0..=ceiling_toku).step_by(COIN_TOKU as usize) {
+            let picked = select_from(&values, cost).unwrap_or_else(|| panic!("no subset for {cost}"));
+            let paid: u64 = picked.iter().map(|i| values[*i]).sum();
+            assert_eq!(paid, cost, "paying {cost} TOKU burned {paid}");
+        }
+        // And the coins actually on the table: 9 coarse + 10 fine = 19, not 90.
+        let coins_on_table = coarse + (COARSE_TOKU / COIN_TOKU);
+        assert_eq!(coins_on_table, 19);
     }
 
     #[test]
