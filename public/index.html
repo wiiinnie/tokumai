@@ -2342,7 +2342,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       // nosemgrep: scrai-taint-untrusted-to-html -- reviewed 2026-08-30: only formatted numbers + static copy
       $("heldText").innerHTML = `${creditSplit()}
         <details class="why"><summary><span class="chev">›</span> What this means</summary>
-          <div class="body">Coins on this device are blind-signed <b>cash</b>: not linked to your account, and a recovery phrase does not bring them back. Lose this device and that part is gone — so before you give it away or move to another one, hand them back under <b>Account &amp; recovery → Move credit back to my account</b>.</div>
+          <div class="body">Coins on this device are blind-signed <b>cash</b>: not linked to your account, and a recovery phrase does not bring them back. Lose this device and that part is gone — so before you give it away or move to another one, hand them back under <b>Account &amp; recovery → Move credit back to my account</b>. What sits on your <b>account</b> has no such risk and <b>does not expire</b>: your phrase reaches it from any device.</div>
         </details>`;
     }
     else $("heldLine").style.display="none";
@@ -5470,7 +5470,8 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       <div class="btnrow"><button class="btn primary" data-click="returnCoins"${(returning || !(held>0))?" disabled":""}>${returning ? `Handing them back… ${returnPct}%` : `Hand back ${esc(formatToku(held))} TOKU`}</button></div>
       ${returning ? `<div class="retbar"><i style="width:${returnPct}%"></i></div>
          <p class="hint">${esc(formatToku(returnDone))} TOKU back so far. Each batch is a round trip through the mixnet, so a full device takes a moment.</p>` : ""}
-      <p class="hint">It goes in batches, because a payment carries its coins with it. Nothing is lost if it is interrupted: an unanswered batch is re-sent exactly as it was, never made afresh.</p>`;
+      <p class="hint">It goes in batches, because a payment carries its coins with it. Nothing is lost if it is interrupted: an unanswered batch is re-sent exactly as it was, never made afresh.</p>
+      <p class="hint"><b>Credit on your account does not expire.</b> Only coins on a device carry a date — that is what makes them spendable without us knowing whose they are. Handing them back stops that clock.</p>`;
 
     const pages = {
       server:  { t:"Server",                 h:`<p class="pagelead">Pick the official server, or paste one from your own tokumai server.</p>${serverControls()}<div id="srvIdents"></div>` },

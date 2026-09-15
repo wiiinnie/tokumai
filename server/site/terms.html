@@ -106,16 +106,21 @@
   <p><b>What we keep about a purchase.</b> For seven days after it settles, a purchase stays linked to the account it was made from — or, for a code bought on the website, to the code it produced. That is the window in which we can trace a payment that did not arrive and judge a refund. After seven days the link is deleted. The purchase record itself (amount, date, payment method, country) is kept for bookkeeping. None of this touches your prompts: the account a purchase belongs to and the session your prompts are billed to are not connected on our side.</p>
   <p><b>Purchases in the iPhone app.</b> On iPhone, credit is bought through the App Store. Apple is the seller of record for that purchase and its price is set in the App Store; Apple's terms, cancellation and refund rules apply to the payment. The credit itself is delivered by us the moment Apple's transaction is verified, and from then on it is credit like any other: on your recovery phrase, spent as coins, not refundable by us once used.</p>
 
-  <!-- LAWYER CHECK (2026-09-14): expiry of bearer coins. Drafted to state the technical facts
-       and the safeguards (automatic return, warning, bounded amount); wording and the 30-day
-       period to be reviewed against § 307 BGB / case law on prepaid balances before relied on. -->
+  <!-- LAWYER CHECK (2026-09-14, period revised 2026-09-15): expiry of bearer coins. Drafted to
+       state the technical facts and the safeguards (automatic return, warning, bounded amount);
+       wording and the 90-day period to be reviewed against § 307 BGB / case law on prepaid
+       balances before relied on. -->
   <h2 id="expiry">6a. Validity of credit drawn onto a device</h2>
   <p>Credit on your account does not expire. To spend it, the app draws it onto your device as
      <b>coins</b>: blind-signed bearer tokens that we cannot trace back to you, which is what keeps
-     your purchases and your prompts apart. Each batch of coins is valid for <b>30 days</b> from the
-     day it is drawn. This period is a property of the cryptographic scheme, not a commercial
-     choice: a coin that could be spent forever would also have to be remembered forever by every
-     server that must refuse it a second time.</p>
+     your purchases and your prompts apart. Coins carry a validity date set when they are issued,
+     <b>at most 90 days</b> ahead and never less than roughly three months' worth of ordinary use.
+     This period is a property of the cryptographic scheme, not a commercial choice: a coin that
+     could be spent forever would also have to be remembered forever by every server that must
+     refuse it a second time.</p>
+  <p><b>Only coins carry a date.</b> Credit you have not drawn onto a device, and credit you move
+     back to your account with <i>Move credit back to my account</i>, does not expire: it is held
+     on your account and reached by your recovery phrase alone.</p>
   <p>The app keeps this from costing you anything as long as it is opened now and then: it draws
      only a small amount at a time, moves unspent coins back to your account (or onto your recovery
      phrase) before they expire when it is opened in the days before the deadline, and shows a

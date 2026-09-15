@@ -110,7 +110,8 @@ Decided parameters:
 | planning a tender | 1, 2, 4, … at BOTH levels. A note is atomic — one note of nine coarse coins pays 9 ¢ and nothing else, while 1+2+4+2 pays every whole cent up to nine. The fine plan reaches just under ONE coarse coin (further is granularity nobody can use) and is minted only when the notes already on the table do not carry it. |
 | prices | quoted in TOKU, rounded up to a fine coin. Paying in increments as the answer streams is NOT needed: the tender above settles exactly in one round trip. |
 | books | **ten coins each: a fine book is 1 ¢, a coarse book 10 ¢**, drawn several at a time in ONE round trip. The book is the unit credit moves onto a device in, so it bounds both what a lost device costs and what is stranded on the account. A device holds a **value** cap of $1.00 (`WORKING_TOKU`) — the bulk in coarse books plus a float of three fine ones as small change — and fetches more by itself below a third of it, after a random 30–120 s pause, so the account call does not sit next to the question that emptied it. Stranded remainder: under 1 ¢ (the smallest book). Measured against the live server 2026-09-14: eight books in three seconds. Nym does the same thing — its ticketbooks are 50 tickets, 7 days, fetched several at a time with `--amount`. |
-| expiry | books last ~30 days; on app start, books < 3 days from expiry are returned to the account (plus a fresh book if in use); local notification at expiry − 3 d; no server push |
+| expiry | **90 days** (`BOOK_VALIDITY_DAYS`, terms §6a), so opening the app once a quarter keeps every coin alive. The date is a property of the ISSUING EPOCH, not of the book: every book of one authority dies on the same day, so a book drawn late in an epoch lives only the rest of it — which is what rolling epochs (below) are for. On app start, books < 3 days from expiry are returned to the account (plus a fresh book if in use); local notification at expiry − 3 d; no server push. Credit on the ACCOUNT never expires. |
+| rolling epochs | TO BUILD, and the server needs it by ~14 Oct 2026: an authority's expiration is fixed at bootstrap and nothing rotates it, so on that date every book dies AND issuing breaks (the authority would sign against a past date). A new authority is bootstrapped before the current one runs out and both are served — new books come from the newest, older ones stay verifiable until their own date. The server CANNOT move books into the new epoch: blind signatures mean it never saw them, and nothing links a book to an account. Only the device can swap, which is why the client-side return/redraw is the other half. |
 | device change | "Move credit back to my account" — built: account-signed, burns the notes, credits their value as entitlement, in batches with a progress bar. No wallet export (a copy is a double-spend). |
 | two devices | share account + entitlement, never books |
 | trickle | removed entirely |
@@ -139,9 +140,11 @@ in RAM, loaded whole at boot and never pruned (~50 KB per dollar of revenue). No
 - spent serials live in `spent_serials` (serial → record), payments in `quorum_records`,
   read through a read-only index; only spends accepted since the last atomic batch write
   are in RAM;
-- rows older than `QUORUM_RETAIN_DAYS` (default 35, floor 33) are pruned at boot and every
-  six hours. Safe because `Authority::verify_payment` rejects spend dates more than
-  `SPEND_DATE_PAST_SECS` (2 days) in the past and 31 days in the future: a coin is
-  unspendable from its book's expiry + 2 days on, and a book lives ~30 days from issue;
+- rows older than `QUORUM_RETAIN_DAYS` are pruned at boot and every six hours. The default
+  AND the floor are `BOOK_VALIDITY_DAYS + 3` (93 since 2026-09-15), derived rather than
+  typed twice: pruning a serial while its book can still be spent would make a second spend
+  of that coin invisible. Safe because `Authority::verify_payment` rejects spend dates more
+  than `SPEND_DATE_PAST_SECS` (2 days) in the past, so a coin is unspendable from its
+  book's expiry + 2 days on;
 - the admin's "burned serials" is a lifetime counter in the quorum meta (seeded once from
   the rows), so pruning never shrinks it (`quorum_pruned_coins` keeps the pruned sum).

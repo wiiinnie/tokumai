@@ -1903,16 +1903,23 @@ async fn connect_identity_at_boot(dir: &Path, gateway: Option<String>, label: &s
     }
 }
 
-/// How long a spend record is kept (seconds): `QUORUM_RETAIN_DAYS`, default 35 — a book
-/// lives ~30 days from issue, a payment verifies at most 2 days past its spend date
-/// (federation::SPEND_DATE_PAST_SECS), plus slack. Never below 33.
 /// Most coins one `coins.return` may carry. A payment costs ~4 ms of pairings per coin,
 /// so this bounds what a single request can ask the crypto pool for; a whole book comes
 /// home in several batches.
 const MAX_RETURN_COINS: u64 = 200;
 
+/// How long a spend record is kept, in days. It MUST outlive a book: pruning a serial
+/// while its book can still be spent would make a second spend of that coin invisible.
+/// A payment verifies at most `federation::SPEND_DATE_PAST_SECS` (2 days) past its spend
+/// date, so the floor is the book's life plus three days of slack — derived from
+/// `BOOK_VALIDITY_DAYS` rather than typed twice, because the two must never drift apart.
+fn quorum_retain_days_floor() -> u64 {
+    BOOK_VALIDITY_DAYS + 3
+}
+
 fn quorum_retain_secs() -> u64 {
-    env_usize("QUORUM_RETAIN_DAYS", 35).max(33) as u64 * 86_400
+    let floor = quorum_retain_days_floor();
+    (env_usize("QUORUM_RETAIN_DAYS", floor as usize) as u64).max(floor) * 86_400
 }
 
 fn identity_exists(dir: &Path) -> bool {
@@ -2018,5 +2025,15 @@ fn future_expiration_date() -> u32 {
         .unwrap_or(0);
     const DAY: u64 = 86_400;
     let today_midnight = (now / DAY) * DAY;
-    (today_midnight + 30 * DAY) as u32
+    (today_midnight + BOOK_VALIDITY_DAYS * DAY) as u32
 }
+
+/// How long the books of one issuing epoch stay spendable.
+///
+/// It is a property of the scheme, not a commercial choice: a coin that could be spent for
+/// ever would have to be remembered for ever by every server that must refuse it a second
+/// time — `QUORUM_RETAIN_DAYS` has to outlive it. Ninety days (terms §6a) so that opening
+/// the app once a quarter is enough to keep every coin alive; at thirty it was once a
+/// month, and the date is shared by every book of the epoch, so a book drawn late in one
+/// lived only days.
+const BOOK_VALIDITY_DAYS: u64 = 90;
