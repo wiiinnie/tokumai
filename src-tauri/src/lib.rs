@@ -2667,32 +2667,51 @@ async fn collect_now(app: AppHandle, main: Arc<Transport>) -> Result<Value, Stri
     // device can cost is then bounded by that amount, and the rest stays on the account
     // where the recovery phrase reaches it (docs/unlinkability.md, block D).
     //
-    // TWO DENOMINATIONS. The bulk is drawn as coarse books (ten cents each) because a
-    // coarse coin carries ten times the value through the mixnet for the same ~490 bytes;
-    // a small float of fine books (one cent each) is what makes a bill exact to a tenth of
-    // a cent. So: keep FINE_FLOAT_BOOKS fine books, put everything else in coarse ones,
-    // and stop at the working cap.
+    // TWO DENOMINATIONS, drawn in three steps.
+    //
+    //   1. the fine FLOAT — a few one-cent books, the small change that lets a tender land
+    //      on the exact price. Taken first, because if the coarse books ate the whole cap
+    //      there would be no change left and every answer would round up to the cent.
+    //   2. the BULK, in coarse books: ten times the value through the mixnet for the same
+    //      ~490 bytes per coin.
+    //   3. the REMAINDER, in fine books again. Without this step credit smaller than a
+    //      coarse book but larger than the float simply sat on the account — 4,503 TOKU
+    //      stranded after the first real top-up (2026-09-15). Now what stays behind is
+    //      under one fine book, a single cent, as it was before the second denomination.
+    let fine = scrai_core::coconut::COIN_TOKU;
     let mut collected = 0u64;
     let mut room_toku = WORKING_TOKU.saturating_sub(coin_value_toku(&wallet::load(&dir)));
     let mut budget = owed;
+    // What one book of each denomination costs, from the server's own keys. Never a number
+    // compiled into the app: the server decides the size, and a guess put a hundred refused
+    // withdrawals through the mixnet once already (2026-09-14).
+    let mut book_of: std::collections::BTreeMap<u64, u64> = std::collections::BTreeMap::new();
     for denom in scrai_core::coconut::DENOMS {
-        // What one book of this denomination costs, from the server's own keys. Never a
-        // number compiled into the app: the server decides the size, and a guess put a
-        // hundred refused withdrawals through the mixnet once already (2026-09-14).
-        let book_toku = match federation_keys(&transport, &srv, &dir, denom).await {
-            Ok(FedResponse::Keys { total_coins, .. }) => total_coins * denom,
-            _ => continue,
-        };
-        if book_toku == 0 {
+        if let Ok(FedResponse::Keys { total_coins, .. }) = federation_keys(&transport, &srv, &dir, denom).await {
+            if total_coins > 0 {
+                book_of.insert(denom, total_coins * denom);
+            }
+        }
+    }
+    let float_gap = book_of.get(&fine).map_or(0, |_| {
+        FINE_FLOAT_BOOKS.saturating_sub(books_of_denom(&wallet::load(&dir), fine))
+    });
+    let mut plan: Vec<(u64, usize)> = Vec::new();
+    for denom in scrai_core::coconut::DENOMS {
+        if !book_of.contains_key(&denom) {
             continue;
         }
-        let want = if denom == scrai_core::coconut::COIN_TOKU {
-            // The fine float: only up to what makes tenders exact, never more.
-            let have = books_of_denom(&wallet::load(&dir), denom);
-            FINE_FLOAT_BOOKS.saturating_sub(have).min((budget / book_toku) as usize)
+        if denom == fine {
+            plan.push((denom, float_gap));
         } else {
-            ((budget / book_toku) as usize).min((room_toku / book_toku) as usize)
-        };
+            plan.push((denom, usize::MAX)); // the bulk: as much as budget and room allow
+        }
+    }
+    plan.push((fine, usize::MAX)); // the remainder, once the coarse books have had their turn
+
+    for (denom, cap) in plan {
+        let Some(&book_toku) = book_of.get(&denom) else { continue };
+        let want = cap.min((budget / book_toku) as usize).min((room_toku / book_toku) as usize);
         // An interrupted withdrawal is finished even when the device is otherwise full —
         // the server may already have charged for it.
         let outstanding = wallet::load(&dir)
