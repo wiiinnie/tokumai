@@ -50,14 +50,23 @@ jobs:
       # artifact upload below fails for hours once the account's storage quota is hit
       # (2026-09-12: "Artifact storage quota has been hit", recalculated every 6-12 h),
       # while release assets are not counted at all.
-      - name: Attach to draft release
+      - name: Attach to the release
         if: ${{ inputs.release_tag != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.release_tag }}
-        run: gh release upload "$RELEASE_TAG" target/release/bundle/appimage/*.AppImage target/release/bundle/deb/*.deb --clobber
+        # A DRAFT release cannot be addressed by its tag — GitHub gives it a placeholder
+        # name until it is published, so `gh release upload <tag>` answers "release not
+        # found" and takes the artifact fallback below down with it (2026-09-15: both
+        # platforms built for half an hour and the bundles were lost with the runners).
+        # So: create the release if it is missing, published, and upload into it.
+        run: |
+          gh release view "$RELEASE_TAG" >/dev/null 2>&1 \
+            || gh release create "$RELEASE_TAG" --title "tokumai $RELEASE_TAG" --notes "Bundles attached by CI."
+          gh release upload "$RELEASE_TAG" target/release/bundle/appimage/*.AppImage target/release/bundle/deb/*.deb --clobber
 
       - name: Upload artifacts
+        if: always()
         continue-on-error: true
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
