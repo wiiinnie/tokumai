@@ -731,8 +731,10 @@ fn now_secs32() -> u32 {
 /// How long before the earliest book dies the app reminds its owner. Inside the swap
 /// window, so someone who opens the app on the reminder still gets the swap rather than a
 /// lecture.
+#[allow(dead_code)] // phones schedule with it; the desktop shows the date in the card
 const EXPIRY_NOTICE_DAYS: u64 = 3;
 /// One id, so a later schedule REPLACES the previous reminder instead of stacking another.
+#[allow(dead_code)]
 const EXPIRY_NOTICE_ID: i32 = 1;
 
 /// How close to its expiry a book is swapped for a fresh one. It has to be WIDER than the
@@ -1923,6 +1925,16 @@ async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<V
         // A book is what one withdrawal draws; the device learns the size from a book it
         // holds, so this follows the server rather than a number compiled into the app.
         "bookToku": books_size_toku(&w, &dir, server.as_deref().unwrap_or("")),
+        // When the coins on this device stop being spendable. The app says it plainly
+        // rather than letting the money quietly stop working; on a phone a local
+        // notification says it too, three days ahead (desktop has no scheduler).
+        "coinsExpire": w
+            .coconut_purses
+            .iter()
+            .filter_map(|j| scrai_core::purse::Purse::restore(j).ok())
+            .filter(|p| p.remaining_coins() > 0)
+            .map(|p| p.expiration_date())
+            .min(),
         // The smallest amount that can change hands: a coin-paid answer rounds up to it.
         "coinToku": scrai_core::coconut::COIN_TOKU,
         "tiers": TIERS,
@@ -2584,6 +2596,12 @@ fn collect_later(app: AppHandle, force: Option<bool>) -> Result<Value, String> {
 /// It is the only thing that reaches the one person the automatic swap cannot help: the
 /// one who does not open the app. Everyone else never sees it, because the swap will have
 /// run long before.
+///
+/// PHONES ONLY. The desktop side of the notification plugin has no scheduler: it builds
+/// the notification and shows it THERE AND THEN, ignoring the date entirely — so on a Mac
+/// this would have fired a "expires in 3 days" banner ninety days early. Desktop gets the
+/// line in the account card instead (`state` reports the earliest expiry).
+#[cfg(any(target_os = "ios", target_os = "android"))]
 fn schedule_expiry_notice(app: &AppHandle) {
     use tauri_plugin_notification::{NotificationExt, PermissionState};
     let Ok(dir) = data_dir(app) else { return };
@@ -2637,6 +2655,9 @@ fn schedule_expiry_notice(app: &AppHandle) {
         Err(e) => log::warn!("[expiry] could not set the reminder: {e}"),
     }
 }
+
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
+fn schedule_expiry_notice(_app: &AppHandle) {}
 
 /// Is any book close enough to its date to be swapped?
 fn has_expiring_books(w: &wallet::Wallet, now: u32) -> bool {

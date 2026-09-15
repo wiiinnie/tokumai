@@ -1821,7 +1821,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       if(gotModels.length) models = gotModels;
       tiers = s.tiers || tiers || [];
       account = s.account; balance = s.balance||0; held = s.held||0;
-      entitlement = s.entitlement||0; bookToku = s.bookToku||100000; coinToku = s.coinToku||100;
+      entitlement = s.entitlement||0; bookToku = s.bookToku||100000; coinToku = s.coinToku||100; coinsExpire = Number(s.coinsExpire)||0;
       phraseVerified = !(account && account.phraseVerified === false);
 
       { const l = String(s.redeemLabel||"").slice(0,80), h = String(s.redeemHint||"").slice(0,80);
@@ -2661,7 +2661,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   let devBuild = false;
   // Paid for but not yet drawn as coins. A tail under one ticketbook cannot be drawn at
   // all until a purchase tops it up — it is still the user's money and is shown as such.
-  let entitlement = 0, bookToku = 100000, coinToku = 100;
+  let entitlement = 0, bookToku = 100000, coinToku = 100, coinsExpire = 0;
   // Developer switch: pay each answer with coins instead of a session balance.
   // The Developer section is a debug-build thing, but a phone has no way to run a debug
   // build sensibly (a debug nym-sdk is enormous) and no environment to set — so seven taps
@@ -5242,6 +5242,21 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // balance any more, so naming "recoverable from your phrase" first was both wrong and
   // frightening: it read as 0 while the money on the ACCOUNT is exactly what the phrase
   // brings back (2026-09-15). Say where each part is, and which part the phrase reaches.
+  // Coins stop being spendable on a date. The app renews them by itself when it is opened
+  // inside the last fortnight, so this is reassurance rather than an alarm — but silence
+  // would be worse: money that quietly stops working is the one thing nobody forgives.
+  // On a phone a local notification says the same thing three days ahead; the desktop
+  // notification plugin cannot schedule, so this line is all it gets.
+  function expiryNote(){
+    if(!(held > 0) || !coinsExpire) return "";
+    const days = Math.floor((coinsExpire*1000 - Date.now()) / 86400000);
+    if(days > 14) return "";
+    const when = new Date(coinsExpire*1000).toLocaleDateString();
+    return days < 0
+      ? `<div class="held" style="color:var(--rust)">The coins on this device expired on ${esc(when)}. Credit on your account is unaffected.</div>`
+      : `<div class="held" style="color:var(--rust)">The coins on this device stop being spendable on ${esc(when)}${days<=3?" — in "+days+" day"+(days===1?"":"s"):""}. Opening the app renews them; nothing else to do.</div>`;
+  }
+
   function creditSplit(){
     const session = Math.max(0, balance - held);
     const parts = [];
@@ -5323,6 +5338,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       <div class="bal">${esc(tokuLine(balance + entitlement))}</div>
       <div class="held">${creditSplit()}</div>
       ${entitlement>0 && entitlement<bookToku ? `<div class="held" style="color:var(--rust)">Coins are drawn a whole book at a time (${esc(formatToku(bookToku))} TOKU), so this rest waits here until your next top-up. It is on your recovery phrase and cannot be lost.</div>` : ``}
+      ${expiryNote()}
       ${checking
         ? `<div class="checkline busy">↻ Checking<span class="dots"></span> <span class="dim">· over the mixnet</span></div>`
         : `<div class="checkline" data-click="checkCredit">↻ Check for credit <span class="dim">· ${esc(credResult||checkedAgo())}</span></div>`}
