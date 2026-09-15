@@ -494,6 +494,40 @@ mod tests {
     }
 
     #[test]
+    fn a_wallet_written_by_an_older_build_still_loads_with_its_money() {
+        // The first paying customer bought on 0.6.x and holds coins on the device. Between
+        // their build and this one the wallet GAINED fields (pending_tenders, spare_notes,
+        // a purse's denom_toku) and LOST others with the session cut. If either direction
+        // made serde reject the file, load_with_key would hand back an empty wallet and
+        // their coins would look gone. Both directions are checked here, on the encrypted
+        // path — the only one a real installation uses since 0.4.2.
+        let dir = scratch("oldshape");
+        let old = r#"{
+            "mnemonic": "abandon abandon art",
+            "server": "Fakhet…@38zcSs…",
+            "session_index": 0,
+            "coconut_purses": ["{\"wallet\":\"…\",\"total_coins\":1000,\"expiration_date\":1797206400}"],
+            "coin_chat": true,
+            "session_balance": 4503,
+            "redeem_pending": {"id": "abc"}
+        }"#;
+        fs::write(wallet_path(&dir), encrypt(&KEY, old).unwrap()).unwrap();
+        let got = load_with_key(&dir, Some(&KEY));
+        assert_eq!(got.mnemonic.as_deref(), Some("abandon abandon art"), "the seed phrase must survive");
+        assert_eq!(got.coconut_purses.len(), 1, "the purse — the actual money — must survive");
+        assert!(got.coconut_purses[0].contains("total_coins"));
+        // Fields this build added are simply absent in the old file; they must default, not fail.
+        assert!(got.pending_tenders.is_empty());
+        assert!(got.spare_notes.is_empty());
+        // And nothing was quarantined: a backup file means the parse failed.
+        let quarantined = fs::read_dir(&dir).unwrap()
+            .filter_map(|e| e.ok())
+            .any(|e| e.file_name().to_string_lossy().starts_with("wallet.corrupt."));
+        assert!(!quarantined, "the file must not have been treated as corrupt");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn wallet_file_is_encrypted_at_rest() {
         // H6: the mnemonic and bearer purses must NOT be readable from the file.
         let dir = scratch("enc");
