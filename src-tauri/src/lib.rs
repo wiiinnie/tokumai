@@ -2607,6 +2607,34 @@ fn collect_later(app: AppHandle, force: Option<bool>) -> Result<Value, String> {
     Ok(json!({ "started": go }))
 }
 
+/// In what order books are drawn, and how many of each.
+///
+/// The small change goes FIRST. It used to go after the bulk, and since the bulk takes
+/// "as much as budget and room allow", there was regularly nothing left for it: a device
+/// with room for a dollar and a dollar owed drew coarse books only, and then every answer
+/// was rounded up to a whole cent because nothing smaller was on the device (2026-09-16).
+/// A float of a few fine books costs a few cents of the budget and is what makes every
+/// later price exact — it is the cheapest thing here and has to be bought first.
+fn withdraw_plan(
+    book_of: &std::collections::BTreeMap<u64, u64>,
+    fine: u64,
+    float_gap: usize,
+) -> Vec<(u64, usize)> {
+    let mut plan: Vec<(u64, usize)> = Vec::new();
+    if book_of.contains_key(&fine) && float_gap > 0 {
+        plan.push((fine, float_gap));
+    }
+    for denom in scrai_core::coconut::DENOMS {
+        if denom != fine && book_of.contains_key(&denom) {
+            plan.push((denom, usize::MAX)); // the bulk: as much as budget and room allow
+        }
+    }
+    if book_of.contains_key(&fine) {
+        plan.push((fine, usize::MAX)); // whatever is still owed, once the bulk has had its turn
+    }
+    plan
+}
+
 /// Can this device still land on an exact price? A tender pays its bulk in coarse coins
 /// and needs fine ones to make up the remainder; with none left, the smallest thing that
 /// can change hands is a whole cent and every answer is rounded up to it. The user has
@@ -2784,18 +2812,7 @@ async fn collect_now(app: AppHandle, main: Arc<Transport>) -> Result<Value, Stri
     let float_gap = book_of.get(&fine).map_or(0, |_| {
         FINE_FLOAT_BOOKS.saturating_sub(books_of_denom(&wallet::load(&dir), fine))
     });
-    let mut plan: Vec<(u64, usize)> = Vec::new();
-    for denom in scrai_core::coconut::DENOMS {
-        if !book_of.contains_key(&denom) {
-            continue;
-        }
-        if denom == fine {
-            plan.push((denom, float_gap));
-        } else {
-            plan.push((denom, usize::MAX)); // the bulk: as much as budget and room allow
-        }
-    }
-    plan.push((fine, usize::MAX)); // the remainder, once the coarse books have had their turn
+    let plan = withdraw_plan(&book_of, fine, float_gap);
 
     for (denom, cap) in plan {
         let Some(&book_toku) = book_of.get(&denom) else { continue };
@@ -4883,6 +4900,31 @@ mod c3_tests {
 mod tender_tests {
     use super::*;
     use scrai_core::coconut::testkit;
+
+    // The other half of the same day's bug: the device had no fine books because the
+    // withdrawal drew the bulk first and the bulk takes everything budget and room allow.
+    // Small change has to be bought before the big notes, or there is never any.
+    #[test]
+    fn small_change_is_drawn_before_the_bulk() {
+        use scrai_core::coconut::{COARSE_TOKU, COIN_TOKU};
+        let mut books = std::collections::BTreeMap::new();
+        books.insert(COIN_TOKU, 10_000);
+        books.insert(COARSE_TOKU, 100_000);
+
+        let plan = withdraw_plan(&books, COIN_TOKU, 3);
+        assert_eq!(plan[0], (COIN_TOKU, 3), "the float comes first, or the bulk eats the budget");
+        assert_eq!(plan[1].0, COARSE_TOKU, "then the bulk");
+        assert_eq!(plan[2], (COIN_TOKU, usize::MAX), "then whatever is still owed");
+
+        // A device that already holds its float does not draw more of it.
+        let plan = withdraw_plan(&books, COIN_TOKU, 0);
+        assert_eq!(plan[0].0, COARSE_TOKU, "no gap to fill, so straight to the bulk");
+
+        // A server without a coarse denomination is still served.
+        let mut fine_only = std::collections::BTreeMap::new();
+        fine_only.insert(COIN_TOKU, 10_000);
+        assert_eq!(withdraw_plan(&fine_only, COIN_TOKU, 3), vec![(COIN_TOKU, 3), (COIN_TOKU, usize::MAX)]);
+    }
 
     // 2026-09-16: a device holding only coarse books paid 1000 TOKU for a 61 TOKU answer,
     // and its own fair-price check flagged an honest server for it. The server had taken
