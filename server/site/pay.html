@@ -230,12 +230,23 @@
   function buyFlow(frag){
     var TIERS = [5, 10, 20, 50];
     var CONSENT = "2026-09-07";          // must match docs/consent/<version>.md
-    var pick = 10, rail = "nyx", c1 = false, c2 = false, order = null, timer = null, clock = null;
+    // The default rail is the first one this server actually serves — "nyx" as a constant
+    // meant the page opened on a dead rail the moment coin payments went away.
+    var pick = 10, rail = null, c1 = false, c2 = false, order = null, timer = null, clock = null;
     // Coins are cheaper by this much — a lower PRICE for the same credit, because a coin
     // payment cannot be charged back. Server-set; 0 means no difference.
     var COIN_OFF = Math.max(0, Math.min(50, Number("{{COIN_DISCOUNT_PCT}}") || 0));
     // Cards sell the larger tiles only (fee + chargeback exposure) — same floor the server enforces.
     var CARD_MIN = Math.max(0, Number("{{CARD_MIN_USD}}") || 10);
+    // Which rails this server can actually raise an invoice on, filled in by pay_html().
+    // A rail that is not listed is not offered at all — not greyed, not "soon": coin
+    // payments were withdrawn on 2026-09-16 with no date to come back, and a tile that
+    // says "not yet" would be a promise nobody has made.
+    var RAILS = "{{RAILS}}".split(",").filter(function(r){ return /^[a-z]+$/.test(r); });
+    if (!RAILS.length) RAILS = ["card"];
+    var hasRail = function(r){ return RAILS.indexOf(r) !== -1; };
+    rail = hasRail("card") ? "card" : RAILS[0];
+    if (rail === "card" && pick < CARD_MIN) pick = CARD_MIN;
     function priceOf(n){ return rail === "card" ? n : Math.round(n * (100 - COIN_OFF)) / 100; }
     function money(x){ return "$" + (Number.isInteger(x) ? x : x.toFixed(2)); }
 
@@ -257,8 +268,8 @@
         'you get a code, not an account.</p>' +
         '<div class="tiles">' + TIERS.map(tile).join("") + '</div>' +
         '<div class="lbl">Pay with</div>' +
-        railRow("nyx", "NYM", "native \u00b7 Nyx", COIN_OFF > 0 ? "\u2212" + COIN_OFF + "% \u00b7 coins cost less" : "") +
-        railRow("card", "Card \u00b7 PayPal \u00b7 Apple Pay \u00b7 Google Pay", "Stripe") +
+        (hasRail("nyx") ? railRow("nyx", "NYM", "native \u00b7 Nyx", COIN_OFF > 0 ? "\u2212" + COIN_OFF + "% \u00b7 coins cost less" : "") : "") +
+        (hasRail("card") ? railRow("card", "Card \u00b7 PayPal \u00b7 Apple Pay \u00b7 Google Pay", "Stripe") : "") +
         '<p class="fine">Sold under our <a href="/terms">Terms</a>. Please read the ' +
         '<a href="/terms#withdrawal">right of withdrawal</a> and the <a href="/privacy">privacy notice</a> first. ' +
         'An <b>unredeemed</b> code can be refunded; once redeemed it cannot.</p>' +

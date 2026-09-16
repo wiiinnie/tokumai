@@ -276,6 +276,12 @@ impl Cfg {
 /// The amounts on sale, each with its card price and — when the server discounts coins —
 /// its coin price. From the server's own tiers and percentage, so the page can never say
 /// a price the invoice will not charge.
+/// Can this server take a coin payment at all? Both coin rails, as one question — the
+/// price tiles and the page copy both hinge on it.
+fn coins_sellable() -> bool {
+    scrai_server::nyx::Nyx::from_env().is_some() || scrai_server::pay::coin_rail_ready()
+}
+
 fn prices_html() -> String {
     let pct = scrai_server::pay::coin_discount_pct();
     let mut out = String::from("<div class=\"prices\">");
@@ -288,7 +294,9 @@ fn prices_html() -> String {
             .map(|c| std::str::from_utf8(c).unwrap_or(""))
             .collect::<Vec<_>>()
             .join(",");
-        let coin = if pct > 0 {
+        // …and only when a coin rail is actually live: the discount priced a way to pay,
+        // and with coins withdrawn the line advertised a price nobody can get.
+        let coin = if pct > 0 && coins_sellable() {
             let cents = scrai_server::pay::charged_cents(usd, "nyx", false);
             format!("<small class=\"cr\">${}.{:02} with NYM or Bitcoin</small>", cents / 100, cents % 100)
         } else {
@@ -300,20 +308,43 @@ fn prices_html() -> String {
     out
 }
 
+/// The shop page, with its placeholders actually filled.
+///
+/// It used to be served straight from the template: `{{COIN_DISCOUNT_PCT}}` and
+/// `{{CARD_MIN_USD}}` were never substituted, and the page's `Number(…) || 0` fallbacks
+/// hid it — the coin discount simply never appeared there, and the card minimum was right
+/// only because the fallback happened to match. `{{RAILS}}` is new and is what lets the
+/// page offer exactly the rails this server can serve.
+fn pay_html() -> String {
+    let rails: Vec<&str> = [
+        ("nyx", scrai_server::nyx::Nyx::from_env().is_some()),
+        ("card", scrai_server::pay::card_enabled()),
+        ("btc", scrai_server::pay::coin_rail_ready()),
+    ]
+    .into_iter()
+    .filter_map(|(name, on)| on.then_some(name))
+    .collect();
+    PAGE_PAY
+        .replace("{{COIN_DISCOUNT_PCT}}", &scrai_server::pay::coin_discount_pct().to_string())
+        .replace("{{CARD_MIN_USD}}", &scrai_server::pay::card_min_usd().to_string())
+        .replace("{{RAILS}}", &rails.join(","))
+}
+
 fn rails_html() -> String {
+    // Only what can actually be bought with, TODAY. This used to render every rail and
+    // label the unavailable ones "not yet", which was honest while a rail was genuinely on
+    // the way — Monero waiting on our BTCPay store. It stopped being honest on 2026-09-16,
+    // when coin payments were withdrawn for tax reasons with no date to come back: "not
+    // yet" would then be a promise nobody has made. A rail that cannot be used is simply
+    // not offered, and if one returns it appears again on its own.
     let dot = |cls: &str, glyph: &str| {
         format!(
             "<svg class=\"coin {cls}\" viewBox=\"0 0 32 32\" width=\"28\" height=\"28\"><circle cx=\"16\" cy=\"16\" r=\"15\" fill=\"currentColor\"></circle><text x=\"16\" y=\"22\" text-anchor=\"middle\" font-family=\"JetBrains Mono, monospace\" font-size=\"15\" font-weight=\"700\" fill=\"#141210\">{glyph}</text></svg>"
         )
     };
-    let tile = |on: bool, mark: String, name: &str, tag_on: &str| {
-        format!(
-            "<div class=\"pm {}\">{mark}<span class=\"pmname\">{name}</span><span class=\"pmtag\">{}</span></div>",
-            if on { "on" } else { "soon" },
-            if on { tag_on } else { "not yet" },
-        )
+    let tile = |mark: String, name: &str, tag: &str| {
+        format!("<div class=\"pm on\">{mark}<span class=\"pmname\">{name}</span><span class=\"pmtag\">{tag}</span></div>")
     };
-    let card_tag = format!("available - from ${}", scrai_server::pay::card_min_usd());
     let pct = scrai_server::pay::coin_discount_pct();
     let coin_tag = if pct > 0 {
         format!("available - from ${} - {pct}% less", scrai_server::pay::coin_min_usd())
@@ -322,23 +353,21 @@ fn rails_html() -> String {
     };
 
     let mut out = String::from("<div class=\"pms\" id=\"rails\">");
-    let nym_tag = if pct > 0 { format!("native - Nyx - {pct}% less") } else { "native - Nyx".to_string() };
-    out.push_str(&tile(
-        scrai_server::nyx::Nyx::from_env().is_some(),
-        dot("nym", "N"),
-        "NYM",
-        &nym_tag,
-    ));
-    out.push_str(&tile(
-        scrai_server::pay::card_enabled(),
-        format!("<span class=\"cardmarks\">{CARD_MARKS}</span>"),
-        "Card, Apple Pay, Google Pay",
-        &card_tag,
-    ));
-    out.push_str(&tile(scrai_server::pay::coin_rail_ready(), dot("btc", "B"), "Bitcoin", &coin_tag));
-    // Monero rides on the same BTCPay store; until that store carries it there is nothing to
-    // say beyond "not yet" — and saying it honestly is the point of generating this at all.
-    out.push_str(&tile(false, dot("xmr", "M"), "Monero", &coin_tag));
+    if scrai_server::nyx::Nyx::from_env().is_some() {
+        let tag = if pct > 0 { format!("native - Nyx - {pct}% less") } else { "native - Nyx".to_string() };
+        out.push_str(&tile(dot("nym", "N"), "NYM", &tag));
+    }
+    if scrai_server::pay::card_enabled() {
+        let card_tag = format!("available - from ${}", scrai_server::pay::card_min_usd());
+        out.push_str(&tile(
+            format!("<span class=\"cardmarks\">{CARD_MARKS}</span>"),
+            "Card, PayPal, Apple Pay, Google Pay",
+            &card_tag,
+        ));
+    }
+    if scrai_server::pay::coin_rail_ready() {
+        out.push_str(&tile(dot("btc", "B"), "Bitcoin", &coin_tag));
+    }
     out.push_str("</div>");
     out
 }
@@ -863,7 +892,7 @@ const PAGES: &[(&str, &str, &str, &str)] = &[
     ("how", "/how-it-works", "How tokumai works: AI chat with no identity, no IP, no traceable payment",
      "Four things that never meet: your identity, your IP address, your payment and your questions. How the Nym mixnet, blind-signed coins and an on-device guard keep them apart."),
     ("pricing", "/pricing", "tokumai pricing: prepaid AI credit, no subscription",
-     "Buy $5 to $50 of TOKU credit once with NYM, Bitcoin, card or the App Store. Coins cost 10 % less. A text answer costs a fraction of a cent; there is no monthly plan."),
+     "Buy $5 to $50 of TOKU credit once by card or through the App Store. A text answer costs a fraction of a cent; there is no monthly plan."),
     ("download", "/download", "Download tokumai for macOS, Windows, Linux, Android and iPhone",
      "Native apps for every platform. Desktop builds are direct downloads with checksums; iPhone through TestFlight; Android as an .apk."),
     ("compare", "/compare", "tokumai compared with other private AI chats",
@@ -1234,7 +1263,7 @@ async fn handle(f: Arc<Faucet>, mut sock: tokio::net::TcpStream, peer: SocketAdd
         }
         ("GET", "/pay") => {
             f.track("view:pay", Some(&req));
-            respond(&mut sock, 200, "text/html; charset=utf-8", PAGE_PAY.as_bytes()).await
+            respond(&mut sock, 200, "text/html; charset=utf-8", pay_html().as_bytes()).await
         }
         ("GET", "/claim") | ("GET", "/redeem") => {
             f.track("view:claim", Some(&req));

@@ -1742,6 +1742,11 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   const priceFor = usd => (selectedMethod==="card" || testnetBuy || isIOSNative() || !coinDiscountPct) ? usd : Math.round(usd*(100-coinDiscountPct))/100;
   const money = x => "$" + (Number.isInteger(x) ? x : x.toFixed(2));
   let coinMinUsd = 10;                   // on-chain floor, from rails.btcMinUsd
+  // Does this server sell for coins at all? Coin payments were withdrawn on 2026-09-16
+  // (they cannot be represented for tax), and the rails simply stopped being configured.
+  // Greying them out was right while one was on the way; it is wrong for one that has been
+  // taken away with no date to return, because "soon" is then a promise nobody made.
+  const coinsOffered = () => !!(rails && (rails.nyx || rails.btc));
   let cardInfo = { enabled:false, minUsd:10, methods:[] };   // server's card rail: {enabled, minUsd, methods:[{id,label}]} — absent → no card row
   // Stripe has no method list to mirror (Mollie's /v2/methods had one, and the server
   // used to fetch it): what a buyer is offered is decided on Stripe's own page, per
@@ -5812,12 +5817,18 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
                   : (selectedMethod==="nyx" ? 0 : coinMinUsd);
       const small = n < floor;
       const dis = (testnetBuy && n!==TESTNET_USD) || small;
-      const sublbl = testnetBuy&&n!==TESTNET_USD ? 'real' : small ? (selectedMethod==="card" ? 'coins only' : 'NYM only') : (testnetBuy&&n===TESTNET_USD ? 'invite' : sub);
+      // "coins only" / "NYM only" name a way to pay; with coins withdrawn the smaller
+      // tiles are simply not for sale, and saying so beats pointing at a rail that is gone.
+      const sublbl = testnetBuy&&n!==TESTNET_USD ? 'real'
+                   : small ? (!coinsOffered() ? 'too small' : (selectedMethod==="card" ? 'coins only' : 'NYM only'))
+                   : (testnetBuy&&n===TESTNET_USD ? 'invite' : sub);
       return `<div class="tiletier${selectedTier===n?' sel':''}${dis?' dis':''}" data-click="selectTier" data-args="${n}"><div class="a">${esc(money(priceFor(n)))}</div><div class="s">${sublbl}</div></div>`;
     }).join("");
-    // Greyed, not hidden: a rail the server cannot raise an invoice on stays visible so the
-    // choice is legible — it just cannot be picked. renderCoinTiles applies that to the coins.
-    if(!rails.btc && selectedMethod!=="nyx" && selectedMethod!=="card"){
+    // A rail that is merely BUSY stays visible and greyed, so the choice stays legible.
+    // A rail that is not offered at all goes: see coinsOffered().
+    if(!coinsOffered() && selectedMethod!=="card"){
+      coinMenu=null; selectMethodQuiet("card");
+    } else if(!rails.btc && selectedMethod!=="nyx" && selectedMethod!=="card"){
       coinMenu=null; selectMethodQuiet("nyx");
     }
     renderCoinTiles();
@@ -6376,6 +6387,8 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   }
   function renderCoinTiles(){
     const host=$("coinTiles"); if(!host) return;
+    // Nothing to draw when coins are not sold here — and nothing to grey either.
+    if(railsKnown && !coinsOffered()){ host.innerHTML = ""; renderCoinMenu(); return; }
     fixCoinPick();
     if(!coinGroups.length){
       // Older server, or a processor rail that picks the coin itself.
@@ -6414,7 +6427,11 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   }
   function selectCoin(group){
     if(testnetBuy){ const s=$("buyStatus"); if(s) s.textContent="Invite credits are paid in NYM by the faucet."; return; }
-    if(!rails.btc){ const s=$("buyStatus"); if(s) s.textContent="Coin payments are not available on this server right now — pay with NYM."; return; }
+    // Pointing at NYM was right while NYM was a way to pay. With coins withdrawn it sent
+    // the buyer to a rail that is also gone.
+    if(!rails.btc){ const s=$("buyStatus"); if(s) s.textContent = coinsOffered()
+      ? "Coin payments are not available on this server right now — pay with NYM."
+      : "Coin payments are not offered here. Pay by card, or on iPhone through the App Store."; return; }
     const g=coinGroups.find(g=>g.group===group); if(!g) return;
     const pick=g.variants.find(v=>v.id===coinPick[g.group]) || g.variants[0];
     // Already on this coin → the tap is about the chain. Otherwise select it first.
@@ -6445,7 +6462,9 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   }
   function selectMethod(m){
     if(testnetBuy && m!=="nyx"){ const s=$("buyStatus"); if(s) s.textContent="Invite credits are paid in NYM by the faucet."; return; }
-    if(m==="btc" && !rails.btc){ const s=$("buyStatus"); if(s) s.textContent="Bitcoin is not available on this server right now — pay with NYM."; return; }
+    if(m==="btc" && !rails.btc){ const s=$("buyStatus"); if(s) s.textContent = coinsOffered()
+      ? "Bitcoin is not available on this server right now — pay with NYM."
+      : "Coin payments are not offered here. Pay by card, or on iPhone through the App Store."; return; }
     if(m!=="card") coinMenu=null;
     if(m==="card" && !cardAvailable()) return;
     selectMethodQuiet(m);
