@@ -1827,6 +1827,43 @@ async fn support_seen(app: AppHandle, id: String) -> Result<(), String> {
     wallet::save(&dir, &w)
 }
 
+/// The diagnostics block, built HERE rather than in the webview, because this side knows
+/// the server and gateway and the webview does not — and because the promise on screen is
+/// "exactly this, nothing else": the text the user is shown is the text that is sent, so
+/// there must be only one place that composes it.
+#[tauri::command]
+async fn support_diag(app: AppHandle, last_error: Option<String>) -> Result<String, String> {
+    let dir = data_dir(&app)?;
+    let w = wallet::load(&dir);
+    let short = |s: &str| -> String {
+        if s.len() <= 22 {
+            s.to_string()
+        } else {
+            format!("{}…{}", &s[..8], &s[s.len() - 6..])
+        }
+    };
+    let books = w.coconut_purses.len();
+    let spares = w.spare_notes.len();
+    let mut out = format!(
+        "app      {} ({})\nos       {} · {}\nserver   {}\ngateway  {}\nwallet   {books} book(s), {spares} spare note(s)\n",
+        reported_version(),
+        if cfg!(debug_assertions) { "development build" } else { "release" },
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        w.server.as_deref().map(short).unwrap_or_else(|| "not set".into()),
+        if w.entry_random {
+            "a random one on every connect".to_string()
+        } else {
+            w.entry_gateway.as_deref().map(short).unwrap_or_else(|| "not chosen yet".into())
+        },
+    );
+    if let Some(e) = last_error.as_deref().filter(|e| !e.trim().is_empty()) {
+        let one: String = e.chars().filter(|c| *c != '\n').take(140).collect();
+        out.push_str(&format!("last     {one}\n"));
+    }
+    Ok(out)
+}
+
 /// Milliseconds since the epoch — the app has no `now_ms` of its own outside the vault.
 fn support_now_ms() -> u64 {
     std::time::SystemTime::now()
@@ -4868,7 +4905,7 @@ pub fn run() {
             state, local_state, set_server, account_new, account_reveal, account_restore, account_delete, account_migrate_qr,
             invoice, invoice_status, invoice_cancel, invite_check, ocr_scan, pdf_text, pdf_ocr, pdf_pages, collect, chat,
             smart_available, smart_detect,
-            mixnet_route, mixnet_ping, cancel_chat, app_resumed, app_hidden, resume_stats, list_entry_gateways, server_identities, set_entry_gateway, set_entry_random, set_mixnet_perf, buy_close, set_coin_chat, coins_return, collect_later, set_fake_old_version, support_send, support_fetch, support_list, support_seen, open_external, save_image, save_file, voucher_redeem,
+            mixnet_route, mixnet_ping, cancel_chat, app_resumed, app_hidden, resume_stats, list_entry_gateways, server_identities, set_entry_gateway, set_entry_random, set_mixnet_perf, buy_close, set_coin_chat, coins_return, collect_later, set_fake_old_version, support_send, support_fetch, support_list, support_seen, support_diag, open_external, save_image, save_file, voucher_redeem,
             phrase_backup_get, iap_products, iap_purchase, iap_restore,
             phrase_check_start,
             phrase_check_verify,

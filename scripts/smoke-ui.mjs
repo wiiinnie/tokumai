@@ -77,6 +77,7 @@ const screens = [
   ["account", "openAccount"],
   ["buy credit", "openBuy"],
   ["settings", "openSettings"],
+  ["support", "openSupport"],
 ];
 for (const [name, fn] of screens) {
   problems.length = problems.length; // keep prior errors
@@ -95,7 +96,7 @@ for (const [name, fn] of screens) {
   // is where a variable somebody deleted hides just as well as in the open path.
   await page
     .evaluate((f) => {
-      const close = { openAccount: "closeAccount", openBuy: "closeBuy", openSettings: "closeSettings" }[f];
+      const close = { openAccount: "closeAccount", openBuy: "closeBuy", openSettings: "closeSettings", openSupport: "closeSupport" }[f];
       if (typeof window[close] === "function") window[close]();
       else document.querySelectorAll(".scrim.open").forEach((s) => s.classList.remove("open"));
     }, fn)
@@ -118,6 +119,16 @@ for (const p of pages) {
     .catch((e) => problems.push(`page ${p}: ${e.message}`));
   await new Promise((r) => setTimeout(r, 120));
   console.log(problems.length > before ? `  ✗ account → ${p}` : `  ✓ account → ${p}`);
+}
+
+// The support sheet's three panes — the list and the thread render from state the form
+// does not touch, so opening the form alone would prove little.
+for (const [name, fn] of [["list", "openSupportList"], ["form", "openSupportForm"]]) {
+  const before = problems.length;
+  await page.evaluate(() => window.openSupport());
+  await page.evaluate((f) => window[f](), fn).catch((e) => problems.push(`support ${name}: ${e.message}`));
+  await new Promise((r) => setTimeout(r, 120));
+  console.log(problems.length > before ? `  ✗ support → ${name}` : `  ✓ support → ${name}`);
 }
 
 await browser.close();

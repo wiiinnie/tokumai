@@ -1194,6 +1194,71 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       <p class="lead" style="margin:0 0 12px">This version of tokumai (<span id="updHave"></span>) is no longer accepted by the server. Please install <b id="updMin"></b> or newer, then open the app again.</p>
       <a class="btn primary" id="updLink" href="#" style="display:inline-block;word-break:break-all" data-click="openLink" data-click-pass="href" data-prevent="1"></a>
       <p class="hint" style="margin:12px 0 0">Your account, history and credit stay on this device — the update keeps them.</p>
+      <!-- The one door that stays open while the gate is shut: if the update is what is
+           failing, this is how we get to hear about it. -->
+      <div class="btnrow" style="margin-top:14px"><button class="btn" type="button" data-click="openSupport">Update not working? Tell us</button></div>
+    </div>
+  </div>
+</div>
+
+
+<!-- Support. Its own scrim, above the update gate on purpose: somebody the gate has shut
+     out must still be able to say so, and the server exempts `support.*` for that reason. -->
+<div class="scrim" id="supScrim" style="z-index:1100" data-click="__backdrop__" data-close="closeSupport">
+  <div class="modal">
+    <div class="mh">
+      <span class="ttl" id="supTtl">Report a <b>problem</b></span>
+      <span class="x" data-click="closeSupport">✕</span>
+    </div>
+    <div class="mb">
+
+      <div id="supPaneForm">
+        <p class="lead" style="margin:0 0 14px">Goes to us through the mixnet, like your questions — we never learn where it came from. <b>No account and no e-mail address:</b> the answer comes back here, under “Your reports”.</p>
+
+        <p class="pagelead" style="margin:0 0 8px">What is this about?</p>
+        <div class="kseg" id="supCats" style="flex-wrap:wrap">
+          <button type="button" class="mchip on" data-click="supCat" data-click-pass="this" data-cat="technical">Technical</button>
+          <button type="button" class="mchip" data-click="supCat" data-click-pass="this" data-cat="bug">Bug</button>
+          <button type="button" class="mchip" data-click="supCat" data-click-pass="this" data-cat="payment">Payment</button>
+          <button type="button" class="mchip" data-click="supCat" data-click-pass="this" data-cat="idea">Idea</button>
+          <button type="button" class="mchip" data-click="supCat" data-click-pass="this" data-cat="other">Other</button>
+        </div>
+
+        <input class="idf" id="supSubject" type="text" maxlength="200" placeholder="One line — what is wrong" style="margin:12px 0 0;max-width:none">
+        <textarea class="idf" id="supBody" maxlength="4000" rows="6" placeholder="What you did, what you expected, what happened instead." style="margin:9px 0 0;max-width:none;resize:vertical;font-family:var(--body);letter-spacing:normal;font-size:14px"></textarea>
+
+        <div class="mprow" style="margin:10px 0 0">
+          <div class="mptop"><b>Screenshot</b><span class="mpheld" id="supShotState">optional · one</span></div>
+          <div id="supShot" style="display:none;align-items:center;gap:10px;margin-bottom:8px">
+            <img id="supShotImg" alt="" style="width:64px;height:48px;object-fit:cover;border-radius:8px;border:1px solid var(--line)">
+            <span class="mpheld" id="supShotNote" style="flex:1"></span>
+            <button class="btn" type="button" data-click="supShotClear">Remove</button>
+          </div>
+          <div class="btnrow"><button class="btn" type="button" data-click="supPick">Add a screenshot</button></div>
+          <p class="mpdesc" id="supShotHint" style="margin:9px 0 0">A picture often shows more than you meant — check it for names, balances or open tabs.</p>
+        </div>
+
+        <label class="setrow" id="supDiagRow" style="margin-top:9px"><input type="checkbox" id="supDiag" checked><span><b>Attach diagnostics</b><small id="supDiagSmall">Eight lines about this build — version, system, gateway, the last error. Never your prompts, your balance, your account or any device id.</small></span></label>
+        <details class="why" id="supDiagWhy" style="margin:2px 0 0"><summary><span class="chev">›</span> Show exactly what would be sent</summary><div class="body"><pre id="supDiagText" style="white-space:pre-wrap;font-family:var(--mono);font-size:11.5px;margin:0"></pre></div></details>
+
+        <div class="btnrow" style="margin-top:14px"><button class="btn primary" id="supSendBtn" type="button" data-click="supSend">Send</button><button class="btn" type="button" data-click="openSupportList">Your reports</button></div>
+        <p class="hint" id="supStatus" style="margin:10px 0 0"></p>
+      </div>
+
+      <div id="supPaneList" style="display:none">
+        <p class="lead" style="margin:0 0 14px">Reports sent from this device. They live here and nowhere else — there is no account behind them, so a report cannot follow you to another device.</p>
+        <div id="supThreads"></div>
+        <div class="btnrow" style="margin-top:12px"><button class="btn primary" type="button" data-click="openSupportForm">New report</button></div>
+      </div>
+
+      <div id="supPaneThread" style="display:none">
+        <div id="supMsgs"></div>
+        <textarea class="idf" id="supReply" maxlength="4000" rows="3" placeholder="Write back…" style="margin:12px 0 0;max-width:none;resize:vertical;font-family:var(--body);letter-spacing:normal;font-size:14px"></textarea>
+        <div class="btnrow" style="margin-top:9px"><button class="btn primary" type="button" data-click="supSendReply">Send</button><button class="btn" type="button" data-click="openSupportList">Back</button></div>
+        <p class="hint" id="supThreadStatus" style="margin:10px 0 0"></p>
+      </div>
+
+      <form style="position:absolute;width:0;height:0;overflow:hidden"><input type="file" id="supFile" accept="image/*" data-change="onSupPicked" data-change-pass="event" style="display:none"></form>
     </div>
   </div>
 </div>
@@ -1327,6 +1392,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         <div class="catrow" data-click="navPage" data-click-pass="this" data-page="eff" data-title="Efficiency"><span class="ic c-eff"><svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M20 4L8.5 15.5M20 20L8.5 8.5"></path></svg></span><span class="tx"><b>Efficiency</b><small>Trim tokens, save credit</small></span><span class="chev">›</span></div>
         <div class="catrow" data-click="navPage" data-click-pass="this" data-page="general" data-title="General"><span class="ic c-gen"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path></svg></span><span class="tx"><b>General</b><small>Typing, tutorial</small></span><span class="chev">›</span></div>
         <div class="catrow" data-click="navPage" data-click-pass="this" data-page="about" data-title="About"><span class="ic c-net"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v5"></path><circle cx="12" cy="7.6" r=".9" fill="currentColor" stroke="none"></circle></svg></span><span class="tx"><b>About</b><small>Version, who runs this, support</small></span><span class="chev">›</span></div>
+        <div class="catrow" id="supCatRow" data-click="openSupport"><span class="ic c-net"><svg viewBox="0 0 24 24"><path d="M12 3a7 7 0 0 0-7 7v4a3 3 0 0 0 3 3h1v-7H7v-.5a5 5 0 0 1 10 0V17a2 2 0 0 1-2 2h-3"></path></svg></span><span class="tx"><b>Support</b><small>Report a problem · your reports</small></span><span class="chev" id="supChev">›</span></div>
         <div class="catrow" id="devCatRow" data-click="navPage" data-click-pass="this" data-page="dev" data-title="Developer"><span class="ic c-dev"><svg viewBox="0 0 24 24"><path d="M9 3h6M10 3v6L4.5 19a1.5 1.5 0 0 0 1.3 2.2h12.4a1.5 1.5 0 0 0 1.3-2.2L14 9V3"></path><path d="M7 15h10"></path></svg></span><span class="tx"><b>Developer</b><small>Diagnostics · dev builds</small></span><span class="chev">›</span></div>
       </div>
       <div class="mpage" data-page="appearance">
@@ -1451,6 +1517,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       </div>
       <div class="mpage" data-page="dev">
       <p class="pagelead" id="devSectionNote">Diagnostics for testing. Hidden in release builds.</p>
+      <label class="setrow" id="devFakeOldRow"><input type="checkbox" id="devFakeOld" data-change="toggleFakeOld"><span><b>Pretend this build is old</b><small>Tells the server version 0.0.1, so its release gate refuses this app exactly as it would refuse a real old build. Everything stops except Support — which is the point of the test. Off again on restart.</small></span></label>
       <div class="setrow" id="hideDevRow" data-click="hideDev" style="cursor:pointer"><span><b>Hide this section</b><small>Takes the Developer row out of the settings list again. Seven taps on the version line bring it back.</small></span><span class="chev">›</span></div>
       <label class="setrow" id="devCostRow"><input type="checkbox" id="devCostChk"><span><b>Developer diagnostics</b><small>Master switch for inline developer diagnostics: the per-answer cost/margin audit and the real upload transfer speed (size ÷ transfer time). Everything meant to be removed later lives here — local-only, toggle any time.</small></span></label>
       <div class="mprow" id="dlSizeRow">
@@ -4424,6 +4491,220 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     const a=$("updLink"); if(url){ a.href=url; a.textContent=url; a.style.display=""; } else { a.style.display="none"; }
     $("updScrim").classList.add("open");
   }
+  // ---------------------------------------------------------------------------
+  // Support (docs/support.md). Its own sheet, and the only screen that still works when
+  // the release gate has shut everything else down — the server exempts `support.*` so
+  // that "the update does not work" can actually reach us.
+  // ---------------------------------------------------------------------------
+  let supCategory = "technical";
+  let supImage = null;          // { bytes, mimeType, url, thumb } — the composer's shape, so the guard can chew on it
+  let supThreadsCache = [];
+  let supOpenId = null;
+  let supGateWasOpen = false;
+  // The last thing that visibly went wrong, offered as the "last" line of the diagnostics.
+  // Not a log: one line, the same one the user just saw on screen.
+  let supLastTrouble = "";
+  function supNoteTrouble(msg){ if(msg) supLastTrouble = String(msg).slice(0,200); }
+  window.addEventListener("error", e => supNoteTrouble(e && e.message));
+
+  function supShowPane(which){
+    ["Form","List","Thread"].forEach(p => { const el=$("supPane"+p); if(el) el.style.display = (p.toLowerCase()===which) ? "" : "none"; });
+    const t=$("supTtl");
+    if(t) t.innerHTML = which==="form" ? "Report a <b>problem</b>" : which==="list" ? "Your <b>reports</b>" : ("Report <b>"+esc(supOpenId||"")+"</b>");
+  }
+  function openSupport(){
+    // Remember the gate: openScrim closes every other sheet, and a gated app must land
+    // back behind the gate when support is done, not in a usable-looking app.
+    supGateWasOpen = $("updScrim").classList.contains("open");
+    supShowPane("form");
+    $("supStatus").textContent = "";
+    refreshSupDiag();
+    openScrim("supScrim");
+    supRefresh();
+  }
+  function closeSupport(){
+    $("supScrim").classList.remove("open");
+    if(supGateWasOpen){ supGateWasOpen = false; $("updScrim").classList.add("open"); }
+  }
+  function openSupportForm(){ supShowPane("form"); }
+  function openSupportList(){ supShowPane("list"); renderSupThreads(); }
+  function supCat(el){
+    supCategory = el.dataset.cat || "technical";
+    document.querySelectorAll("#supCats .mchip").forEach(c => c.classList.toggle("on", c===el));
+  }
+  async function refreshSupDiag(){
+    try{ $("supDiagText").textContent = await Backend.supportDiag(supLastTrouble); }
+    catch(_){ $("supDiagText").textContent = "(diagnostics unavailable)"; }
+  }
+
+  // --- the screenshot: the composer's pipeline, minus the camera and minus PDFs ---
+  function supPick(){
+    if(isIOSNative()) pickSupNative();
+    else $("supFile").click();
+  }
+  async function pickSupNative(){
+    // "library" only. Nobody photographs their own screen to report a bug, and offering
+    // the camera here only invites a picture of something else.
+    try{
+      const r = await Backend.pickImage("library");
+      if(!r) return;
+      const bin = atob(r.dataB64);
+      const bytes = new Uint8Array(bin.length);
+      for(let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i);
+      supTakeFile(new File([bytes], r.name||"screenshot.jpg", { type: r.mimeType||"image/jpeg" }));
+    }catch(e){ $("supStatus").textContent = "picker: " + ((e&&e.message)||e); }
+  }
+  function onSupPicked(ev){ const f=ev.target.files&&ev.target.files[0]; ev.target.value=""; supTakeFile(f); }
+  async function supTakeFile(f){
+    if(!f) return;
+    if(!/^image\//.test(f.type||"")){ $("supStatus").textContent = "images only — a screenshot, not a document"; return; }
+    if(f.size > MAX_IMG){ $("supStatus").textContent = "too large — max 10 MB"; return; }
+    $("supStatus").textContent = "reading the picture…";
+    try{
+      // Metadata FIRST, exactly as the composer does it: a canvas re-encode holds pixels
+      // and nothing else, so EXIF/GPS/camera/time are gone and HEIC becomes JPEG. This
+      // does not depend on the guard and never will — it costs nothing.
+      let bytes, mimeType = f.type, note = "";
+      try{ const clean = await stripImageMeta(f); bytes = clean.bytes; mimeType = clean.mimeType; note = "metadata removed"; }
+      catch(_){ bytes = new Uint8Array(await f.arrayBuffer()); note = "metadata could NOT be removed"; }
+      const url = URL.createObjectURL(new Blob([bytes], {type:mimeType}));
+      if(supImage && supImage.url) URL.revokeObjectURL(supImage.url);
+      supImage = { bytes, mimeType, url, thumb: await makeThumb(url, 640), name: f.name };
+      renderSupShot(note);
+      // The guard, ONLY if the user has it on for everything else. It may be sold
+      // separately and may not ship at all, so support never forces it and never
+      // advertises it — a report is written on a bad day.
+      const g = getGuardOpts();
+      if(g && g.enabled && g.scanImages && typeof scanFileForSensitive === "function"){
+        $("supStatus").textContent = "checking the picture on this device…";
+        let res;
+        try{ res = await scanFileForSensitive(supImage, () => supImage === null); }
+        catch(_){ res = { findings:[] }; }
+        if(supImage && res && res.findings && res.findings.length){
+          renderSupShot(note + " · found " + res.findings.length);
+          if(res.boxes && res.boxes.length){
+            showGuardImage(supImage, res.boxes, res.findings, {
+              title: "Before you send this",
+              replace: (redacted) => { supImage = redacted; renderSupShot("metadata removed · blurred"); },
+            });
+          } else {
+            showGuard(res.findings, { intro:"This picture appears to contain sensitive data:",
+              confirmLabel:"Send it anyway", cancelLabel:"Remove it",
+              onConfirm:()=>{}, onCancel:()=> supShotClear() });
+          }
+        } else if(supImage){ renderSupShot(note + " · scanned, nothing found"); }
+      }
+      $("supStatus").textContent = "";
+    }catch(e){ $("supStatus").textContent = "could not read the picture: " + ((e&&e.message)||e); }
+  }
+  function renderSupShot(note){
+    if(!supImage){ supShotClear(); return; }
+    $("supShot").style.display = "flex";
+    $("supShotImg").src = supImage.thumb ? ("data:image/jpeg;base64," + supImage.thumb) : supImage.url;
+    $("supShotNote").textContent = note || "";
+    $("supShotState").textContent = "one attached";
+  }
+  function supShotClear(){
+    if(supImage && supImage.url) URL.revokeObjectURL(supImage.url);
+    supImage = null;
+    $("supShot").style.display = "none";
+    $("supShotState").textContent = "optional · one";
+  }
+
+  async function supSend(){
+    const subject = $("supSubject").value.trim();
+    const body = $("supBody").value.trim();
+    if(!body){ $("supStatus").textContent = "write what happened first"; return; }
+    const btn = $("supSendBtn");
+    btn.disabled = true; $("supStatus").textContent = "sending through the mix…";
+    try{
+      const diag = $("supDiag").checked ? ($("supDiagText").textContent || null) : null;
+      const image = supImage ? bytesToB64(supImage.bytes) : null;
+      const r = await Backend.supportSend(supCategory, subject || "(no subject)", body, diag, image);
+      $("supSubject").value = ""; $("supBody").value = ""; supShotClear();
+      $("supStatus").innerHTML = "Sent as <b>" + esc(String(r && r.ticket || "")) + "</b>. The answer comes back here — no e-mail needed.";
+      await supRefresh();
+    }catch(e){ $("supStatus").textContent = "could not send: " + ((e&&e.message)||e); }
+    finally{ btn.disabled = false; }
+  }
+
+  function supAgo(ms){
+    const m = Math.max(0, Math.round((Date.now()-ms)/60000));
+    return m<60 ? m+" min ago" : m<1440 ? Math.round(m/60)+" h ago" : Math.round(m/1440)+" d ago";
+  }
+  function renderSupThreads(){
+    const box = $("supThreads");
+    if(!supThreadsCache.length){ box.innerHTML = '<p class="hint">Nothing yet.</p>'; return; }
+    box.innerHTML = supThreadsCache.map(t =>
+      '<div class="setrow" style="cursor:pointer" data-click="supOpenThread" data-click-pass="this" data-id="'+escAttr(t.id)+'">'
+      + '<span><b>' + esc(t.id) + (t.unread ? ' <span style="color:var(--mix)">●</span>' : '') + '</b>'
+      + '<small>' + esc(t.subject||"") + ' · ' + esc(t.status||"open") + ' · ' + esc(supAgo(t.at)) + '</small></span>'
+      + '<span class="chev">›</span></div>').join("");
+  }
+  async function supOpenThread(el){
+    supOpenId = el.dataset.id;
+    supShowPane("thread");
+    renderSupThread();
+    try{ await Backend.supportSeen(supOpenId); }catch(_){}
+    const t = supThreadsCache.find(x => x.id===supOpenId); if(t) t.unread = false;
+    paintSupDot();
+  }
+  function renderSupThread(){
+    const t = supThreadsCache.find(x => x.id===supOpenId);
+    const box = $("supMsgs");
+    if(!t){ box.innerHTML = '<p class="hint">Gone.</p>'; return; }
+    box.innerHTML = (t.msgs||[]).map(m =>
+      '<div class="mprow" style="background:' + (m.who==="tokumai" ? "color-mix(in srgb,var(--mix) 12%,var(--surface-2))" : "var(--surface-2)") + '">'
+      + '<div class="mptop"><b>' + (m.who==="tokumai" ? "tokumai" : "you") + '</b><span class="mpheld">' + esc(supAgo(m.at)) + '</span></div>'
+      + '<div class="mpdesc" style="margin:0;white-space:pre-wrap">' + esc(m.text||"") + '</div></div>').join("")
+      || '<p class="hint">No messages.</p>';
+  }
+  async function supSendReply(){
+    const text = $("supReply").value.trim();
+    if(!text || !supOpenId) return;
+    $("supThreadStatus").textContent = "sending…";
+    try{
+      await Backend.supportFetch(supOpenId, text);
+      $("supReply").value = "";
+      await supRefresh();
+      renderSupThread();
+      $("supThreadStatus").textContent = "sent";
+    }catch(e){ $("supThreadStatus").textContent = "could not send: " + ((e&&e.message)||e); }
+  }
+  /// Collect anything waiting and repaint. Cheap; runs when the sheet opens and once at
+  /// start-up, which is the whole of the "push" this design has.
+  async function supRefresh(){
+    try{
+      const r = await Backend.supportFetch(null, null);
+      supThreadsCache = (r && r.threads) || [];
+    }catch(_){
+      try{ const l = await Backend.supportList(); supThreadsCache = (l && l.threads) || []; }catch(__){}
+    }
+    renderSupThreads();
+    paintSupDot();
+  }
+  async function supRefreshQuiet(){
+    try{ const l = await Backend.supportList(); supThreadsCache = (l && l.threads) || []; paintSupDot(); }catch(_){}
+    try{ const r = await Backend.supportFetch(null, null); supThreadsCache = (r && r.threads) || []; paintSupDot(); }catch(_){}
+  }
+  function paintSupDot(){
+    const n = supThreadsCache.filter(t => t.unread).length;
+    const chev = $("supChev");
+    if(chev) chev.innerHTML = n ? ('<span style="color:var(--mix)">●</span> ›') : "›";
+  }
+
+  // Debug builds only: report an ancient version so the LIVE gate refuses us, and the
+  // update sheet — and the support door in it — can be tried for real.
+  async function toggleFakeOld(){
+    const on = $("devFakeOld").checked;
+    try{
+      await Backend.setFakeOldVersion(on);
+      $("setStatus").textContent = on
+        ? "Now telling the server this is version 0.0.1 — its update gate will refuse everything but support."
+        : "Reporting the real version again.";
+    }catch(e){ $("devFakeOld").checked = false; $("setStatus").textContent = (e&&e.message)||String(e); }
+  }
+
   function persistSettings(){
     const o = { ctxPairs:CTX_STEPS[parseInt($("prCtx").value,10)] ?? 4, topicShift:$("prTopic").checked, whitespace:$("prWhite").checked, requestTrim:$("prReq").checked, handover:$("prHand").checked };
     savePruneOpts(o);
@@ -6801,7 +7082,9 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     showRestore, askNew, returnThen, cancelAcctView, saveServer, srvSelected, qNav, scrollToBottom, reopenGuard, checkCredit,
     openEntryPicker, showExitInfo, chooseGateway, closeGw, filterGw, toggleGwOpt,
     acceptTerms, declineTerms, termsAgreeToggle, chooseModel, openLink, openSite, writeSupport, paymentSupport, setPhraseBackup, askPhraseBackupYes, askPhraseBackupNo, startPhraseCheck, submitPhraseCheck, showPhraseAgain, toggleImgOvl, saveImgTap, liveNudgeUse, liveNudgeSkip, reconnectMix, runMixPing, resetMixPerf,
-    pickImage, attachTap, pickNative, pickFile, closeAttachMenu, onImagePicked, clearImage, setMenuKind, toggleLatest, startMode, imgSettled,
+    pickImage, attachTap, pickNative, pickFile, closeAttachMenu, onImagePicked, clearImage,
+    openSupport, closeSupport, openSupportForm, openSupportList, supCat, supPick, onSupPicked, supShotClear,
+    supSend, supSendReply, supOpenThread, toggleFakeOld, setMenuKind, toggleLatest, startMode, imgSettled,
     closeImport, decryptImport, selectMethod, copyMemo, openSettings, closeSettings,
     navPage, navBack, acctNav, acctBack, backFromRestore,
     resumePayment, backToChooser, selectTier, startPurchase, cancelPending, payOnWeb,
