@@ -11,6 +11,7 @@ pub mod faucet;
 pub mod http;
 pub mod iap;
 pub mod inflight;
+pub mod mail;
 pub mod nyx;
 pub mod openai;
 /// The one definition lives in the core, where the spend-date bound and the retention
@@ -21,6 +22,7 @@ pub mod mint;
 pub mod pay;
 pub mod replies;
 pub mod store;
+pub mod support;
 pub mod uploads;
 
 /// The server's version — the shared workspace version (root Cargo.toml), so it always

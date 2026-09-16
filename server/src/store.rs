@@ -55,6 +55,13 @@ fn add_column(conn: &Connection, sql: &str) -> Result<(), String> {
 }
 
 impl Store {
+    /// The support tables are shared with the faucet, so their queries live in
+    /// `support.rs` and take a bare connection. Handing it over beats mirroring a dozen
+    /// one-line methods here, and support owns no invariant this struct protects.
+    pub fn support(&self) -> &Connection {
+        &self.conn
+    }
+
     /// Open (creating if needed) the state database.
     pub fn open(path: &Path) -> Result<Store, String> {
         if let Some(dir) = path.parent() {
@@ -170,6 +177,10 @@ impl Store {
             [],
         )
         .map_err(|e| e.to_string())?;
+
+        // Support tickets. Shared with the faucet exactly like `web_orders` below, so the
+        // queries live in support.rs and take a bare connection — see `support()`.
+        crate::support::init(&conn)?;
 
         // The channel between the faucet (clearnet, serves /pay) and the server (mixnet only,
         // owns the payment rails). A table rather than a port: no new listener on the box

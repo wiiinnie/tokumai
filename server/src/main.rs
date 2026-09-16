@@ -415,6 +415,9 @@ async fn main() {
     };
     // Revision marks of what is already on disk — persist_changed() re-saves a store
     // only when its revision moved past these.
+    // Support caps live for the life of the process; a restart is a fresh window, which is
+    // the right trade for a counter nobody should be able to make the server remember.
+    let mut support_gate = SupportGate::new();
     let mut saved = SavedRevs {
         quorum_meta: quorum.meta_revision(),
         pay: paywall.revision(),
@@ -625,6 +628,13 @@ const ORDER_TICK_MS: u64 = 1000;
             // chain poll, but somebody IS watching a spinner while this happens. The query is
             // one indexed lookup on a table that is almost always empty.
             _ = order_tick.tick() => {
+                // Support notifications the first attempt could not deliver — an MTA that
+                // was down, a box that had none yet. The report itself was never at risk;
+                // this only catches the knock up. Also picks up tickets the FAUCET filed,
+                // which has no MTA of its own to try with.
+                for (id, category, via) in scrai_server::support::unnotified(db.support()) {
+                    knock_now(db.support(), &id, &category, &via);
+                }
                 // A buyer who pressed cancel: the invoice lives here, so the cancelling does
                 // too. Recorded as an error on the row, which also stops the page polling for
                 // something that will never arrive.
@@ -919,7 +929,12 @@ const ORDER_TICK_MS: u64 = 1000;
             // Exempt: `ping` (latency probe) and the chunk follow-ups — an `image.chunk` ref
             // only exists because a gated `chat` produced it, an `upload.chunk` only because a
             // gated `upload.begin` reserved the slot. (0.3.0 sends both without `app`.)
-            if !matches!(kind.as_str(), "ping" | "image.chunk" | "upload.chunk") {
+            // Also exempt: `support.*`. Somebody whose update is what is failing has to be
+            // able to say so, and a gate that silences the one channel for "the update does
+            // not work" is a gate that hides its own bugs. Support needs no account, no
+            // catalogue and no balance, so it is the one thing that still works when a
+            // client is otherwise refused — the app keeps a way in on the update sheet.
+            if !matches!(kind.as_str(), "ping" | "image.chunk" | "upload.chunk" | "support.send" | "support.fetch") {
                 if let Some((min, url)) = scrai_server::app_outdated(&envelope) {
                     let id = envelope.get("id").cloned().unwrap_or(serde_json::Value::Null);
                     let app = envelope.get("app").and_then(|a| a.as_str()).unwrap_or("<0.3.0 (no version sent)");
@@ -1068,6 +1083,78 @@ const ORDER_TICK_MS: u64 = 1000;
                 let out = serde_json::to_vec(&reply).unwrap_or_default();
                 if let Err(e) = senders[to.idx].read().await.send_reply(to.tag, out).await {
                     eprintln!("scrai-server: purchase reply failed: {e}");
+                }
+                continue;
+            }
+            // Support (docs/support.md). No signature, no account, no session: this has to
+            // work for somebody whose payment is broken, whose app is refused by the gate,
+            // or who never had credit at all. What is left to stop a flood is therefore
+            // caps — per sender tag while a client keeps one, and a global valve that
+            // protects the inbox no matter how many tags a flooder burns through.
+            if kind == "support.send" || kind == "support.fetch" {
+                let v: serde_json::Value = serde_json::from_slice(&m.message).unwrap_or(serde_json::Value::Null);
+                let id = v.get("id").cloned().unwrap_or(serde_json::Value::Null);
+                let now = pay::now_ms() as i64;
+                let reply = if kind == "support.fetch" {
+                    // Collecting is cheap and writes nothing anybody can flood — only the
+                    // delivered marks — so it is not rate limited. A follow-up in the same
+                    // call is, because that is a write.
+                    let secrets: Vec<String> = v
+                        .get("secrets")
+                        .and_then(|s| s.as_array())
+                        .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+                        .unwrap_or_default();
+                    let mut out = scrai_server::support::collect(db.support(), &secrets, now);
+                    if let (Some(secret), Some(text)) =
+                        (v.get("replySecret").and_then(|x| x.as_str()), v.get("replyText").and_then(|x| x.as_str()))
+                    {
+                        match support_gate.admit(&tag, now) {
+                            false => out["error"] = serde_json::Value::String("too many messages — try again later".into()),
+                            true => match scrai_server::support::append_from_user(db.support(), secret, text, now) {
+                                Ok(tid) => {
+                                    println!("scrai-server: support {tid} — a reply came back from the app");
+                                    out["replied"] = serde_json::Value::String(tid);
+                                }
+                                Err(e) => out["error"] = serde_json::Value::String(e),
+                            },
+                        }
+                    }
+                    out["id"] = id;
+                    out["kind"] = serde_json::Value::String("support.msgs".into());
+                    out
+                } else if !support_gate.admit(&tag, now) {
+                    serde_json::json!({ "id": id, "kind": "error",
+                        "error": "too many reports just now — try again in a few minutes" })
+                } else {
+                    let g = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+                    let image = v.get("image").and_then(|x| x.as_str()).and_then(|b64| {
+                        use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+                        B64.decode(b64).ok()
+                    });
+                    let t = scrai_server::support::NewTicket {
+                        via: scrai_server::support::Via::App,
+                        category: g("category"),
+                        subject: g("subject"),
+                        body: g("body"),
+                        diag: v.get("diag").and_then(|x| x.as_str()).map(str::to_string),
+                        // An app report is answered in the app. There is no address field
+                        // on this route at all — that is the whole point of the mailbox.
+                        reply_to: None,
+                        secret_hash: v.get("secretHash").and_then(|x| x.as_str()).map(str::to_string),
+                        image: image.map(|b| (b, "image/jpeg".to_string())),
+                    };
+                    match scrai_server::support::create(db.support(), &t, now) {
+                        Err(e) => serde_json::json!({ "id": id, "kind": "error", "error": e }),
+                        Ok(tid) => {
+                            println!("scrai-server: support {tid} filed from the app ({})", t.category);
+                            knock_now(db.support(), &tid, &t.category, "app");
+                            serde_json::json!({ "id": id, "kind": "support.ok", "ticket": tid })
+                        }
+                    }
+                };
+                let out = serde_json::to_vec(&reply).unwrap_or_default();
+                if let Err(e) = senders[to.idx].read().await.send_reply(to.tag, out).await {
+                    eprintln!("scrai-server: support reply failed: {e}");
                 }
                 continue;
             }
@@ -1373,6 +1460,64 @@ const ORDER_TICK_MS: u64 = 1000;
         let _ = t.await;
     }
     println!("scrai-server: clean shutdown — mixnet state flushed.");
+}
+
+/// What stops a support flood when there is no IP to count.
+///
+/// Two ceilings, because each covers the other's blind spot: a sender tag holds for as
+/// long as a client keeps one, so it stops the ordinary accident (a stuck retry loop); a
+/// flooder who burns a fresh tag per message walks past that, and the global valve is what
+/// protects the inbox from them. The valve is deliberately generous — a real support
+/// flood is a handful per hour, and refusing an honest report is worse than reading spam.
+struct SupportGate {
+    per_tag: std::collections::HashMap<String, (u32, i64)>,
+    window_start: i64,
+    this_hour: u32,
+}
+
+impl SupportGate {
+    const PER_TAG_PER_HOUR: u32 = 3;
+    const GLOBAL_PER_HOUR: u32 = 40;
+
+    fn new() -> Self {
+        SupportGate { per_tag: std::collections::HashMap::new(), window_start: 0, this_hour: 0 }
+    }
+
+    fn admit(&mut self, tag: &AnonymousSenderTag, now: i64) -> bool {
+        const HOUR: i64 = 3_600_000;
+        if now - self.window_start >= HOUR {
+            self.window_start = now;
+            self.this_hour = 0;
+            self.per_tag.clear();   // the map is the window; clearing it is the expiry
+        }
+        if self.this_hour >= Self::GLOBAL_PER_HOUR {
+            eprintln!("scrai-server: support valve closed — {} this hour", self.this_hour);
+            return false;
+        }
+        let e = self.per_tag.entry(format!("{tag:?}")).or_insert((0, now));
+        if e.0 >= Self::PER_TAG_PER_HOUR {
+            return false;
+        }
+        e.0 += 1;
+        self.this_hour += 1;
+        true
+    }
+}
+
+/// Knock on the operator's door about one ticket, and remember that we did. A failure is
+/// logged and left for the drain: the report is already in the database, so nothing is
+/// lost by the mail being late.
+fn knock_now(conn: &rusqlite::Connection, id: &str, category: &str, via: &str) {
+    let now = pay::now_ms() as i64;
+    let (open, stale) = scrai_server::support::open_counts(conn, now);
+    match scrai_server::mail::knock(id, category, via, open, stale) {
+        Ok(sent) => {
+            if sent {
+                scrai_server::support::mark_notified(conn, id, now);
+            }
+        }
+        Err(e) => eprintln!("scrai-server: support {id} — notification failed ({e}); the drain will retry"),
+    }
 }
 
 /// Where a reply goes: the Nym client that received the request (its reply SURBs live in
