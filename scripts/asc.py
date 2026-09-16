@@ -54,6 +54,9 @@ def api(path):
         sys.exit(f"refusing a path that is not under {API}: {path!r}")
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token()}"})
     try:
+        # The URL is pinned to API above and the path never comes from a network
+        # response; this is a local developer tool.
+        # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
         with urllib.request.urlopen(req, timeout=30) as r:
             return json.load(r)
     except urllib.error.HTTPError as e:
