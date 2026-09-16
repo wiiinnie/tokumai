@@ -2808,11 +2808,35 @@ fn collect_later(app: AppHandle, force: Option<bool>) -> Result<Value, String> {
     // nothing else would ever trigger the sweep.
     let go = force.unwrap_or(false)
         || coin_value_toku(&w) < LOW_WATER_TOKU
+        // Out of small change is its own kind of empty: a wallet of coarse books alone
+        // cannot pay an exact price, so every answer is rounded up to a whole cent. It was
+        // never low enough to notice, because the VALUE was fine.
+        || !has_fine_change(&w)
         || has_expiring_books(&w, now_secs32());
     if go {
         spawn_refill_soon(&app);
     }
     Ok(json!({ "started": go }))
+}
+
+/// Can this device still land on an exact price? A tender pays its bulk in coarse coins
+/// and needs fine ones to make up the remainder; with none left, the smallest thing that
+/// can change hands is a whole cent and every answer is rounded up to it. The user has
+/// bought that cent either way, so this is not theft — but it is a bad deal, and the fix
+/// is simply to fetch change before it bites.
+fn has_fine_change(w: &wallet::Wallet) -> bool {
+    use scrai_core::coconut::COIN_TOKU;
+    let in_spares = w.spare_notes.iter().any(|v| {
+        serde_json::from_value::<scrai_core::tender::Note>(v.clone())
+            .map(|n| n.value_toku() < scrai_core::coconut::COARSE_TOKU)
+            .unwrap_or(false)
+    });
+    in_spares
+        || w.coconut_purses.iter().any(|pj| {
+            scrai_core::purse::Purse::restore(pj)
+                .map(|p| p.denom_toku() == COIN_TOKU && p.remaining_coins() > 0)
+                .unwrap_or(false)
+        })
 }
 
 /// Warn, three days before the earliest book on this device dies, that opening the app
@@ -3230,7 +3254,14 @@ async fn chat_impl(
         // reply burned nothing, so every note goes back into the wallet.
         let req_id = req.get("id").and_then(|i| i.as_str()).unwrap_or_default().to_string();
         coin_settle(&dir, &req_id, &notes, &reply)?;
-        if coin_value_toku(&wallet::load(&dir)) < LOW_WATER_TOKU {
+        // The smallest note this request could pay with. Below one coarse coin it is real
+        // granularity; at or above it the price could only be rounded up to a whole cent,
+        // which the warning below has to know before it blames anybody.
+        let smallest_note = notes.iter().map(|n| n.value_toku()).min().unwrap_or(scrai_core::coconut::COIN_TOKU);
+        // Low on VALUE, or low on CHANGE. The second half is new: a device can hold plenty
+        // of coarse books and no fine ones, and then nothing was ever low enough to trigger
+        // a refill while every answer got rounded up to a whole cent.
+        if coin_value_toku(&wallet::load(&dir)) < LOW_WATER_TOKU || !has_fine_change(&wallet::load(&dir)) {
             spawn_refill(&app);
         }
         if let Some(e) = reply.get("error").and_then(|e| e.as_str()) {
@@ -3246,7 +3277,10 @@ async fn chat_impl(
                 "servedTokens": c.get("servedTokens"),
                 "askedTokens": c.get("askedTokens"),
             }),
-            None => overcharge_warning(&srv, &model, &messages, &resp),
+            None => match overcharge_warning(&srv, &model, &messages, &resp, smallest_note) {
+                Value::Null => change_warning(&model, &messages, &resp, smallest_note),
+                w => w,
+            },
         };
         return Ok(paid_chat_reply(&app, &resp, warning));
     }
@@ -3260,11 +3294,33 @@ async fn chat_impl(
          serves — switch \"pay with coins\" back on under Developer".into())
 }
 
+/// The other reason a charge can look wrong: this device had no small change, so the
+/// smallest thing it could hand over was a whole coarse coin. The server took the least it
+/// could; the shortage is ours. Say that, and say that change is on its way — anything
+/// else leaves the user staring at 1000 TOKU for a 61 TOKU answer with no explanation.
+fn change_warning(model: &str, messages: &Value, resp: &Value, smallest_note_toku: u64) -> Value {
+    use scrai_core::coconut::COARSE_TOKU;
+    if smallest_note_toku < COARSE_TOKU {
+        return Value::Null;
+    }
+    let Some(charged) = resp.pointer("/usage/billing/priceScrai").and_then(|v| v.as_u64()) else {
+        return Value::Null;
+    };
+    let Some(fair) = fair_price_estimate(model, messages, resp.get("text").and_then(|t| t.as_str()).unwrap_or("")) else {
+        return Value::Null;
+    };
+    // Only when the rounding is the story: a charge that is mostly the coin, not the answer.
+    if charged <= fair.saturating_mul(2) {
+        return Value::Null;
+    }
+    json!({ "kind": "rounded", "charged": charged, "fairEstimate": fair, "coin": smallest_note_toku })
+}
+
 /// C3: independent overcharge check. Recompute a fair upper bound from the client's OWN
 /// token estimate and bundled retail table; a charge grossly above it means the operator
 /// inflated the margin or the token counts. Additive and fail-open — any inability to
 /// estimate just skips the check, and never blocks a legitimate answer.
-fn overcharge_warning(srv: &str, model: &str, messages: &Value, resp: &Value) -> Value {
+fn overcharge_warning(srv: &str, model: &str, messages: &Value, resp: &Value, smallest_note_toku: u64) -> Value {
     let charged = resp.pointer("/usage/billing/priceScrai").and_then(|v| v.as_u64());
     let has_images = resp
         .get("images")
@@ -3276,7 +3332,14 @@ fn overcharge_warning(srv: &str, model: &str, messages: &Value, resp: &Value) ->
     let Some(fair) = fair_price_estimate(model, messages, reply_text) else { return Value::Null };
     // The comparison is against the rounded-up price, because that is what the server may
     // legitimately take: a 0.17 ¢ answer costs 0.2 ¢ when coins pay.
-    let coin = scrai_core::coconut::COIN_TOKU;
+    //
+    // And it rounds to the smallest note WE handed over, not to the fine coin. A note is
+    // burned whole; if this device had no small change, one coarse coin is the least the
+    // server could possibly take, and calling that an overcharge accuses it of our own
+    // shortage. That is exactly what happened on 2026-09-16: a device full of coarse books
+    // and out of fine ones paid 1000 TOKU for a 61 TOKU answer and flagged an honest
+    // server for it.
+    let coin = smallest_note_toku.max(scrai_core::coconut::COIN_TOKU);
     let ceiling = ((fair as f64 * OVERCHARGE_FACTOR).ceil() as u64).div_ceil(coin) * coin;
     if charged > MIN_FLAG_SCRAI && charged > ceiling {
         flag_server(srv, &format!("overcharge: charged {charged} TOKU vs ~{fair} fair (>{OVERCHARGE_FACTOR}×)"));
@@ -5032,6 +5095,27 @@ mod c3_tests {
 mod tender_tests {
     use super::*;
     use scrai_core::coconut::testkit;
+
+    // 2026-09-16: a device holding only coarse books paid 1000 TOKU for a 61 TOKU answer,
+    // and its own fair-price check flagged an honest server for it. The server had taken
+    // the least it could — a note is burned whole, and a coarse coin was the smallest
+    // thing on the table. Nothing was ever "low" enough to fetch change, because the VALUE
+    // was fine; only the granularity was gone.
+    #[test]
+    fn a_wallet_of_coarse_books_alone_knows_it_has_no_change() {
+        use scrai_core::coconut::{COARSE_TOKU, COIN_TOKU};
+        let fk = testkit::funded();
+        let mut coarse_only = wallet::Wallet::default();
+        coarse_only.coconut_purses.push(fk.new_purse_of(COARSE_TOKU).persist().unwrap());
+        assert!(!has_fine_change(&coarse_only), "a coarse book cannot land on an exact price");
+
+        let mut both = wallet::Wallet::default();
+        both.coconut_purses.push(fk.new_purse_of(COARSE_TOKU).persist().unwrap());
+        both.coconut_purses.push(fk.new_purse_of(COIN_TOKU).persist().unwrap());
+        assert!(has_fine_change(&both), "one fine book is change");
+
+        assert!(!has_fine_change(&wallet::Wallet::default()), "an empty wallet has no change either");
+    }
 
     /// A wallet with one fine book, and the keys for both denominations.
     fn wallet_with_a_book() -> (wallet::Wallet, u64, Vec<scrai_core::purse::EpochKeys>) {
