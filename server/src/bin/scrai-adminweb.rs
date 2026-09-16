@@ -169,6 +169,15 @@ async fn send(sock: &mut tokio::net::TcpStream, status: u16, ctype: &str, body: 
     let _ = sock.flush().await;
 }
 
+/// Milliseconds since the epoch — support rows are stamped in the same unit the server
+/// and the faucet use.
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
 async fn reply(sock: &mut tokio::net::TcpStream, v: &Value) {
     send(sock, 200, "application/json", serde_json::to_vec(v).unwrap_or_default().as_slice()).await
 }
@@ -235,6 +244,70 @@ async fn route(sock: &mut tokio::net::TcpStream, req: &Req, db: &PathBuf) {
                 .collect();
             reply(sock, &json!({ "codes": items })).await
         }
+        // ---- support ---------------------------------------------------------------
+        // The one place answers are written. An app ticket is answered here and the device
+        // collects it; a web ticket gets an address and a subject line to paste into a mail
+        // client, because our machine deliberately never mails a stranger (docs/support.md).
+        ("POST", "/api/support") => {
+            let all = body.get("all").and_then(|v| v.as_bool()).unwrap_or(false);
+            let Ok(conn) = rusqlite::Connection::open(db) else {
+                reply(sock, &json!({ "error": "cannot open the state db" })).await;
+                return;
+            };
+            let rows: Vec<Value> = scrai_server::support::list(&conn, all, 200)
+                .iter()
+                .map(|t| json!({ "id": t.id, "createdAt": t.created_at, "via": t.via, "category": t.category,
+                                 "subject": t.subject, "status": t.status, "hasImage": t.has_image, "waiting": t.waiting }))
+                .collect();
+            reply(sock, &json!({ "tickets": rows })).await
+        }
+        ("POST", "/api/support/get") => {
+            let Ok(conn) = rusqlite::Connection::open(db) else {
+                reply(sock, &json!({ "error": "cannot open the state db" })).await;
+                return;
+            };
+            match scrai_server::support::get(&conn, &s("id")) {
+                Some(v) => reply(sock, &v).await,
+                None => reply(sock, &json!({ "error": "no such ticket" })).await,
+            }
+        }
+        ("POST", "/api/support/image") => {
+            let Ok(conn) = rusqlite::Connection::open(db) else {
+                send(sock, 500, "text/plain", b"cannot open the state db").await;
+                return;
+            };
+            match scrai_server::support::image(&conn, &s("id")) {
+                Some((bytes, mime)) => send(sock, 200, &mime, &bytes).await,
+                None => send(sock, 404, "text/plain", b"no image").await,
+            }
+        }
+        ("POST", "/api/support/reply") => {
+            let (id, text) = (s("id"), s("text"));
+            if text.trim().is_empty() {
+                reply(sock, &json!({ "error": "an empty answer is not an answer" })).await;
+                return;
+            }
+            let Ok(conn) = rusqlite::Connection::open(db) else {
+                reply(sock, &json!({ "error": "cannot open the state db" })).await;
+                return;
+            };
+            let now = now_ms();
+            match scrai_server::support::reply(&conn, &id, &text, now) {
+                Ok(()) => reply(sock, &json!({ "message": format!("answered {id} — the app collects it on its next start") })).await,
+                Err(e) => reply(sock, &json!({ "error": e })).await,
+            }
+        }
+        ("POST", "/api/support/status") => {
+            let Ok(conn) = rusqlite::Connection::open(db) else {
+                reply(sock, &json!({ "error": "cannot open the state db" })).await;
+                return;
+            };
+            match scrai_server::support::set_status(&conn, &s("id"), &s("status"), now_ms()) {
+                Ok(()) => reply(sock, &json!({ "message": "done" })).await,
+                Err(e) => reply(sock, &json!({ "error": e })).await,
+            }
+        }
+
         ("POST", "/api/network") => reply(sock, &json!({ "message": admin::toggle_network() })).await,
 
         ("GET", _) => send(sock, 404, "text/plain", b"not found").await,

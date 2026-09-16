@@ -258,9 +258,31 @@
        its fingerprint, because the code itself is not kept.</p>
   </div>
 
+  <div class="codes" id="supBox" hidden>
+    <div class="chead">
+      <h3>Support</h3>
+      <span class="chips">
+        <button class="chip on" id="supChipOpen">open <i id="nSupOpen">0</i></button>
+        <button class="chip" id="supChipAll">all <i id="nSupAll">0</i></button>
+      </span>
+    </div>
+    <div class="tw" style="margin-top:10px">
+      <table>
+        <thead><tr><th>id</th><th>via</th><th>kind</th><th>subject</th><th>state</th><th>age</th></tr></thead>
+        <tbody id="supRows"></tbody>
+      </table>
+    </div>
+    <div id="supDetail" hidden style="margin-top:14px;border-top:1px solid var(--line);padding-top:14px"></div>
+    <p class="hint">An <b>app</b> ticket is answered here and the device collects the answer on its next start — there is
+       no address and no account behind it. A <b>web</b> ticket shows the address the reporter left, if any: answer that
+       one from your own mail client, because this machine deliberately never sends mail to a stranger. The only mail it
+       sends is the notification that something arrived.</p>
+  </div>
+
   <div class="bar">
     <button class="pri" id="bRefund">Refund…</button>
     <button id="bCodes">Codes…</button>
+    <button id="bSup">Support…</button>
     <button id="bCode">Mint invite code</button>
     <button class="dgr" id="bNet">Toggle network</button>
     <span class="status" id="msg"></span>
@@ -574,6 +596,89 @@
       if (!$("codesBox").hidden) loadCodes();
     });
   };
+
+  // ---- support -------------------------------------------------------------------
+  // The one place answers are written. Kept deliberately plain: a list, a ticket, a box.
+  var supAll = false, supOpenId = null;
+  function supAge(ms){
+    var m = Math.max(0, Math.round((Date.now() - ms) / 60000));
+    return m < 60 ? m + " min" : m < 1440 ? Math.round(m / 60) + " h" : Math.round(m / 1440) + " d";
+  }
+  function loadSupport(){
+    return post("/api/support", { all: supAll }).then(function(j){
+      var rows = j.tickets || [];
+      $("nSupAll").textContent = rows.length;
+      $("nSupOpen").textContent = rows.filter(function(t){ return t.status !== "done"; }).length;
+      $("supRows").innerHTML = rows.map(function(t){
+        return '<tr data-id="' + esc(t.id) + '" style="cursor:pointer">'
+          + '<td class="g">' + esc(t.id) + '</td>'
+          + '<td>' + esc(t.via) + '</td>'
+          + '<td>' + esc(t.category) + '</td>'
+          + '<td>' + esc(t.subject) + (t.hasImage ? " 📎" : "") + '</td>'
+          + '<td>' + esc(t.status) + (t.waiting ? ' <b class="g">·</b>' : "") + '</td>'
+          + '<td>' + esc(supAge(t.createdAt)) + '</td></tr>';
+      }).join("") || '<tr><td colspan="6">nothing</td></tr>';
+      Array.prototype.forEach.call($("supRows").querySelectorAll("tr[data-id]"), function(tr){
+        tr.onclick = function(){ openSupTicket(tr.getAttribute("data-id")); };
+      });
+    });
+  }
+  function openSupTicket(id){
+    supOpenId = id;
+    return post("/api/support/get", { id: id }).then(function(t){
+      if (t.error) { say(t.error, true); return; }
+      var msgs = (t.msgs || []).map(function(m){
+        return '<div style="margin:0 0 8px"><b class="' + (m.who === "tokumai" ? "g" : "") + '">' + esc(m.who)
+          + '</b> <span class="hint">' + esc(supAge(m.at)) + ' ago' + (m.who === "tokumai" && !m.delivered ? " · not collected yet" : "") + '</span>'
+          + '<div style="white-space:pre-wrap">' + esc(m.text) + '</div></div>';
+      }).join("");
+      var how = t.via === "app"
+        ? '<button class="pri" id="supReplyBtn">Answer in the app</button>'
+        : '<button class="pri" id="supReplyBtn">Record this answer</button>'
+          + '<button id="supCopyAddr">Copy address</button><button id="supCopySubj">Copy subject</button>';
+      $("supDetail").hidden = false;
+      $("supDetail").innerHTML =
+        '<h3>' + esc(t.id) + ' · ' + esc(t.category) + ' · ' + esc(t.via) + '</h3>'
+        + '<p><b>' + esc(t.subject) + '</b></p>'
+        + (t.replyTo ? '<p class="hint">reply to: <b>' + esc(t.replyTo) + '</b></p>'
+                     : '<p class="hint">' + (t.via === "app" ? "answered in the app — no address needed" : "no address given: we can read them, not answer them") + '</p>')
+        + (t.diag ? '<pre style="white-space:pre-wrap">' + esc(t.diag) + '</pre>' : "")
+        + (t.hasImage ? '<p><img alt="screenshot" id="supImg" style="max-width:420px;border:1px solid var(--line);border-radius:8px"></p>' : "")
+        + msgs
+        + '<textarea id="supText" rows="4" style="width:100%;max-width:640px"></textarea>'
+        + '<div class="bar" style="margin-top:8px">' + how + '<button id="supDone">Mark done</button></div>';
+      if (t.hasImage) {
+        fetch("/api/support/image", { method: "POST", headers: { "content-type": "application/json" },
+                                      body: JSON.stringify({ id: id }) })
+          .then(function(r){ return r.blob(); })
+          .then(function(b){ $("supImg").src = URL.createObjectURL(b); });
+      }
+      $("supReplyBtn").onclick = function(){
+        var text = $("supText").value.trim();
+        if (!text) { say("an empty answer is not an answer", true); return; }
+        post("/api/support/reply", { id: id, text: text }).then(function(j){
+          say(j.message || j.error || "", !!j.error);
+          loadSupport(); openSupTicket(id);
+        });
+      };
+      $("supDone").onclick = function(){
+        post("/api/support/status", { id: id, status: "done" }).then(function(){ loadSupport(); $("supDetail").hidden = true; });
+      };
+      if ($("supCopyAddr")) $("supCopyAddr").onclick = function(){
+        navigator.clipboard.writeText(t.replyTo || "").then(function(){ say("address copied"); });
+      };
+      if ($("supCopySubj")) $("supCopySubj").onclick = function(){
+        navigator.clipboard.writeText("[" + t.id + "] " + t.subject).then(function(){ say("subject copied"); });
+      };
+    });
+  }
+  $("bSup").onclick = function(){
+    var box = $("supBox");
+    box.hidden = !box.hidden;
+    if (!box.hidden) loadSupport();
+  };
+  $("supChipOpen").onclick = function(){ supAll = false; $("supChipOpen").className = "chip on"; $("supChipAll").className = "chip"; loadSupport(); };
+  $("supChipAll").onclick = function(){ supAll = true; $("supChipAll").className = "chip on"; $("supChipOpen").className = "chip"; loadSupport(); };
   $("bNet").onclick = function(){
     post("/api/network").then(function(j){ say(j.message || ""); poll(); });
   };
