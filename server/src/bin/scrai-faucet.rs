@@ -545,12 +545,20 @@ struct Faucet {
 
 const BUCKET_CLAIM: u64 = 1;
 const BUCKET_ORDER: u64 = 2;
+const BUCKET_SUPPORT: u64 = 3;
 /// Orders per hour per IP. A buyer makes one; somebody buying a few codes as gifts makes a
 /// handful. Anything past this is not a customer — and every accepted order becomes a REAL
 /// gateway call on the next tick (a Mollie payment object, an address and memo), on a path
 /// that has no account to throttle and does not go through `admit_invoice`, so the
 /// server-wide invoice brake never saw it either (audit 2026-09-08, M4).
 const ORDERS_PER_HOUR: usize = 8;
+/// Support reports from one hashed IP per hour. Higher than it needs to be for an honest
+/// reporter and low enough that a script is not a mail flood: the cost of refusing a real
+/// report is worse than the cost of reading a few junk ones.
+const SUPPORT_PER_HOUR: usize = 5;
+/// A form nobody could have read, let alone filled in, in under this. Cheap, invisible to
+/// a person, and it catches the scripts that a honeypot alone does not.
+const SUPPORT_MIN_FILL_MS: u64 = 2_000;
 
 fn valid_code(s: &str) -> bool {
     (8..=32).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'-')
@@ -866,6 +874,8 @@ const PAGES: &[(&str, &str, &str, &str)] = &[
      "Buy $5 to $50 of TOKU credit once with NYM, Bitcoin, card or the App Store. Coins cost 10 % less. A text answer costs a fraction of a cent; there is no monthly plan."),
     ("download", "/download", "Download tokumai for macOS, Windows, Linux, Android and iPhone",
      "Native apps for every platform. Desktop builds are direct downloads with checksums; iPhone through TestFlight; Android as an .apk."),
+    ("support", "/support", "tokumai support — report a problem",
+     "Something not working? Report it from inside the app, where it travels the mixnet and we never learn where it came from — or write from this page if the app is what is broken."),
     ("compare", "/compare", "tokumai compared with other private AI chats",
      "How tokumai differs from Duck.ai, Venice, nilGPT, Lumo and Brave Leo: who sees your IP, whether a payment can be linked to a prompt, and what is a promise versus a design."),
     ("vs-duck-ai", "/vs/duck-ai", "tokumai vs Duck.ai: Private AI Chat Compared (2026)",
@@ -1300,6 +1310,59 @@ async fn handle(f: Arc<Faucet>, mut sock: tokio::net::TcpStream, peer: SocketAdd
         // ---- buying a voucher on the web -------------------------------------------
         // The faucet cannot raise an invoice (the rails live in the server), so it books an
         // order and the server answers it. See docs/vouchers.md.
+        // Support from the website. The private route is the app (it goes through the
+        // mixnet and we never see where it came from); this exists because sometimes the
+        // app is exactly what is broken. See docs/support.md.
+        ("POST", "/api/support") => {
+            let v: serde_json::Value = serde_json::from_slice(&req.body).unwrap_or(serde_json::Value::Null);
+            let g = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+            // The honeypot field is hidden in CSS and has no label: a person never fills
+            // it in, and a script that fills every input always does.
+            if !g("website").is_empty() {
+                respond(&mut sock, 200, "application/json", &json(&serde_json::json!({ "ok": true }))).await;
+                return;
+            }
+            let opened = v.get("openedAt").and_then(|x| x.as_u64()).unwrap_or(0);
+            let now_ms = scrai_server::pay::now_ms();
+            if opened == 0 || now_ms.saturating_sub(opened) < SUPPORT_MIN_FILL_MS {
+                respond(&mut sock, 200, "application/json",
+                        &json(&serde_json::json!({ "error": "that was quick — try sending it again" }))).await;
+                return;
+            }
+            if !f.ip_ok_for(BUCKET_SUPPORT, &req.ip, SUPPORT_PER_HOUR) {
+                respond(&mut sock, 200, "application/json",
+                        &json(&serde_json::json!({ "error": "too many reports from here in the last hour" }))).await;
+                return;
+            }
+            let image = v.get("image").and_then(|x| x.as_str()).and_then(|b64| {
+                use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+                B64.decode(b64).ok()
+            });
+            let t = scrai_server::support::NewTicket {
+                via: scrai_server::support::Via::Web,
+                category: g("category"),
+                subject: g("subject"),
+                body: g("body"),
+                diag: None,
+                reply_to: Some(g("email")).filter(|e| e.contains('@') && e.len() < 200),
+                // No secret: a browser has nowhere to keep one. A web reporter is answered
+                // by mail, or not at all — which is what the page says before they type.
+                secret_hash: None,
+                image: image.map(|b| (b, "image/jpeg".to_string())),
+            };
+            let out = match state_rw(&f.cfg.state_db()).and_then(|c| {
+                scrai_server::support::create(&c, &t, now_ms as i64)
+            }) {
+                Ok(id) => {
+                    println!("tokumai-faucet: support {id} filed from the website ({})", t.category);
+                    // The knock is left to the server's drain: this process has no MTA
+                    // arrangement of its own, and the ticket is safe in the table either way.
+                    serde_json::json!({ "ok": true, "ticket": id })
+                }
+                Err(e) => serde_json::json!({ "error": e }),
+            };
+            respond(&mut sock, 200, "application/json", &json(&out)).await
+        }
         ("POST", "/api/order") => {
             if !f.ip_ok_for(BUCKET_ORDER, &req.ip, ORDERS_PER_HOUR) {
                 respond(&mut sock, 429, "application/json",

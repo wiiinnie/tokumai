@@ -260,7 +260,7 @@
 <div class="site">
   <div class="nav">
     <span class="logo"><div style="width:28px; height:28px; border-radius:6px; box-sizing:border-box; flex-shrink:0; background:radial-gradient(120% 120% at 30% 18%, #1A1816, #141210); border:1px solid #2A2521; display:flex; align-items:center; justify-content:center;"><svg viewBox="0 0 100 100" width="78%" height="78%"><rect x="19" y="28" width="27" height="9" rx="4.5" fill="#ECE6DC"></rect><rect x="49" y="28" width="31" height="9" rx="4.5" fill="#7A5FFF"></rect><rect x="25" y="40" width="17" height="9" rx="4.5" fill="#ECE6DC"></rect><rect x="45" y="40" width="30" height="9" rx="4.5" fill="#7A5FFF"></rect><rect x="19" y="52" width="36" height="9" rx="4.5" fill="#ECE6DC"></rect><rect x="58" y="52" width="20" height="9" rx="4.5" fill="#7A5FFF"></rect><rect x="28" y="64" width="22" height="9" rx="4.5" fill="#ECE6DC"></rect><rect x="54" y="64" width="26" height="9" rx="4.5" fill="#7A5FFF"></rect></svg></div><span>tokum<b>ai</b></span></span>
-    <span class="links"><a href="/how-it-works" data-nav="how">How it works</a><a href="/pricing" data-nav="pricing">Pricing</a><a href="/download" data-nav="download">Download</a><a href="/compare" data-nav="compare">Compare</a></span>
+    <span class="links"><a href="/how-it-works" data-nav="how">How it works</a><a href="/pricing" data-nav="pricing">Pricing</a><a href="/download" data-nav="download">Download</a><a href="/compare" data-nav="compare">Compare</a><a href="/support" data-nav="support">Support</a></span>
     <a class="btn primary buy" href="/pay">Buy credit</a>
     <div class="sw" role="group" aria-label="Theme"><button type="button" id="bDark" class="on">Dark</button><button type="button" id="bLight">Light</button></div>
   </div>
@@ -513,6 +513,75 @@
 <!--@end-->
 
 
+<!--@page:support-->
+  <p class="crumb"><a href="/">tokumai</a> · Support</p>
+  <div class="hero one">
+    <h1>Something not working?<br><b>Tell us</b> — no account needed.</h1>
+    <p>There are two ways to reach us, and they are not equally private. <b>The one inside the app is the good one.</b> This page explains why, and then gives you the other one anyway — because sometimes the app is exactly what is broken.</p>
+  </div>
+
+  <div class="feats" style="margin-bottom:30px">
+    <div class="feat"><b>Running the latest version?</b><p>Most reports we get are already fixed in a newer build. Check <a href="/download">Download</a> first — it takes ten seconds.</p></div>
+    <div class="feat"><b>Payment not arrived?</b><p>Card payments land within a minute, coin payments after a few confirmations. Give it ten minutes before writing.</p></div>
+    <div class="feat"><b>Lost your recovery phrase?</b><p>We cannot help, and that is by design — nobody here can see or restore an account. <a href="/how-it-works">Why</a>.</p></div>
+  </div>
+
+  <div class="blk" style="border-color:color-mix(in srgb,var(--acc) 52%,var(--line));background:linear-gradient(180deg,color-mix(in srgb,var(--acc) 9%,var(--card)),var(--card))">
+    <div class="bh"><i>1</i><b>Report from inside the app</b><span>the private way</span></div>
+    <p class="note">Your report travels the same road your questions do: <b>through the mixnet</b>. We receive it without ever learning where it came from — not your address, not your country, not your network. It needs <b>no e-mail address</b> either: the answer comes back into the app, under “Your reports”.</p>
+    <p class="note">Open tokumai and go to <b>Settings › Support › Report a problem</b>.</p>
+    <p class="note">There is deliberately no button here that opens the app for you. A link that launched it would put a click from your address and a message arriving over the mixnet a couple of seconds apart — and two events that close together stop being two events. So you open it yourself, whenever you like. That gap is yours, and it is worth more than the convenience.</p>
+  </div>
+
+  <div class="blk">
+    <div class="bh"><i>2</i><b>Or write from this page</b><span>works without the app</span></div>
+    <p class="note">For when the app will not start, is not installed yet, or the problem is that you cannot get that far. Same categories, same support ID.</p>
+    <p class="note" style="border:1px solid color-mix(in srgb,var(--rust) 38%,var(--line));border-radius:12px;background:color-mix(in srgb,var(--rust) 7%,var(--surface-2));padding:14px 16px">
+      <b>Before you use this form:</b> sending from a browser means <b>we see your IP address for the moment of the request</b> — any website does, there is no way around it. We do not store it and keep no access log. But that is us promising, where the app route is us being <b>unable</b>. If that difference matters to you, and it reasonably might, use the app.
+    </p>
+
+    <form id="supForm" onsubmit="return false">
+      <p class="rlbl">What is this about?</p>
+      <div class="pms" id="supCats" style="grid-template-columns:repeat(auto-fit,minmax(168px,1fr))">
+        <button type="button" class="pm sel" data-cat="technical"><b>Technical</b><span class="pmtag">will not connect, hangs, crashes</span></button>
+        <button type="button" class="pm" data-cat="bug"><b>Bug</b><span class="pmtag">works, but wrongly</span></button>
+        <button type="button" class="pm" data-cat="payment"><b>Payment</b><span class="pmtag">a payment, a code, a balance</span></button>
+        <button type="button" class="pm" data-cat="idea"><b>Idea</b><span class="pmtag">something you wish it did</span></button>
+        <button type="button" class="pm" id="supCatOther" data-cat="other"><b>Something else</b><span class="pmtag">press, partnerships, anything</span></button>
+      </div>
+
+      <p class="rlbl" style="margin-top:20px">Subject</p>
+      <input class="idf" id="supSubject" type="text" maxlength="200" placeholder="One line — what is wrong" style="max-width:none;font-family:var(--body);letter-spacing:normal;font-size:15px">
+
+      <p class="rlbl" style="margin-top:16px">What happened?</p>
+      <textarea class="idf" id="supBody" maxlength="4000" rows="7" placeholder="What you did, what you expected, what happened instead. Your app version and operating system save a round trip." style="max-width:none;resize:vertical;font-family:var(--body);letter-spacing:normal;font-size:15px;line-height:1.55"></textarea>
+
+      <p class="rlbl" style="margin-top:16px">Screenshot <span style="text-transform:none;letter-spacing:0">— optional, one, max 10 MB</span></p>
+      <input type="file" id="supImage" accept="image/png,image/jpeg,image/webp" class="idf" style="max-width:none;padding:10px">
+      <p class="note" style="margin-top:6px">A picture often shows more than you meant — check it for names, balances or open tabs before attaching it.</p>
+
+      <p class="rlbl" style="margin-top:16px">Your e-mail <span style="text-transform:none;letter-spacing:0">— optional</span></p>
+      <input class="idf" id="supEmail" type="email" maxlength="200" placeholder="only if you want an answer" style="max-width:none;font-family:var(--body);letter-spacing:normal;font-size:15px">
+      <p class="note" style="margin-top:6px">Leave it empty and we still read it — we just have no way to reply. Reporting from the app solves that without an address.</p>
+
+      <!-- Honeypot: hidden from people, irresistible to the scripts that fill every input. -->
+      <div style="position:absolute;left:-9999px" aria-hidden="true"><label>Website<input type="text" id="supWebsite" tabindex="-1" autocomplete="off"></label></div>
+
+      <div class="btnrow" style="margin-top:20px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <button type="button" class="btn primary big" id="supSend">Send</button>
+        <span class="fine" id="supStatus">No account, no cookie, no tracking pixel.</span>
+      </div>
+    </form>
+  </div>
+
+  <div class="blk">
+    <div class="bh"><i>3</i><b>How it goes on</b></div>
+    <p class="note">Your message lands on our own machine, in a console <b>one person</b> can reach. It does not travel by mail — the only mail leaving here is a note to ourselves saying that something arrived.</p>
+    <p class="note">You get a <b>support ID</b> like <b>TKM-7QF3</b>. If you left an address, our reply carries it in the subject, so the thread stays in one piece.</p>
+    <p class="note">Expect an answer within a working day or two. There is no phone number — this is a small operation, and saying so beats a hotline nobody picks up.</p>
+  </div>
+<!--@end-->
+
 <!--@page:compare-->
   <p class="crumb"><a href="/">tokumai</a> · Compare</p>
   <div class="hero one">
@@ -610,7 +679,7 @@
 
   <div class="foot">
     <span>© 2026 Hermes Blockchain Ventures · prepaid credit $5 · $10 · $20 · $50 — see <a href="/terms">Terms</a></span>
-    <span><a href="/imprint">Imprint</a> · <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a> · <a href="/imprint#contact">Contact</a></span>
+    <span><a href="/imprint">Imprint</a> · <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a> · <a href="/support">Support</a> · <a href="/imprint#contact">Contact</a></span>
   </div>
 </div>
 <div class="lb" id="lb" role="dialog" aria-modal="true" aria-label="Screenshot"><img id="lbImg" src="" alt=""></div>
@@ -677,6 +746,59 @@
   // Nothing is ever bought on this page; the app raises the invoice and, on iPhone, hands
   // it to /pay. Removing the picker took the "nothing to show yet" empty state with it.
 })();
+
+  // ---- support form (page: /support) -------------------------------------------------
+  // No framework, no dependency: the site ships as one file and this is four handlers.
+  var supCat = "technical", supOpened = Date.now();
+  var supCatsBox = document.getElementById("supCats");
+  if (supCatsBox) {
+    var pickCat = function (btn) {
+      supCat = btn.getAttribute("data-cat");
+      var all = document.querySelectorAll('#supCats .pm, #supCatOther');
+      for (var i = 0; i < all.length; i++) all[i].classList.toggle("sel", all[i] === btn);
+    };
+    supCatsBox.addEventListener("click", function (e) {
+      var b = e.target.closest(".pm"); if (b) pickCat(b);
+    });
+    var other = document.getElementById("supCatOther");
+    if (other) other.addEventListener("click", function () { pickCat(other); });
+
+    document.getElementById("supSend").addEventListener("click", function () {
+      var btn = this, st = document.getElementById("supStatus");
+      var body = document.getElementById("supBody").value.trim();
+      if (!body) { st.textContent = "Write what happened first."; return; }
+      btn.disabled = true; st.textContent = "sending…";
+      var file = document.getElementById("supImage").files[0];
+      var go = function (imageB64) {
+        fetch("/api/support", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            category: supCat,
+            subject: document.getElementById("supSubject").value.trim() || "(no subject)",
+            body: body,
+            email: document.getElementById("supEmail").value.trim(),
+            website: document.getElementById("supWebsite").value,
+            openedAt: supOpened,
+            image: imageB64 || null
+          })
+        }).then(function (r) { return r.json(); }).then(function (j) {
+          btn.disabled = false;
+          if (j.error) { st.textContent = j.error; return; }
+          document.getElementById("supForm").innerHTML =
+            '<p class="rlbl">Sent</p><p class="note" style="font-size:15px">Keep this number: <b style="font-family:var(--mono);color:var(--acc);font-size:17px">'
+            + String(j.ticket || "").replace(/[^A-Z0-9-]/g, "")
+            + '</b></p><p class="note">Quote it if you write again — from any address — and you are back in the same conversation. '
+            + 'Without an address we can read you but not answer you; reporting from the app solves that without one.</p>';
+        }).catch(function () { btn.disabled = false; st.textContent = "could not send — try again in a moment"; });
+      };
+      if (!file) { go(null); return; }
+      if (file.size > 10 * 1024 * 1024) { btn.disabled = false; st.textContent = "that image is over 10 MB"; return; }
+      var fr = new FileReader();
+      fr.onload = function () { go(String(fr.result).split(",")[1] || null); };
+      fr.onerror = function () { btn.disabled = false; st.textContent = "could not read that image"; };
+      fr.readAsDataURL(file);
+    });
+  }
 </script>
 </body>
 </html>
