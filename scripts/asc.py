@@ -43,9 +43,16 @@ def token():
     sig = b64(r.to_bytes(32, "big") + s.to_bytes(32, "big"))
     return (head + b"." + body + b"." + sig).decode()
 
+API = "https://api.appstoreconnect.apple.com/"
+
 def api(path):
-    req = urllib.request.Request(f"https://api.appstoreconnect.apple.com/{path.lstrip('/')}",
-                                 headers={"Authorization": f"Bearer {token()}"})
+    # The path comes from this file or from argv, never from a network response — but
+    # urllib honours file:// and friends, so a path that carried its own scheme would be
+    # read off the local disk instead. Pin the prefix rather than trust the caller.
+    url = API + path.lstrip("/")
+    if not url.startswith(API) or "://" in path:
+        sys.exit(f"refusing a path that is not under {API}: {path!r}")
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token()}"})
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             return json.load(r)
