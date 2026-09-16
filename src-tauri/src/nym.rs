@@ -968,7 +968,7 @@ mod tests {
 fn stamp_app(req: &Value) -> Result<Vec<u8>, String> {
     let mut req = req.clone();
     if let Some(o) = req.as_object_mut() {
-        o.insert("app".into(), Value::String(crate::app_version().to_string()));
+        o.insert("app".into(), Value::String(crate::reported_version()));
     }
     serde_json::to_vec(&req).map_err(|e| e.to_string())
 }

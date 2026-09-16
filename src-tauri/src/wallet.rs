@@ -68,6 +68,35 @@ pub struct PendingTender {
     pub notes: Vec<serde_json::Value>,
 }
 
+/// A support thread this device started. There is no account behind it: the `secret` is
+/// the only thing that opens it, so this list IS the user's support history — lose the
+/// device and the thread is gone, exactly like the coins. Said so on screen, not hidden.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct SupportThread {
+    pub id: String,
+    /// Never leaves the device except as a bearer token on `support.fetch`.
+    pub secret: String,
+    pub category: String,
+    pub subject: String,
+    pub at: u64,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub msgs: Vec<SupportMsg>,
+    /// True once an answer has arrived that the user has not opened yet — the dot in
+    /// Settings, kept here so it survives a restart.
+    #[serde(default)]
+    pub unread: bool,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct SupportMsg {
+    pub at: i64,
+    /// "user" or "tokumai".
+    pub who: String,
+    pub text: String,
+}
+
 #[derive(Default, Serialize, Deserialize)]
 pub struct Wallet {
     #[serde(default)]
@@ -100,6 +129,9 @@ pub struct Wallet {
     /// Legacy single in-flight withdrawal — migrated into `pending_withdraws` on load.
     #[serde(default, skip_serializing)]
     pub pending_withdraw: Option<PendingWithdraw>,
+    /// Support threads started from this device — see `SupportThread`.
+    #[serde(default)]
+    pub support: Vec<SupportThread>,
     /// In-flight withdrawals awaiting their credentials. Books are drawn several at a
     /// time in one round trip, so there can be a handful; each is resumed idempotently
     /// with its own unchanged request body (M-cl-2).

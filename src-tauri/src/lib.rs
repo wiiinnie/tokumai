@@ -59,6 +59,20 @@ pub fn app_version() -> &'static str {
     APP_VER.get().map(String::as_str).unwrap_or("0.0.0")
 }
 
+/// Debug builds only: report an ancient version so the LIVE server's release gate refuses
+/// us, and the update sheet — and the way out of it — can be tested without installing an
+/// old build. It changes only what we say about ourselves, never what we are: everything
+/// else in this process is the current code, which is exactly what makes the test honest.
+static FAKE_OLD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The version that goes out on the wire. Not `app_version()` — see FAKE_OLD.
+pub fn reported_version() -> String {
+    if cfg!(debug_assertions) && FAKE_OLD.load(std::sync::atomic::Ordering::Relaxed) {
+        return "0.0.1".into();
+    }
+    app_version().to_string()
+}
+
 /// The App Store storefront the device is signed into, as an ISO 3166-1 alpha-3 code
 /// ("USA", "DEU", …). Only iOS has one; `None` when no store account is signed in or on
 /// any other platform. The webview turns it into the 3.1.1 top-up variant (see
@@ -1653,6 +1667,181 @@ fn coins_on_device(w: &wallet::Wallet) -> u64 {
 /// Batched, because a payment costs ~490 bytes and ~4 ms of server pairings per coin: a
 /// whole book goes home in several requests. Each batch is persisted before it leaves and
 /// re-sent verbatim until the server answers, so a lost reply can never lose the coins.
+/// Debug builds only: pretend to be an old build so the server's release gate refuses us.
+/// Lets the update sheet — and the support way out of it — be tested against the LIVE
+/// gate rather than against a mock of it.
+#[tauri::command]
+async fn set_fake_old_version(on: bool) -> Result<bool, String> {
+    if !cfg!(debug_assertions) {
+        return Err("only in a development build".into());
+    }
+    FAKE_OLD.store(on, std::sync::atomic::Ordering::Relaxed);
+    println!("tokumai: reporting version {} to the server", reported_version());
+    Ok(on)
+}
+
+/// File a support report. Carries no account key, no session and no address: what comes
+/// back is collected later against `secret`, which never leaves this device otherwise.
+///
+/// Deliberately NOT gated on having credit, a server catalogue or a working payment — this
+/// is the one call that has to go through when everything else is refused, including when
+/// the update gate has shut the app out (the server exempts `support.*`).
+#[tauri::command]
+async fn support_send(
+    app: AppHandle,
+    transport: State<'_, Arc<Transport>>,
+    category: String,
+    subject: String,
+    body: String,
+    diag: Option<String>,
+    image: Option<String>,
+) -> Result<Value, String> {
+    let dir = data_dir(&app)?;
+    let w = wallet::load(&dir);
+    let srv = server_addr(&w)?;
+    let secret = rand_hex(32);
+    let mut env = json!({
+        "v": PROTO, "kind": "support.send", "id": rand_hex(16),
+        "category": category, "subject": subject, "body": body,
+        "secretHash": scrai_server_support_hash(&secret),
+    });
+    if let Some(d) = &diag {
+        env["diag"] = Value::String(d.clone());
+    }
+    if let Some(img) = &image {
+        env["image"] = Value::String(img.clone());
+    }
+    // A screenshot makes this far bigger than a control message, so it gets the SURBs a
+    // text answer gets rather than the handful a small one does.
+    let surbs = if image.is_some() { SURBS_TEXT } else { SURBS_SMALL };
+    let reply = transport.inner().round_trip(&srv, &env, surbs, TIMEOUT_MS).await?;
+    if let Some(e) = reply.get("error").and_then(|e| e.as_str()) {
+        return Err(e.to_string());
+    }
+    let id = reply.get("ticket").and_then(|t| t.as_str()).ok_or("the server sent no support id")?.to_string();
+    // Remembered only after the server confirmed it: a thread we cannot name is one the
+    // user would see in the list and never get an answer on.
+    let mut w = wallet::load(&dir);
+    w.support.insert(
+        0,
+        wallet::SupportThread {
+            id: id.clone(),
+            secret,
+            category,
+            subject,
+            at: support_now_ms(),
+            status: "open".into(),
+            msgs: vec![wallet::SupportMsg { at: support_now_ms() as i64, who: "user".into(), text: body }],
+            unread: false,
+        },
+    );
+    wallet::save(&dir, &w)?;
+    Ok(json!({ "ticket": id }))
+}
+
+/// Collect whatever is waiting on the threads this device holds secrets for, and
+/// optionally add a line to one of them. Cheap enough to run on start-up.
+#[tauri::command]
+async fn support_fetch(
+    app: AppHandle,
+    transport: State<'_, Arc<Transport>>,
+    reply_to: Option<String>,
+    reply_text: Option<String>,
+) -> Result<Value, String> {
+    let dir = data_dir(&app)?;
+    let w = wallet::load(&dir);
+    if w.support.is_empty() {
+        return Ok(json!({ "threads": [] }));
+    }
+    let srv = server_addr(&w)?;
+    let secrets: Vec<String> = w.support.iter().take(20).map(|t| t.secret.clone()).collect();
+    let mut env = json!({ "v": PROTO, "kind": "support.fetch", "id": rand_hex(16), "secrets": secrets });
+    // A follow-up names its thread by id here; the secret is what the server checks.
+    if let (Some(tid), Some(text)) = (&reply_to, &reply_text) {
+        if let Some(t) = w.support.iter().find(|t| &t.id == tid) {
+            env["replySecret"] = Value::String(t.secret.clone());
+            env["replyText"] = Value::String(text.clone());
+        }
+    }
+    let got = transport.inner().round_trip(&srv, &env, SURBS_TEXT, TIMEOUT_MS).await?;
+    if let Some(e) = got.get("error").and_then(|e| e.as_str()) {
+        return Err(e.to_string());
+    }
+    // Merge: the server is the authority on what it has said, the device on what it sent.
+    let mut w = wallet::load(&dir);
+    if let (Some(tid), Some(text)) = (&reply_to, &reply_text) {
+        if let Some(t) = w.support.iter_mut().find(|t| &t.id == tid) {
+            t.msgs.push(wallet::SupportMsg { at: support_now_ms() as i64, who: "user".into(), text: text.clone() });
+            t.status = "open".into();
+        }
+    }
+    let empty = Vec::new();
+    for tk in got.get("tickets").and_then(|t| t.as_array()).unwrap_or(&empty) {
+        let Some(id) = tk.get("id").and_then(|i| i.as_str()) else { continue };
+        let Some(t) = w.support.iter_mut().find(|t| t.id == id) else { continue };
+        if let Some(st) = tk.get("status").and_then(|s| s.as_str()) {
+            t.status = st.to_string();
+        }
+        for m in tk.get("msgs").and_then(|m| m.as_array()).unwrap_or(&empty) {
+            let at = m.get("at").and_then(|a| a.as_i64()).unwrap_or(0);
+            let text = m.get("text").and_then(|x| x.as_str()).unwrap_or("").to_string();
+            // The server re-sends an answer until the device has it; adding it twice is
+            // the difference between a thread and a stutter.
+            if t.msgs.iter().any(|x| x.who == "tokumai" && x.at == at) {
+                continue;
+            }
+            t.msgs.push(wallet::SupportMsg { at, who: "tokumai".into(), text });
+            t.unread = true;
+        }
+        t.msgs.sort_by_key(|m| m.at);
+    }
+    wallet::save(&dir, &w)?;
+    Ok(support_threads_json(&w))
+}
+
+/// The threads as the UI shows them — the secrets stay here.
+fn support_threads_json(w: &wallet::Wallet) -> Value {
+    json!({
+        "threads": w.support.iter().map(|t| json!({
+            "id": t.id, "category": t.category, "subject": t.subject, "at": t.at,
+            "status": t.status, "unread": t.unread,
+            "msgs": t.msgs.iter().map(|m| json!({ "at": m.at, "who": m.who, "text": m.text })).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>()
+    })
+}
+
+/// Read the threads without touching the network, for painting the list and the dot.
+#[tauri::command]
+async fn support_list(app: AppHandle) -> Result<Value, String> {
+    Ok(support_threads_json(&wallet::load(&data_dir(&app)?)))
+}
+
+/// Opening a thread clears its dot.
+#[tauri::command]
+async fn support_seen(app: AppHandle, id: String) -> Result<(), String> {
+    let dir = data_dir(&app)?;
+    let mut w = wallet::load(&dir);
+    if let Some(t) = w.support.iter_mut().find(|t| t.id == id) {
+        t.unread = false;
+    }
+    wallet::save(&dir, &w)
+}
+
+/// Milliseconds since the epoch — the app has no `now_ms` of its own outside the vault.
+fn support_now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// The same construction the server uses, so a secret matches the hash it stored.
+fn scrai_server_support_hash(secret: &str) -> String {
+    let mut bytes = b"tokumai-support:".to_vec();
+    bytes.extend_from_slice(secret.as_bytes());
+    hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&bytes))
+}
+
 #[tauri::command]
 async fn coins_return(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<Value, String> {
     let t = transport.inner().clone();
@@ -4679,7 +4868,7 @@ pub fn run() {
             state, local_state, set_server, account_new, account_reveal, account_restore, account_delete, account_migrate_qr,
             invoice, invoice_status, invoice_cancel, invite_check, ocr_scan, pdf_text, pdf_ocr, pdf_pages, collect, chat,
             smart_available, smart_detect,
-            mixnet_route, mixnet_ping, cancel_chat, app_resumed, app_hidden, resume_stats, list_entry_gateways, server_identities, set_entry_gateway, set_entry_random, set_mixnet_perf, buy_close, set_coin_chat, coins_return, collect_later, open_external, save_image, save_file, voucher_redeem,
+            mixnet_route, mixnet_ping, cancel_chat, app_resumed, app_hidden, resume_stats, list_entry_gateways, server_identities, set_entry_gateway, set_entry_random, set_mixnet_perf, buy_close, set_coin_chat, coins_return, collect_later, set_fake_old_version, support_send, support_fetch, support_list, support_seen, open_external, save_image, save_file, voucher_redeem,
             phrase_backup_get, iap_products, iap_purchase, iap_restore,
             phrase_check_start,
             phrase_check_verify,
