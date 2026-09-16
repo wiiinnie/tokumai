@@ -4103,6 +4103,9 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         if(!ai.note && warn && warn.kind === "capped"){
           ai.note = "This answer was shortened to fit the coins on this device. Top up, and the next one runs to full length.";
           ai.noteKind = "rust";
+        } else if(!ai.note && warn && warn.kind === "rounded"){
+          ai.note = `This device had no small coins left, so the answer was rounded up to ${formatToku(warn.coin)} TOKU — it should cost about ${formatToku(warn.fairEstimate)}. Small change is on its way; the next answers are exact again.`;
+          ai.noteKind = "rust";
         } else if(!ai.note && warn && warn.kind === "overcharge"){
           ai.note = `Charged ${formatToku(warn.charged)} TOKU for an answer that should cost about ${formatToku(warn.fairEstimate)}. This server has been flagged on this device — switch servers under Account & recovery.`;
           ai.noteKind = "rust";
