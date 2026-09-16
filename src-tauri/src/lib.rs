@@ -182,6 +182,20 @@ fn is_flagged(srv: &str) -> bool {
     flagged_servers().lock().map(|f| f.contains(srv)).unwrap_or(false)
 }
 
+/// A PRICING suspicion, which is a different thing from catching a server issuing garbage
+/// credentials, and must not carry the same consequence.
+///
+/// `flag_server` stops withdrawals, and rightly so: a server that mints invalid books
+/// destroys money, and feeding it another one makes it worse. A charge that looks too high
+/// destroys nothing — the user has the answer and can walk away. Blocking withdrawals on a
+/// *suspicion* makes the user's position worse, not better, and on 2026-09-16 it did
+/// exactly that: a device out of small change was overcharged by its own shortage, flagged
+/// an honest server for it, and then could not draw the small change that would have fixed
+/// it. "Check for credit" failed for the rest of the run while chat kept working.
+fn note_overcharge(srv: &str, reason: &str) {
+    log::error!("[trust] {srv} charged more than this device thinks fair: {reason} — telling the user, not blocking");
+}
+
 
 
 
@@ -3342,7 +3356,7 @@ fn overcharge_warning(srv: &str, model: &str, messages: &Value, resp: &Value, sm
     let coin = smallest_note_toku.max(scrai_core::coconut::COIN_TOKU);
     let ceiling = ((fair as f64 * OVERCHARGE_FACTOR).ceil() as u64).div_ceil(coin) * coin;
     if charged > MIN_FLAG_SCRAI && charged > ceiling {
-        flag_server(srv, &format!("overcharge: charged {charged} TOKU vs ~{fair} fair (>{OVERCHARGE_FACTOR}×)"));
+        note_overcharge(srv, &format!("charged {charged} TOKU vs ~{fair} fair (>{OVERCHARGE_FACTOR}×)"));
         return json!({
             "kind": "overcharge",
             "charged": charged,

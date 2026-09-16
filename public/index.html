@@ -4174,7 +4174,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
           ai.note = `This device had no small coins left, so the answer was rounded up to ${formatToku(warn.coin)} TOKU — it should cost about ${formatToku(warn.fairEstimate)}. Small change is on its way; the next answers are exact again.`;
           ai.noteKind = "rust";
         } else if(!ai.note && warn && warn.kind === "overcharge"){
-          ai.note = `Charged ${formatToku(warn.charged)} TOKU for an answer that should cost about ${formatToku(warn.fairEstimate)}. This server has been flagged on this device — switch servers under Account & recovery.`;
+          ai.note = `Charged ${formatToku(warn.charged)} TOKU for an answer that should cost about ${formatToku(warn.fairEstimate)}. Nothing is blocked — but if it keeps happening, switch servers under Account & recovery.`;
           ai.noteKind = "rust";
         }
         renderThread();
@@ -5946,9 +5946,16 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         : (rest > 0 ? `${formatToku(rest)} TOKU waiting — a book is ${formatToku(bookToku)}` : "nothing outstanding");
       checking = false; renderAccount();
     }catch(e){
-      credResult = "could not reach the server";
+      // Say what actually went wrong. "Could not reach the server" was a guess printed as
+      // a fact, and on 2026-09-16 it hid the real reason — a client-side trust flag was
+      // refusing the withdrawal — for as long as it took to read the smaller line below it.
+      const why = String((e && e.message) || e || "");
+      credResult = /flagged/i.test(why) ? "refused by this device — restart the app"
+                 : /timed out|timeout/i.test(why) ? "no answer in time — try again"
+                 : why ? why.slice(0, 120)
+                 : "could not reach the server";
       checking = false; renderAccount();
-      acctStatus("failed: "+(e.message||e));
+      acctStatus("failed: "+(why||"unknown"));
     }
   }
 
