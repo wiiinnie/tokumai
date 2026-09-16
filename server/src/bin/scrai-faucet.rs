@@ -48,7 +48,7 @@ use scrai_server::faucet::{list_codes, mint, open_db as open_faucet_db, DEFAULT_
 use scrai_server::pay::{Pay, TestnetInv, TESTNET_USD};
 
 const SITE: &str = include_str!("../../site/index.html");
-/// Legal pages Mollie's onboarding checks for (imprint, terms, privacy) — static, no
+/// Legal pages a card processor's onboarding checks for (imprint, terms, privacy) — static, no
 /// placeholders, served as-is.
 const PAGE_IMPRINT: &str = include_str!("../../site/imprint.html");
 const PAGE_TERMS: &str = include_str!("../../site/terms.html");
@@ -58,7 +58,7 @@ const PAGE_PRIVACY: &str = include_str!("../../site/privacy.html");
 /// invoice rides in the URL FRAGMENT, so it never reaches this server — nothing to log,
 /// nothing to store, and this route serves one static file to everyone.
 const PAGE_PAY: &str = include_str!("../../site/pay.html");
-/// Mollie's five official method marks, lifted out of index.html so the rail tiles can be
+/// The five official card/wallet method marks, lifted out of index.html so the rail tiles can be
 /// generated without a wall of SVG inside Rust. Originals in docs/brand/.
 const CARD_MARKS: &str = include_str!("../../site/cardmarks.html");
 /// Where a tester redeems an invite code. The app links here with the code and the memo
@@ -66,7 +66,7 @@ const CARD_MARKS: &str = include_str!("../../site/cardmarks.html");
 const PAGE_CLAIM: &str = include_str!("../../site/claim.html");
 /// The site's screenshots, baked into the binary so a deploy ships them (Caddy only knows
 /// /dl/; nothing else to upload or configure). Served as GET /img/<name>.
-/// Where Mollie's hosted checkout sends the browser afterwards (`MOLLIE_REDIRECT_URL`
+/// Where Stripe's hosted checkout sends the browser afterwards (`STRIPE_REDIRECT_URL`
 /// defaults to this host's /paid). Static, no script, no cookie, no order id in the URL
 /// or the page — the app learns about the payment from its own status poll, so this page
 /// links nothing back to anything. Same palette as the site, no external fonts (the CSP
@@ -270,7 +270,7 @@ impl Cfg {
 /// The "Available payment options" tiles.
 ///
 /// Read from the SERVER's own configuration rather than written into the page by hand — the
-/// card tile claimed "not available yet" for a day after Mollie went live, because a static
+/// card tile claimed "not available yet" for a day after the card rail went live, because a static
 /// page cannot know. Both units run with the same working directory and load the same .env,
 /// so asking `pay` here gives exactly the answer the server would give.
 /// The amounts on sale, each with its card price and — when the server discounts coins —
@@ -547,7 +547,7 @@ const BUCKET_CLAIM: u64 = 1;
 const BUCKET_ORDER: u64 = 2;
 /// Orders per hour per IP. A buyer makes one; somebody buying a few codes as gifts makes a
 /// handful. Anything past this is not a customer — and every accepted order becomes a REAL
-/// gateway call on the next tick (a Mollie payment object, an address and memo), on a path
+/// gateway call on the next tick (a Stripe checkout session, an address and memo), on a path
 /// that has no account to throttle and does not go through `admit_invoice`, so the
 /// server-wide invoice brake never saw it either (audit 2026-09-08, M4).
 const ORDERS_PER_HOUR: usize = 8;
@@ -1260,7 +1260,7 @@ async fn handle(f: Arc<Faucet>, mut sock: tokio::net::TcpStream, peer: SocketAdd
             }
             None => respond(&mut sock, 404, "text/plain", b"not found").await,
         },
-        // Mollie's redirect target after a card checkout (see PAID_HTML). Any query string
+        // Stripe's redirect target after a card checkout (see PAID_HTML). Any query string
         // is ignored — nothing on this page depends on it.
         ("GET", "/paid") => {
             f.track("view:paid", Some(&req));

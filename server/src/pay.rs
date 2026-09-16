@@ -32,7 +32,7 @@ use serde_json::{json, Value};
 // costly call).
 const INVOICE_PER_ACCT: usize = 5;
 /// Card invoices get a tighter per-account budget in the same window: every one is a
-/// Mollie payment object we cannot claw back once the credit is withdrawn, and card
+/// Stripe payment we cannot claw back once the credit is withdrawn, and card
 /// checkouts are the one rail with a chargeback path.
 const CARD_PER_ACCT: usize = 3;
 /// Invite-code checks per account and window. A code is 12 random characters out of 31,
@@ -148,16 +148,11 @@ fn charged_of(inv: &Inv) -> u32 {
     if inv.charged_cents > 0 { inv.charged_cents } else { inv.amount_usd.saturating_mul(100) }
 }
 
-/// True when a Mollie key is configured — the client shows the card row only then.
+/// True when a Stripe key is configured — the client shows the card row only then.
 pub fn card_enabled() -> bool {
     matches!(CardRail::from_env(), CardRail::Stripe { .. })
 }
 
-/// What the catalog reply tells the app about cards: whether the row exists at all, the
-/// smallest tile it may buy, and which methods Mollie's checkout will offer (one source
-/// of truth — never hardcoded in the client). `methods` is what is enabled in the Mollie
-/// dashboard right now, fetched from `GET /v2/methods` and cached for 10 minutes, so
-/// switching PayPal or Wero on there changes the app's label without a build or deploy.
 /// Which rails this server can actually raise an invoice on. Derived from what is
 /// configured, so turning a rail off is deleting its variables — not editing the app and
 /// shipping a build. The app greys out whatever is missing instead of offering a tile
@@ -460,7 +455,7 @@ pub fn append_refund(inv_id: &str, paid_at: u64, usd: u32, method: &str, provide
     let clean = |s: &str| -> String {
         s.chars().filter(|c| !matches!(c, ',' | '\n' | '\r' | '"')).take(64).collect()
     };
-    // The provider reference rides along so the money side can be found in Mollie — or on
+    // The provider reference rides along so the money side can be found in Stripe — or on
     // the chain, where it is the memo — without a second lookup.
     // A void after the purchase link expired has no receipt to name — the code was all the
     // buyer showed. "-" rather than a number derived from a tombstone.
@@ -1652,7 +1647,7 @@ pub struct Raised {
 pub struct Gateway {
     rail: Rail,
     nyx: Option<crate::nyx::Nyx>,
-    /// Cards (Mollie hosted checkout) — orthogonal to the coin rails, serves "card".
+    /// Cards (Stripe hosted checkout) — orthogonal to the coin rails, serves "card".
     card: CardRail,
 }
 
@@ -1662,7 +1657,7 @@ impl Gateway {
     }
 
     pub fn name(&self) -> String {
-        // "none+nyx+mollie" read like a failure at boot, when it only means "no coin rail
+        // "none+nyx+stripe" read like a failure at boot, when it only means "no coin rail
         // is configured" — which is the correct state between removing CoinGate and having
         // BTCPay up. Name what IS there; say so plainly when nothing is.
         let mut n = match self.rail {
@@ -1679,7 +1674,7 @@ impl Gateway {
             add("nyx");
         }
         if let CardRail::Stripe { .. } = self.card {
-            add("mollie");
+            add("stripe");
         }
         if n.is_empty() {
             n.push_str("none — this server cannot sell anything");
@@ -1894,7 +1889,7 @@ impl Rail {
     /// settings instead of second-guessing them here.
     ///
     /// Takes the whole invoice for the same reason the card rail does (audit M2): a
-    /// settled status alone is not enough to credit. It matters MORE here than at Mollie,
+    /// settled status alone is not enough to credit. It matters MORE here than at the card rail,
     /// because a BTCPay store has a payment-tolerance setting — with it above zero an
     /// invoice reaches "Settled" having received less than it asked for, and no code on
     /// our side would have noticed.
@@ -2055,7 +2050,7 @@ fn variant_json(c: &Coin) -> Value {
 
 
 // ---------------------------------------------------------------------------
-// Cards via Mollie — hosted checkout, no card data here, no webhook (the server has
+// Cards via Stripe — hosted checkout, no card data here, no webhook (the server has
 // no clearnet port, so the client's 10 s status poll drives `GET /v2/payments/{id}`).
 // See docs/card-payments.md §4 for every fact this code leans on.
 // ---------------------------------------------------------------------------
@@ -2266,7 +2261,7 @@ fn btcpay_settlement_matches(inv: &Value, our: &Inv) -> Result<(), String> {
     Ok(())
 }
 
-/// Does this `paid` Mollie payment belong to `expect_ref` and carry the amount we quoted?
+/// Does this `paid` Stripe session belong to `expect_ref` and carry the amount we quoted?
 /// Pure, so the rule is testable without the network.
 fn settlement_matches(v: &Value, expect_ref: &str, currency: &str, cents: u64) -> Result<(), String> {
     // Four conditions out of one reply. `client_reference_id` is the field Stripe means
@@ -2332,38 +2327,6 @@ async fn stripe(secret_key: &str, req: reqwest::RequestBuilder) -> Result<Value,
     Ok(body)
 }
 
-/// `2026-08-29T10:47:54+00:00` → unix ms. Mollie's timestamps are
-/// RFC 3339 with a numeric offset (or `Z`); anything else parses as None and the caller
-/// falls back.
-fn rfc3339_ms(s: &str) -> Option<u64> {
-    let s = s.trim();
-    let (date, rest) = s.split_once('T')?;
-    let mut d = date.split('-').map(|x| x.parse::<i64>());
-    let (y, mo, da) = (d.next()?.ok()?, d.next()?.ok()?, d.next()?.ok()?);
-    // time part ends where the offset starts: 'Z', '+' or '-'
-    let off_pos = rest.find(['Z', '+', '-'])?;
-    let (time, off) = rest.split_at(off_pos);
-    let time = time.split('.').next()?; // drop fractional seconds
-    let mut t = time.split(':').map(|x| x.parse::<i64>());
-    let (h, mi, se) = (t.next()?.ok()?, t.next()?.ok()?, t.next().unwrap_or(Ok(0)).ok()?);
-    let off_secs: i64 = if off == "Z" {
-        0
-    } else {
-        let sign = if off.starts_with('-') { -1 } else { 1 };
-        let mut o = off[1..].split(':').map(|x| x.parse::<i64>());
-        let (oh, om) = (o.next()?.ok()?, o.next().unwrap_or(Ok(0)).ok()?);
-        sign * (oh * 3600 + om * 60)
-    };
-    // days from civil (Howard Hinnant), valid for the proleptic Gregorian calendar
-    let (y2, m2) = if mo <= 2 { (y - 1, mo + 9) } else { (y, mo - 3) };
-    let era = y2.div_euclid(400);
-    let yoe = y2 - era * 400;
-    let doy = (153 * m2 + 2) / 5 + da - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146_097 + doe - 719_468;
-    let secs = days * 86_400 + h * 3600 + mi * 60 + se - off_secs;
-    u64::try_from(secs).ok().map(|s| s * 1000)
-}
 
 // ---------------------------------------------------------------------------
 #[cfg(test)]
@@ -2608,7 +2571,7 @@ mod tests {
         assert!(replay.get("error").is_some());
     }
 
-    /// Card rules live in begin_create: no Mollie key → no card sales at all; with a key,
+    /// Card rules live in begin_create: no Stripe key → no card sales at all; with a key,
     /// tiles below CARD_MIN_USD are refused BEFORE any gateway call. Env-mutating →
     /// write lock.
     #[tokio::test]
@@ -2956,7 +2919,7 @@ mod card_tests {
         assert_eq!(after[0].id, "open2");
     }
 
-    // ---- Mollie settlement (audit M2): `paid` alone must never credit -----------------
+    // ---- Stripe settlement (audit M2): `paid` alone must never credit -----------------
 
     fn stripe_paid(order: &str, cents: u64, currency: &str) -> Value {
         json!({

@@ -141,7 +141,7 @@ pub const MONEY_RAILS: [&str; 7] = [
 /// `net_var` resolves `_MAINNET` → `_TESTNET` → bare, and that fallback ignores whether the
 /// server is actually in testnet mode. With only `_TESTNET` values in .env — the normal
 /// state of a testnet box — flipping TESTNET to 0 keeps every rail pointed at the
-/// test world while the server starts accepting real money. The worst of them is Mollie:
+/// test world while the server starts accepting real money. The worst of them is the card rail:
 /// its test checkout lets the payer pick "paid" for free, so anyone could mint credit and
 /// spend it on provider calls we pay for. Refuse to boot instead.
 pub fn testnet_rails_on_mainnet() -> Vec<&'static str> {
@@ -209,7 +209,7 @@ mod rail_guard_tests {
     }
 
     /// The scenario this exists for: a testnet box whose .env only has _TESTNET rails, and
-    /// someone flips TESTNET to 0. Mollie would then run on its `test_` key, whose
+    /// someone flips TESTNET to 0. The card rail would then run on its test key, whose
     /// checkout lets the payer choose "paid" for free — real credit, no money moved.
     #[test]
     fn a_mainnet_server_refuses_rails_that_only_have_a_testnet_value() {

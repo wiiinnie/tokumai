@@ -122,7 +122,6 @@
   /* the rail mark keeps its own colour even when the tile is selected (which sets `color`) */
   .pm .coin{color:var(--acc)} .pm .coin.btc{color:var(--btc)} .pm .coin.nym{color:var(--nym)} .pm .coin.xmr{color:var(--xmr)}
   .cardmarks{display:flex;gap:4px;align-items:center;height:28px;flex-wrap:nowrap} .cardmarks svg{display:block;flex:none}
-  .mollie{display:inline-flex;align-items:center;vertical-align:-3px;margin-left:2px}
   .payempty{border:1px dashed var(--line);border-radius:12px;padding:22px;text-align:center;font-family:var(--mono);font-size:12px;color:var(--muted)}
   .invoice[hidden],.payempty[hidden]{display:none}
   .invoice.noqr{grid-template-columns:1fr}
@@ -327,7 +326,7 @@
       <div class="txt"><div class="n">03 · PAYMENT</div><h3>A payment can't be matched to a question</h3>
         <p>You buy credit in fixed amounts — $5, $10, $20 or $50 — with NYM, Bitcoin, a card, or on iPhone through the App Store. The credit is then withdrawn as <b>blind-signed coins</b>: the server signs them without seeing them, and cannot recognise them when they come back to pay for a prompt.</p>
         <p>A coin purchase sees a wallet address; a card payment sees a name and a card. Neither sees your account, and neither can be connected to what you ask. Fixed amounts mean a purchase reveals no per-user fingerprint.</p></div>
-      <button class="shot " type="button" data-full="/img/how-payment" aria-label="Enlarge: Buy credit: fixed amounts, card via Mollie or NYM, a code field"><img class="dk" src="/img/how-payment-dark.jpg" alt="Buy credit: fixed amounts, card via Mollie or NYM, a code field" loading="lazy"><img class="lt" src="/img/how-payment-light.jpg" alt="Buy credit: fixed amounts, card via Mollie or NYM, a code field" loading="lazy"></button>
+      <button class="shot " type="button" data-full="/img/how-payment" aria-label="Enlarge: Buy credit: fixed amounts, card via Stripe or NYM, a code field"><img class="dk" src="/img/how-payment-dark.jpg" alt="Buy credit: fixed amounts, card via Mollie or NYM, a code field" loading="lazy"><img class="lt" src="/img/how-payment-light.jpg" alt="Buy credit: fixed amounts, card via Mollie or NYM, a code field" loading="lazy"></button>
     </div>
     <div class="step">
       <div class="txt"><div class="n">04 · YOUR DEVICE</div><h3>What shouldn't leave, doesn't</h3>

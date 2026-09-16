@@ -80,7 +80,7 @@ async fn main() {
                  _TESTNET value and would run against TEST infrastructure while real money \
                  is accepted: {}. Set {} (or delete the _TESTNET one if the rail is unused). \
                  A bare name does NOT count — a _TESTNET value outranks it. Check the line is \
-                 not still commented out. Mollie in particular would credit real balance for \
+                 not still commented out. The card rail in particular would credit real balance for \
                  a free test-checkout payment.",
                 stale.join(", "),
                 wanted.join(", ")

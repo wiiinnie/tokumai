@@ -173,7 +173,7 @@ impl Store {
 
         // The channel between the faucet (clearnet, serves /pay) and the server (mixnet only,
         // owns the payment rails). A table rather than a port: no new listener on the box
-        // that holds the mint, no second Mollie client, and an order survives either process
+        // that holds the mint, no second Stripe client, and an order survives either process
         // dying — it is simply still there on the next tick. See docs/vouchers.md.
         conn.execute(
             "CREATE TABLE IF NOT EXISTS web_orders (\

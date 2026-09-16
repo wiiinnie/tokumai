@@ -55,14 +55,14 @@ pub struct Inv {
     /// raised as a $1 faucet-paid testnet purchase (TESTNET servers)
     #[serde(default)]
     pub testnet: bool,
-    /// rail that served it: "btc" | "nyx" | "card" (Mollie) — absent on pre-card records
+    /// rail that served it: "btc" | "nyx" | "card" (Stripe) — absent on pre-card records
     #[serde(default)]
     pub method: String,
     /// ISO-3166 country the payment rail reported. Empty for coin transfers (a chain has
     /// no country) and for everything raised before 2026-09-07.
     #[serde(default)]
     pub country: String,
-    /// The rail's own id for the payment: a Mollie payment id, or the NYM memo. This is
+    /// The rail's own id for the payment: a Stripe checkout session id, or the NYM memo. This is
     /// what finds the money again — in the dashboard, or on the chain.
     #[serde(default)]
     pub provider_ref: String,
@@ -160,7 +160,7 @@ pub struct Metrics {
     pub inv_expired: usize,
     pub purchased_toku: u64,
     pub purchased_usd: u64,
-    // card rail (Mollie): separately visible because it is the one rail with chargebacks
+    // card rail (Stripe): separately visible because it is the one rail with chargebacks
     pub card_paid: usize,
     pub card_pending: usize,
     pub card_usd: u64,
@@ -901,7 +901,7 @@ pub fn do_void(state_db: &Path, hit: &Hit, reason: &str, evidence: &str) -> Stri
         Ok(crate::store::VoucherVoid::Voided(_)) => {
             crate::pay::append_refund(&hit.invoice, hit.paid_at, hit.usd, &hit.method, &hit.provider_ref, reason, evidence);
             let how = if hit.method == "card" {
-                format!("refund ${} in Mollie against {}", hit.usd, hit.provider_ref)
+                format!("refund ${} in Stripe against {}", hit.usd, hit.provider_ref)
             } else {
                 format!("send ${} worth back to the address that paid memo {}", hit.usd, hit.provider_ref)
             };

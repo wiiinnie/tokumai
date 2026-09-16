@@ -100,7 +100,7 @@
   //
   // It is also completely attacker-controlled — anyone can craft a link to this page.
   // Nothing here is trusted: every value is escaped into the DOM, lengths are capped,
-  // and the only clickable link (the card checkout) must be an https URL on mollie.com,
+  // and the only clickable link (the card checkout) must be an https URL on checkout.stripe.com,
   // exactly the check the app and the server already make. Without that this page would
   // be a redirector on our own domain, which is a phishing primitive.
   var out = document.getElementById("out");
@@ -112,13 +112,16 @@
   var esc = function(s){ return String(s == null ? "" : s).replace(/[&<>"'`]/g, function(c){ return ESCMAP[c]; }); };
   var MAX = 200;
   var clean = function(s){ return typeof s === "string" ? s.slice(0, MAX) : ""; };
-  var isMollie = function(u){
+  // The host must match EXACTLY. Mollie's guard accepted any *.mollie.com; Stripe's
+  // checkout lives on one host, so there is no reason to accept a family of them — and a
+  // suffix test is how "checkout.stripe.com.attacker.net" gets clicked.
+  var isStripe = function(u){
     if (typeof u !== "string" || u.length > 500) return false;
     var rest = u.indexOf("https://") === 0 ? u.slice(8) : null;
     if (rest === null) return false;
     if (/[\s<>"'\\]/.test(u)) return false;
     var host = rest.split("/")[0];
-    return host === "mollie.com" || /\.mollie\.com$/.test(host);
+    return host === "checkout.stripe.com";
   };
 
   // The "raising the invoice" ticker. Declared out here, not inside buyFlow, because
@@ -185,14 +188,14 @@
              '<span>' + esc(toku.toLocaleString("en-US")) + ' TOKU</span></div>';
 
   if (inv.rail === "card") {
-    if (!isMollie(inv.checkout)) {
-      fail("That checkout link is not valid", "Only Mollie's own checkout is accepted here. Raise the payment again in the app.");
+    if (!isStripe(inv.checkout)) {
+      fail("That checkout link is not valid", "Only Stripe's own checkout is accepted here. Raise the payment again in the app.");
       return;
     }
     out.innerHTML = head +
-      '<p class="lead" style="margin:14px 0 18px">You will finish the payment on Mollie\u2019s own checkout page. ' +
-      'Mollie sees your name, card and IP for the payment itself \u2014 never your tokumai account and never what you ask.</p>' +
-      '<a class="btn" id="go" href="' + esc(inv.checkout) + '" rel="noopener">Continue to Mollie</a>' +
+      '<p class="lead" style="margin:14px 0 18px">You will finish the payment on Stripe\u2019s own checkout page. ' +
+      'Stripe asks for your name and billing address and sees your card and IP for the payment itself \u2014 never your tokumai account and never what you ask.</p>' +
+      '<a class="btn" id="go" href="' + esc(inv.checkout) + '" rel="noopener">Continue to Stripe</a>' +
       '<p class="note">The credit appears in the app on its own, usually within seconds of paying. ' +
       'You can close this page once the payment went through.</p></div>';
     return;
@@ -255,7 +258,7 @@
         '<div class="tiles">' + TIERS.map(tile).join("") + '</div>' +
         '<div class="lbl">Pay with</div>' +
         railRow("nyx", "NYM", "native \u00b7 Nyx", COIN_OFF > 0 ? "\u2212" + COIN_OFF + "% \u00b7 coins cost less" : "") +
-        railRow("card", "Card \u00b7 Apple Pay \u00b7 Google Pay", "Mollie") +
+        railRow("card", "Card \u00b7 PayPal \u00b7 Apple Pay \u00b7 Google Pay", "Stripe") +
         '<p class="fine">Sold under our <a href="/terms">Terms</a>. Please read the ' +
         '<a href="/terms#withdrawal">right of withdrawal</a> and the <a href="/privacy">privacy notice</a> first. ' +
         'An <b>unredeemed</b> code can be refunded; once redeemed it cannot.</p>' +
@@ -359,8 +362,8 @@
         var checkout = p.checkout || (p.options && p.options[0] && p.options[0].checkout) || "";
         out.innerHTML = '<div class="card"><h1>Pay $' + pick + '</h1>' +
           '<p class="lead">' + esc(p.instruction || "") + '</p>' + opts +
-          (checkout && /^https:\/\/([a-z0-9-]+\.)*mollie\.com\//.test(checkout)
-            ? '<p class="lead">Card, Apple Pay or Google Pay, processed by Mollie. The checkout opens in a new tab; ' +
+          (checkout && isStripe(checkout)
+            ? '<p class="lead">Card, PayPal, Apple Pay or Google Pay, processed by Stripe. The checkout opens in a new tab; ' +
               'this page keeps waiting and shows your code the moment the payment is confirmed.</p>' +
               '<a class="go" href="' + esc(checkout) + '" target="_blank" rel="noopener">Open the checkout \u2192</a>' : "") +
           '<div class="watch"><span class="wd"></span><span id="wtx">checking\u2026</span></div>' +
