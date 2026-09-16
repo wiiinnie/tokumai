@@ -9,6 +9,7 @@ at ~/.appstoreconnect/private_keys/AuthKey_<id>.p8) and calls the REST API.
     scripts/asc.py builds [n]   recent builds: version (build) state  age
     scripts/asc.py versions     App Store version records and their state
     scripts/asc.py get <path>   any endpoint, raw JSON (e.g. v1/apps)
+    scripts/asc.py patch <path> <json>   |   scripts/asc.py post <path> <json>
 
 PyJWT is not installed anywhere in this project; the token is 30 lines of `cryptography`.
 """
@@ -45,20 +46,25 @@ def token():
 
 API = "https://api.appstoreconnect.apple.com/"
 
-def api(path):
+def api(path, method="GET", payload=None):
     # The path comes from this file or from argv, never from a network response — but
     # urllib honours file:// and friends, so a path that carried its own scheme would be
     # read off the local disk instead. Pin the prefix rather than trust the caller.
     url = API + path.lstrip("/")
     if not url.startswith(API) or "://" in path:
         sys.exit(f"refusing a path that is not under {API}: {path!r}")
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token()}"})
+    data = json.dumps(payload).encode() if payload is not None else None
+    headers = {"Authorization": f"Bearer {token()}"}
+    if data:
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
         # The URL is pinned to API above and the path never comes from a network
         # response; this is a local developer tool.
         # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
         with urllib.request.urlopen(req, timeout=30) as r:
-            return json.load(r)
+            body = r.read()
+            return json.loads(body) if body.strip() else {"ok": True, "status": r.status}
     except urllib.error.HTTPError as e:
         sys.exit(f"HTTP {e.code}: {e.read().decode()[:400]}")
 
@@ -90,5 +96,10 @@ elif cmd == "versions":
         print(f"{a['versionString']:>8}  {a['appStoreState']}  ({a['platform']}, {ago(a['createdDate'])})")
 elif cmd == "get":
     print(json.dumps(api(sys.argv[2]), indent=2))
+elif cmd in ("patch", "post"):
+    # Writes. Deliberately dumb — the payload is passed in whole, so what happens is
+    # visible at the call site rather than assembled out of sight.
+    body = json.loads(sys.argv[3]) if len(sys.argv) > 3 else None
+    print(json.dumps(api(sys.argv[2], method=cmd.upper(), payload=body), indent=2))
 else:
     sys.exit(__doc__)
