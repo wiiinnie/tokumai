@@ -1496,9 +1496,9 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       </div>
       <div class="mprow">
         <div class="mptop"><b>Image size</b></div>
-        <div class="mpdesc">Resolution of generated pictures (Nano Banana 2). Bigger pictures cost more tokens and take longer through the mixnet — 4K is several megabytes and a few minutes. 1K is the default.<br>Nano Banana 2 Lite draws 512 / 1K only: 2K or 4K on Lite is drawn — and billed — as 1K, and the answer says so.</div>
-        <input type="range" id="imgSize" min="0" max="3" step="1" class="mpslider flat">
-        <div class="mpticks" id="imgSizeTicks"><span>512 · ×0.67</span><span>1K</span><span>2K · ×1.5</span><span>4K · ×2.25</span></div>
+        <div class="mpdesc">Resolution of generated pictures (Nano Banana 2). A bigger picture costs more tokens and takes longer through the mixnet, where a few megabytes are minutes rather than seconds. 1K is the default.<br>Nano Banana 2 Lite draws 1K only: 2K on Lite is drawn — and billed — as 1K, and the answer says so.</div>
+        <input type="range" id="imgSize" min="0" max="1" step="1" class="mpslider flat">
+        <div class="mpticks" id="imgSizeTicks"><span>1K</span><span>2K · ×1.5</span></div>
       </div>
       <label class="setrow"><input type="checkbox" id="prTopic"><span><b>Topic-shift trimming</b><small>Drop earlier turns that are unrelated to your new question (e.g. weather → football). Terse follow-ups keep their context. Never drops the recent exchanges above.</small></span></label>
       <label class="setrow"><input type="checkbox" id="prWhite"><span><b>Whitespace normalisation</b><small>Collapse redundant spaces and blank lines. Lossless — wording is never changed.</small></span></label>
@@ -4810,9 +4810,13 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     try{ const v=parseInt(localStorage.getItem(t.key),10); return t.steps.includes(v) ? v : t.steps[t.dflt]; }catch(_){ return t.steps[t.dflt]; }
   }
   function thinkLabel(b){ const t=thinkStops(); const i=t.steps.indexOf(b); return (i<0 ? t.labels[t.dflt] : t.labels[i]).replace(/ ·.*$/,""); }
-  // Generated-picture size for Nano Banana 2 models: "512" | "1K" | "2K" | "4K". 1K unless
-  // the user chose otherwise; the server validates and sizes its reserve to it.
-  const IMAGE_SIZES = ["512","1K","2K","4K"];
+  // Generated-picture size for Nano Banana 2 models: "1K" | "2K". 1K unless the user
+  // chose otherwise; the server validates and sizes its reserve to it.
+  // What the app OFFERS. The server's billing table still knows 512 and 4K — an older
+  // build asking for one is priced correctly — they are simply no longer on the dial.
+  // 4K went because a few megabytes through the mixnet is minutes, not seconds, and the
+  // wait is the whole experience; 512 went because it is not worth a step of its own.
+  const IMAGE_SIZES = ["1K","2K"];
   function imageSize(){
     try{ const v=localStorage.getItem("scrai.imageSize"); return IMAGE_SIZES.includes(v)?v:"1K"; }catch(_){ return "1K"; }
   }
