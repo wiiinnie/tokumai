@@ -15,7 +15,7 @@
 //
 // Gateways: BTCPay (real; BTCPAY_URL/STORE_ID/API_KEY) or the fake (dev;
 // FAKE_PAYMENTS=1 — settles on first poll and says so loudly), native NYM
-// (nyx.rs), and cards via Mollie (MOLLIE_API_KEY — hosted checkout, polled, see
+// (nyx.rs), and cards via Stripe (STRIPE_SECRET_KEY — hosted checkout, polled, see
 // docs/card-payments.md).
 // ---------------------------------------------------------------------------
 
@@ -32,7 +32,7 @@ use serde_json::{json, Value};
 // costly call).
 const INVOICE_PER_ACCT: usize = 5;
 /// Card invoices get a tighter per-account budget in the same window: every one is a
-/// Mollie payment object we cannot claw back once the credit is withdrawn, and card
+/// Stripe payment we cannot claw back once the credit is withdrawn, and card
 /// checkouts are the one rail with a chargeback path.
 const CARD_PER_ACCT: usize = 3;
 /// Invite-code checks per account and window. A code is 12 random characters out of 31,
@@ -148,16 +148,11 @@ fn charged_of(inv: &Inv) -> u32 {
     if inv.charged_cents > 0 { inv.charged_cents } else { inv.amount_usd.saturating_mul(100) }
 }
 
-/// True when a Mollie key is configured — the client shows the card row only then.
+/// True when a Stripe key is configured — the client shows the card row only then.
 pub fn card_enabled() -> bool {
-    matches!(CardRail::from_env(), CardRail::Mollie { .. })
+    matches!(CardRail::from_env(), CardRail::Stripe { .. })
 }
 
-/// What the catalog reply tells the app about cards: whether the row exists at all, the
-/// smallest tile it may buy, and which methods Mollie's checkout will offer (one source
-/// of truth — never hardcoded in the client). `methods` is what is enabled in the Mollie
-/// dashboard right now, fetched from `GET /v2/methods` and cached for 10 minutes, so
-/// switching PayPal or Wero on there changes the app's label without a build or deploy.
 /// Which rails this server can actually raise an invoice on. Derived from what is
 /// configured, so turning a rail off is deleting its variables — not editing the app and
 /// shipping a build. The app greys out whatever is missing instead of offering a tile
@@ -184,64 +179,15 @@ pub fn coin_rail_ready() -> bool {
         && crate::net_var("BTCPAY_API_KEY").is_some()
 }
 
+/// What the catalog reply tells the app about cards: whether the row exists at all, and
+/// the smallest tile it may buy.
+///
+/// Mollie could list the methods its checkout would offer and the app showed them. Stripe
+/// has no equivalent to mirror — what a buyer is offered is decided per session from the
+/// dashboard — so the row says "Card" and the hosted page stays the one source of truth
+/// for what can actually be used. One fewer HTTP call on every client start, too.
 pub async fn card_info() -> Value {
-    let enabled = card_enabled();
-    let methods = if enabled { mollie_methods().await } else { Vec::new() };
-    json!({ "enabled": enabled, "minUsd": card_min_usd(), "methods": methods })
-}
-
-/// `[{id, label}]` of the checkout methods enabled for our Mollie profile. Empty on any
-/// failure (the app then says "Card & more"). Cached: the catalog is fetched by every
-/// client start, Mollie's list changes once a quarter.
-async fn mollie_methods() -> Vec<Value> {
-    use std::sync::Mutex;
-    use std::time::{Duration, Instant};
-    static CACHE: Mutex<Option<(Instant, Vec<Value>)>> = Mutex::new(None);
-    if let Ok(c) = CACHE.lock() {
-        if let Some((at, m)) = c.as_ref() {
-            if at.elapsed() < Duration::from_secs(600) {
-                return m.clone();
-            }
-        }
-    }
-    let CardRail::Mollie { api_key, .. } = CardRail::from_env() else { return Vec::new() };
-    let fetched = match mollie(&api_key, crate::http::client().get(format!("{MOLLIE_API}/methods"))).await {
-        Ok(v) => v
-            .pointer("/_embedded/methods")
-            .and_then(|m| m.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|m| {
-                        let id = m.get("id").and_then(|i| i.as_str())?;
-                        // Mollie's `status` is "activated" for live methods; the list is
-                        // already filtered to active ones, but don't rely on it.
-                        if m.get("status").and_then(|s| s.as_str()).is_some_and(|s| s != "activated") {
-                            return None;
-                        }
-                        let label = match id {
-                            "creditcard" => "Card",
-                            "applepay" => "Apple Pay",
-                            "googlepay" => "Google Pay",
-                            "paypal" => "PayPal",
-                            "wero" => "Wero",
-                            "ideal" => "iDEAL",
-                            "bancontact" => "Bancontact",
-                            _ => m.get("description").and_then(|d| d.as_str()).unwrap_or(id),
-                        };
-                        Some(json!({ "id": id, "label": label }))
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default(),
-        Err(e) => {
-            eprintln!("scrai-server: mollie /methods failed ({e:?}) — app shows the generic card label");
-            Vec::new()
-        }
-    };
-    if let Ok(mut c) = CACHE.lock() {
-        *c = Some((Instant::now(), fetched.clone()));
-    }
-    fetched
+    json!({ "enabled": card_enabled(), "minUsd": card_min_usd() })
 }
 
 /// Testnet mode (`TESTNET=1`): the ONE extra thing it enables is a $1 invoice
@@ -509,7 +455,7 @@ pub fn append_refund(inv_id: &str, paid_at: u64, usd: u32, method: &str, provide
     let clean = |s: &str| -> String {
         s.chars().filter(|c| !matches!(c, ',' | '\n' | '\r' | '"')).take(64).collect()
     };
-    // The provider reference rides along so the money side can be found in Mollie — or on
+    // The provider reference rides along so the money side can be found in Stripe — or on
     // the chain, where it is the memo — without a second lookup.
     // A void after the purchase link expired has no receipt to name — the code was all the
     // buyer showed. "-" rather than a number derived from a tombstone.
@@ -590,8 +536,8 @@ pub struct Inv {
     /// Lives IN the durable record so a pending payment survives restarts.
     #[serde(default)]
     expected_unym: u64,
-    /// ISO-3166 country the money came from, as the payment rail reports it (Mollie's
-    /// `countryCode`). NOT asked of the buyer and not
+    /// ISO-3166 country the money came from, as the payment rail reports it (Stripe's
+    /// billing address on the checkout session). NOT asked of the buyer by us and not
     /// derivable for a direct coin transfer, where it stays empty. Its only job is to show
     /// how close cross-border EU B2C turnover is to the threshold that would force OSS
     /// registration — it never changes what is charged.
@@ -1701,7 +1647,7 @@ pub struct Raised {
 pub struct Gateway {
     rail: Rail,
     nyx: Option<crate::nyx::Nyx>,
-    /// Cards (Mollie hosted checkout) — orthogonal to the coin rails, serves "card".
+    /// Cards (Stripe hosted checkout) — orthogonal to the coin rails, serves "card".
     card: CardRail,
 }
 
@@ -1711,7 +1657,7 @@ impl Gateway {
     }
 
     pub fn name(&self) -> String {
-        // "none+nyx+mollie" read like a failure at boot, when it only means "no coin rail
+        // "none+nyx+stripe" read like a failure at boot, when it only means "no coin rail
         // is configured" — which is the correct state between removing CoinGate and having
         // BTCPay up. Name what IS there; say so plainly when nothing is.
         let mut n = match self.rail {
@@ -1727,8 +1673,8 @@ impl Gateway {
         if self.nyx.is_some() {
             add("nyx");
         }
-        if let CardRail::Mollie { .. } = self.card {
-            add("mollie");
+        if let CardRail::Stripe { .. } = self.card {
+            add("stripe");
         }
         if n.is_empty() {
             n.push_str("none — this server cannot sell anything");
@@ -1819,12 +1765,12 @@ impl Rail {
             // non-nyx invoice still settled for free. Refuse to boot in that mixed state.
             let real = [
                 "NYX_RECEIVE_ADDRESS", "NYX_LCD_URL", "BTCPAY_URL", "BTCPAY_STORE_ID", "BTCPAY_API_KEY",
-                "MOLLIE_API_KEY", "MOLLIE_API_KEY_TESTNET", "MOLLIE_API_KEY_MAINNET",
+                "STRIPE_SECRET_KEY", "STRIPE_SECRET_KEY_TESTNET", "STRIPE_SECRET_KEY_MAINNET",
             ]
             .iter()
             .any(|k| std::env::var(k).map(|v| !v.trim().is_empty()).unwrap_or(false));
             if real {
-                eprintln!("scrai-server: FATAL: FAKE_PAYMENTS=1 together with a real payment rail (NYX_*/BTCPAY_*/MOLLIE_*) — remove one. Refusing to start.");
+                eprintln!("scrai-server: FATAL: FAKE_PAYMENTS=1 together with a real payment rail (NYX_*/BTCPAY_*/STRIPE_*) — remove one. Refusing to start.");
                 std::process::exit(1);
             }
             eprintln!("scrai-server: FAKE_PAYMENTS=1 — invoices settle on first poll. DEV ONLY.");
@@ -1943,7 +1889,7 @@ impl Rail {
     /// settings instead of second-guessing them here.
     ///
     /// Takes the whole invoice for the same reason the card rail does (audit M2): a
-    /// settled status alone is not enough to credit. It matters MORE here than at Mollie,
+    /// settled status alone is not enough to credit. It matters MORE here than at the card rail,
     /// because a BTCPay store has a payment-tolerance setting — with it above zero an
     /// invoice reaches "Settled" having received less than it asked for, and no code on
     /// our side would have noticed.
@@ -2104,29 +2050,34 @@ fn variant_json(c: &Coin) -> Value {
 
 
 // ---------------------------------------------------------------------------
-// Cards via Mollie — hosted checkout, no card data here, no webhook (the server has
+// Cards via Stripe — hosted checkout, no card data here, no webhook (the server has
 // no clearnet port, so the client's 10 s status poll drives `GET /v2/payments/{id}`).
 // See docs/card-payments.md §4 for every fact this code leans on.
 // ---------------------------------------------------------------------------
 
-const MOLLIE_API: &str = "https://api.mollie.com/v2";
-/// Where Mollie sends the browser after checkout when MOLLIE_REDIRECT_URL is unset:
+const STRIPE_API: &str = "https://api.stripe.com/v1";
+/// Where Stripe sends the browser after checkout when STRIPE_REDIRECT_URL is unset:
 /// the static thank-you page on our own site (no order id, no cookie).
 const DEFAULT_PAID_URL: &str = "https://tokumai.com/paid";
+/// Stripe's floor for a Checkout Session is 30 minutes; Mollie's cards expired after ~15.
+/// The buy sheet counts this down, so it is a decision rather than an inheritance: a buyer
+/// gets half an hour, and an abandoned invoice holds its slot that long.
+const CHECKOUT_MINUTES: u64 = 30;
 
 pub enum CardRail {
-    Mollie { api_key: String, redirect_url: String },
+    Stripe { secret_key: String, redirect_url: String },
     None,
 }
 
 impl CardRail {
     pub fn from_env() -> CardRail {
-        // Network-scoped like BTCPay (MOLLIE_API_KEY_MAINNET / _TESTNET, bare fallback).
-        // A `test_…` key is Mollie's test mode (EUR only, checkout lets you pick the
-        // outcome); a `live_…` key moves real money.
-        match crate::net_var("MOLLIE_API_KEY") {
+        // Network-scoped like BTCPay (STRIPE_SECRET_KEY_MAINNET / _TESTNET, bare fallback).
+        // The MODE comes from which slot the key sits in, never from sniffing its prefix:
+        // Stripe has sk_test_, sk_live_, rk_test_, rk_live_ and will add more, and a guess
+        // that is wrong here quotes the wrong money.
+        match crate::net_var("STRIPE_SECRET_KEY") {
             Some(k) => {
-                let redirect_url = crate::net_var("MOLLIE_REDIRECT_URL")
+                let redirect_url = crate::net_var("STRIPE_REDIRECT_URL")
                     .filter(|u| u.starts_with("https://"))
                     .or_else(|| {
                         crate::cfg("FAUCET_URL")
@@ -2135,7 +2086,7 @@ impl CardRail {
                             .map(|u| format!("{}/paid", u.trim_end_matches('/')))
                     })
                     .unwrap_or_else(|| DEFAULT_PAID_URL.to_string());
-                CardRail::Mollie { api_key: k.trim().to_string(), redirect_url }
+                CardRail::Stripe { secret_key: k.trim().to_string(), redirect_url }
             }
             None => CardRail::None,
         }
@@ -2143,57 +2094,74 @@ impl CardRail {
 
     pub fn name(&self) -> &'static str {
         match self {
-            CardRail::Mollie { .. } => "mollie",
+            CardRail::Stripe { .. } => "stripe",
             CardRail::None => "none",
         }
     }
 
     async fn create_invoice(&self, usd: u32, reference: &str) -> Result<RaisedInvoice, String> {
-        let CardRail::Mollie { api_key, redirect_url } = self else {
+        let CardRail::Stripe { secret_key, redirect_url } = self else {
             return Err("card payments are not configured on this server".into());
         };
-        let (currency, value) = quoted_amount(api_key, usd);
-        let body = json!({
-            "amount": { "currency": currency, "value": value },
-            "description": "tokumai credit",
-            "redirectUrl": redirect_url,
-            // No `method`: the hosted checkout offers every method enabled in the Mollie
-            // dashboard (cards, PayPal, later Wero) — switching one on there needs no deploy.
-            // Our random invoice id only — Mollie never learns the account, a session
-            // key or anything usage-related.
-            "metadata": { "orderId": reference },
-            "locale": "en_US",
-        });
-        let v = mollie(
-            api_key,
+        let (currency, cents) = quoted_amount(usd);
+        let cents_s = cents.to_string();
+        let exp_s = (now_ms() / 1000 + CHECKOUT_MINUTES * 60).to_string();
+        // Stripe is form-encoded, not JSON, and nests with brackets.
+        let form: Vec<(&str, &str)> = vec![
+            ("mode", "payment"),
+            ("line_items[0][price_data][currency]", currency),
+            ("line_items[0][price_data][unit_amount]", &cents_s),
+            ("line_items[0][price_data][product_data][name]", "tokumai credit"),
+            ("line_items[0][quantity]", "1"),
+            // Both on purpose: `client_reference_id` is the field Stripe means for our own
+            // id, `metadata` is what a human reading the dashboard looks at. Settlement
+            // requires them to agree.
+            ("client_reference_id", reference),
+            ("metadata[orderId]", reference),
+            // Name and billing address are a bookkeeping requirement, so they are pinned
+            // HERE rather than in the dashboard: a toggle somebody flips by accident would
+            // quietly stop collecting what the books need. `enabled` alone makes the name
+            // required — Stripe defaults its `optional` to false.
+            ("billing_address_collection", "required"),
+            ("name_collection[individual][enabled]", "true"),
+            // Adaptive Pricing would present AND settle in the buyer's own currency, and
+            // `check_status` refuses anything that is not the amount we quoted — so a
+            // conversion would mean a charged card and no credit. Off here as well as in
+            // the dashboard, because either one can be changed without the other.
+            ("adaptive_pricing[enabled]", "false"),
+            // No Customer object: the name and address stay on the session, at Stripe, and
+            // never become a profile we hold.
+            ("customer_creation", "if_required"),
+            ("submit_type", "pay"),
+            ("locale", "en"),
+            ("expires_at", &exp_s),
+            ("success_url", redirect_url),
+        ];
+        let v = stripe(
+            secret_key,
             crate::http::client()
-                .post(format!("{MOLLIE_API}/payments"))
+                .post(format!("{STRIPE_API}/checkout/sessions"))
                 // Keyed by OUR invoice id: if this create is ever re-sent (a retry inside
-                // the hour), Mollie hands back the same payment instead of a second one.
+                // the window), Stripe hands back the same session instead of a second one.
                 .header("Idempotency-Key", reference)
-                .json(&body),
+                .form(&form),
         )
         .await?;
         let provider_ref = v.get("id").and_then(|i| i.as_str()).unwrap_or_default().to_string();
-        if !provider_ref.starts_with("tr_") {
-            return Err("Mollie returned no payment id".into());
+        if !provider_ref.starts_with("cs_") {
+            return Err("Stripe returned no checkout session id".into());
         }
-        let checkout = v
-            .pointer("/_links/checkout/href")
-            .and_then(|h| h.as_str())
-            .unwrap_or_default()
-            .to_string();
-        // The client opens this in the OS browser — it must be Mollie's own hosted page.
-        if !is_mollie_url(&checkout) {
-            return Err("Mollie returned no hosted checkout link".into());
+        let checkout = v.get("url").and_then(|h| h.as_str()).unwrap_or_default().to_string();
+        // The client opens this in the OS browser — it must be Stripe's own hosted page.
+        if !is_stripe_url(&checkout) {
+            return Err("Stripe returned no hosted checkout link".into());
         }
-        // `expiresAt` is RFC 3339; cards expire after ~15–30 min at Mollie. Fall back to
-        // 15 min if it is missing rather than predicting.
+        // Stripe's own expiry rather than our prediction of it; seconds, not RFC 3339.
         let expires_at = v
-            .get("expiresAt")
-            .and_then(|e| e.as_str())
-            .and_then(rfc3339_ms)
-            .unwrap_or_else(|| now_ms() + 15 * 60_000);
+            .get("expires_at")
+            .and_then(|e| e.as_u64())
+            .map(|s| s * 1000)
+            .unwrap_or_else(|| now_ms() + CHECKOUT_MINUTES * 60_000);
         Ok(RaisedInvoice {
             provider_ref,
             pay_to: String::new(),
@@ -2203,72 +2171,67 @@ impl CardRail {
         })
     }
 
-    /// "paid" | "pending" | "expired". Only Mollie's `paid` settles — `authorized` is the
-    /// capture flow we do not use. A 429 (rate limit) is "nothing new yet": the next
+    /// "paid" | "pending" | "expired". A 429 (rate limit) is "nothing new yet": the next
     /// 10 s poll re-asks, and our volume is nowhere near the limit anyway.
     ///
     /// Takes the whole invoice, not just the reference: `paid` alone never settles, the
     /// payment must also be OUR payment for OUR amount (see `settlement_matches`).
     async fn check_status(&self, inv: &Inv) -> Result<Paid, String> {
-        let CardRail::Mollie { api_key, .. } = self else {
+        let CardRail::Stripe { secret_key, .. } = self else {
             return Err("card payments are not configured on this server".into());
         };
         let provider_ref = inv.provider_ref.as_str();
-        if !provider_ref.starts_with("tr_") || !provider_ref.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
-            return Err("not a Mollie payment reference".into());
+        if !provider_ref.starts_with("cs_") || !provider_ref.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+            return Err("not a Stripe checkout session".into());
         }
-        let v = match mollie(api_key, crate::http::client().get(format!("{MOLLIE_API}/payments/{provider_ref}"))).await {
+        let url = format!("{STRIPE_API}/checkout/sessions/{provider_ref}");
+        let v = match stripe(secret_key, crate::http::client().get(url)).await {
             Ok(v) => v,
-            Err(MollieErr::RateLimited(_)) => return Ok(Paid::plain("pending".into())),
-            Err(MollieErr::Other(e)) => return Err(e),
+            Err(CardErr::RateLimited(_)) => return Ok(Paid::plain("pending".into())),
+            Err(CardErr::Other(e)) => return Err(e),
         };
-        let status = v.get("status").and_then(|s| s.as_str()).unwrap_or("");
-        if status != "paid" {
-            return Ok(Paid::plain(
-                match status {
-                    "canceled" | "expired" | "failed" => "expired",
-                    _ => "pending",
-                }
-                .into(),
-            ));
+        if v.get("payment_status").and_then(|s| s.as_str()) != Some("paid") {
+            let expired = v.get("status").and_then(|s| s.as_str()) == Some("expired");
+            return Ok(Paid::plain(if expired { "expired" } else { "pending" }.into()));
         }
         // Settlement is the one place where being wrong costs real money, so the reply has
         // to agree with the invoice we raised — not merely say "paid". There is no known
-        // path to a mismatch today (the server creates the payment and looks it up by its
+        // path to a mismatch today (the server creates the session and looks it up by its
         // own id), which is exactly why a mismatch means something we do not understand
         // happened: fail closed, leave the invoice pending, and say so in the log.
-        let (currency, value) = quoted_amount(api_key, inv.amount_usd);
-        if let Err(why) = settlement_matches(&v, &inv.id, currency, &value) {
-            eprintln!("scrai-server: REFUSING to settle Mollie {provider_ref} for invoice {}: {why}", inv.id);
+        let (currency, cents) = quoted_amount(inv.amount_usd);
+        if let Err(why) = settlement_matches(&v, &inv.id, currency, cents) {
+            eprintln!("scrai-server: REFUSING to settle Stripe {provider_ref} for invoice {}: {why}", inv.id);
             return Err("this card payment does not match the invoice — it was not credited; contact support".into());
         }
-        // Where the money came from, out of the reply we already have — the buyer is never
-        // asked. `countryCode` is Mollie's own; a card also carries the issuer's country.
+        // The BILLING country the buyer typed, which is the one the books want — Mollie
+        // could only offer the country of the card. The name, address and e-mail beside it
+        // stay at Stripe; we take the country and nothing else.
         let country = v
-            .get("countryCode")
+            .pointer("/customer_details/address/country")
             .and_then(|c| c.as_str())
-            .or_else(|| v.pointer("/details/cardCountryCode").and_then(|c| c.as_str()))
             .map(|c| c.to_string());
         Ok(Paid { state: "paid".into(), country })
     }
 }
 
-/// Mollie's hosted checkout lives on mollie.com (www.mollie.com/checkout/…); nothing
-/// else may be handed to the client as a link to open.
-fn is_mollie_url(u: &str) -> bool {
+/// Stripe's hosted checkout lives on checkout.stripe.com; nothing else may be handed to
+/// the client as a link to open. `stripe.com` on its own would not be enough — a
+/// look-alike under another subdomain would pass that, and this string ends up in a
+/// browser the user trusts because we sent them there.
+fn is_stripe_url(u: &str) -> bool {
     let Some(rest) = u.strip_prefix("https://") else { return false };
-    let host = rest.split('/').next().unwrap_or("");
-    host == "mollie.com" || host.ends_with(".mollie.com")
+    let host = rest.split(['/', '?', '#']).next().unwrap_or("");
+    host == "checkout.stripe.com"
 }
 
-/// The amount we ask Mollie to charge for a `usd` tile. Test mode is EUR-only at Mollie,
-/// so the test rail charges the tile's number in EUR 1:1 — a placeholder, nothing is
-/// converted; live charges the USD tile (the TOKU price is fixed per USD, Mollie converts
-/// to the payout currency). One function, so the settlement check cannot drift away from
-/// what the create asked for.
-fn quoted_amount(api_key: &str, usd: u32) -> (&'static str, String) {
-    let currency = if api_key.starts_with("test_") { "EUR" } else { "USD" };
-    (currency, format!("{usd}.00"))
+/// What we ask Stripe to charge: a lowercase ISO code and the amount in minor units.
+///
+/// Always USD, in test mode too. Mollie's test keys could only quote EUR, which is what
+/// made a live/test currency mix-up worth guarding against; Stripe has no such
+/// restriction, so the sandbox charges exactly what production charges.
+fn quoted_amount(usd: u32) -> (&'static str, u64) {
+    ("usd", usd as u64 * 100)
 }
 
 /// Does this settled BTCPay invoice belong to us and carry what we asked for?
@@ -2298,93 +2261,72 @@ fn btcpay_settlement_matches(inv: &Value, our: &Inv) -> Result<(), String> {
     Ok(())
 }
 
-/// Does this `paid` Mollie payment belong to `expect_ref` and carry the amount we quoted?
+/// Does this `paid` Stripe session belong to `expect_ref` and carry the amount we quoted?
 /// Pure, so the rule is testable without the network.
-fn settlement_matches(v: &Value, expect_ref: &str, currency: &str, value: &str) -> Result<(), String> {
-    let order = v.pointer("/metadata/orderId").and_then(|o| o.as_str()).unwrap_or("");
-    if order != expect_ref {
-        return Err(format!("metadata.orderId is {order:?}, expected {expect_ref:?}"));
+fn settlement_matches(v: &Value, expect_ref: &str, currency: &str, cents: u64) -> Result<(), String> {
+    // Four conditions out of one reply. `client_reference_id` is the field Stripe means
+    // for our own id; `metadata.orderId` carries the same value, and either one
+    // disagreeing is enough to refuse.
+    let by_ref = v.get("client_reference_id").and_then(|o| o.as_str()).unwrap_or("");
+    let by_meta = v.pointer("/metadata/orderId").and_then(|o| o.as_str()).unwrap_or("");
+    if by_ref != expect_ref || by_meta != expect_ref {
+        return Err(format!("session names {by_ref:?}/{by_meta:?}, expected {expect_ref:?}"));
     }
-    let got_cur = v.pointer("/amount/currency").and_then(|c| c.as_str()).unwrap_or("");
-    let got_val = v.pointer("/amount/value").and_then(|c| c.as_str()).unwrap_or("");
-    if got_cur != currency || got_val != value {
-        return Err(format!("amount is {got_val} {got_cur}, expected {value} {currency}"));
+    if v.get("status").and_then(|s| s.as_str()) != Some("complete") {
+        return Err("session is not complete".into());
+    }
+    let got_cur = v.get("currency").and_then(|c| c.as_str()).unwrap_or("");
+    let got_amt = v.get("amount_total").and_then(|c| c.as_u64()).unwrap_or(0);
+    // Stripe writes the currency lowercase; compare case-insensitively rather than rely on it.
+    if !got_cur.eq_ignore_ascii_case(currency) || got_amt != cents {
+        return Err(format!("amount is {got_amt} {got_cur}, expected {cents} {currency}"));
     }
     Ok(())
 }
 
 #[derive(Debug)]
-enum MollieErr {
+enum CardErr {
     /// 429 with the provider's `Retry-After` (seconds), when it sent one.
     RateLimited(Option<u64>),
     Other(String),
 }
 
-impl From<MollieErr> for String {
-    fn from(e: MollieErr) -> String {
+impl From<CardErr> for String {
+    fn from(e: CardErr) -> String {
         match e {
-            MollieErr::RateLimited(after) => provider_busy("the card processor", after),
-            MollieErr::Other(s) => s,
+            CardErr::RateLimited(after) => provider_busy("the card processor", after),
+            CardErr::Other(s) => s,
         }
     }
 }
 
-async fn mollie(api_key: &str, req: reqwest::RequestBuilder) -> Result<Value, MollieErr> {
+async fn stripe(secret_key: &str, req: reqwest::RequestBuilder) -> Result<Value, CardErr> {
+    // Stripe authenticates with HTTP Basic: the secret key as the username, no password.
     let res = req
-        .header("authorization", format!("Bearer {api_key}"))
+        .basic_auth(secret_key, Some(""))
         .timeout(std::time::Duration::from_secs(20))
         .send()
         .await
-        .map_err(|e| MollieErr::Other(format!("Mollie unreachable: {e}")))?;
+        .map_err(|e| CardErr::Other(format!("Stripe unreachable: {e}")))?;
     let status = res.status();
     let retry_after = retry_after_secs(&res);
     let body: Value = res.json().await.unwrap_or(Value::Null);
     if !status.is_success() {
-        // Mollie errors are {status, title, detail}; `detail` names the offending field.
-        let detail = body.get("detail").and_then(|m| m.as_str()).unwrap_or("");
+        // Stripe errors are {error:{type, code, message}}; `message` is written for a human.
+        let detail = body.pointer("/error/message").and_then(|m| m.as_str()).unwrap_or("");
         return Err(match status.as_u16() {
-            401 | 403 => MollieErr::Other("Mollie rejected the API key — check MOLLIE_API_KEY".into()),
-            404 => MollieErr::Other("Mollie does not know this payment".into()),
-            429 => MollieErr::RateLimited(retry_after),
-            502 | 503 | 504 => MollieErr::Other(provider_busy("the card processor", retry_after)),
-            s => MollieErr::Other(format!("Mollie {s}: {}", detail.chars().take(200).collect::<String>())),
+            401 | 403 => CardErr::Other(
+                "Stripe rejected the API key — check STRIPE_SECRET_KEY and the key's permissions".into(),
+            ),
+            404 => CardErr::Other("Stripe does not know this checkout session".into()),
+            429 => CardErr::RateLimited(retry_after),
+            502 | 503 | 504 => CardErr::Other(provider_busy("the card processor", retry_after)),
+            s => CardErr::Other(format!("Stripe {s}: {}", detail.chars().take(200).collect::<String>())),
         });
     }
     Ok(body)
 }
 
-/// `2026-08-29T10:47:54+00:00` → unix ms. Mollie's timestamps are
-/// RFC 3339 with a numeric offset (or `Z`); anything else parses as None and the caller
-/// falls back.
-fn rfc3339_ms(s: &str) -> Option<u64> {
-    let s = s.trim();
-    let (date, rest) = s.split_once('T')?;
-    let mut d = date.split('-').map(|x| x.parse::<i64>());
-    let (y, mo, da) = (d.next()?.ok()?, d.next()?.ok()?, d.next()?.ok()?);
-    // time part ends where the offset starts: 'Z', '+' or '-'
-    let off_pos = rest.find(['Z', '+', '-'])?;
-    let (time, off) = rest.split_at(off_pos);
-    let time = time.split('.').next()?; // drop fractional seconds
-    let mut t = time.split(':').map(|x| x.parse::<i64>());
-    let (h, mi, se) = (t.next()?.ok()?, t.next()?.ok()?, t.next().unwrap_or(Ok(0)).ok()?);
-    let off_secs: i64 = if off == "Z" {
-        0
-    } else {
-        let sign = if off.starts_with('-') { -1 } else { 1 };
-        let mut o = off[1..].split(':').map(|x| x.parse::<i64>());
-        let (oh, om) = (o.next()?.ok()?, o.next().unwrap_or(Ok(0)).ok()?);
-        sign * (oh * 3600 + om * 60)
-    };
-    // days from civil (Howard Hinnant), valid for the proleptic Gregorian calendar
-    let (y2, m2) = if mo <= 2 { (y - 1, mo + 9) } else { (y, mo - 3) };
-    let era = y2.div_euclid(400);
-    let yoe = y2 - era * 400;
-    let doy = (153 * m2 + 2) / 5 + da - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146_097 + doe - 719_468;
-    let secs = days * 86_400 + h * 3600 + mi * 60 + se - off_secs;
-    u64::try_from(secs).ok().map(|s| s * 1000)
-}
 
 // ---------------------------------------------------------------------------
 #[cfg(test)]
@@ -2629,7 +2571,7 @@ mod tests {
         assert!(replay.get("error").is_some());
     }
 
-    /// Card rules live in begin_create: no Mollie key → no card sales at all; with a key,
+    /// Card rules live in begin_create: no Stripe key → no card sales at all; with a key,
     /// tiles below CARD_MIN_USD are refused BEFORE any gateway call. Env-mutating →
     /// write lock.
     #[tokio::test]
@@ -2637,7 +2579,7 @@ mod tests {
         let _env = ENV_LOCK.write().unwrap_or_else(|e| e.into_inner());
         std::env::remove_var("TESTNET");
         std::env::remove_var("CARD_MIN_USD");
-        for k in ["MOLLIE_API_KEY", "MOLLIE_API_KEY_TESTNET", "MOLLIE_API_KEY_MAINNET"] {
+        for k in ["STRIPE_SECRET_KEY", "STRIPE_SECRET_KEY_TESTNET", "STRIPE_SECRET_KEY_MAINNET"] {
             std::env::remove_var(k);
         }
         let (sk, pem, aid) = account();
@@ -2651,7 +2593,7 @@ mod tests {
         assert!(r.get("error").and_then(|e| e.as_str()).unwrap().contains("not available"));
 
         // key present → $5 is below the default $10 minimum
-        std::env::set_var("MOLLIE_API_KEY_TESTNET", "test_dummy");
+        std::env::set_var("STRIPE_SECRET_KEY_TESTNET", "rk_test_dummy");
         assert!(card_enabled());
         let req = json!({"kind":"invoice.create","id":"r","publicKey":pem,"usd":5,"method":"card",
             "nonce":"c2","sig":signed(&sk,&aid,"invoice:5","c2")});
@@ -2670,7 +2612,7 @@ mod tests {
             "nonce":"c4","sig":signed(&sk,&aid,"invoice:5","c4")});
         let r: Value = serde_json::from_slice(&pay.handle(req.to_string().as_bytes(), &gw).await).unwrap();
         assert!(r.get("invoiceId").is_some());
-        std::env::remove_var("MOLLIE_API_KEY_TESTNET");
+        std::env::remove_var("STRIPE_SECRET_KEY_TESTNET");
     }
 
     #[tokio::test]
@@ -2873,25 +2815,64 @@ mod card_tests {
     use super::*;
 
     #[test]
-    fn rfc3339_parses_mollie_timestamps() {
-        // 2026-08-29T10:47:54+00:00 = 1788000474 (checked against `date -u -j`)
-        assert_eq!(rfc3339_ms("2026-08-29T10:47:54+00:00"), Some(1_788_000_474_000));
-        assert_eq!(rfc3339_ms("2026-08-29T10:47:54Z"), Some(1_788_000_474_000));
-        // +02:00 is two hours EARLIER in UTC
-        assert_eq!(rfc3339_ms("2026-08-29T12:47:54+02:00"), Some(1_788_000_474_000));
-        assert_eq!(rfc3339_ms("1970-01-01T00:00:00Z"), Some(0));
-        assert_eq!(rfc3339_ms("garbage"), None);
-        assert_eq!(rfc3339_ms(""), None);
-    }
 
     #[test]
-    fn only_mollie_hosted_checkout_is_a_link() {
-        assert!(is_mollie_url("https://www.mollie.com/checkout/select-method/7UhSN1zuXS"));
-        assert!(is_mollie_url("https://mollie.com/x"));
-        assert!(!is_mollie_url("http://www.mollie.com/checkout"));
-        assert!(!is_mollie_url("https://evil-mollie.com/checkout"));
-        assert!(!is_mollie_url("https://mollie.com.evil.net/checkout"));
-        assert!(!is_mollie_url(""));
+    /// The adapter against the real sandbox. Ignored by default — it needs the network and
+    /// a key — and run by hand with:
+    ///
+    ///     STRIPE_SECRET_KEY=$(grep ^STRIPE_SECRET_KEY_TESTNET= .env | cut -d= -f2) \
+    ///       cargo test -p scrai-server --lib stripe_sandbox -- --ignored --nocapture
+    ///
+    /// The unit tests above prove the RULES; this proves the request we actually send is a
+    /// request Stripe accepts. Both matter: a perfect rule applied to a rejected request
+    /// settles nothing.
+    #[test]
+    #[ignore = "network + STRIPE_SECRET_KEY"]
+    fn stripe_sandbox_raises_and_reads_back_an_invoice() {
+        let Ok(key) = std::env::var("STRIPE_SECRET_KEY") else {
+            panic!("set STRIPE_SECRET_KEY to a test key to run this");
+        };
+        assert!(key.contains("_test_"), "refusing to run against a live key");
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let rail = CardRail::Stripe { secret_key: key, redirect_url: "https://tokumai.com/paid".into() };
+        // Unique per RUN: the idempotency key is our reference, so a repeated one makes
+        // Stripe hand back the first session — correct behaviour that looks like a failure
+        // when two runs of this test overlap.
+        let reference = format!("selftest{}{}", now_ms(), std::process::id());
+
+        let raised = rt.block_on(rail.create_invoice(10, &reference)).expect("create");
+        assert!(raised.provider_ref.starts_with("cs_"), "got {}", raised.provider_ref);
+        let checkout = raised.options[0]["checkout"].as_str().unwrap_or_default();
+        assert!(is_stripe_url(checkout), "checkout url was {checkout}");
+        // 30 minutes, not Mollie's 15 — the floor Stripe imposes.
+        let minutes = (raised.expires_at.saturating_sub(now_ms())) / 60_000;
+        assert!((25..=35).contains(&minutes), "expiry is {minutes} min away");
+
+        // Unpaid, so the rail must say "pending" and settle nothing.
+        // Only the three fields check_status reads; the rest of a real Inv is the
+        // paywall's business.
+        let inv: Inv = serde_json::from_value(json!({
+            "id": reference, "provider_ref": raised.provider_ref, "account_id": "",
+            "amount_usd": 10, "amount_scrai": 1_000_000u64, "method": "card",
+            "status": "pending", "expires_at": raised.expires_at,
+        }))
+        .expect("an Inv the paywall would accept");
+        let state = rt.block_on(rail.check_status(&inv)).expect("status");
+        assert_eq!(state.state, "pending");
+        assert!(!state.is_paid());
+        println!("sandbox ok: {} · {checkout}", raised.provider_ref);
+    }
+
+    fn only_stripes_hosted_checkout_is_a_link() {
+        // This string is handed to a browser because WE told the user to trust it, so the
+        // host has to match exactly. "stripe.com somewhere in the name" is the attack.
+        assert!(is_stripe_url("https://checkout.stripe.com/c/pay/cs_test_a1#fid"));
+        assert!(is_stripe_url("https://checkout.stripe.com/c/pay/cs_live_x?y=1"));
+        assert!(!is_stripe_url("http://checkout.stripe.com/c/pay/x"), "plain http is not it");
+        assert!(!is_stripe_url("https://stripe.com/checkout"), "the apex is not the checkout host");
+        assert!(!is_stripe_url("https://checkout.stripe.com.evil.net/x"));
+        assert!(!is_stripe_url("https://evil-checkout.stripe.com/x"));
+        assert!(!is_stripe_url(""));
     }
 
     #[test]
@@ -2938,35 +2919,51 @@ mod card_tests {
         assert_eq!(after[0].id, "open2");
     }
 
-    // ---- Mollie settlement (audit M2): `paid` alone must never credit -----------------
+    // ---- Stripe settlement (audit M2): `paid` alone must never credit -----------------
 
-    fn mollie_paid(order: &str, value: &str, currency: &str) -> Value {
+    fn stripe_paid(order: &str, cents: u64, currency: &str) -> Value {
         json!({
-            "id": "tr_abc", "status": "paid",
-            "amount": { "currency": currency, "value": value },
+            "status": "complete",
+            "payment_status": "paid",
+            "client_reference_id": order,
             "metadata": { "orderId": order },
+            "amount_total": cents,
+            "currency": currency,
         })
     }
 
     #[test]
-    fn quoted_amount_follows_the_key_mode() {
-        assert_eq!(quoted_amount("test_x", 5), ("EUR", "5.00".to_string()));
-        assert_eq!(quoted_amount("live_x", 25), ("USD", "25.00".to_string()));
+    fn the_quote_is_dollars_in_minor_units() {
+        // Mollie's test keys could only quote EUR, so the sandbox charged a different
+        // currency than production and a mix-up was worth guarding. Stripe has no such
+        // split: one fewer way to be wrong.
+        assert_eq!(quoted_amount(5), ("usd", 500));
+        assert_eq!(quoted_amount(50), ("usd", 5000));
     }
 
     #[test]
     fn settlement_needs_our_reference_and_our_amount() {
-        let ok = mollie_paid("inv7", "10.00", "USD");
-        assert!(settlement_matches(&ok, "inv7", "USD", "10.00").is_ok());
+        assert!(settlement_matches(&stripe_paid("inv7", 1000, "usd"), "inv7", "usd", 1000).is_ok());
 
-        // someone else's payment that happens to be paid
-        assert!(settlement_matches(&mollie_paid("inv8", "10.00", "USD"), "inv7", "USD", "10.00").is_err());
+        // someone else's session that happens to be paid
+        assert!(settlement_matches(&stripe_paid("inv8", 1000, "usd"), "inv7", "usd", 1000).is_err());
         // the tile we sold is not the amount that was charged
-        assert!(settlement_matches(&mollie_paid("inv7", "1.00", "USD"), "inv7", "USD", "10.00").is_err());
-        // right number, wrong money (the test/live currency mix-up M2 names)
-        assert!(settlement_matches(&mollie_paid("inv7", "10.00", "EUR"), "inv7", "USD", "10.00").is_err());
-        // a reply without metadata at all settles nothing
-        assert!(settlement_matches(&json!({ "status": "paid" }), "inv7", "USD", "10.00").is_err());
+        assert!(settlement_matches(&stripe_paid("inv7", 100, "usd"), "inv7", "usd", 1000).is_err());
+        // right number, wrong money — what Adaptive Pricing would do if it came back on
+        assert!(settlement_matches(&stripe_paid("inv7", 1000, "eur"), "inv7", "usd", 1000).is_err());
+        // a reply with no reference at all settles nothing
+        let bare = json!({ "status": "complete", "payment_status": "paid" });
+        assert!(settlement_matches(&bare, "inv7", "usd", 1000).is_err());
+
+        // the two names for our id must AGREE — one of them being right is not enough
+        let mut split = stripe_paid("inv7", 1000, "usd");
+        split["metadata"]["orderId"] = json!("inv8");
+        assert!(settlement_matches(&split, "inv7", "usd", 1000).is_err());
+
+        // ours, right amount, but Stripe has not finished with it
+        let mut still_open = stripe_paid("inv7", 1000, "usd");
+        still_open["status"] = json!("open");
+        assert!(settlement_matches(&still_open, "inv7", "usd", 1000).is_err());
     }
 
     // ---- purchase consent (§ 356 (5) BGB) --------------------------------------------

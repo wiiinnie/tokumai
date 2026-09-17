@@ -76,7 +76,7 @@
 
      Naming a recipient is a GDPR duty (Art. 13 (1) (e)), so this page has to be
      updated BEFORE a new provider serves its first request — never after. It is
-     also one of the pages Mollie reviews for card acceptance.
+     also one of the pages Stripe reviews for card acceptance.
 
      Checklist when adding or removing a provider:
        1. this file, §3 and §5 (legal entity + country + transfer mechanism)
@@ -96,13 +96,17 @@
   </ul>
 
   <h2>4. Payments</h2>
-  <p><b>Coins (NYM, Bitcoin):</b> we see the transaction on the public chain and the invoice memo; no personal data is collected. <b>Cards:</b> processed by <b>Mollie B.V.</b>, Keizersgracht 126, 1015 CW Amsterdam. Mollie collects the data needed for the payment (card details, name, e-mail if asked, IP address, browser data) as an independent controller under its own privacy policy: <a href="https://www.mollie.com/privacy" rel="noopener">mollie.com/privacy</a>. We receive from Mollie only the payment status, amount and our own random order id — never card data. Legal basis: Art. 6 (1) (b) GDPR; Mollie's retention follows its legal obligations (payment records, typically 7 years).</p>
+  <p><b>Cards and PayPal:</b> processed by <b>Stripe Payments Europe, Limited</b>, 1 Grand Canal Street Lower, Grand Canal Dock, Dublin 2, Ireland. The checkout runs on Stripe's own page, never in our app or on this site.</p>
+
+  <p>Stripe collects what the payment and our bookkeeping need — <b>your name and billing address</b>, your e-mail address, the card or account details, your IP address and browser data — as an independent controller under its own privacy policy: <a href="https://stripe.com/privacy" rel="noopener">stripe.com/privacy</a>. Name and address are required because we are obliged to record where a sale was made; they are <b>not</b> something the service itself needs, and they never touch your tokumai account or anything you do with it.</p>
+
+  <p>From Stripe we receive the payment status, the amount, our own random order id and <b>the country of the billing address</b>. The country is the only one of those we keep, in our sales records. We never receive card data, and we do not copy your name, address or e-mail into our systems — they stay with Stripe, where the tax records are kept. Legal basis: Art. 6 (1) (b) GDPR for the payment, Art. 6 (1) (c) GDPR for the records we must keep; Stripe's retention follows its own legal obligations (payment records, typically 7 years).</p>
 
   <h2>5. Recipients and transfers</h2>
-  <p>Model providers (Google LLC and OpenAI, L.L.C. — USA, under the EU–US Data Privacy Framework and/or standard contractual clauses) receive request content only; Mollie B.V. (Netherlands) receives card payment data; our hosting provider OVHcloud (EU data centre) operates the server. No data is sold or used for advertising.</p>
+  <p>Model providers (Google LLC and OpenAI, L.L.C. — USA, under the EU–US Data Privacy Framework and/or standard contractual clauses) receive request content only; Stripe Payments Europe, Limited (Ireland) receives the payment data, and may pass it to Stripe, Inc. (USA) under the same safeguards; our hosting provider OVHcloud (EU data centre) operates the server. No data is sold or used for advertising.</p>
 
   <h2>6. Your rights</h2>
-  <p>You have the rights of access, rectification, erasure, restriction, portability and objection (Art. 15–21 GDPR) and the right to complain to a supervisory authority (for us: Bayerisches Landesamt für Datenschutzaufsicht (BayLDA), Ansbach). Note that most data we hold is anonymous by design and cannot be attributed to you; for card payments, please quote the order id from the Mollie receipt.</p>
+  <p>You have the rights of access, rectification, erasure, restriction, portability and objection (Art. 15–21 GDPR) and the right to complain to a supervisory authority (for us: Bayerisches Landesamt für Datenschutzaufsicht (BayLDA), Ansbach). Note that most data we hold is anonymous by design and cannot be attributed to you; for card payments, please quote the order id from the Stripe receipt.</p>
 
   <h2>7. Contact</h2>
   <p><a href="mailto:hermes-stakepool@proton.me">hermes-stakepool@proton.me</a> · Hermes Blockchain Ventures, 80799 München.</p>

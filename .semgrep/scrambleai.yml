@@ -67,11 +67,15 @@ rules:
       - pattern-either:
           - pattern: $X.unwrap()
           - pattern: $X.expect($MSG)
-      # test modules may panic freely
+      # test modules may panic freely. By NAME, because `#[cfg(test)] mod $M { ... }` as a
+      # pattern matches nothing here and silently disarms the whole rule — 82 findings the
+      # moment it was tried (2026-09-16). So: add the name when a new test module appears.
       - pattern-not-inside: |
           mod tests { ... }
       - pattern-not-inside: |
           mod test { ... }
+      - pattern-not-inside: |
+          mod card_tests { ... }
     paths:
       include: [server/src/chat.rs, server/src/pay.rs, server/src/nyx.rs, server/src/replies.rs, server/src/uploads.rs, server/src/catalog.rs, server/src/federation.rs]
 

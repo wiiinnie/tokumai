@@ -132,7 +132,11 @@ pub const MONEY_RAILS: [&str; 7] = [
     "BTCPAY_URL",
     "BTCPAY_STORE_ID",
     "BTCPAY_API_KEY",
-    "MOLLIE_API_KEY",
+    // The card rail. Renaming this with the Mollie→Stripe swap was missed on 2026-09-16,
+    // and the miss is the worst kind: the list looked complete, the guard still ran, and a
+    // mainnet server carrying only STRIPE_SECRET_KEY_TESTNET would have booted and sold
+    // credit for test-card payments. Anything added to CardRail belongs here the same day.
+    "STRIPE_SECRET_KEY",
     // The faucet wallet pin. A mainnet server still pinned to the sandbox faucet refuses
     // every invite credit (fail closed) — visible only as testers whose $1 never lands.
     "FAUCET_ADDRESS",
@@ -143,7 +147,7 @@ pub const MONEY_RAILS: [&str; 7] = [
 /// `net_var` resolves `_MAINNET` → `_TESTNET` → bare, and that fallback ignores whether the
 /// server is actually in testnet mode. With only `_TESTNET` values in .env — the normal
 /// state of a testnet box — flipping TESTNET to 0 keeps every rail pointed at the
-/// test world while the server starts accepting real money. The worst of them is Mollie:
+/// test world while the server starts accepting real money. The worst of them is the card rail:
 /// its test checkout lets the payer pick "paid" for free, so anyone could mint credit and
 /// spend it on provider calls we pay for. Refuse to boot instead.
 pub fn testnet_rails_on_mainnet() -> Vec<&'static str> {
@@ -211,36 +215,45 @@ mod rail_guard_tests {
     }
 
     /// The scenario this exists for: a testnet box whose .env only has _TESTNET rails, and
-    /// someone flips TESTNET to 0. Mollie would then run on its `test_` key, whose
+    /// someone flips TESTNET to 0. The card rail would then run on its test key, whose
     /// checkout lets the payer choose "paid" for free — real credit, no money moved.
     #[test]
     fn a_mainnet_server_refuses_rails_that_only_have_a_testnet_value() {
         assert!(rails_on_test_infra(env(&[])).is_empty(), "nothing configured → nothing to flag");
 
+        // The card rail must BE in the list. A rename that updates CardRail and forgets
+        // MONEY_RAILS leaves a guard that still runs, still passes, and no longer guards
+        // the one rail where a test key means free credit — which is what happened on
+        // 2026-09-16 and was caught by an operator reading their own .env comment.
+        assert!(
+            MONEY_RAILS.contains(&"STRIPE_SECRET_KEY"),
+            "the card rail's env base must be in MONEY_RAILS, or a test key can serve real money"
+        );
+
         // exactly the shape of the live .env on 2026-09-05
         let live = env(&[
-            ("MOLLIE_API_KEY_TESTNET", "test_abc"),
+            ("STRIPE_SECRET_KEY_TESTNET", "rk_test_abc"),
             ("NYX_LCD_URL_TESTNET", "https://validator-sandbox-1.nymtech.net/api"),
             ("BTCPAY_URL_TESTNET", "https://testnet.demo.btcpayserver.org"),
         ]);
         let stale = rails_on_test_infra(live);
-        assert!(stale.contains(&"MOLLIE_API_KEY"), "the free-credit one must be caught: {stale:?}");
+        assert!(stale.contains(&"STRIPE_SECRET_KEY"), "the free-credit one must be caught: {stale:?}");
         assert!(stale.contains(&"NYX_LCD_URL") && stale.contains(&"BTCPAY_URL"));
 
         // a half-migrated .env still trips on what is left
         let half = env(&[
-            ("MOLLIE_API_KEY_TESTNET", "test_abc"),
-            ("MOLLIE_API_KEY_MAINNET", "live_abc"),
+            ("STRIPE_SECRET_KEY_TESTNET", "rk_test_abc"),
+            ("STRIPE_SECRET_KEY_MAINNET", "rk_live_abc"),
             ("NYX_LCD_URL_TESTNET", "https://validator-sandbox-1.nymtech.net/api"),
         ]);
         assert_eq!(rails_on_test_infra(half), vec!["NYX_LCD_URL"]);
 
         // an empty value is not a value
-        let blank = env(&[("MOLLIE_API_KEY_TESTNET", "test_abc"), ("MOLLIE_API_KEY_MAINNET", "   ")]);
-        assert_eq!(rails_on_test_infra(blank), vec!["MOLLIE_API_KEY"]);
+        let blank = env(&[("STRIPE_SECRET_KEY_TESTNET", "rk_test_abc"), ("STRIPE_SECRET_KEY_MAINNET", "   ")]);
+        assert_eq!(rails_on_test_infra(blank), vec!["STRIPE_SECRET_KEY"]);
 
         // a rail configured only for mainnet, or not at all, is fine
-        assert!(rails_on_test_infra(env(&[("MOLLIE_API_KEY_MAINNET", "live_abc")])).is_empty());
+        assert!(rails_on_test_infra(env(&[("STRIPE_SECRET_KEY_MAINNET", "rk_live_abc")])).is_empty());
     }
 }
 

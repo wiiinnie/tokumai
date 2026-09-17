@@ -48,7 +48,7 @@ use scrai_server::faucet::{list_codes, mint, open_db as open_faucet_db, DEFAULT_
 use scrai_server::pay::{Pay, TestnetInv, TESTNET_USD};
 
 const SITE: &str = include_str!("../../site/index.html");
-/// Legal pages Mollie's onboarding checks for (imprint, terms, privacy) — static, no
+/// Legal pages a card processor's onboarding checks for (imprint, terms, privacy) — static, no
 /// placeholders, served as-is.
 const PAGE_IMPRINT: &str = include_str!("../../site/imprint.html");
 const PAGE_TERMS: &str = include_str!("../../site/terms.html");
@@ -58,7 +58,7 @@ const PAGE_PRIVACY: &str = include_str!("../../site/privacy.html");
 /// invoice rides in the URL FRAGMENT, so it never reaches this server — nothing to log,
 /// nothing to store, and this route serves one static file to everyone.
 const PAGE_PAY: &str = include_str!("../../site/pay.html");
-/// Mollie's five official method marks, lifted out of index.html so the rail tiles can be
+/// The five official card/wallet method marks, lifted out of index.html so the rail tiles can be
 /// generated without a wall of SVG inside Rust. Originals in docs/brand/.
 const CARD_MARKS: &str = include_str!("../../site/cardmarks.html");
 /// Where a tester redeems an invite code. The app links here with the code and the memo
@@ -66,7 +66,7 @@ const CARD_MARKS: &str = include_str!("../../site/cardmarks.html");
 const PAGE_CLAIM: &str = include_str!("../../site/claim.html");
 /// The site's screenshots, baked into the binary so a deploy ships them (Caddy only knows
 /// /dl/; nothing else to upload or configure). Served as GET /img/<name>.
-/// Where Mollie's hosted checkout sends the browser afterwards (`MOLLIE_REDIRECT_URL`
+/// Where Stripe's hosted checkout sends the browser afterwards (`STRIPE_REDIRECT_URL`
 /// defaults to this host's /paid). Static, no script, no cookie, no order id in the URL
 /// or the page — the app learns about the payment from its own status poll, so this page
 /// links nothing back to anything. Same palette as the site, no external fonts (the CSP
@@ -270,12 +270,18 @@ impl Cfg {
 /// The "Available payment options" tiles.
 ///
 /// Read from the SERVER's own configuration rather than written into the page by hand — the
-/// card tile claimed "not available yet" for a day after Mollie went live, because a static
+/// card tile claimed "not available yet" for a day after the card rail went live, because a static
 /// page cannot know. Both units run with the same working directory and load the same .env,
 /// so asking `pay` here gives exactly the answer the server would give.
 /// The amounts on sale, each with its card price and — when the server discounts coins —
 /// its coin price. From the server's own tiers and percentage, so the page can never say
 /// a price the invoice will not charge.
+/// Can this server take a coin payment at all? Both coin rails, as one question — the
+/// price tiles and the page copy both hinge on it.
+fn coins_sellable() -> bool {
+    scrai_server::nyx::Nyx::from_env().is_some() || scrai_server::pay::coin_rail_ready()
+}
+
 fn prices_html() -> String {
     let pct = scrai_server::pay::coin_discount_pct();
     let mut out = String::from("<div class=\"prices\">");
@@ -288,7 +294,9 @@ fn prices_html() -> String {
             .map(|c| std::str::from_utf8(c).unwrap_or(""))
             .collect::<Vec<_>>()
             .join(",");
-        let coin = if pct > 0 {
+        // …and only when a coin rail is actually live: the discount priced a way to pay,
+        // and with coins withdrawn the line advertised a price nobody can get.
+        let coin = if pct > 0 && coins_sellable() {
             let cents = scrai_server::pay::charged_cents(usd, "nyx", false);
             format!("<small class=\"cr\">${}.{:02} with NYM or Bitcoin</small>", cents / 100, cents % 100)
         } else {
@@ -300,20 +308,43 @@ fn prices_html() -> String {
     out
 }
 
+/// The shop page, with its placeholders actually filled.
+///
+/// It used to be served straight from the template: `{{COIN_DISCOUNT_PCT}}` and
+/// `{{CARD_MIN_USD}}` were never substituted, and the page's `Number(…) || 0` fallbacks
+/// hid it — the coin discount simply never appeared there, and the card minimum was right
+/// only because the fallback happened to match. `{{RAILS}}` is new and is what lets the
+/// page offer exactly the rails this server can serve.
+fn pay_html() -> String {
+    let rails: Vec<&str> = [
+        ("nyx", scrai_server::nyx::Nyx::from_env().is_some()),
+        ("card", scrai_server::pay::card_enabled()),
+        ("btc", scrai_server::pay::coin_rail_ready()),
+    ]
+    .into_iter()
+    .filter_map(|(name, on)| on.then_some(name))
+    .collect();
+    PAGE_PAY
+        .replace("{{COIN_DISCOUNT_PCT}}", &scrai_server::pay::coin_discount_pct().to_string())
+        .replace("{{CARD_MIN_USD}}", &scrai_server::pay::card_min_usd().to_string())
+        .replace("{{RAILS}}", &rails.join(","))
+}
+
 fn rails_html() -> String {
+    // Only what can actually be bought with, TODAY. This used to render every rail and
+    // label the unavailable ones "not yet", which was honest while a rail was genuinely on
+    // the way — Monero waiting on our BTCPay store. It stopped being honest on 2026-09-16,
+    // when coin payments were withdrawn for tax reasons with no date to come back: "not
+    // yet" would then be a promise nobody has made. A rail that cannot be used is simply
+    // not offered, and if one returns it appears again on its own.
     let dot = |cls: &str, glyph: &str| {
         format!(
             "<svg class=\"coin {cls}\" viewBox=\"0 0 32 32\" width=\"28\" height=\"28\"><circle cx=\"16\" cy=\"16\" r=\"15\" fill=\"currentColor\"></circle><text x=\"16\" y=\"22\" text-anchor=\"middle\" font-family=\"JetBrains Mono, monospace\" font-size=\"15\" font-weight=\"700\" fill=\"#141210\">{glyph}</text></svg>"
         )
     };
-    let tile = |on: bool, mark: String, name: &str, tag_on: &str| {
-        format!(
-            "<div class=\"pm {}\">{mark}<span class=\"pmname\">{name}</span><span class=\"pmtag\">{}</span></div>",
-            if on { "on" } else { "soon" },
-            if on { tag_on } else { "not yet" },
-        )
+    let tile = |mark: String, name: &str, tag: &str| {
+        format!("<div class=\"pm on\">{mark}<span class=\"pmname\">{name}</span><span class=\"pmtag\">{tag}</span></div>")
     };
-    let card_tag = format!("available - from ${}", scrai_server::pay::card_min_usd());
     let pct = scrai_server::pay::coin_discount_pct();
     let coin_tag = if pct > 0 {
         format!("available - from ${} - {pct}% less", scrai_server::pay::coin_min_usd())
@@ -322,23 +353,31 @@ fn rails_html() -> String {
     };
 
     let mut out = String::from("<div class=\"pms\" id=\"rails\">");
-    let nym_tag = if pct > 0 { format!("native - Nyx - {pct}% less") } else { "native - Nyx".to_string() };
-    out.push_str(&tile(
-        scrai_server::nyx::Nyx::from_env().is_some(),
-        dot("nym", "N"),
-        "NYM",
-        &nym_tag,
-    ));
-    out.push_str(&tile(
-        scrai_server::pay::card_enabled(),
-        format!("<span class=\"cardmarks\">{CARD_MARKS}</span>"),
-        "Card, Apple Pay, Google Pay",
-        &card_tag,
-    ));
-    out.push_str(&tile(scrai_server::pay::coin_rail_ready(), dot("btc", "B"), "Bitcoin", &coin_tag));
-    // Monero rides on the same BTCPay store; until that store carries it there is nothing to
-    // say beyond "not yet" — and saying it honestly is the point of generating this at all.
-    out.push_str(&tile(false, dot("xmr", "M"), "Monero", &coin_tag));
+    if scrai_server::nyx::Nyx::from_env().is_some() {
+        let tag = if pct > 0 { format!("native - Nyx - {pct}% less") } else { "native - Nyx".to_string() };
+        out.push_str(&tile(dot("nym", "N"), "NYM", &tag));
+    }
+    if scrai_server::pay::card_enabled() {
+        let card_tag = format!("available - from ${}", scrai_server::pay::card_min_usd());
+        out.push_str(&tile(
+            format!("<span class=\"cardmarks\">{CARD_MARKS}</span>"),
+            "Card, PayPal, Apple Pay, Google Pay",
+            &card_tag,
+        ));
+    }
+    if scrai_server::pay::coin_rail_ready() {
+        out.push_str(&tile(dot("btc", "B"), "Bitcoin", &coin_tag));
+    }
+    // Nothing live at all — the state this server is in between payment processors. An
+    // empty block under "Available payment options" reads as a broken page rather than as
+    // a situation, so say what it is. No date: we do not have one to give.
+    if out == "<div class=\"pms\" id=\"rails\">" {
+        return String::from(
+            "<p class=\"note\">No payment method is switched on at the moment. \
+             Credit from a code can be redeemed in the app at any time, and on iPhone \
+             credit can be bought through the App Store.</p>",
+        );
+    }
     out.push_str("</div>");
     out
 }
@@ -548,7 +587,7 @@ const BUCKET_ORDER: u64 = 2;
 const BUCKET_SUPPORT: u64 = 3;
 /// Orders per hour per IP. A buyer makes one; somebody buying a few codes as gifts makes a
 /// handful. Anything past this is not a customer — and every accepted order becomes a REAL
-/// gateway call on the next tick (a Mollie payment object, an address and memo), on a path
+/// gateway call on the next tick (a Stripe checkout session, an address and memo), on a path
 /// that has no account to throttle and does not go through `admit_invoice`, so the
 /// server-wide invoice brake never saw it either (audit 2026-09-08, M4).
 const ORDERS_PER_HOUR: usize = 8;
@@ -871,7 +910,7 @@ const PAGES: &[(&str, &str, &str, &str)] = &[
     ("how", "/how-it-works", "How tokumai works: AI chat with no identity, no IP, no traceable payment",
      "Four things that never meet: your identity, your IP address, your payment and your questions. How the Nym mixnet, blind-signed coins and an on-device guard keep them apart."),
     ("pricing", "/pricing", "tokumai pricing: prepaid AI credit, no subscription",
-     "Buy $5 to $50 of TOKU credit once with NYM, Bitcoin, card or the App Store. Coins cost 10 % less. A text answer costs a fraction of a cent; there is no monthly plan."),
+     "Buy $5 to $50 of TOKU credit once by card or through the App Store. A text answer costs a fraction of a cent; there is no monthly plan."),
     ("download", "/download", "Download tokumai for macOS, Windows, Linux, Android and iPhone",
      "Native apps for every platform. Desktop builds are direct downloads with checksums; iPhone through TestFlight; Android as an .apk."),
     ("support", "/support", "tokumai support — report a problem",
@@ -1244,7 +1283,7 @@ async fn handle(f: Arc<Faucet>, mut sock: tokio::net::TcpStream, peer: SocketAdd
         }
         ("GET", "/pay") => {
             f.track("view:pay", Some(&req));
-            respond(&mut sock, 200, "text/html; charset=utf-8", PAGE_PAY.as_bytes()).await
+            respond(&mut sock, 200, "text/html; charset=utf-8", pay_html().as_bytes()).await
         }
         ("GET", "/claim") | ("GET", "/redeem") => {
             f.track("view:claim", Some(&req));
@@ -1270,7 +1309,7 @@ async fn handle(f: Arc<Faucet>, mut sock: tokio::net::TcpStream, peer: SocketAdd
             }
             None => respond(&mut sock, 404, "text/plain", b"not found").await,
         },
-        // Mollie's redirect target after a card checkout (see PAID_HTML). Any query string
+        // Stripe's redirect target after a card checkout (see PAID_HTML). Any query string
         // is ignored — nothing on this page depends on it.
         ("GET", "/paid") => {
             f.track("view:paid", Some(&req));

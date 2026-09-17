@@ -14,10 +14,10 @@
     --ink:#141210; --surface:#1C1917; --surface-2:#262220; --line:#332E2A; --bone:#ECE6DC; --muted:#9C938A;
     --acc:#7A5FFF; --acc2:#B9A3FF; --rust:#C15A43; --winborder:#3A3430;
     --tint1:rgba(122,95,255,.07); --tint2:rgba(122,95,255,.04); --page:#141210; --card:#1C1917;
-    /* Rail marks: each coin's own hue, pulled toward the warm palette so they sit
-       next to the violet accent instead of shouting over it. Monero keeps its hue
-       and is greyed by .pm.soon (it is not live yet). */
-    --btc:#F0912F; --nym:#3FC98A; --xmr:#E4642A;
+    /* Rail marks: each coin's own hue, pulled toward the warm palette so they sit next to
+       the violet accent instead of shouting over it. Only rails the server can actually
+       serve are rendered (rails_html), so these apply to whatever is live at the time. */
+    --btc:#F0912F; --nym:#3FC98A;
     --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace; --body:'Hanken Grotesk',system-ui,-apple-system,sans-serif; --display:'Fraunces',Georgia,serif;
     /* the old site's names, kept so the download/verify markup styles unchanged */
     --signal:var(--acc2); --mix:var(--acc);
@@ -120,9 +120,7 @@
   .pm.sel{border-color:var(--acc);background:color-mix(in srgb,var(--acc) 11%,var(--surface-2));color:var(--acc)} .pm.sel .pmtag{color:var(--acc2)}
   .pm.soon{opacity:.38;filter:saturate(.4);cursor:not-allowed} .pmname{font-size:14px;font-weight:600;color:var(--bone)} .pmtag{font-family:var(--mono);font-size:10px;color:var(--muted);text-align:center}
   /* the rail mark keeps its own colour even when the tile is selected (which sets `color`) */
-  .pm .coin{color:var(--acc)} .pm .coin.btc{color:var(--btc)} .pm .coin.nym{color:var(--nym)} .pm .coin.xmr{color:var(--xmr)}
-  .cardmarks{display:flex;gap:4px;align-items:center;height:28px;flex-wrap:nowrap} .cardmarks svg{display:block;flex:none}
-  .mollie{display:inline-flex;align-items:center;vertical-align:-3px;margin-left:2px}
+  .pm .coin{color:var(--acc)} .pm .coin.btc{color:var(--btc)} .pm .coin.nym{color:var(--nym)} .cardmarks{display:flex;gap:4px;align-items:center;height:28px;flex-wrap:nowrap} .cardmarks svg{display:block;flex:none}
   .payempty{border:1px dashed var(--line);border-radius:12px;padding:22px;text-align:center;font-family:var(--mono);font-size:12px;color:var(--muted)}
   .invoice[hidden],.payempty[hidden]{display:none}
   .invoice.noqr{grid-template-columns:1fr}
@@ -325,9 +323,9 @@
     </div>
     <div class="step">
       <div class="txt"><div class="n">03 · PAYMENT</div><h3>A payment can't be matched to a question</h3>
-        <p>You buy credit in fixed amounts — $5, $10, $20 or $50 — with NYM, Bitcoin, a card, or on iPhone through the App Store. The credit is then withdrawn as <b>blind-signed coins</b>: the server signs them without seeing them, and cannot recognise them when they come back to pay for a prompt.</p>
+        <p>You buy credit in fixed amounts — $5, $10, $20 or $50 — with a card, or on iPhone through the App Store. The credit is then withdrawn as <b>blind-signed coins</b>: the server signs them without seeing them, and cannot recognise them when they come back to pay for a prompt.</p>
         <p>A coin purchase sees a wallet address; a card payment sees a name and a card. Neither sees your account, and neither can be connected to what you ask. Fixed amounts mean a purchase reveals no per-user fingerprint.</p></div>
-      <button class="shot " type="button" data-full="/img/how-payment" aria-label="Enlarge: Buy credit: fixed amounts, card via Mollie or NYM, a code field"><img class="dk" src="/img/how-payment-dark.jpg" alt="Buy credit: fixed amounts, card via Mollie or NYM, a code field" loading="lazy"><img class="lt" src="/img/how-payment-light.jpg" alt="Buy credit: fixed amounts, card via Mollie or NYM, a code field" loading="lazy"></button>
+      <button class="shot " type="button" data-full="/img/how-payment" aria-label="Enlarge: Buy credit: fixed amounts, card via Stripe, a code field"><img class="dk" src="/img/how-payment-dark.jpg" alt="Buy credit: fixed amounts, card via Stripe, a code field" loading="lazy"><img class="lt" src="/img/how-payment-light.jpg" alt="Buy credit: fixed amounts, card via Stripe, a code field" loading="lazy"></button>
     </div>
     <div class="step">
       <div class="txt"><div class="n">04 · YOUR DEVICE</div><h3>What shouldn't leave, doesn't</h3>
@@ -361,7 +359,7 @@
       <a class="way" href="#in-app">
         <div class="k">in the app</div>
         <h3>Top up in the app</h3>
-        <p>One step shorter: the app raises the invoice itself and the credit lands where you are. On iPhone through the App Store; on Android, Mac, Windows and Linux with NYM, card or Bitcoin directly.</p>
+        <p>One step shorter: the app raises the invoice itself and the credit lands where you are. On iPhone through the App Store; on Android, Mac, Windows and Linux by card directly.</p>
         <span class="go">How it works →</span>
       </a>
     </div>
@@ -370,8 +368,7 @@
     {{PRICES}}
     <div class="rlbl" style="margin-top:18px">Available payment options</div>
     {{RAILS}}
-    <p class="note">What each one learns: a coin payment sees a wallet address and an amount; the card rail sees your name, card and IP, because a card payment cannot happen without them; the App Store sees your Apple ID. None of them sees your account, and none of them sees what you ask.</p>
-    <p class="note"><b>Coins cost less.</b> A payment in NYM or Bitcoin cannot be charged back, and we pass that on as a lower price for the same credit — the green line on each amount. Not as extra credit, so nobody holds balances of unequal face value.</p>
+    <p class="note">What the card rail learns: your name, billing address, card and IP, because a card payment cannot happen without them; the App Store sees your Apple ID. None of them sees your account, and none of them sees what you ask.</p>
     <p class="note">100,000 TOKU = $1, pinned when the invoice is raised. Fixed amounts only, so a purchase reveals no per-user fingerprint.</p>
   </div>
   <div class="sec">
@@ -395,7 +392,7 @@
       <div class="steps3">
         <div class="st"><i>1</i><b>Open an account</b><span>Account → Create new account. No email, no phone, no password — a 24-word phrase is generated on your device and is the whole account.</span></div>
         <div class="st"><i>2</i><b>Buy credit → pick an amount</b><span>The invoice is raised and signed inside the app, where your account key lives. Nothing asks who you are and there is no ID to type in.</span></div>
-        <div class="st"><i>3</i><b>Pay, and it lands</b><span>Address and amount appear in the app — for NYM with a memo you must include. The credit shows up as “held” and is spent as blind-signed coins.</span></div>
+        <div class="st"><i>3</i><b>Pay, and it lands</b><span>The checkout opens in your browser; the credit shows up as “held” the moment it is confirmed, and is spent as blind-signed coins.</span></div>
       </div>
       {{SHOT_MAC_BUY}}
     </div>
