@@ -143,11 +143,12 @@ Numbers to build on rather than the estimates that preceded them.
 
 | | |
 | --- | --- |
-| mixnet throughput | **~99 KB/s** — a 0.59 MB picture is 0.79 MB on the wire as base64 and crossed in 8.2 s. Comments saying "~50 KB/s" were an estimate and were half the real figure |
+| mixnet throughput | **~100–120 KB/s** — 0.79 MB on the wire in 8.2 s (99 KB/s), and on a four times larger picture 3.21 MB in 27.9 s (118 KB/s). It does NOT fall off with size: the bigger transfer was the faster one, so the window keeps the pipe full. Comments saying "~50 KB/s" were an estimate and were half the real figure |
 | fixed overhead | **~7.8 s** before anything comes back, for a text answer (first byte) and for a picture (first chunk) alike. Mixnet round trip plus the model; nothing gets under it |
 | a 1K picture | 16.1 s total = 7.9 s generating + 8.2 s transfer. So transfer is only half the wait at this size |
+| a 2K picture | 53.8 s total = 25.9 s generating + 27.9 s transfer, 2.41 MB (3.21 MB on the wire), 35 chunks, charged $0.139. Judged "acceptably fast" on the phone. Note where the time went: **the model took as long as the mixnet did** — 2K is four times the pixels of 1K for the renderer too, so half of a shorter transfer would not be felt |
 | base64 | costs 25 % of the transfer — 2 s here, ten on a big picture. Worth doing, not urgent |
-| 4K, revised | extrapolates to **one to two minutes**, not the four a note in this repo claimed. Dropped from the dial anyway: a minute and a half of waiting is not a good experience either |
+| 4K, revised | measured 2K scales to roughly **three minutes** (about 13 MB on the wire ≈ 110 s transfer, plus a generating step that grew just as fast) — so not the four minutes a note in this repo claimed, but no better than the 250 s I first guessed either. Dropped from the dial: the wait is real and the phone screen cannot show the pixels |
 
 ## E · Several servers
 
