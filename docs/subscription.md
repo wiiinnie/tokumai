@@ -100,11 +100,19 @@ to continue indefinitely, cancellable with at most one month's notice. So the ye
 Not legal advice — these are the specific things to put in front of a lawyer.
 
 - **The cancellation button (§312k BGB).** A consumer contract concluded online needs a
-  plainly labelled "cancel your contract here" control on the website, reachable **without
-  logging in**. This collides with the architecture in an interesting way: there are no
-  website accounts here, and the customer is deliberately anonymous to us. The only handle
-  that exists is the e-mail address Stripe holds. It needs designing, not improvising — and
-  it is the kind of omission that gets a warning letter.
+  plainly labelled "cancel your contract here" control, reachable without logging in.
+  *Nothing about this needs state on our side*: Stripe holds the subscription, and the
+  monthly reset already asks it whether the subscription is still active — a customer who
+  cancels in Stripe's portal simply gets no allowance on the 1st. Stripe's Customer Portal
+  may be enough on its own.
+  What is genuinely unclear is whether §312k is satisfied by sending the customer to a third
+  party's portal: the provision is prescriptive about the sequence — a button with a
+  prescribed label, a confirmation page, and an immediate acknowledgement in text form. That
+  is a question for the lawyer, not a guess.
+  If the answer is "it has to happen on your site", it is still cheap and still stateless:
+  the button takes an e-mail address, the server asks **Stripe** whether there is an active
+  subscription for it, cancels it through the API and sends the acknowledgement. Ask, act,
+  forget — no customer database appears.
 - **Pre-contract information.** The recurring price, the term, how it renews and how it ends
   must be visible *before* the order button, and the button itself must name the payment
   obligation.
@@ -176,8 +184,9 @@ the day at random; the anonymity set barely notices, the server does.
 
 ## Still open
 
-- **The cancellation button without accounts.** See above: required, and the only identifier
-  we have is an e-mail address held by Stripe, not by us. Decide this before launch.
+- **Does Stripe's Customer Portal satisfy §312k**, or must the flow live on our own site?
+  Either way it needs no stored customer data (see above) — but the answer decides whether
+  anything is built at all.
 - ~~Is a mid-period top-up a voucher?~~ **Settled by avoiding it**: the answer to running out
   is a bigger tier, not a top-up.
 - **The existing paying customer** bought $10 of one-off credit under terms that say account
