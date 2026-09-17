@@ -25,8 +25,9 @@ lapsing at the end of a month is a mobile data plan, not a voucher.
 
 | | |
 | --- | --- |
-| price | **€10 / month**, or **€108 / year** (12 × €10 less 10 %) |
-| what you get | **1,000,000 TOKU per calendar month** — the same allowance the $10 tile buys today |
+| tiers | **€10 / €20 / €30 a month** for **1M / 2M / 3M TOKU**. Linear on purpose: the only reason to take a bigger one is to need it |
+| yearly | 12 × the monthly price less 10 % — €108 / €216 / €324 |
+| what 1M TOKU is | the same allowance the $10 tile buys today: roughly 3,700 fast text answers, or 570 from the strongest model, or 150 pictures |
 | rollover | **none.** The month starts at 1,000,000, not at 1,000,000 plus what is left |
 | currency | **EUR.** The operator's books are in euro; a USD price would put an FX spread on every monthly charge instead of once |
 | billing period | the **calendar month**, anchored to the 1st, not to the day of signup |
@@ -50,6 +51,69 @@ fraction in a different month, which is why this is computed and not approximate
 
 Stripe prorates the charge natively when a subscription is anchored to the 1st; the
 allowance uses the same fraction so the two cannot drift.
+
+## Changing tier mid-month
+
+The answer to "I am running out" is **a bigger tier, not a top-up**. A tier change is
+unambiguously a change to the contract; a top-up sold as extra allowance might be read as a
+voucher, and then the three-year problem returns through the back door. Choosing the version
+that raises no question beats answering the question.
+
+**Up is immediate and pro rata**, by the same day arithmetic as a partial first month:
+
+```
+€10 → €20 on 15 March:  remaining = 31 − 15 + 1 = 17 days
+                        price     = €10 × 17/31 = €5.48
+                        allowance = +1,000,000 × 17/31 = +548,387 TOKU
+```
+
+**Down takes effect on the 1st.** It cannot be immediate: the month's allowance was drawn as
+coins on the 1st, and the server cannot take them back — it does not know which coins are
+whose. That is the same blindness the whole design rests on, so this is not a limitation to
+fix but a consequence to state.
+
+**A note on the ladder.** The tiers are exactly linear, which is honest and easy to explain.
+Worth knowing that they are not linear for us: every charge carries a fixed fee component, so
+one €30 subscription earns more than three €10 ones. If a volume discount is ever wanted,
+that is where it costs nothing.
+
+## Cancellation
+
+**Cancellable to the end of the current month**, with no notice period beyond that. Stripe
+does this natively (`cancel_at_period_end`); what has to be decided is only when a request
+still counts as being on time.
+
+**Do not pick a timezone — make it not matter.** An unclear term in consumer T&Cs is read in
+the customer's favour, so a timezone clause is a fight that cannot be won. Instead: a
+cancellation that arrives on the last day of the month **in any timezone** ends the
+subscription at that month's end. In practice that means accepting one until roughly twelve
+hours after local midnight. The cost is half a day of service the customer has already paid
+for; the gain is that the question can never be argued.
+
+**The yearly plan may not roll into a second year.** Under the German rules on fair consumer
+contracts a fixed term cannot renew itself for another fixed term: after twelve months it has
+to continue indefinitely, cancellable with at most one month's notice. So the yearly plan is
+"twelve months, then monthly" — not "twelve months, then twelve more".
+
+## Duties a subscription brings that one-off sales did not
+
+Not legal advice — these are the specific things to put in front of a lawyer.
+
+- **The cancellation button (§312k BGB).** A consumer contract concluded online needs a
+  plainly labelled "cancel your contract here" control on the website, reachable **without
+  logging in**. This collides with the architecture in an interesting way: there are no
+  website accounts here, and the customer is deliberately anonymous to us. The only handle
+  that exists is the e-mail address Stripe holds. It needs designing, not improvising — and
+  it is the kind of omission that gets a warning letter.
+- **Pre-contract information.** The recurring price, the term, how it renews and how it ends
+  must be visible *before* the order button, and the button itself must name the payment
+  obligation.
+- **No customer KYC.** We are a merchant, not a payment institution; Stripe runs its checks
+  on us. A subscription does not change that.
+- **VAT becomes recurring.** Whatever the answer on cross-border digital services is, it now
+  applies every month instead of once.
+- **The right of withdrawal** still applies at signup, with the same "start immediately and
+  lose it" consent the shop already collects.
 
 ## What it does to privacy
 
@@ -112,12 +176,10 @@ the day at random; the anonymity set barely notices, the server does.
 
 ## Still open
 
-- **Is a mid-period top-up a service extension or a voucher?** The intent: "extra allowance
-  until the end of this month", granted as `entitlement += X` and wiped by the next reset,
-  never carried forward. Technically trivial. Whether that holds as a service extension
-  rather than as prepaid credit with a one-month expiry is **not settled** — it goes to the
-  lawyer with the rest. If it is a voucher, the three-year problem comes back and the answer
-  is to sell a bigger plan instead of a top-up.
+- **The cancellation button without accounts.** See above: required, and the only identifier
+  we have is an e-mail address held by Stripe, not by us. Decide this before launch.
+- ~~Is a mid-period top-up a voucher?~~ **Settled by avoiding it**: the answer to running out
+  is a bigger tier, not a top-up.
 - **The existing paying customer** bought $10 of one-off credit under terms that say account
   credit does not expire. That promise stands. Whatever the model becomes, his balance is
   honoured as bought.
@@ -134,8 +196,9 @@ the day at random; the anonymity set barely notices, the server does.
 
 ## What would be built
 
-1. Stripe: `mode: subscription`, anchored to the 1st, monthly and annual prices in EUR,
-   pro-rata first period. Poll the subscription's state the way the one-off invoice is
+1. Stripe: `mode: subscription`, anchored to the 1st, three monthly and three annual prices
+   in EUR, pro-rata first period, pro-rata upgrades, downgrades at period end,
+   `cancel_at_period_end`. Poll the subscription's state the way the one-off invoice is
    polled today — still no webhook, still no inbound port.
 2. Server: subscription state per account, the monthly reset (set, not add), the pro-rata
    rule above, and the reset date in the account reply so the app can show it.
