@@ -137,6 +137,18 @@ Decided parameters:
 
 Order: A → quorum rebuild → D. B and C only if D slips.
 
+## Measured, 2026-09-17 (iPhone, mainnet server)
+
+Numbers to build on rather than the estimates that preceded them.
+
+| | |
+| --- | --- |
+| mixnet throughput | **~99 KB/s** — a 0.59 MB picture is 0.79 MB on the wire as base64 and crossed in 8.2 s. Comments saying "~50 KB/s" were an estimate and were half the real figure |
+| fixed overhead | **~7.8 s** before anything comes back, for a text answer (first byte) and for a picture (first chunk) alike. Mixnet round trip plus the model; nothing gets under it |
+| a 1K picture | 16.1 s total = 7.9 s generating + 8.2 s transfer. So transfer is only half the wait at this size |
+| base64 | costs 25 % of the transfer — 2 s here, ten on a big picture. Worth doing, not urgent |
+| 4K, revised | extrapolates to **one to two minutes**, not the four a note in this repo claimed. Dropped from the dial anyway: a minute and a half of waiting is not a good experience either |
+
 ## E · Several servers
 
 One **payment server** (account, entitlement, issuing, returns), any number of **prompt

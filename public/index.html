@@ -1520,7 +1520,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       <label class="setrow" id="devCostRow"><input type="checkbox" id="devCostChk"><span><b>Developer diagnostics</b><small>Master switch for inline developer diagnostics: the per-answer cost/margin audit and the real upload transfer speed (size ÷ transfer time). Everything meant to be removed later lives here — local-only, toggle any time.</small></span></label>
       <div class="mprow" id="dlSizeRow">
         <div class="mptop"><b>Image upload size</b></div>
-        <div class="mpdesc">One dial for resolution + quality before upload. The mixnet path is ~50 KB/s, so upload time ∝ file size. Vision models tile at ~768–1024 px, so smaller barely affects what the model sees.</div>
+        <div class="mpdesc">One dial for resolution + quality before upload. The mixnet moves about 100 KB/s (measured 2026-09-17), so upload time ∝ file size. Vision models tile at ~768–1024 px, so smaller barely affects what the model sees.</div>
         <input type="range" id="dlSize" min="0" max="4" step="1" class="mpslider flat">
         <div class="mpticks" id="dlSizeTicks"><span>smallest</span><span>balanced</span><span>sharpest</span></div>
         <div class="mpout" id="dlSizeVal"></div>
@@ -3673,7 +3673,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     // ALWAYS re-encode to JPEG — smallest for photos AND screenshots/PNGs. The canvas
     // re-encode inherently drops ALL metadata (EXIF/GPS/…): a canvas holds only pixels,
     // so this single step is both the downscale AND the metadata strip. Downscale to a
-    // vision-friendly size (models tile to ~1024 px), so far fewer bytes cross the ~50 KB/s
+    // vision-friendly size (models tile to ~1024 px), so far fewer bytes cross the ~100 KB/s
     // mixnet → upload time ∝ size. Resolution + quality are DEV-tunable (Settings → Developer).
     const _dl = dlScale();
     const outMime = "image/jpeg";
@@ -4853,7 +4853,9 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     try{ const v=localStorage.getItem("scrai.imageSize"); return IMAGE_SIZES.includes(v)?v:"1K"; }catch(_){ return "1K"; }
   }
   // DEV image-downscale before upload — ONE dial pairing resolution + JPEG quality. The
-  // mixnet path is ~50 KB/s (throughput-bound), so upload time ∝ file size → this is the
+  // mixnet path is ~100 KB/s (MEASURED 2026-09-17: a 0.79 MB picture in 8.2 s; the older
+  // ~50 KB/s in these comments was an estimate and was half the real figure), so upload
+  // time ∝ file size → this is the
   // real speed lever. Default = step 3 (1600 px / 0.82). Tunable under Settings → Developer.
   const DL_STEPS = [ [768,0.70], [1024,0.75], [1280,0.78], [1600,0.82], [2048,0.85] ];
   function dlScale(){
