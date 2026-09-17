@@ -5826,7 +5826,17 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     }).join("");
     // A rail that is merely BUSY stays visible and greyed, so the choice stays legible.
     // A rail that is not offered at all goes: see coinsOffered().
-    if(!coinsOffered() && selectedMethod!=="card"){
+    //
+    // And there is a third state, which this server is in right now: NOTHING can be bought
+    // — coins withdrawn, the card rail not switched on yet. Falling back to the card then
+    // would leave the sheet sitting on a dead selection, which is the same mistake the NYM
+    // fallback made. Select nothing, and say what is left.
+    const nothingToBuyWith = railsKnown && !coinsOffered() && !cardAvailable();
+    if(nothingToBuyWith){
+      coinMenu=null;
+      const st=$("buyStatus");
+      if(st && !st.textContent) st.textContent = "No payment method is switched on here yet. If you have a code, redeem it above.";
+    } else if(!coinsOffered() && selectedMethod!=="card"){
       coinMenu=null; selectMethodQuiet("card");
     } else if(!rails.btc && selectedMethod!=="nyx" && selectedMethod!=="card"){
       coinMenu=null; selectMethodQuiet("nyx");
