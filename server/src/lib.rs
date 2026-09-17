@@ -130,7 +130,11 @@ pub const MONEY_RAILS: [&str; 7] = [
     "BTCPAY_URL",
     "BTCPAY_STORE_ID",
     "BTCPAY_API_KEY",
-    "MOLLIE_API_KEY",
+    // The card rail. Renaming this with the Mollie→Stripe swap was missed on 2026-09-16,
+    // and the miss is the worst kind: the list looked complete, the guard still ran, and a
+    // mainnet server carrying only STRIPE_SECRET_KEY_TESTNET would have booted and sold
+    // credit for test-card payments. Anything added to CardRail belongs here the same day.
+    "STRIPE_SECRET_KEY",
     // The faucet wallet pin. A mainnet server still pinned to the sandbox faucet refuses
     // every invite credit (fail closed) — visible only as testers whose $1 never lands.
     "FAUCET_ADDRESS",
@@ -215,30 +219,39 @@ mod rail_guard_tests {
     fn a_mainnet_server_refuses_rails_that_only_have_a_testnet_value() {
         assert!(rails_on_test_infra(env(&[])).is_empty(), "nothing configured → nothing to flag");
 
+        // The card rail must BE in the list. A rename that updates CardRail and forgets
+        // MONEY_RAILS leaves a guard that still runs, still passes, and no longer guards
+        // the one rail where a test key means free credit — which is what happened on
+        // 2026-09-16 and was caught by an operator reading their own .env comment.
+        assert!(
+            MONEY_RAILS.contains(&"STRIPE_SECRET_KEY"),
+            "the card rail's env base must be in MONEY_RAILS, or a test key can serve real money"
+        );
+
         // exactly the shape of the live .env on 2026-09-05
         let live = env(&[
-            ("MOLLIE_API_KEY_TESTNET", "test_abc"),
+            ("STRIPE_SECRET_KEY_TESTNET", "rk_test_abc"),
             ("NYX_LCD_URL_TESTNET", "https://validator-sandbox-1.nymtech.net/api"),
             ("BTCPAY_URL_TESTNET", "https://testnet.demo.btcpayserver.org"),
         ]);
         let stale = rails_on_test_infra(live);
-        assert!(stale.contains(&"MOLLIE_API_KEY"), "the free-credit one must be caught: {stale:?}");
+        assert!(stale.contains(&"STRIPE_SECRET_KEY"), "the free-credit one must be caught: {stale:?}");
         assert!(stale.contains(&"NYX_LCD_URL") && stale.contains(&"BTCPAY_URL"));
 
         // a half-migrated .env still trips on what is left
         let half = env(&[
-            ("MOLLIE_API_KEY_TESTNET", "test_abc"),
-            ("MOLLIE_API_KEY_MAINNET", "live_abc"),
+            ("STRIPE_SECRET_KEY_TESTNET", "rk_test_abc"),
+            ("STRIPE_SECRET_KEY_MAINNET", "rk_live_abc"),
             ("NYX_LCD_URL_TESTNET", "https://validator-sandbox-1.nymtech.net/api"),
         ]);
         assert_eq!(rails_on_test_infra(half), vec!["NYX_LCD_URL"]);
 
         // an empty value is not a value
-        let blank = env(&[("MOLLIE_API_KEY_TESTNET", "test_abc"), ("MOLLIE_API_KEY_MAINNET", "   ")]);
-        assert_eq!(rails_on_test_infra(blank), vec!["MOLLIE_API_KEY"]);
+        let blank = env(&[("STRIPE_SECRET_KEY_TESTNET", "rk_test_abc"), ("STRIPE_SECRET_KEY_MAINNET", "   ")]);
+        assert_eq!(rails_on_test_infra(blank), vec!["STRIPE_SECRET_KEY"]);
 
         // a rail configured only for mainnet, or not at all, is fine
-        assert!(rails_on_test_infra(env(&[("MOLLIE_API_KEY_MAINNET", "live_abc")])).is_empty());
+        assert!(rails_on_test_infra(env(&[("STRIPE_SECRET_KEY_MAINNET", "rk_live_abc")])).is_empty());
     }
 }
 
