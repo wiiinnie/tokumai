@@ -2557,7 +2557,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     t.innerHTML=`<div class="wrap">`+messages.map((m,mi)=>`
       <div class="msg ${m.role}">
         <div class="who">${m.role==='you'?'you':(m.role==='err'?'error':'tokumai')}${m.role==='ai'&&m.model?`<span class="viamodel">${esc(m.model)}</span>`:''}</div>
-        <div class="body">${bodyHtml(m,mi)}${(m.role==='you'&&m.editRef)?`<div class="editref">✎ edits the selected picture</div>`:''}${(m.role==='ai'&&m.note)?`<div class="sizenote${m.noteKind?' '+m.noteKind:''}">${esc(m.note)}</div>`:''}${(devCost&&m.role==='ai'&&m.audit)?auditDiv(m.audit):''}${(devCost&&m.role==='you'&&m.xfer)?xferDiv(m.xfer):''}${(m.role==='err'&&m.retry)?`<button class="retrybtn" data-click="retryMsg" data-args="${mi}">↻ Retry</button>`:''}${(m.role==='ai'&&m.streaming&&!m.dismissed)?`<div class="msgacts"><button class="msgact rust" data-click="cancelMsg" data-args="${mi}">✕ Dismiss</button>${m.img?'<span class="billhint">billing has started — this only stops the wait</span>':''}</div>`:''}${(m.role==='ai'&&!m.streaming&&m.canResend)?`<div class="msgacts"><button class="msgact" data-click="resendMsg" data-args="${mi}" title="Send the same question again with the currently selected model">↻ Resend</button></div>`:''}</div>
+        <div class="body">${bodyHtml(m,mi)}${(m.role==='you'&&m.editRef)?`<div class="editref">✎ edits the selected picture</div>`:''}${(m.role==='ai'&&m.note)?`<div class="sizenote${m.noteKind?' '+m.noteKind:''}">${esc(m.note)}</div>`:''}${(devCost&&m.role==='ai'&&m.audit)?auditDiv(m.audit):''}${(devCost&&m.role==='ai'&&m.dlStats)?dlStatsDiv(m.dlStats):''}${(devCost&&m.role==='you'&&m.xfer)?xferDiv(m.xfer):''}${(m.role==='err'&&m.retry)?`<button class="retrybtn" data-click="retryMsg" data-args="${mi}">↻ Retry</button>`:''}${(m.role==='ai'&&m.streaming&&!m.dismissed)?`<div class="msgacts"><button class="msgact rust" data-click="cancelMsg" data-args="${mi}">✕ Dismiss</button>${m.img?'<span class="billhint">billing has started — this only stops the wait</span>':''}</div>`:''}${(m.role==='ai'&&!m.streaming&&m.canResend)?`<div class="msgacts"><button class="msgact" data-click="resendMsg" data-args="${mi}" title="Send the same question again with the currently selected model">↻ Resend</button></div>`:''}</div>
       </div>`).join("")+`</div>`;
     if(pinQuestion){ pinLastQuestion(t); }
     else { t.style.paddingBottom=""; setTop(t, followStream ? t.scrollHeight : prevTop); }
@@ -2789,6 +2789,18 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     if(!x) return "";
     const mb=(x.bytes/1048576).toFixed(2);
     return `<div class="costaudit">⚙ upload ${mb} MB in ${x.secs.toFixed(1)}s · <b>${x.kbps.toFixed(0)} KB/s</b> · ${x.chunks} chunk${x.chunks===1?'':'s'}${x.pipelined?' · parallel':''}</div>`;
+  }
+  // DEV download readout: what a generated picture really cost in WAIT, split into the
+  // part that was the model thinking and the part that was bytes crossing the mixnet.
+  // The upload side has had this since August; the download side never did, which is why
+  // "a 4K picture takes about four minutes" was a remembered figure and not a measured one.
+  function dlStatsDiv(d){
+    if(!d) return "";
+    const mb=(d.picture/1048576).toFixed(2), wireMb=(d.wire/1048576).toFixed(2);
+    const rate = d.xferSecs>0 ? (d.wire/1024)/d.xferSecs : 0;
+    return `<div class="costaudit">⚙ picture ${mb} MB (${wireMb} MB on the wire, base64) · ${d.chunks} chunk${d.chunks===1?'':'s'} · `
+      + `waited ${d.totalSecs.toFixed(1)}s = ${d.genSecs.toFixed(1)}s generating + `
+      + `<b>${d.xferSecs.toFixed(1)}s transfer (${rate.toFixed(0)} KB/s)</b></div>`;
   }
   function auditDiv(a){
     if(!a) return "";
@@ -4119,7 +4131,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     // DEV latency probe: t0 = request handed to the transport; tSent = it fully left
     // for the mixnet; tFirst = first reply byte. total captures the full round-trip;
     // (tFirst − tSent) isolates the mixnet+provider latency from local upload time.
-    const t0 = performance.now(); let tSent = 0, tFirst = 0;
+    const t0 = performance.now(); let tSent = 0, tFirst = 0, dlFirstChunkAt = 0, dlChunks = 0;
     // The size we ASKED for — compared with usage.imageSize (what was actually drawn) so a
     // downgrade (2K on Lite → 1K) is told to the user, not silently swallowed.
     const reqSize = imageSize(), reqLabel = $("mName").textContent || currentModel;
@@ -4136,6 +4148,10 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
           // also the true first-byte moment of an image reply.
           if(!tFirst) tFirst=performance.now();
           stopMixPhase();
+          // The first chunk event is the moment the picture EXISTS and the bytes start
+          // moving — everything before it was the model, everything after is the mixnet.
+          if(!dlFirstChunkAt) dlFirstChunkAt = performance.now();
+          dlChunks = +info.total || dlChunks;
           setDlProg({ done:+info.done||0, total:+info.total||0 });
         }
       },
@@ -4147,7 +4163,23 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         if(ai.dismissed){ ai.collapsed=true; const paid = evt.usage && (evt.usage.priceToku ?? evt.usage.priceScrai); if(typeof paid==="number") ai.paidToku=paid; }
         if(!tFirst) tFirst=performance.now();                       // image reply: no deltas
         if(typeof evt.balance==="number"){ balance=evt.balance; if(typeof evt.held==="number") held=evt.held; renderBal(); }
-        if(Array.isArray(evt.images) && evt.images.length){ ai.images=evt.images; }
+        if(Array.isArray(evt.images) && evt.images.length){
+          ai.images=evt.images;
+          // Split the wait. Everything up to the first chunk was the model; everything
+          // after it was bytes crossing the mixnet. Bytes are counted from the base64 the
+          // images actually arrived as, so it is the wire size and not the decoded one.
+          // What crossed the wire is the BASE64, not the picture: one character per byte
+          // sent, a third more than the JPEG itself. The rate must be measured against
+          // that, or it flatters the mixnet by 25 %.
+          const wire = evt.images.reduce((n,im)=> n + ((im.data||"").length), 0);
+          const now = performance.now();
+          if(wire > 0){
+            const genSecs = ((dlFirstChunkAt || now) - t0)/1000;
+            const xferSecs = dlFirstChunkAt ? (now - dlFirstChunkAt)/1000 : 0;
+            ai.dlStats = { wire, picture: Math.round(wire*3/4), chunks: dlChunks || 1,
+                           totalSecs: (now - t0)/1000, genSecs, xferSecs };
+          }
+        }
         if(!ai.text && !(ai.images&&ai.images.length)){
           if(modelKind==="image"){
             // a question sent to a painter — older servers answer with nothing at all
