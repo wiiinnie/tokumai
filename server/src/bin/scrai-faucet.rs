@@ -368,6 +368,16 @@ fn rails_html() -> String {
     if scrai_server::pay::coin_rail_ready() {
         out.push_str(&tile(dot("btc", "B"), "Bitcoin", &coin_tag));
     }
+    // Nothing live at all — the state this server is in between payment processors. An
+    // empty block under "Available payment options" reads as a broken page rather than as
+    // a situation, so say what it is. No date: we do not have one to give.
+    if out == "<div class=\"pms\" id=\"rails\">" {
+        return String::from(
+            "<p class=\"note\">No payment method is switched on at the moment. \
+             Credit from a code can be redeemed in the app at any time, and on iPhone \
+             credit can be bought through the App Store.</p>",
+        );
+    }
     out.push_str("</div>");
     out
 }
