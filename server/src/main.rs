@@ -661,6 +661,12 @@ const ORDER_TICK_MS: u64 = 1000;
     // scan of every subscription once a minute costs nothing either.
     const EXPIRY_CHECK_MS: u64 = 60_000;
     let mut expired_checked: u64 = 0;
+    /// How often ONE stale subscription is re-asked about, and how old "stale" is. Six
+    /// hours is far inside a monthly period and far outside Stripe's rate limits; the
+    /// every-30-seconds beat means a hundred subscribers are all refreshed within an hour.
+    const SUBS_CHECK_MS: u64 = 30_000;
+    const SUB_STALE_MS: u64 = 6 * 3600 * 1000;
+    let mut subs_checked: u64 = 0;
     loop {
         tokio::select! {
             // Ask the chain about a few open invoices, off the loop like every other
@@ -681,6 +687,47 @@ const ORDER_TICK_MS: u64 = 1000;
                 // is wired in (next step), nothing sets it to false — which is harmless
                 // only because no subscription exists yet. It must land before the first
                 // one is sold.
+                // Ask Stripe about subscriptions we have not asked about lately. This is
+                // the RENEWAL path on the web: Stripe charges the card on the 1st and tells
+                // nobody, so `paid_until_ms` would stay at the first period's end and the
+                // subscriber would lapse after one month. One account per tick, oldest
+                // check first — bounded outbound work, and a plan is a monthly thing.
+                if pay::card_enabled() && pay::now_ms().saturating_sub(subs_checked) >= SUBS_CHECK_MS {
+                    subs_checked = pay::now_ms();
+                    let stale: Vec<(String, String)> = paywall
+                        .subs_to_check(pay::now_ms(), SUB_STALE_MS)
+                        .into_iter()
+                        .filter(|(_, rail)| rail.starts_with("stripe:"))
+                        .take(1)
+                        .collect();
+                    for (account, rail) in stale {
+                        let sub_id = rail.trim_start_matches("stripe:").to_string();
+                        let (tx, slots, card) = (pay_tx.clone(), gateway_slots.clone(), pay::CardRail::from_env());
+                        tokio::spawn(async move {
+                            let Ok(_permit) = slots.acquire_owned().await else { return };
+                            let grant = match card.subscription_plan(&sub_id).await {
+                                // Not paid any more: hand back the tier with a paid-until in
+                                // the past, which is what expire_lapsed reads.
+                                Ok((t, y, paid, until)) => Some((sub_id, t, y, if paid { until } else { 0 })),
+                                // A rate limit or a blip changes nothing; the next tick asks
+                                // again, and the date already on record still governs.
+                                Err(_) => None,
+                            };
+                            let _ = tx
+                                .send(PayDone {
+                                    outcome: pay::PayOutcome::Plan {
+                                        id: serde_json::Value::Null,
+                                        account,
+                                        reply: serde_json::Value::Null,
+                                        grant,
+                                    },
+                                    to: None,
+                                    _guard: None,
+                                })
+                                .await;
+                        });
+                    }
+                }
                 // A paid period that has run out. Nothing ever arrives to announce it —
                 // a lapsed App Store subscription simply stops appearing in what Apple
                 // hands the app — so the date is checked here, on its own beat, and the
@@ -1128,6 +1175,80 @@ const ORDER_TICK_MS: u64 = 1000;
             // snapshot second, the same crash argument as below. The app keeps Apple's
             // transaction unfinished until this reply arrives, so a lost reply is a retry —
             // and a retry by the same account is a success with nothing more to credit.
+            // Plans on the web. Two kinds, both account-signed, both one Stripe call:
+            // `plan.create` raises a hosted checkout, `plan.status` asks whether it
+            // completed and, if it did, grants the month.
+            //
+            // NOTHING about the order is remembered between the two. What was bought is
+            // read back from Stripe's own record — the subscription names a price, the
+            // price names a tier — so a client cannot claim a plan it did not pay for, and
+            // a restart in the middle of a checkout loses nothing to resume.
+            if kind == "plan.create" || kind == "plan.status" {
+                let v: serde_json::Value = serde_json::from_slice(&m.message).unwrap_or(serde_json::Value::Null);
+                let id = v.get("id").cloned().unwrap_or(serde_json::Value::Null);
+                let bad = |e: &str| serde_json::json!({ "id": id, "kind": "error", "error": e });
+                let reply = match paywall.plan_claimant(&v) {
+                    None => Some(bad("account signature does not check out, or the nonce was reused")),
+                    Some(account) if paywall.admit_invoice(&account, true).is_err() => {
+                        Some(bad("too many checkouts from this account — try again in a few minutes"))
+                    }
+                    Some(account) => {
+                        let rail = pay::CardRail::from_env();
+                        let (tx, slots) = (pay_tx.clone(), gateway_slots.clone());
+                        let session = v.get("session").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                        let tier = v.get("tier").and_then(|t| t.as_u64()).unwrap_or(0) as usize;
+                        let yearly = v.get("yearly").and_then(|y| y.as_bool()).unwrap_or(false);
+                        let create = kind == "plan.create";
+                        let reference = format!("plan{}", pay::rand_hex(12));
+                        let guard = inflight.enter(to);
+                        tokio::spawn(async move {
+                            let mut grant = None;
+                            let out = match tokio::time::timeout(QUEUE_WAIT, slots.acquire_owned()).await {
+                                Ok(Ok(_permit)) if create => match rail.create_subscription(tier, yearly, &reference).await {
+                                    Ok(r) => serde_json::json!({ "id": id, "kind": "plan.open",
+                                        "session": r.provider_ref, "options": r.options, "expiresAt": r.expires_at }),
+                                    Err(e) => serde_json::json!({ "id": id, "kind": "error", "error": e }),
+                                },
+                                Ok(Ok(_permit)) => match rail.checkout_subscription(&session).await {
+                                    Ok(None) => serde_json::json!({ "id": id, "kind": "plan.pending" }),
+                                    // Paid. What was bought is asked of Stripe, never taken
+                                    // from the request: the subscription names a price and
+                                    // the price names a tier.
+                                    Ok(Some(sub_id)) => match rail.subscription_plan(&sub_id).await {
+                                        Ok((t, y, paid, until)) if paid => {
+                                            grant = Some((sub_id, t, y, until));
+                                            serde_json::Value::Null
+                                        }
+                                        Ok(_) => serde_json::json!({ "id": id, "kind": "plan.pending" }),
+                                        Err(e) => serde_json::json!({ "id": id, "kind": "error", "error": e }),
+                                    },
+                                    Err(e) => serde_json::json!({ "id": id, "kind": "error", "error": e }),
+                                },
+                                _ => serde_json::json!({ "id": id, "kind": "error",
+                                    "error": "the payment gateway is busy — try again in a moment" }),
+                            };
+                            // The grant cannot happen out here: it touches the pay snapshot,
+                            // which lives on the loop. Hand it back through the same channel
+                            // every other gateway answer uses.
+                            let _ = tx
+                                .send(PayDone {
+                                    outcome: pay::PayOutcome::Plan { id, account, reply: out, grant },
+                                    to: Some(to),
+                                    _guard: Some(guard),
+                                })
+                                .await;
+                        });
+                        None
+                    }
+                };
+                if let Some(r) = reply {
+                    let out = serde_json::to_vec(&r).unwrap_or_default();
+                    if let Err(e) = senders[to.idx].read().await.send_reply(to.tag, out).await {
+                        eprintln!("scrai-server: plan reply failed: {e}");
+                    }
+                }
+                continue;
+            }
             if kind == iap::IAP_KIND {
                 let v: serde_json::Value = serde_json::from_slice(&m.message).unwrap_or(serde_json::Value::Null);
                 let id = v.get("id").cloned().unwrap_or(serde_json::Value::Null);

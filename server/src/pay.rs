@@ -851,7 +851,7 @@ impl Pay {
         Ok(())
     }
 
-    fn admit_invoice(&mut self, account_id: &str, card: bool) -> Result<(), String> {
+    pub fn admit_invoice(&mut self, account_id: &str, card: bool) -> Result<(), String> {
         let now = now_ms();
         if card {
             let hits = self.card_hits.entry(account_id.to_string()).or_default();
@@ -978,6 +978,19 @@ impl Pay {
         self.subs.get(account_id)
     }
 
+    /// Which account a rail's subscription already belongs to. A subscription belongs to
+    /// ONE account for its whole life: without this, a second account that learned the id
+    /// could attach the same paid subscription to itself and draw a month a month.
+    pub fn rail_owner(&self, rail_id: &str) -> Option<String> {
+        self.subs.iter().find(|(_, s)| s.rail_id == rail_id).map(|(a, _)| a.clone())
+    }
+
+    /// Prove the caller owns the account a plan is being attached to. Its own purpose
+    /// string, so no signature this account made for anything else can be replayed here.
+    pub fn plan_claimant(&mut self, v: &Value) -> Option<String> {
+        self.account_owns(v, "plan")
+    }
+
     /// Deduct for a coconut issuance, **allowance first**. Called BEFORE the (off-loop)
     /// issuance runs, so two withdraws of the same account in flight can't both pass the
     /// gate; `restore_credit` gives it back when issuance fails.
@@ -1075,6 +1088,10 @@ impl Pay {
     ) -> bool {
         let tier = tier.min(subscription::TIERS.len() - 1);
         let period = subscription::period_of_ms(now_ms_);
+        // A rail reporting a period that has ENDED is telling us the subscription is over,
+        // not starting one. Nothing is granted for it — the row is only marked unpaid, so
+        // the month already in hand survives and the next one does not arrive.
+        let paid_now = paid_until_ms > now_ms_;
         let known = self
             .subs
             .get(account_id)
@@ -1085,11 +1102,11 @@ impl Pay {
                 // The second case matters: the monthly reset already ran and lapsed them,
                 // so without it a subscriber who opens the app on the 5th after a late
                 // renewal would wait until the following month for a month they paid for.
-                let grant = granted_period < period || !was_paid;
+                let grant = paid_now && (granted_period < period || !was_paid);
                 let (y, m, d) = subscription::civil_from_ms(now_ms_);
                 let (days, total) = subscription::served(y, m, d);
                 if let Some(sub) = self.subs.get_mut(account_id) {
-                    sub.active = true;
+                    sub.active = paid_now;
                     sub.checked_at_ms = now_ms_;
                     sub.paid_until_ms = paid_until_ms;
                     sub.tier = tier;
@@ -1105,6 +1122,9 @@ impl Pay {
                 self.rev += 1;
                 grant
             }
+            // A subscription nobody here has seen before. If it is not paid for, there is
+            // nothing to record: a row would only claim a plan this account does not have.
+            _ if !paid_now => false,
             _ => {
                 let (full_toku, _) = subscription::TIERS[tier];
                 let sub = self.subs.entry(account_id.to_string()).or_default();
@@ -1446,6 +1466,31 @@ impl Pay {
                 }
                 self.account_reply(&id, &account)
             }
+            PayOutcome::Plan { id, account, reply, grant } => match grant {
+                None => reply,
+                Some((sub_id, tier, yearly, until)) => {
+                    let rail = format!("stripe:{sub_id}");
+                    // A subscription belongs to ONE account for its whole life. Without
+                    // this, a second account that learned the id could attach the same paid
+                    // subscription to itself and draw a month a month.
+                    match self.rail_owner(&rail) {
+                        Some(owner) if owner != account => {
+                            err(&id, "this subscription is already on another account")
+                        }
+                        _ => {
+                            let granted = self.subscribe_or_renew(&account, tier, &rail, now_ms(), until);
+                            println!(
+                                "scrai-server: Stripe plan tier {tier}{} — {}",
+                                if yearly { " yearly" } else { "" },
+                                if granted { "month granted" } else { "already granted this month" }
+                            );
+                            let mut r = self.account_reply(&id, &account);
+                            r["kind"] = json!("plan.paid");
+                            r
+                        }
+                    }
+                }
+            },
             // The watcher has no client to answer — it just credits what the chain shows,
             // so the app finds the money already there and the claim page stops waiting.
             PayOutcome::Watch { paid } => {
@@ -1831,7 +1876,9 @@ fn encode(v: &Value) -> Vec<u8> {
     serde_json::to_vec(v).unwrap_or_default()
 }
 
-fn rand_hex(bytes: usize) -> String {
+/// Random hex. `pub` because the binary crate raises its own references too
+/// (main.rs is a separate crate from this library).
+pub fn rand_hex(bytes: usize) -> String {
     use rand::RngCore;
     let mut buf = vec![0u8; bytes];
     rand::thread_rng().fill_bytes(&mut buf);
@@ -1866,6 +1913,11 @@ pub enum PayOutcome {
     /// settlement and never leaves the payment side of the database.
     Sweep { id: Value, account: String, paid: Vec<(String, Option<String>)> },
     Watch { paid: Vec<(String, Option<String>)> },
+    /// A plan checkout that has been to Stripe and back. Everything that needed the
+    /// network already happened; `grant` is what Stripe said was bought — (subscription id,
+    /// tier, yearly, paid-until) — and applying it is left to the loop, because that is
+    /// where the snapshot lives.
+    Plan { id: Value, account: String, reply: Value, grant: Option<(String, usize, bool, u64)> },
 }
 
 impl PayOutcome {
@@ -1876,6 +1928,7 @@ impl PayOutcome {
             PayOutcome::Status { .. } => "invoice.status",
             PayOutcome::Sweep { .. } => "entitlement",
             PayOutcome::Watch { .. } => "invoice.watch",
+            PayOutcome::Plan { .. } => "plan",
         }
     }
 }
@@ -2439,6 +2492,20 @@ pub fn stripe_price_for(tier: usize, yearly: bool) -> Option<String> {
     ids.get(tier + if yearly { subscription::TIERS.len() } else { 0 }).cloned()
 }
 
+/// Which plan a Stripe price id belongs to — the reverse of `stripe_price_for`, and the
+/// reason a paid checkout needs no remembered order. What the customer bought is read back
+/// from Stripe's own record of the subscription, so a client cannot name a tier it did not
+/// pay for and a restart mid-checkout loses nothing.
+pub fn stripe_tier_of_price(price_id: &str) -> Option<(usize, bool)> {
+    let ids = stripe_price_ids();
+    let n = subscription::TIERS.len();
+    if ids.len() != n * 2 {
+        return None;
+    }
+    let at = ids.iter().position(|p| p == price_id)?;
+    Some((at % n, at >= n))
+}
+
 /// Can this server sell a plan on the web at all?
 pub fn plans_sellable() -> bool {
     matches!(CardRail::from_env(), CardRail::Stripe { .. }) && stripe_price_for(0, false).is_some()
@@ -2553,7 +2620,7 @@ impl CardRail {
     ///
     /// No `customer_creation` or `submit_type` here: Stripe always makes a Customer for a
     /// subscription (it has to, to bill again), and `submit_type` belongs to payment mode.
-    async fn create_subscription(&self, tier: usize, yearly: bool, reference: &str) -> Result<RaisedInvoice, String> {
+    pub async fn create_subscription(&self, tier: usize, yearly: bool, reference: &str) -> Result<RaisedInvoice, String> {
         let CardRail::Stripe { secret_key, redirect_url } = self else {
             return Err("card payments are not configured on this server".into());
         };
@@ -2606,6 +2673,55 @@ impl CardRail {
             options: json!([{ "method": "card", "checkout": checkout }]),
             expires_at,
         })
+    }
+
+    /// The subscription a completed Checkout Session produced, if it has completed.
+    /// `Ok(None)` means "not finished yet", which is the normal answer while the buyer is
+    /// still on Stripe's page.
+    pub async fn checkout_subscription(&self, session_id: &str) -> Result<Option<String>, String> {
+        let CardRail::Stripe { secret_key, .. } = self else {
+            return Err("card payments are not configured on this server".into());
+        };
+        if !session_id.starts_with("cs_") || !session_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+            return Err("not a Stripe checkout session".into());
+        }
+        let v = match stripe(secret_key, crate::http::client().get(format!("{STRIPE_API}/checkout/sessions/{session_id}"))).await
+        {
+            Ok(v) => v,
+            Err(CardErr::RateLimited(_)) => return Ok(None),
+            Err(CardErr::Other(e)) => return Err(e),
+        };
+        // Both conditions, not either: a session can be complete without the first invoice
+        // having been paid (a bank redirect that is still settling), and granting a month
+        // on that would be granting it for nothing.
+        if v.get("status").and_then(|s| s.as_str()) != Some("complete")
+            || v.get("payment_status").and_then(|s| s.as_str()) != Some("paid")
+        {
+            return Ok(None);
+        }
+        Ok(v.get("subscription").and_then(|x| x.as_str()).map(str::to_string))
+    }
+
+    /// What a subscription is: which plan, whether it is paid, and until when. The plan is
+    /// read from the PRICE Stripe has on it — never from what a client says it bought.
+    pub async fn subscription_plan(&self, sub_id: &str) -> Result<(usize, bool, bool, u64), String> {
+        let CardRail::Stripe { secret_key, .. } = self else {
+            return Err("card payments are not configured on this server".into());
+        };
+        if !sub_id.starts_with("sub_") || !sub_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+            return Err("not a Stripe subscription id".into());
+        }
+        let v = match stripe(secret_key, crate::http::client().get(format!("{STRIPE_API}/subscriptions/{sub_id}"))).await {
+            Ok(v) => v,
+            Err(CardErr::RateLimited(_)) => return Err("rate limited".into()),
+            Err(CardErr::Other(e)) => return Err(e),
+        };
+        let price = v
+            .pointer("/items/data/0/price/id")
+            .and_then(|p| p.as_str())
+            .ok_or("this subscription names no price")?;
+        let (tier, yearly) = stripe_tier_of_price(price).ok_or("this subscription is for a plan we do not sell")?;
+        Ok((tier, yearly, stripe_sub_paid(&v), stripe_period_end_ms(&v)))
     }
 
     /// Is this subscription paid for, and until when? Returns (active, paid-until in ms).
@@ -3463,6 +3579,34 @@ mod tests {
         p.expire_lapsed(ms(2027, 9, 2));
         p.roll_periods(ms(2027, 10, 1));
         assert_eq!(p.allowance_left("acct"), 0);
+    }
+
+    #[test]
+    fn a_rail_reporting_an_ended_period_grants_nothing() {
+        // The refresh asks Stripe about a subscription and is told the paid period is over.
+        // That is the END of a plan, not the start of one — but it arrives on the same call
+        // that a renewal does, and "it was not paid before, so grant" would have handed out
+        // a month for a cancelled subscription.
+        let mut p = Pay::default();
+        let rail = "stripe:sub_test";
+        p.subscribe_or_renew("acct", 0, rail, ms(2026, 9, 1), ms(2026, 10, 1));
+        p.consume_credit("acct", 700_000);
+        // 1 October: Stripe charged again, so the refresh reports a period running to
+        // 1 November — and the month arrives on that, not on the calendar alone.
+        assert!(p.subscribe_or_renew("acct", 0, rail, ms(2026, 10, 1), ms(2026, 11, 1)));
+        assert_eq!(p.allowance_left("acct"), 700_000, "October, paid for");
+
+        // 2 October: the card failed, Stripe says the period ended.
+        assert!(!p.subscribe_or_renew("acct", 0, rail, ms(2026, 10, 2), ms(2026, 10, 1)));
+        assert_eq!(p.allowance_left("acct"), 700_000, "the month in hand is not taken back");
+        assert!(!p.subscription("acct").unwrap().paid_at(ms(2026, 10, 2)));
+        // …and November does not arrive.
+        p.roll_periods(ms(2026, 11, 1));
+        assert_eq!(p.allowance_left("acct"), 0);
+
+        // An account nobody has ever seen, reported unpaid, gets no row at all.
+        assert!(!p.subscribe_or_renew("stranger", 2, "stripe:sub_other", ms(2026, 10, 2), 0));
+        assert!(p.subscription("stranger").is_none());
     }
 
     #[test]
