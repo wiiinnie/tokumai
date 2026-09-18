@@ -617,6 +617,26 @@ pub struct Sub {
     pub allowance: Allowance,
 }
 
+/// The plan ladder as the app should draw it: allowance, price, and what a bigger plan
+/// saves against the entry tier. Derived from `subscription::TIERS` rather than typed on
+/// the client, so a tier can never be advertised at a price this server does not sell.
+pub fn plans_info() -> Value {
+    let v: Vec<Value> = subscription::TIERS
+        .iter()
+        .enumerate()
+        .map(|(i, (toku, cents))| {
+            json!({
+                "tier": i,
+                "toku": toku,
+                "cents": cents,
+                "yearlyCents": subscription::yearly_cents(*cents),
+                "savesCents": subscription::saving_cents(i),
+            })
+        })
+        .collect();
+    json!(v)
+}
+
 /// Durable paywall state (invoices, entitlements, burned nonces) + the volatile
 /// rate-limit windows. Snapshot/restore mirrors SessionStore so main.rs persists
 /// it with the same revision-gated write.

@@ -131,3 +131,23 @@ public func tokumai_iap_finish(_ idC: UnsafePointer<CChar>?, _ ctx: UnsafeMutabl
         reply.send(["status": "gone"])
     }
 }
+
+/// What the App Store says this Apple ID is currently entitled to — the live subscriptions.
+///
+/// A renewal is NOT a purchase the app sees: StoreKit charges the card in the background
+/// and the app only learns about it the next time it asks. So this is asked on every
+/// launch and the answer is handed to the server, which grants the month if it has not
+/// granted one yet. Nothing here is trusted on the device: what travels is Apple's own
+/// signed JWS, and the server checks it against Apple's root, expiry included.
+@_cdecl("tokumai_iap_entitlements")
+public func tokumai_iap_entitlements(_ ctx: UnsafeMutableRawPointer?, _ cb: TokumaiIapCallback) {
+    let reply = Reply(ctx: ctx, cb: cb)
+    guard #available(iOS 15.0, *) else { reply.send(["transactions": []]); return }
+    Task {
+        var list: [[String: Any]] = []
+        for await v in Transaction.currentEntitlements {
+            if let d = describe(v) { list.append(d) }
+        }
+        reply.send(["transactions": list])
+    }
+}

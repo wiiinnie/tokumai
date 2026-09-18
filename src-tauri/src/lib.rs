@@ -52,6 +52,11 @@ static SERVER_UPDATE: std::sync::Mutex<Option<Value>> = std::sync::Mutex::new(No
 /// Product ids the server sells through the App Store (catalog `iapProducts`), remembered
 /// with the models so the buy sheet has them without another round trip.
 static IAP_PRODUCTS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+/// The App Store ids of the monthly/yearly plans, and the ladder the server publishes for
+/// them (allowance, price, what a bigger one saves). Both come from the catalog, so a plan
+/// can never be advertised here at a price this server does not sell.
+static IAP_PLANS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+static PLAN_LADDER: std::sync::Mutex<Option<Value>> = std::sync::Mutex::new(None);
 /// tauri.conf.json's version, read once at launch; goes out as `app` on every request so
 /// the server's release gate (MIN_APP) can tell an outdated build apart.
 static APP_VER: std::sync::OnceLock<String> = std::sync::OnceLock::new();
@@ -2162,6 +2167,7 @@ async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<V
         // Paid for, not yet drawn as coins. Below one ticketbook it cannot be drawn at
         // all, so it has to be named rather than silently missing from the total.
         "entitlement": w.entitlement_seen,
+        "plan": w.plan_seen,
         // A book is what one withdrawal draws; the device learns the size from a book it
         // holds, so this follows the server rather than a number compiled into the app.
         "bookToku": books_size_toku(&w, &dir, server.as_deref().unwrap_or("")),
@@ -2190,6 +2196,8 @@ async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<V
         "server": server,
         "serverAlternates": w.server_alternates,
         "iapProducts": IAP_PRODUCTS.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+        "iapPlans": IAP_PLANS.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+        "plans": PLAN_LADDER.lock().unwrap_or_else(|e| e.into_inner()).clone(),
     });
     diag(&app, &format!(
         "state: about to respond, {} bytes total (models {} bytes)",
@@ -3003,7 +3011,19 @@ async fn collect_now(app: AppHandle, main: Arc<Transport>) -> Result<Value, Stri
     let resp = transport
         .round_trip(&srv, &json!({"v":PROTO,"kind":"entitlement","id":rand_hex(16),"publicKey":a.public_key_pem,"nonce":nonce,"sig":sig}), SURBS_SMALL, TIMEOUT_MS)
         .await?;
-    let owed = resp.get("entitlement").and_then(|e| e.as_u64()).unwrap_or(0);
+    // What can be drawn is BOTH pockets: a subscriber's remaining month plus whatever was
+    // bought outright. The server spends them in that order; the client only needs the sum.
+    // (Reading `entitlement` alone here would leave every subscriber's month on the server.)
+    let plan = resp.get("subscription").cloned();
+    let allowance = plan.as_ref().and_then(|p| p.get("left")).and_then(|l| l.as_u64()).unwrap_or(0);
+    let owed = resp.get("entitlement").and_then(|e| e.as_u64()).unwrap_or(0).saturating_add(allowance);
+    {
+        let mut w = wallet::load(&dir);
+        if w.plan_seen != plan {
+            w.plan_seen = plan.clone();
+            let _ = wallet::save(&dir, &w);
+        }
+    }
 
     // Top the device UP to the working amount rather than drawing everything: what a lost
     // device can cost is then bounded by that amount, and the rest stays on the account
@@ -4764,6 +4784,18 @@ fn init_android_tls_verifier() {
 
 #[cfg(target_os = "ios")]
 async fn iap_verify_on_server(app: &AppHandle, transport: &Transport, jws: &str) -> Result<(u64, u64), String> {
+    let resp = iap_verify_value(app, transport, jws).await?;
+    Ok((
+        resp.get("toku").and_then(|t| t.as_u64()).unwrap_or(0),
+        resp.get("entitlement").and_then(|t| t.as_u64()).unwrap_or(0),
+    ))
+}
+
+/// The server's whole answer to one signed transaction. A credit tile answers with `toku`
+/// and `entitlement`; a plan answers with `subscription` — same route, same signature, and
+/// the server decides which product it is looking at.
+#[cfg(target_os = "ios")]
+async fn iap_verify_value(app: &AppHandle, transport: &Transport, jws: &str) -> Result<Value, String> {
     let transport = buy_transport(app, transport).await;
     let w = wallet::load(&data_dir(app)?);
     let srv = server_addr(&w)?;
@@ -4783,10 +4815,7 @@ async fn iap_verify_on_server(app: &AppHandle, transport: &Transport, jws: &str)
     if let Some(e) = resp.get("error").and_then(|e| e.as_str()) {
         return Err(e.to_string());
     }
-    Ok((
-        resp.get("toku").and_then(|t| t.as_u64()).unwrap_or(0),
-        resp.get("entitlement").and_then(|t| t.as_u64()).unwrap_or(0),
-    ))
+    Ok(resp)
 }
 
 /// App Store product ids from a catalog reply: plain reverse-DNS strings, a handful at most.
@@ -4805,6 +4834,22 @@ fn remember_iap_products(resp: &Value) {
         })
         .unwrap_or_default();
     *IAP_PRODUCTS.lock().unwrap_or_else(|e| e.into_inner()) = ids;
+    let plans: Vec<String> = resp
+        .get("iapPlans")
+        .and_then(|p| p.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str())
+                .filter(|s| !s.is_empty() && s.len() <= 120
+                    && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_'))
+                .map(str::to_string)
+                .take(12)
+                .collect()
+        })
+        .unwrap_or_default();
+    *IAP_PLANS.lock().unwrap_or_else(|e| e.into_inner()) = plans;
+    *PLAN_LADDER.lock().unwrap_or_else(|e| e.into_inner()) =
+        resp.get("plans").filter(|p| p.is_array()).cloned();
 }
 
 /// The remembered ids — or, when the catalog was cached before the server learned to
@@ -4901,6 +4946,112 @@ async fn iap_restore_impl(app: AppHandle, transport: Arc<Transport>) -> Result<V
 #[tauri::command]
 async fn iap_restore(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<Value, String> {
     Box::pin(iap_restore_impl(app, transport.inner().clone())).await
+}
+
+/// The plans as StoreKit describes them — localised price strings included, which is why
+/// this is asked of Apple and not built from the cents the catalog carries. Apple requires
+/// the price shown in the app to be Apple's own.
+#[cfg(target_os = "ios")]
+#[tauri::command]
+async fn iap_plans(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<Value, String> {
+    let ids = {
+        let have = IAP_PLANS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if have.is_empty() {
+            // The catalog was cached before this server sold plans — fetch it once.
+            Box::pin(iap_product_ids(&app, &transport)).await;
+            IAP_PLANS.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        } else {
+            have
+        }
+    };
+    if ids.is_empty() {
+        return Err("this server sells no plans through the App Store".into());
+    }
+    let products = Box::pin(iap_ios::products(&ids)).await?;
+    Ok(json!({ "products": products, "ladder": PLAN_LADDER.lock().unwrap_or_else(|e| e.into_inner()).clone() }))
+}
+
+#[cfg(target_os = "ios")]
+async fn iap_subscribe_impl(app: AppHandle, transport: Arc<Transport>, product_id: String) -> Result<Value, String> {
+    if !IAP_PLANS.lock().unwrap_or_else(|e| e.into_inner()).contains(&product_id) {
+        return Err("that plan is not on sale here".into());
+    }
+    let r = iap_ios::purchase(&product_id).await?;
+    let status = r.get("status").and_then(|s| s.as_str()).unwrap_or("").to_string();
+    if status != "ok" {
+        return Ok(json!({ "status": status }));
+    }
+    let jws = r.get("jws").and_then(|j| j.as_str()).unwrap_or("").to_string();
+    let tx = r.get("transactionId").and_then(|t| t.as_str()).unwrap_or("").to_string();
+    match iap_verify_value(&app, &transport, &jws).await {
+        Ok(resp) => {
+            // Only acknowledged to Apple once the month is on the account — the same order
+            // the credit path uses, for the same reason: an unfinished transaction is
+            // re-sent, a finished one is gone.
+            if let Err(e) = iap_ios::finish(&tx).await {
+                log::warn!("[iap] plan granted, but the transaction could not be finished yet: {e}");
+            }
+            Ok(json!({ "status": "subscribed", "account": resp }))
+        }
+        Err(e) => Ok(json!({ "status": "unclaimed", "error": e })),
+    }
+}
+
+/// Subscribe through Apple's sheet and have the server grant the month.
+/// `status`: subscribed (account) | cancelled | pending | unclaimed (error).
+#[cfg(target_os = "ios")]
+#[tauri::command]
+async fn iap_subscribe(app: AppHandle, transport: State<'_, Arc<Transport>>, product_id: String) -> Result<Value, String> {
+    Box::pin(iap_subscribe_impl(app, transport.inner().clone(), product_id)).await
+}
+
+#[cfg(target_os = "ios")]
+async fn iap_sync_plan_impl(app: AppHandle, transport: Arc<Transport>) -> Result<Value, String> {
+    // A renewal never reaches the app as a purchase: StoreKit charges in the background and
+    // the app only learns of it by asking. So every launch asks, and hands Apple's signed
+    // answer to the server — which grants the month only if it has not granted one yet.
+    let live = iap_ios::entitlements().await?;
+    let plans = IAP_PLANS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let mut last = Value::Null;
+    let mut errors: Vec<String> = Vec::new();
+    for t in live.iter().take(8) {
+        let product = t.get("productId").and_then(|p| p.as_str()).unwrap_or("");
+        if !plans.iter().any(|p| p == product) {
+            continue; // a credit tile, or something this server does not sell
+        }
+        let jws = t.get("jws").and_then(|j| j.as_str()).unwrap_or("");
+        if jws.is_empty() {
+            continue;
+        }
+        match iap_verify_value(&app, &transport, jws).await {
+            Ok(resp) => last = resp,
+            Err(e) => errors.push(e),
+        }
+    }
+    Ok(json!({ "checked": live.len(), "account": last, "error": errors.first() }))
+}
+
+/// Tell the server what Apple says this device is entitled to. Called on launch.
+#[cfg(target_os = "ios")]
+#[tauri::command]
+async fn iap_sync_plan(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<Value, String> {
+    Box::pin(iap_sync_plan_impl(app, transport.inner().clone())).await
+}
+
+#[cfg(not(target_os = "ios"))]
+#[tauri::command]
+async fn iap_plans() -> Result<Value, String> {
+    Err("App Store plans exist only in the iPhone app".into())
+}
+#[cfg(not(target_os = "ios"))]
+#[tauri::command]
+async fn iap_subscribe(_product_id: String) -> Result<Value, String> {
+    Err("App Store plans exist only in the iPhone app".into())
+}
+#[cfg(not(target_os = "ios"))]
+#[tauri::command]
+async fn iap_sync_plan() -> Result<Value, String> {
+    Err("App Store plans exist only in the iPhone app".into())
 }
 
 #[cfg(not(target_os = "ios"))]
@@ -5003,6 +5154,9 @@ pub fn run() {
             phrase_backup_get, iap_products, iap_purchase, iap_restore,
             phrase_check_start,
             phrase_check_verify,
+            iap_plans,
+            iap_subscribe,
+            iap_sync_plan,
             phrase_backup_set,
             share_text, upload_begin, upload_chunk, upload_pipeline, pick_image, open_account_security,
             vault_list, vault_load, vault_save, vault_remove, vault_purge_webdata, pending_load, pending_save

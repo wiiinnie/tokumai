@@ -161,6 +161,11 @@ pub struct Wallet {
     /// like it vanished. Refreshed by every account call that learns it.
     #[serde(default)]
     pub entitlement_seen: u64,
+    /// The plan the server last reported for this account: tier, whether it is being paid
+    /// for, and what is left of this month. Only a cached picture for the UI — the money
+    /// itself is the server's number, asked again on every account call.
+    #[serde(default)]
+    pub plan_seen: Option<serde_json::Value>,
     /// Pay chats with the SESSION balance instead of coins — the way back, not the way.
     ///
     /// Stored inverted on purpose. Coins are the payment path (docs/unlinkability.md, block

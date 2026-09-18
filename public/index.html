@@ -564,6 +564,42 @@
   .mpticks.ends span:first-child{color:var(--rust)}
   .mpticks.ends span:last-child{color:var(--mix)}
   .cursor{display:inline-block;width:7px;height:15px;background:var(--mix);vertical-align:-2px;margin-left:2px;animation:blink 1s steps(2) infinite}
+  /* The month's allowance. The number that matters is what is LEFT, and beside it the
+     date it comes back — a meter without a reset date reads as a countdown to nothing. */
+  .allow{border:1px solid var(--line);border-radius:12px;padding:13px;background:var(--surface-2);margin:10px 0}
+  .allow .top{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:9px}
+  .allow .big{font-family:var(--mono);font-size:20px;font-weight:700;letter-spacing:-.02em;color:var(--bone)}
+  .allow .of{font-family:var(--mono);font-size:11px;color:var(--muted)}
+  .allow .track{height:6px;border-radius:4px;background:var(--ink);overflow:hidden}
+  .allow .track>i{display:block;height:100%;background:var(--mix);transition:width .3s}
+  .allow .track.low>i{background:var(--rust)}
+  .allow .foot{display:flex;justify-content:space-between;gap:10px;margin-top:9px;font-family:var(--mono);font-size:10.5px;color:var(--muted)}
+  .allow .foot b{color:var(--bone);font-weight:500}
+  /* Credit bought before plans existed. Its own row, its own colour, and never folded into
+     the meter above: a number labelled "resets on the 1st" must not contain money that
+     does not. */
+  .keepbox{display:flex;gap:11px;align-items:flex-start;border:1px solid #3a4a41;background:#1a211d;
+           border-radius:12px;padding:11px 12px;margin:10px 0}
+  .keepbox .ic{font-family:var(--mono);color:#6FA88B;font-size:13px;line-height:1.4}
+  .keepbox b{display:block;font-size:13.5px;color:var(--bone)}
+  .keepbox small{display:block;color:var(--muted);font-size:11.5px;margin-top:2px;line-height:1.45}
+  /* plan sheet */
+  .planseg{display:flex;background:var(--surface-2);border-radius:9px;padding:3px;margin-bottom:14px}
+  .planseg span{flex:1;text-align:center;font-family:var(--mono);font-size:11.5px;padding:8px 0;border-radius:7px;color:var(--muted);cursor:pointer}
+  .planseg span.on{background:var(--mix);color:#fff;font-weight:500}
+  .plantier{display:flex;align-items:center;gap:12px;border:1px solid var(--line);border-radius:12px;
+            padding:12px 13px;margin-bottom:9px;background:var(--surface);cursor:pointer}
+  .plantier.sel{border-color:var(--mix);background:#221d2e;box-shadow:0 0 0 1px var(--mix) inset}
+  .plantier .radio{width:16px;height:16px;border-radius:50%;border:1.5px solid var(--line);flex:0 0 auto}
+  .plantier.sel .radio{border-color:var(--mix);background:radial-gradient(circle,var(--mix) 0 4.5px,transparent 5px)}
+  .plantier .who{min-width:0;flex:1}
+  .plantier .who b{display:block;font-family:var(--mono);font-size:13.5px;color:var(--bone)}
+  .plantier .who small{display:block;color:var(--muted);font-size:11px;margin-top:2px}
+  .plantier .price{text-align:right;flex:0 0 auto;font-family:var(--mono)}
+  .plantier .price b{display:block;font-size:14.5px;color:var(--bone)}
+  .plantier .price small{display:block;color:var(--muted);font-size:10px}
+  .plansave{display:inline-block;font-family:var(--mono);font-size:9.5px;color:#6FA88B;
+            border:1px solid #33463d;background:#18211d;border-radius:20px;padding:2px 7px;margin-top:5px}
   .mixphase{font-family:var(--mono);font-size:12.5px;letter-spacing:.02em;color:var(--mix);opacity:.9}
   /* elapsed seconds beside the held phase word: the wait is long enough (a 2K picture is
      ~26 s of drawing) that a motionless line reads as a hang. Dimmer than the word — it
@@ -1326,6 +1362,16 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   </div>
 </div>
 
+<!-- Plans. On iOS the only lawful rail is an auto-renewable App Store subscription, so
+     the prices shown here are Apple's own (StoreKit), not ours. Elsewhere the sheet says
+     where a plan is bought instead of pretending to sell one. -->
+<div class="scrim" id="planScrim" data-click="__backdrop__" data-close="closePlans">
+  <div class="modal">
+    <div class="mh"><span class="ttl">Choose your <b>plan</b></span><span class="x" data-click="closePlans">✕</span></div>
+    <div class="mb" id="planBody"></div>
+  </div>
+</div>
+
 <!-- iOS web top-up: our own leave-the-app sheet (US-storefront behaviour; the EU build
      will get Apple's DMA system sheet via the entitlement instead — no double sheet). -->
 <div class="scrim" id="topupScrim" data-click="__backdrop__" data-close="closeTopupSheet">
@@ -1900,6 +1946,9 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       if(gotModels.length) models = gotModels;
       tiers = s.tiers || tiers || [];
       account = s.account; balance = s.balance||0; held = s.held||0;
+      plan = (s.plan && typeof s.plan === "object") ? s.plan : null;
+      planLadder = Array.isArray(s.plans) ? s.plans : planLadder;
+      planIds = Array.isArray(s.iapPlans) ? s.iapPlans : planIds;
       entitlement = s.entitlement||0; bookToku = s.bookToku||100000; coinToku = s.coinToku||100; coinsExpire = Number(s.coinsExpire)||0;
       phraseVerified = !(account && account.phraseVerified === false);
 
@@ -1908,6 +1957,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         if(h){ const m=$("redeemHint"); if(m) m.textContent = h; } }
       refreshPhraseBackup();
       maybeRestoreIap();
+      maybeSyncPlan();
 
       fakePayments = s.fakePayments === true;    // only when the server SAYS so
       devBuild = s.devBuild === true;
@@ -2741,6 +2791,10 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // Paid for but not yet drawn as coins. A tail under one ticketbook cannot be drawn at
   // all until a purchase tops it up — it is still the user's money and is shown as such.
   let entitlement = 0, bookToku = 100000, coinToku = 100, coinsExpire = 0;
+  // The subscription as the server last reported it: {tier, active, toku_per_month, granted,
+  // left, period}. null = no plan, which is a supported state forever — an account that
+  // bought credit outright keeps working exactly as it always did.
+  let plan = null, planLadder = [], planIds = [];
   // Developer switch: pay each answer with coins instead of a session balance.
   // The Developer section is a debug-build thing, but a phone has no way to run a debug
   // build sensibly (a debug nym-sdk is enormous) and no environment to set — so seven taps
@@ -5700,6 +5754,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       <div class="ses">paid with coins · fingerprint</div>
       <div class="bal">${esc(tokuLine(balance + entitlement))}</div>
       <div class="held">${creditSplit()}</div>
+      ${allowanceHTML()}${keptCreditHTML()}
       ${entitlement>0 && entitlement<bookToku ? `<div class="held" style="color:var(--rust)">Coins are drawn a whole book at a time (${esc(formatToku(bookToku))} TOKU), so this rest waits here until your next top-up. It is on your recovery phrase and cannot be lost.</div>` : ``}
       ${expiryNote()}
       ${checking
@@ -6242,6 +6297,158 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     if(iosStoreOn()) loadIap(false); else renderIosStore();
   }
 
+  // ---------- the month's allowance ----------
+  // A subscriber has two pockets and they are never added into one number: the allowance
+  // resets on the 1st, the bought credit does not. Folding them together would label money
+  // as perishable that is not. See docs/subscription.md.
+  function planActive(){ return !!(plan && plan.active && Number(plan.granted) > 0); }
+  function planLeft(){ return Number(plan && plan.left) || 0; }
+  /// The 1st of next month, in the reader's own locale — the date the meter refills.
+  function resetDateLabel(){
+    const d = new Date();
+    const next = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1));
+    try{ return next.toLocaleDateString(undefined, { day: "numeric", month: "short" }); }
+    catch(_){ return "the 1st"; }
+  }
+  function allowanceHTML(){
+    if(!planActive()) return "";
+    const left = planLeft(), granted = Number(plan.granted) || 0;
+    const pct = granted > 0 ? Math.max(0, Math.min(100, Math.round(left / granted * 100))) : 0;
+    return `<div class="allow">
+      <div class="top"><span class="big">${esc(formatToku(left))}</span><span class="of">of ${esc(formatToku(granted))} TOKU</span></div>
+      <div class="track${pct <= 10 ? " low" : ""}"><i style="width:${pct}%"></i></div>
+      <div class="foot"><span>${pct}% of this month left</span><span>resets <b>${esc(resetDateLabel())}</b></span></div>
+    </div>`;
+  }
+  /// Credit bought outright, shown only when there IS a plan beside it — on its own, the
+  /// balance line already says it, and a second box would just repeat.
+  function keptCreditHTML(){
+    if(!planActive() || entitlement <= 0) return "";
+    return `<div class="keepbox"><span class="ic">✓</span><span><b>Credit you bought earlier · ${esc(formatToku(entitlement))} TOKU</b>
+      <small>Does not expire. Used automatically once a month's allowance runs out.</small></span></div>`;
+  }
+
+  // ---------- plans (iOS: App Store subscription) ----------
+  let planList = null, planErr = "", planLoading = false, planSel = null, planBusy = false,
+      planMsg = "", planYearly = false;
+  const planIsYearly = id => /\.year$/.test(String(id || ""));
+  const planEuro = id => { const m = /\.(\d{1,3})(\.year)?$/.exec(String(id || "")); return m ? parseInt(m[1], 10) : 0; };
+  /// The ladder the SERVER published for a product id: allowance and what it saves. Never
+  /// computed here — a tier advertised at a price this server does not sell is a bug we
+  /// would only find in a receipt.
+  function ladderOf(id){
+    const cents = planEuro(id) * 100;
+    return (planLadder || []).find(p => Number(p.cents) === cents) || null;
+  }
+  function openPlans(){
+    planMsg = ""; show("planScrim", true); renderPlans();
+    if(isIOSNative()) loadPlans(false);
+  }
+  function closePlans(){ show("planScrim", false); }
+  async function loadPlans(force){
+    if(!isIOSNative()) return;
+    if(planList && !force){ renderPlans(); return; }
+    planLoading = true; planErr = ""; renderPlans();
+    try{
+      const r = await Backend.iapPlans();
+      const list = Array.isArray(r && r.products) ? r.products : [];
+      if(Array.isArray(r && r.ladder)) planLadder = r.ladder;
+      planList = list.filter(p => p && typeof p.id === "string" && planEuro(p.id) > 0);
+      if(!planList.length){ planList = null; planErr = "The App Store returned no plans for this app."; }
+    }catch(e){ planList = null; planErr = String((e && e.message) || e || "The App Store is not answering."); }
+    planLoading = false; renderPlans();
+  }
+  function planTierHTML(p){
+    const l = ladderOf(p.id);
+    const toku = l ? Number(l.toku) : 0;
+    const saves = l ? Number(l.savesCents) || 0 : 0;
+    const sub = toku > 0 ? `${formatToku(toku)} TOKU a month` : "";
+    return `<div class="plantier${planSel === p.id ? " sel" : ""}" data-click="selectPlan" data-click-pass="id" data-id="${escAttr(String(p.id))}">
+      <span class="radio"></span>
+      <span class="who"><b>${esc(sub || String(p.id))}</b><small>${esc(planPromptLine(toku))}</small>
+        ${saves > 0 ? `<span class="plansave">saves ${esc(euros(saves))} a month</span>` : ``}</span>
+      <span class="price"><b>${esc(String(p.displayPrice || ""))}</b><small>${planYearly ? "per year" : "per month"}</small></span>
+    </div>`;
+  }
+  /// Euro cents → "€1.42". The saving is the server's number; only the formatting is ours.
+  /// (`money` above is the dollar formatter for the credit tiles — plans are priced in euro.)
+  function euros(cents){
+    const v = (Number(cents) || 0) / 100;
+    try{ return v.toLocaleString(undefined, { style: "currency", currency: "EUR" }); }
+    catch(_){ return "€" + v.toFixed(2); }
+  }
+  /// What a month's TOKU buys, in the units people think in. Derived from the catalogue's
+  /// own prices so it cannot go stale when a provider changes theirs.
+  function planPromptLine(toku){
+    if(!(toku > 0)) return "";
+    // The cheapest text model's real per-answer cost, from the same function the model
+    // list prices with — so this figure moves when a provider's price does.
+    const costs = (models || []).filter(m => (m.kind || "text") !== "image")
+                                .map(answerCost).filter(c => isFinite(c) && c > 0).sort((a, b) => a - b);
+    const per = costs[0] || 0;
+    return per > 0 ? `≈ ${Math.floor(toku / per).toLocaleString()} answers from a fast model` : "";
+  }
+  function renderPlans(){
+    const box = $("planBody"); if(!box) return;
+    if(!isIOSNative()){
+      box.innerHTML = `<p class="hint">Plans are bought on the website, and the app then finds the month on your account. ` +
+        `This build cannot open a checkout for you yet.</p>`;
+      return;
+    }
+    if(planLoading){ box.innerHTML = `<p class="hint">Loading App Store prices…</p>`; return; }
+    if(planErr || !planList){
+      box.innerHTML = `<div class="setrow" style="cursor:default;border-color:var(--rust)"><span><b style="color:var(--rust)">The App Store is not answering right now.</b><small>${esc(planErr)} Your plan and everything you have already bought are unaffected.</small></span></div>
+        <div class="btnrow"><button class="btn" data-click="loadPlans" data-args="true">Try again</button></div>`;
+      return;
+    }
+    const shown = planList.filter(p => planIsYearly(p.id) === planYearly);
+    const sel = shown.find(p => p.id === planSel);
+    const ready = !!sel && !planBusy;
+    box.innerHTML = `${allowanceHTML()}
+      <p class="hint" style="margin:0 0 12px">Every month you get a fresh allowance. It does not roll over — and it does not expire on you mid-month either.</p>
+      <div class="planseg"><span class="${planYearly ? "" : "on"}" data-click="planPeriod" data-args="false">Monthly</span><span class="${planYearly ? "on" : ""}" data-click="planPeriod" data-args="true">Yearly · −10%</span></div>
+      ${shown.map(planTierHTML).join("")}
+      <div style="margin-top:12px"><button class="btn primary${planBusy ? " busy" : ""}" style="width:100%${ready ? "" : ";opacity:.5;cursor:not-allowed"}"${ready ? "" : " disabled"} data-click="subscribePlan">${
+        planBusy ? "Subscribing — the App Store first, then our server confirms…"
+                 : sel ? `Subscribe — ${esc(String(sel.displayPrice || ""))}` : "Pick a plan above"}</button></div>
+      <p class="hint" style="margin:10px 2px 0;text-align:center">Renews until you cancel. Manage or cancel any time in your Apple ID settings; ${esc(planYearly ? "a year" : "a month")} already paid for stays yours.</p>
+      ${planMsg ? `<p class="hint" style="margin:10px 0 0">${esc(planMsg)}</p>` : ``}`;
+  }
+  function selectPlan(id){ if(!planList || !planList.some(p => p.id === id)) return; planSel = id; planMsg = ""; renderPlans(); }
+  function planPeriod(yearly){ planYearly = !!yearly; planSel = null; renderPlans(); }
+  async function subscribePlan(){
+    const sel = planList && planList.find(p => p.id === planSel);
+    if(!sel || planBusy) return;
+    planBusy = true; planMsg = ""; renderPlans();
+    try{
+      const r = await Backend.iapSubscribe(sel.id);
+      const st = String((r && r.status) || "");
+      if(st === "subscribed"){
+        planMsg = "✓ Your plan is active. The month is on your account — collecting it now.";
+        planSel = null;
+        await collectAfterIap();
+      }
+      else if(st === "cancelled"){ planMsg = ""; }
+      else if(st === "pending"){ planMsg = "Waiting for approval (Ask to Buy). The plan starts once it is approved."; }
+      else if(st === "unclaimed"){ planMsg = `Paid — but the server has not confirmed the plan yet: ${String((r && r.error) || "no answer")}. Nothing is lost: the app checks again on its own, and on the next launch.`; }
+      else { planMsg = "The App Store gave an unexpected answer."; }
+    }catch(e){ planMsg = "Failed: " + String((e && e.message) || e); }
+    planBusy = false; renderPlans();
+  }
+  /// On launch: ask Apple what this device is entitled to and tell the server. A RENEWAL is
+  /// never a purchase the app sees — StoreKit charges in the background — so without this
+  /// the second month would never arrive.
+  let planSyncedOnce = false;
+  async function maybeSyncPlan(){
+    if(planSyncedOnce || !isIOSNative() || !account) return;
+    planSyncedOnce = true;
+    try{
+      const r = await Backend.iapSyncPlan();
+      const acct = r && r.account;
+      if(acct && acct.subscription){ plan = acct.subscription; renderThread(); }
+    }catch(_){ /* the next launch asks again; nothing is lost by a quiet failure */ }
+  }
+
   // ---------- App Store purchases (iOS) ----------
   // Tiles come from StoreKit (localized price), the credit amount from the product id's
   // tile (`…credit.10` = $10 = 1,000,000 TOKU — the same buckets as every other rail). A
@@ -6282,10 +6489,15 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     }
     if(codeRow) codeRow.classList.remove("dis");
     const tiles = iapList.map(iapTile).join("");
+    // A plan is the cheaper way in and belongs above the one-off tiles, not hidden behind
+    // them. When one is already running, this row shows the month instead of selling again.
+    const planRow = planActive()
+      ? `${allowanceHTML()}${keptCreditHTML()}<div class="setrow" data-click="openPlans"><span><b>Your plan</b><small>${esc(formatToku(Number(plan.toku_per_month) || 0))} TOKU a month · change or cancel</small></span><span class="chev">›</span></div>`
+      : `<div class="setrow" data-click="openPlans"><span><b>Monthly plan</b><small>A fresh allowance every month — more TOKU per euro than the amounts below.</small></span><span class="chev">›</span></div>`;
     const sel = iapList.find(p => p.id===iapSel);
     const ready = !!sel && iapConsent && !iapBusy;
     const label = iapBusy ? "Buying — the App Store first, then our server confirms (up to two minutes)…" : sel ? `Buy ${esc(iapToku(sel.id))} TOKU for ${esc(String(sel.displayPrice||""))}` : "Pick an amount above";
-    box.innerHTML = `<div class="grouplbl" style="margin-top:2px">Amount</div><div class="tiles">${tiles}</div>
+    box.innerHTML = `${planRow}<div class="grouplbl" style="margin-top:2px">${planActive() ? "Or add a one-off amount" : "Amount"}</div><div class="tiles">${tiles}</div>
       <div class="consent" style="margin-top:10px"><div class="ck${iapConsent?" on":""}" data-click="toggleIapConsent"><span class="box">✓</span><span class="cktx">I understand that this credit is tied to my <b>recovery phrase</b> and to this device: the phrase brings back what has moved onto it, coins still on the device are lost with the device. Nobody — including tokumai — can restore either.</span></div></div>
       <div style="margin-top:10px"><button class="btn primary${iapBusy?" busy":""}" style="width:100%${ready?"":";opacity:.5;cursor:not-allowed"}"${ready?"":" disabled"} data-click="buyIap">${label}</button></div>
       ${iapMsg ? `<p class="hint" style="margin:10px 0 0">${esc(iapMsg)}</p>` : ``}
@@ -7188,6 +7400,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
 
   // expose for inline handlers
   Object.assign(window,{ toggleGwRandom, pickServerIdentity, returnCoins, tapVersion, hideDev, selectIap, loadIap, toggleIapConsent, buyIap, restoreIap, codeTyped,
+    openPlans, closePlans, loadPlans, selectPlan, planPeriod, subscribePlan,
     pickModel, copyPhrase, newChat, openSession, deleteSession, exportSession, toggleMenu, selectModelIdx,
     autogrow, onKey, sendMsg, retryMsg, showHandover, downloadHandover, closeHandover, pickImport, importHandover,
     cancelMsg, resendMsg, showDismissed, retrieveMsg, openConnSheet, closeConnSheet, rebuildRoute, rebuildRouteFromSheet, copyResumeLog, routeDismiss, useOfficialServer, iterateImg,

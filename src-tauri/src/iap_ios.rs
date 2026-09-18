@@ -19,6 +19,7 @@ extern "C" {
     fn tokumai_iap_products(ids_json: *const c_char, ctx: *mut c_void, cb: Cb);
     fn tokumai_iap_purchase(product_id: *const c_char, ctx: *mut c_void, cb: Cb);
     fn tokumai_iap_unfinished(ctx: *mut c_void, cb: Cb);
+    fn tokumai_iap_entitlements(ctx: *mut c_void, cb: Cb);
     fn tokumai_iap_finish(transaction_id: *const c_char, ctx: *mut c_void, cb: Cb);
 }
 
@@ -84,4 +85,12 @@ pub async fn finish(transaction_id: &str) -> Result<(), String> {
     let id = c(transaction_id)?;
     // SAFETY: as above.
     call(Duration::from_secs(60), |ctx, cb| unsafe { tokumai_iap_finish(id.as_ptr(), ctx, cb) }).await.map(|_| ())
+}
+
+/// The live subscriptions this Apple ID holds. A renewal never reaches the app as a
+/// purchase — StoreKit charges in the background — so this is what tells the server the
+/// plan is still being paid for.
+pub async fn entitlements() -> Result<Vec<Value>, String> {
+    let v = call(Duration::from_secs(20), |ctx, cb| unsafe { tokumai_iap_entitlements(ctx, cb) }).await?;
+    Ok(v.get("transactions").and_then(|t| t.as_array()).cloned().unwrap_or_default())
 }
