@@ -467,7 +467,9 @@ async fn main() {
     // right setting for a test round and the wrong one the moment the app is public.
     if iap::allow_sandbox() {
         eprintln!(
-            "scrai-server: WARNING: IAP_ALLOW_SANDBOX=1 — sandbox purchases create REAL credit              and REAL subscriptions. Every TestFlight tester buys in the sandbox. Turn it off              before the app is public."
+            "scrai-server: WARNING: IAP_ALLOW_SANDBOX=1 — sandbox purchases create REAL credit \
+             and REAL subscriptions. Every TestFlight tester buys in the sandbox. Turn it \
+             off before the app is public."
         );
     }
     if pay::voucher_key().is_some() {
