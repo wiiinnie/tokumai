@@ -6525,9 +6525,14 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     // Plans only: no amount tiles, no error, and the code field stays usable.
     if(!iapList && !iapErr && planIds.length){
       if(codeRow) codeRow.classList.remove("dis");
-      box.innerHTML = planActive()
+      const row = planActive()
         ? `${allowanceHTML()}${keptCreditHTML()}<div class="setrow" data-click="openPlans"><span><b>Your plan</b><small>${esc(formatToku(Number(plan.toku_per_month) || 0))} TOKU a month · change or cancel</small></span><span class="chev">›</span></div>`
         : `<div class="setrow" data-click="openPlans"><span><b>Choose a plan</b><small>A fresh allowance of TOKU every month.</small></span><span class="chev">›</span></div>`;
+      // Restore has to survive the one-off tiles being retired. An app that sells an
+      // auto-renewable subscription must offer a way to get it back on a new device or
+      // after a reinstall — App Review checks for it, and a customer who paid and sees
+      // nothing needs it more than any other button on this sheet.
+      box.innerHTML = row + restoreLinkHTML();
       return;
     }
     if(iapErr || !iapList){
@@ -6558,7 +6563,12 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       <div class="consent" style="margin-top:10px"><div class="ck${iapConsent?" on":""}" data-click="toggleIapConsent"><span class="box">✓</span><span class="cktx">I understand that this credit is tied to my <b>recovery phrase</b> and to this device: the phrase brings back what has moved onto it, coins still on the device are lost with the device. Nobody — including tokumai — can restore either.</span></div></div>
       <div style="margin-top:10px"><button class="btn primary${iapBusy?" busy":""}" style="width:100%${ready?"":";opacity:.5;cursor:not-allowed"}"${ready?"":" disabled"} data-click="buyIap">${label}</button></div>
       ${iapMsg ? `<p class="hint" style="margin:10px 0 0">${esc(iapMsg)}</p>` : ``}
-      <p class="hint" style="text-align:center;margin:10px 0 14px"><span data-click="restoreIap" style="cursor:pointer;text-decoration:underline">Restore purchases</span></p>`;
+      ${restoreLinkHTML()}`;
+  }
+  /// One restore control, used by both shapes of this sheet. Apple requires a restore path
+  /// in any app selling a subscription; it must not disappear with the amount tiles.
+  function restoreLinkHTML(){
+    return `<p class="hint" style="text-align:center;margin:10px 0 14px"><span data-click="restoreIap" style="cursor:pointer;text-decoration:underline">Restore purchases</span></p>`;
   }
   function selectIap(id){ if(!iapList || !iapList.some(p => p.id===id)) return; iapSel = id; iapMsg = ""; renderIosStore(); }
   function toggleIapConsent(){ iapConsent = !iapConsent; renderIosStore(); }
@@ -6594,10 +6604,24 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     if(iapBusy) return;
     iapBusy = true; iapMsg = "Checking with the App Store, then with our server…"; renderIosStore();
     try{
+      // A subscription is NOT an unfinished transaction: it lives in what Apple says this
+      // Apple ID currently owns. Restore has to ask that too, or a subscriber reinstalling
+      // the app — or arriving on a second device — would find nothing to restore.
+      try{
+        const p = await Backend.iapSyncPlan();
+        const acct = p && p.account;
+        if(acct && acct.subscription){ plan = acct.subscription; }
+      }catch(_){ /* the credit half below still reports what it finds */ }
       const r = await Backend.iapRestore();
       const claimed = Number(r && r.claimed)||0, found = Number(r && r.found)||0, toku = Number(r && r.toku)||0;
       if(claimed>0){ iapMsg = "✓ " + iapCreditedLine(r); disarmIapRetry(); await collectAfterIap(); }
-      else if(found===0){ iapMsg = "Nothing to restore — every purchase has been credited."; disarmIapRetry(); }
+      else if(found===0){
+        iapMsg = planActive()
+          ? "✓ Your plan is back — this month's allowance is on your account."
+          : "Nothing to restore — every purchase has been credited.";
+        disarmIapRetry();
+        if(planActive()) await collectAfterIap();
+      }
       else { iapMsg = `${found} paid purchase${found>1?"s":""} still unclaimed: ${String((r && r.error)||"the server did not answer")}. The app keeps trying.`; armIapRetry(); }
     }catch(e){ iapMsg = "Failed: " + String((e && e.message) || e); }
     iapBusy = false; renderIosStore();
