@@ -1026,9 +1026,12 @@ impl Pay {
         (to_allowance, to_entitlement)
     }
 
-    /// A subscription begins (or is re-pointed at a new rail id). The first month is granted
-    /// PRO RATA to the day, from the same fraction that priced it — the two cannot drift
-    /// because both come out of `subscription::served`.
+    /// A subscription begins on a rail that prorates — Stripe, anchored to the 1st. The
+    /// first month is granted PRO RATA to the day, from the same fraction that priced it:
+    /// the two cannot drift because both come out of `subscription::served`.
+    ///
+    /// The App Store takes the other path (`subscribe_or_renew`): Apple charges a full
+    /// period at signup, so a full month is what it grants.
     pub fn subscribe(&mut self, account_id: &str, tier: usize, rail_id: &str, now_ms_: u64, paid_until_ms: u64) -> u64 {
         let (full_toku, _) = subscription::TIERS[tier.min(subscription::TIERS.len() - 1)];
         let (y, m, d) = subscription::civil_from_ms(now_ms_);
@@ -1052,9 +1055,16 @@ impl Pay {
     ///
     /// Returns true when a month was actually handed out, so the caller can log it.
     ///
-    /// The first, partial month is granted pro rata like everywhere else. Apple bills a
-    /// full period from the day of purchase, so a subscriber effectively gets the rest of
-    /// the signup month on top — bounded by one month, once, and in their favour.
+    /// **The first month is granted in FULL here, unlike the web rail.** Apple does not
+    /// prorate: it charges the whole price at signup and runs the period from that day.
+    /// Granting a fraction for a full charge would be taking money for less service at the
+    /// moment the customer is deciding whether to keep the thing — someone subscribing on
+    /// the 28th would pay €10 and get three days. That it evens out by the 1st is an
+    /// argument nobody should have to be given.
+    ///
+    /// The cost is one extra part-month per subscriber, once: thirteen grants across the
+    /// first twelve charges instead of twelve and a fraction. Bounded, and the price of a
+    /// rail whose billing we do not control.
     pub fn subscribe_or_renew(
         &mut self,
         account_id: &str,
@@ -1096,7 +1106,15 @@ impl Pay {
                 grant
             }
             _ => {
-                self.subscribe(account_id, tier, rail_id, now_ms_, paid_until_ms);
+                let (full_toku, _) = subscription::TIERS[tier];
+                let sub = self.subs.entry(account_id.to_string()).or_default();
+                sub.tier = tier;
+                sub.rail_id = rail_id.to_string();
+                sub.active = true;
+                sub.checked_at_ms = now_ms_;
+                sub.paid_until_ms = paid_until_ms;
+                sub.allowance.reset(period, full_toku);
+                self.rev += 1;
                 true
             }
         }
@@ -3162,6 +3180,9 @@ mod tests {
         assert_eq!(p.allowance_left("acct"), 700_000);
     }
 
+    /// The web rail prorates because Stripe does: the charge and the allowance come out of
+    /// ONE fraction, so they cannot drift. The App Store rail deliberately does not — see
+    /// `an_app_store_plan_seen_twice_does_not_grant_twice`.
     #[test]
     fn a_first_month_is_granted_pro_rata_to_the_day() {
         let mut p = Pay::default();
@@ -3176,16 +3197,23 @@ mod tests {
     fn an_app_store_plan_seen_twice_does_not_grant_twice() {
         let mut p = Pay::default();
         let rail = "iap:2000000111222333";
-        // First sighting: the partial first month, pro rata (13 of 30 days).
+        // Signing up on the 18th grants the WHOLE month, because Apple charged the whole
+        // price: it does not prorate a first period the way Stripe does.
         assert!(p.subscribe_or_renew("acct", 0, rail, ms(2026, 9, 18), paid_through(2027)));
-        assert_eq!(p.allowance_left("acct"), 303_333);
-        p.consume_credit("acct", 300_000);
+        assert_eq!(p.allowance_left("acct"), 700_000);
+        p.consume_credit("acct", 696_667);
 
         // The app re-sends the SAME entitlement at every launch. Nothing is granted again,
         // and what has been spent stays spent.
         assert!(!p.subscribe_or_renew("acct", 0, rail, ms(2026, 9, 19), paid_through(2027)));
         assert!(!p.subscribe_or_renew("acct", 0, rail, ms(2026, 9, 30), paid_through(2027)));
         assert_eq!(p.allowance_left("acct"), 3_333);
+        // …and signing up on the LAST day of a month is a whole month too, not one day of
+        // it. This is the case that would otherwise read as being cheated: a full charge
+        // for three days, with the explanation arriving only on the 1st.
+        let mut q = Pay::default();
+        q.subscribe_or_renew("late", 0, "iap:2000000444555666", ms(2026, 9, 29), paid_through(2027));
+        assert_eq!(q.allowance_left("late"), 700_000);
 
         // A new month: granted once, in full, however many times the app reports it.
         assert!(p.subscribe_or_renew("acct", 0, rail, ms(2026, 10, 1), paid_through(2027)));

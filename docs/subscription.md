@@ -184,6 +184,32 @@ for a card to fail.
 **Load.** Everyone drawing on the 1st is a spike. Spread the draw over the first hours of
 the day at random; the anonymity set barely notices, the server does.
 
+## The first month differs by rail, because the rails do
+
+Stripe can be anchored to the 1st and prorates a partial first period; **Apple cannot and
+does not.** The App Store charges the full price at signup and runs the period from that
+day — 18 September to 18 October, then the 18th of every month after.
+
+So the first month is granted differently, on purpose:
+
+| | charge | first grant |
+| --- | --- | --- |
+| Stripe (web) | pro rata, to the day | pro rata, from the same fraction |
+| App Store | **full price, at once** | **a full month** |
+
+Granting a fraction against a full charge would be taking money for less service at exactly
+the moment a customer decides whether to keep the thing. Someone subscribing on the 28th
+would pay €10 and get three days; that it evens out on the 1st is an argument nobody should
+have to be given.
+
+What it costs: thirteen grants across the first twelve charges instead of twelve and a
+fraction — one extra part-month per subscriber, once, averaging about €2.85 of provider
+cost. Roughly a tenth of a first year's profit on that subscriber, and the price of a rail
+whose billing we do not control.
+
+It cannot run away: `subscribe_or_renew` grants at most once per calendar month, so a
+renewal, a re-report at launch, or an upgrade inside a granted month all add nothing.
+
 ## Credit that already exists — the migration rule
 
 Decided 2026-09-18, and it is a constraint rather than a preference: **nobody loses credit they
