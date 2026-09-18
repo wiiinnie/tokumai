@@ -6358,15 +6358,30 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     }catch(e){ planList = null; planErr = String((e && e.message) || e || "The App Store is not answering."); }
     planLoading = false; renderPlans();
   }
+  /// What a YEARLY product saves against paying monthly for the same tier — computed from
+  /// Apple's own two prices, not from our 10 %. The price point we ask for and the one the
+  /// App Store offers are not always the same number, and a discount we advertise has to be
+  /// one the receipt agrees with. Returns cents, or 0 when there is nothing to compare.
+  function yearlySavingCents(yearlyProduct){
+    if(!planIsYearly(yearlyProduct.id)) return 0;
+    const monthly = (planList || []).find(p => !planIsYearly(p.id) && planEuro(p.id) === planEuro(yearlyProduct.id));
+    const m = Number(monthly && monthly.price), y = Number(yearlyProduct.price);
+    if(!(m > 0) || !(y > 0)) return 0;
+    return Math.max(0, Math.round((m * 12 - y) * 100));
+  }
   function planTierHTML(p){
     const l = ladderOf(p.id);
     const toku = l ? Number(l.toku) : 0;
-    const saves = l ? Number(l.savesCents) || 0 : 0;
     const sub = toku > 0 ? `${formatToku(toku)} TOKU a month` : "";
+    // On the monthly tab: what a bigger plan saves against the entry one (the server's
+    // figure). On the yearly tab: what paying yearly saves against monthly (Apple's).
+    // Each view compares against what the reader is actually weighing it up against.
+    const saves = planYearly ? yearlySavingCents(p) : (l ? Number(l.savesCents) || 0 : 0);
+    const per = planYearly ? "a year" : "a month";
     return `<div class="plantier${planSel === p.id ? " sel" : ""}" data-click="selectPlan" data-click-pass="id" data-id="${escAttr(String(p.id))}">
       <span class="radio"></span>
       <span class="who"><b>${esc(sub || String(p.id))}</b><small>${esc(planPromptLine(toku))}</small>
-        ${saves > 0 ? `<span class="plansave">saves ${esc(euros(saves))} a month</span>` : ``}</span>
+        ${saves > 0 ? `<span class="plansave">saves ${esc(euros(saves))} ${esc(per)}</span>` : ``}</span>
       <span class="price"><b>${esc(String(p.displayPrice || ""))}</b><small>${planYearly ? "per year" : "per month"}</small></span>
     </div>`;
   }
@@ -6406,13 +6421,27 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     const ready = !!sel && !planBusy;
     box.innerHTML = `${allowanceHTML()}
       <p class="hint" style="margin:0 0 12px">Every month you get a fresh allowance. It does not roll over — and it does not expire on you mid-month either.</p>
-      <div class="planseg"><span class="${planYearly ? "" : "on"}" data-click="planPeriod" data-args="false">Monthly</span><span class="${planYearly ? "on" : ""}" data-click="planPeriod" data-args="true">Yearly · −10%</span></div>
+      <div class="planseg"><span class="${planYearly ? "" : "on"}" data-click="planPeriod" data-args="false">Monthly</span><span class="${planYearly ? "on" : ""}" data-click="planPeriod" data-args="true">Yearly${yearlyPitch()}</span></div>
       ${shown.map(planTierHTML).join("")}
       <div style="margin-top:12px"><button class="btn primary${planBusy ? " busy" : ""}" style="width:100%${ready ? "" : ";opacity:.5;cursor:not-allowed"}"${ready ? "" : " disabled"} data-click="subscribePlan">${
         planBusy ? "Subscribing — the App Store first, then our server confirms…"
                  : sel ? `Subscribe — ${esc(String(sel.displayPrice || ""))}` : "Pick a plan above"}</button></div>
       <p class="hint" style="margin:10px 2px 0;text-align:center">Renews until you cancel. Manage or cancel any time in your Apple ID settings; ${esc(planYearly ? "a year" : "a month")} already paid for stays yours.</p>
       ${planMsg ? `<p class="hint" style="margin:10px 0 0">${esc(planMsg)}</p>` : ``}`;
+  }
+  /// The yearly tab's own label. A fixed "−10%" would be a claim about prices the App
+  /// Store sets, and its price points do not always land where we asked — so the discount
+  /// shown is the smallest one actually on offer, rounded DOWN. Nothing, if we cannot work
+  /// it out.
+  function yearlyPitch(){
+    const pcts = (planList || []).filter(p => planIsYearly(p.id)).map(p => {
+      const monthly = planList.find(q => !planIsYearly(q.id) && planEuro(q.id) === planEuro(p.id));
+      const m = Number(monthly && monthly.price), y = Number(p.price);
+      return (m > 0 && y > 0) ? (1 - y / (m * 12)) * 100 : 0;
+    }).filter(x => x > 0);
+    if(!pcts.length) return "";
+    const worst = Math.floor(Math.min.apply(null, pcts));
+    return worst >= 1 ? ` · −${worst}%` : "";
   }
   function selectPlan(id){ if(!planList || !planList.some(p => p.id === id)) return; planSel = id; planMsg = ""; renderPlans(); }
   function planPeriod(yearly){ planYearly = !!yearly; planSel = null; renderPlans(); }
