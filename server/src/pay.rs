@@ -3259,6 +3259,30 @@ mod tests {
     }
 
     #[test]
+    fn a_yearly_plan_is_twelve_monthly_allowances_behind_one_payment() {
+        // The App Store bills a yearly plan once and its expiresDate is a year out. The
+        // allowance is still MONTHLY: one payment behind it instead of twelve, and no
+        // separate machinery. Written down as a test because "the paid period is a year,
+        // so grant a year" is the tidy-looking change someone will eventually make — and
+        // it would hand a year of allowance to a device in one go.
+        let mut p = Pay::default();
+        let rail = "iap:2000000999888777";
+        p.subscribe_or_renew("acct", 2, rail, ms(2026, 9, 1), ms(2027, 9, 1));
+        assert_eq!(p.allowance_left("acct"), 4_000_000, "September, in full");
+
+        for m in 10..=12 {
+            p.consume_credit("acct", p.allowance_left("acct")); // spend the month
+            p.expire_lapsed(ms(2026, m, 1));
+            p.roll_periods(ms(2026, m, 1));
+            assert_eq!(p.allowance_left("acct"), 4_000_000, "month {m} arrives on its own");
+        }
+        // …and it stops when the year does, without anyone reporting anything.
+        p.expire_lapsed(ms(2027, 9, 2));
+        p.roll_periods(ms(2027, 10, 1));
+        assert_eq!(p.allowance_left("acct"), 0);
+    }
+
+    #[test]
     fn a_subscription_with_no_known_paid_period_grants_nothing() {
         // Fail closed. A row restored from a snapshot written before paid_until_ms existed
         // has 0 there, and 0 must mean "not paid for" — the alternative is a field whose
