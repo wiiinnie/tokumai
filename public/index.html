@@ -6341,10 +6341,10 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     return (planLadder || []).find(p => Number(p.cents) === cents) || null;
   }
   function openPlans(){
-    planMsg = ""; show("planScrim", true); renderPlans();
+    planMsg = ""; renderPlans(); openScrim("planScrim");
     if(isIOSNative()) loadPlans(false);
   }
-  function closePlans(){ show("planScrim", false); }
+  function closePlans(){ $("planScrim").classList.remove("open"); }
   async function loadPlans(force){
     if(!isIOSNative()) return;
     if(planList && !force){ renderPlans(); return; }

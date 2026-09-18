@@ -78,6 +78,10 @@ const screens = [
   ["buy credit", "openBuy"],
   ["settings", "openSettings"],
   ["support", "openSupport"],
+  // Added after openPlans shipped calling a helper that does not exist (`show`): every
+  // check in the repo stayed green because nothing here opened that sheet. A screen not
+  // on this list is a screen nobody opens until a user does.
+  ["plans", "openPlans"],
 ];
 for (const [name, fn] of screens) {
   problems.length = problems.length; // keep prior errors
@@ -96,7 +100,7 @@ for (const [name, fn] of screens) {
   // is where a variable somebody deleted hides just as well as in the open path.
   await page
     .evaluate((f) => {
-      const close = { openAccount: "closeAccount", openBuy: "closeBuy", openSettings: "closeSettings", openSupport: "closeSupport" }[f];
+      const close = { openAccount: "closeAccount", openBuy: "closeBuy", openSettings: "closeSettings", openSupport: "closeSupport", openPlans: "closePlans" }[f];
       if (typeof window[close] === "function") window[close]();
       else document.querySelectorAll(".scrim.open").forEach((s) => s.classList.remove("open"));
     }, fn)
