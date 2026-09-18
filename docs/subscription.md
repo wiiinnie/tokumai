@@ -200,7 +200,8 @@ rather than exceptional.
 only what is left over comes from `entitlements`. That is the order that costs the customer
 least — the allowance dies on the 1st either way, the bought credit does not.
 
-**Returns go back where they came from.** A device handing coins back (device move, giveback)
+**Returns go back where they came from.** (Decided 2026-09-18, built in
+`core/src/subscription.rs` with twelve tests.) A device handing coins back (device move, giveback)
 must not turn a monthly allowance into permanent credit — draw a million on the 1st, hand it
 back on the 31st, repeat, and the voucher problem is rebuilt by hand. So the period carries a
 third number, `drawn_from_allowance`, and a return of value `v` restores
@@ -276,6 +277,41 @@ unit with one meaning — it is the denomination of the coins. So the store pric
 
 That survives even the standard 30 %, so exceeding the Small Business threshold would not turn
 the app loss-making overnight — but enrolling stays a precondition, not a nice-to-have.
+
+### A limited company does not recover the VAT on a sale
+
+Worth writing down because it is an easy and expensive thing to assume. Registering for VAT
+(which a GmbH/UG does from the first euro) lets input tax be deducted on what the business
+**buys**. It does not give back the tax on what the business **sells** — the €1.60 inside a
+€10 subscription is collected for the state either way.
+
+And the deduction has almost nothing to bite on here. The big cost is the AI providers, billed
+from Ireland and the US: those are **reverse charge**, so the invoice carries no German VAT at
+all — it is self-assessed and deducted in the same return, netting to zero. Stripe (Ireland)
+likewise. What the App Store pays out is a B2B supply *to Apple*, with no VAT in either
+direction. Only domestic purchases — hosting, hardware, the accountant — actually yield input
+tax, and they are small next to the provider bill.
+
+So the company form moves exactly one number, and downwards: the web rail goes from €9.60 per
+€10 to €8.03, because VAT must now be remitted. The store rails do not move at all (€7.14
+before and after — Apple and Google already deducted the consumer's VAT before paying out).
+
+**The consequence for pricing: €10 on the web stops making sense.** It yields +€0.88 a month
+while carrying the full dollar exposure. Either one price everywhere, or a modest web discount:
+
+| | web | Apple/Google 15 % |
+| --- | --- | --- |
+| €11.99 | +€2.52 | +€1.44 |
+| €12.99 | +€3.35 | +€2.16 |
+
+**And the bottom line is after tax.** Corporation tax plus trade tax take roughly 30 % of the
+profit: at €12.99 that is ~€1.51 per store subscriber-month and ~€2.34 per web one. Against a
+GmbH's fixed costs — servers, developer programmes, and an accountant who now has a
+Jahresabschluss to file — **the break-even is on the order of 150 paying subscribers**, not
+fifteen. That number, not the per-subscriber margin, is the one to plan against.
+
+*(Not tax advice: the reverse-charge treatment and Apple's commissionaire structure are for the
+Steuerberater to confirm. The arithmetic above is what follows if they do.)*
 
 ### What moves the number
 

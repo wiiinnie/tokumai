@@ -15,4 +15,5 @@ pub mod gateway;
 pub mod pricing;
 pub mod purse;
 pub mod quorum;
+pub mod subscription;
 pub mod tender;
