@@ -450,11 +450,26 @@ async fn main() {
     // Said BOTH ways round on purpose. A warning that only prints on failure means a silent
     // log is ambiguous — it reads the same whether the key is fine or the deploy never
     // arrived, which is exactly the question somebody asks after a deploy (2026-09-08).
+    let tiles = iap::product_ids();
     println!(
-        "scrai-server: App Store purchases — products {:?}, sandbox transactions {}",
-        iap::product_ids(),
+        "scrai-server: App Store — {}, plans {:?}, sandbox transactions {}",
+        if tiles.is_empty() {
+            "NO one-off credit (IAP_TIERS=none — plans only)".to_string()
+        } else {
+            format!("one-off credit {tiles:?}")
+        },
+        iap::plan_ids(),
         if iap::allow_sandbox() { "ACCEPTED (IAP_ALLOW_SANDBOX=1)" } else { "refused" }
     );
+    // Sandbox acceptance used to be worth a line; with subscriptions it is worth a warning.
+    // EVERY TestFlight tester buys in the sandbox, with their own Apple ID — so while this
+    // is on, any of them can mint a free subscription, not just free credit. It is the
+    // right setting for a test round and the wrong one the moment the app is public.
+    if iap::allow_sandbox() {
+        eprintln!(
+            "scrai-server: WARNING: IAP_ALLOW_SANDBOX=1 — sandbox purchases create REAL credit              and REAL subscriptions. Every TestFlight tester buys in the sandbox. Turn it off              before the app is public."
+        );
+    }
     if pay::voucher_key().is_some() {
         println!("scrai-server: voucher codes — fingerprints are keyed (VOUCHER_KEY)");
     } else {
