@@ -219,6 +219,79 @@ number labelled "resets 1 Oct" would say the opposite of the truth.
 
 Mockups (2026-09-18): https://claude.ai/code/artifact/e557a83b-2f92-4f58-970e-f49d91f93f48
 
+## What the app stores cost — computed 2026-09-18
+
+Mobile first means Apple and Google are the main rail, not the exception, so the rates decide
+the price. Assumptions stated once: German **VAT 19 %**, **1 EUR = $1.08**, `MARGIN=1.30`, and
+a month's allowance **spent in full** (the pessimistic case, and the realistic one for anyone
+who stays — see utilisation below).
+
+**The store is the seller, so VAT comes off before the commission.** Apple and Google are
+merchants of record in the EU: they charge the customer VAT, remit it, and pay out a share of
+the *net*. The operator's Kleinunternehmer status does not help here — it only helps on the
+web rail, and only until the turnover limit is crossed.
+
+| rail | of €10 we receive |
+| --- | --- |
+| Stripe web, no VAT (today) | €9.60 |
+| Stripe web, with VAT, EEA card | €8.03 |
+| Stripe web, with VAT, non-EEA card | €7.88 |
+| **Apple IAP, Small Business 15 %** | **€7.14** |
+| Apple IAP, standard 30 % | €5.88 |
+| **Google Play subscription, 10 % + 5 % billing** | **€7.14** |
+| Google Play, 10 % with alternative billing + own PSP | €7.35 |
+
+Google's rates changed on **30 June 2026** (Epic settlement): auto-renewing subscriptions are a
+10 % service fee plus a 5 % billing fee when Play Billing is used — the same 15 % as Apple's
+Small Business Program, and 10 % if billing is taken elsewhere. Apple's EU link-out is *not*
+cheaper for an app this size: Store Services 5 % (Tier 1, which gives up featuring and
+analytics) or 13 % (Tier 2) plus a 5 % Core Technology Commission plus 2 % for the first six
+months, and our own PSP and VAT on top of that.
+
+**1M TOKU costs €7.12 to serve** at `MARGIN=1.30` if it is spent in full ($10 retail ÷ 1.30,
+converted). Against the table above that gives, per subscriber-month:
+
+| margin | web (no VAT) | web (VAT) | Apple/Google 15 % | Apple 30 % |
+| --- | --- | --- | --- | --- |
+| **1.30** | +€2.48 | +€0.90 | **+€0.02** | −€1.24 |
+| 1.45 | +€3.21 | +€1.64 | +€0.76 | −€0.50 |
+| 1.60 | +€3.81 | +€2.24 | +€1.36 | +€0.10 |
+
+**€10 through a store is exactly break-even** — €9.97 is the break-even price at 15 %, €12.11
+at 30 %. That is the whole finding: at today's margin the store rails pay for the AI and
+nothing else.
+
+### The fix is the price, not the margin
+
+Two dials do the same arithmetic, and only one of them is safe. Raising `MARGIN` makes every
+TOKU buy less AI **on every rail and for every existing customer**, and the TOKU has to stay one
+unit with one meaning — it is the denomination of the coins. So the store price moves instead:
+
+**€12.99 a month in the app stores for the same 1,000,000 TOKU that costs €10 on the web.**
+
+| | at 15 % | at 30 % |
+| --- | --- | --- |
+| we receive | €9.28 | €7.64 |
+| profit, allowance fully spent | **+€2.16** | +€0.52 |
+
+That survives even the standard 30 %, so exceeding the Small Business threshold would not turn
+the app loss-making overnight — but enrolling stays a precondition, not a nice-to-have.
+
+### What moves the number
+
+- **Utilisation.** At €12.99 and 15 %: +€2.16 if the month is spent in full, +€3.58 at 80 %,
+  +€5.01 at 60 %. Do not plan on it. People self-select into the tier they exhaust, and the
+  ones who exhaust it are the ones who renew — light users are upside, not budget.
+- **FX.** Costs are billed in dollars, the price is in euro: at parity the same subscriber
+  yields +€1.59 instead of +€2.16, at $0.95 +€1.18. Pricing in EUR removed a 3 % conversion
+  spread per charge and replaced it with a slow exposure we carry.
+- **Refunds.** A store refund claws the commission back, but the allowance was already drawn as
+  blind coins and cannot be. One refunded month is a full loss of that month's provider cost.
+  Bounded by design — one month, never a balance — which is exactly why this model is safer
+  here than prepaid credit was.
+- **The €30 tier is where the money is.** Fixed fee components are paid once per charge, so one
+  €30 subscriber beats three €10 ones; the annual plan pays the fixed part once a year.
+
 ## Still open
 
 - **Does Stripe's Customer Portal satisfy §312k**, or must the flow live on our own site?
@@ -230,9 +303,10 @@ Mockups (2026-09-18): https://claude.ai/code/artifact/e557a83b-2f92-4f58-970e-f4
   buckets, allowance spent first, returns capped, and no-subscription stays a supported state.
 - **Invite and gift codes** currently grant non-expiring credit — the same voucher problem in
   miniature. Under a subscription they should grant a *month of service* instead.
-- **Apple.** An auto-renewable subscription is an IAP subscription, and Apple's cut applies
-  every month rather than once. The break-even from the card sale (a commission above 23.1 %
-  loses money at MARGIN 1.30) becomes a recurring condition, not a one-time one.
+- ~~Apple~~ **Computed above.** Both stores take 15 % (Apple Small Business, Google's post-June
+  2026 subscription rate), VAT comes off first, and €10 is break-even. The store price becomes
+  €12.99 for the same allowance. What is still open is whether the iOS build shows the web price
+  at all — anti-steering is relaxed in the EU and the US, not everywhere.
 - **Positioning.** The pricing page says, in as many words, "there is no monthly plan". That
   sentence goes, and the page has to explain why the change is in the customer's favour
   rather than read as a retreat.
