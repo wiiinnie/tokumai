@@ -67,10 +67,19 @@ pub fn bundle_id() -> String {
 /// deliberately not on iOS). Each must also be a purchase tier, so the credited amount
 /// is one the other rails produce too: an App Store buyer must not be recognisable by a
 /// bucket size of their own.
+///
+/// **`IAP_TIERS=none` sells no one-off credit at all** — the app then offers plans only.
+/// Retiring one-off credit is the point of the subscription model, and doing it from the
+/// server means it does not wait for an app review: a build that still knows how to show
+/// tiles simply stops being told about any. The reverse is just as cheap, which is what
+/// makes it safe to flip before the plans have been proven in the wild.
 pub fn tiers() -> Vec<u32> {
     let all = crate::pay::purchase_tiers();
-    crate::cfg("IAP_TIERS")
-        .ok()
+    let configured = crate::cfg("IAP_TIERS").ok().map(|s| s.trim().to_string());
+    if configured.as_deref().is_some_and(|s| s.eq_ignore_ascii_case("none") || s.is_empty()) {
+        return Vec::new();
+    }
+    configured
         .map(|s| s.split(',').filter_map(|t| t.trim().parse().ok()).collect::<Vec<u32>>())
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| vec![10, 20, 50])
@@ -347,6 +356,26 @@ mod tests {
         t.original_transaction_id = "2000000111222333".into();
         t.expires_at_ms = 2_000_000_000_000;
         t
+    }
+
+    #[test]
+    fn one_off_credit_can_be_retired_from_the_server() {
+        // The switch that lets the App Store stop selling one-off credit without waiting
+        // for an app review. The app is simply told about no tiles; a build that still
+        // knows how to draw them draws none.
+        let saved = std::env::var("SCRAI_IAP_TIERS").ok();
+        std::env::set_var("SCRAI_IAP_TIERS", "none");
+        assert!(tiers().is_empty());
+        assert!(product_ids().is_empty());
+        // Plans are a different list and are NOT affected — the point of the switch is to
+        // leave exactly one way to pay.
+        assert!(!plan_ids().is_empty());
+        std::env::set_var("SCRAI_IAP_TIERS", "10,50");
+        assert_eq!(tiers(), vec![10, 50]);
+        match saved {
+            Some(v) => std::env::set_var("SCRAI_IAP_TIERS", v),
+            None => std::env::remove_var("SCRAI_IAP_TIERS"),
+        }
     }
 
     #[test]
