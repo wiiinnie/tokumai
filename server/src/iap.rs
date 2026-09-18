@@ -41,6 +41,8 @@ pub struct AppleTx {
     pub ownership: String,
     /// Apple's storefront (ISO 3166 alpha-3), for the bookkeeping country column.
     pub storefront: String,
+    /// When an auto-renewable subscription's paid period ends. 0 for a consumable.
+    pub expires_at_ms: u64,
 }
 
 /// The product-id prefix the tiles hang off: `<prefix><usd>` — `com.tokumai.app.credit.10`.
@@ -89,6 +91,69 @@ pub fn product_usd(product_id: &str) -> Option<u32> {
     let rest = product_id.strip_prefix(p.as_str())?;
     let usd: u32 = rest.parse().ok()?;
     tiers().contains(&usd).then_some(usd)
+}
+
+/// The product-id prefix for the monthly plans: `<prefix><euro>` — `com.tokumai.app.plan.10`,
+/// with `.year` appended for the annual version of the same tier.
+pub fn plan_prefix() -> String {
+    crate::cfg("IAP_PLAN_PREFIX")
+        .ok()
+        .map(|p| p.trim().to_string())
+        .filter(|p| !p.is_empty())
+        .unwrap_or_else(|| "com.tokumai.app.plan.".to_string())
+}
+
+/// The subscription product ids, in tier order: monthly then yearly.
+pub fn plan_ids() -> Vec<String> {
+    let p = plan_prefix();
+    let monthly = scrai_core::subscription::TIERS.iter().map(|(_, cents)| format!("{p}{}", cents / 100));
+    let yearly: Vec<String> =
+        scrai_core::subscription::TIERS.iter().map(|(_, cents)| format!("{p}{}.year", cents / 100)).collect();
+    monthly.chain(yearly).collect()
+}
+
+/// Which plan a product id is: (tier index, yearly?). None for anything that is not a plan.
+pub fn product_plan(product_id: &str) -> Option<(usize, bool)> {
+    let rest = product_id.strip_prefix(plan_prefix().as_str())?;
+    let (euro, yearly) = match rest.strip_suffix(".year") {
+        Some(e) => (e, true),
+        None => (rest, false),
+    };
+    let cents: u64 = euro.parse::<u64>().ok()? * 100;
+    let tier = scrai_core::subscription::TIERS.iter().position(|(_, c)| *c == cents)?;
+    Some((tier, yearly))
+}
+
+/// Does a verified transaction buy a SUBSCRIPTION here, and which one? The checks mirror
+/// `credit_for`; what differs is the product type and that a lapsed period is refused —
+/// Apple keeps handing the app the last transaction of a subscription that has ended, and
+/// treating that as "still paid" would give away months.
+pub fn plan_for(tx: &AppleTx, now_ms: u64) -> Result<(usize, bool), String> {
+    if tx.bundle_id != bundle_id() {
+        return Err("this purchase belongs to another app".into());
+    }
+    if tx.kind != "Auto-Renewable Subscription" {
+        return Err("this purchase is not a plan".into());
+    }
+    if tx.revoked {
+        return Err("this subscription was refunded by Apple".into());
+    }
+    if tx.ownership != "PURCHASED" {
+        return Err("this subscription is not yours".into());
+    }
+    if tx.original_transaction_id.is_empty() {
+        return Err("this subscription has no transaction number".into());
+    }
+    match tx.environment.as_str() {
+        "Production" => {}
+        "Sandbox" if allow_sandbox() => {}
+        "Sandbox" => return Err("sandbox purchases are not accepted by this server".into()),
+        _ => return Err("unknown App Store environment".into()),
+    }
+    if tx.expires_at_ms == 0 || tx.expires_at_ms <= now_ms {
+        return Err("this subscription has ended".into());
+    }
+    product_plan(&tx.product_id).ok_or_else(|| "this plan is not on sale here".into())
 }
 
 /// Sandbox transactions credit real entitlement only when the operator says so
@@ -192,6 +257,7 @@ pub fn verify_jws(jws: &str, now_ms: u64) -> Result<AppleTx, String> {
         revoked: body.get("revocationDate").is_some(),
         ownership: str_of("inAppOwnershipType"),
         storefront: str_of("storefront"),
+        expires_at_ms: body.get("expiresDate").and_then(|d| d.as_u64()).unwrap_or(0),
     })
 }
 
@@ -242,6 +308,7 @@ mod tests {
             revoked: false,
             ownership: "PURCHASED".into(),
             storefront: "DEU".into(),
+            expires_at_ms: 0,
         }
     }
 
@@ -271,6 +338,61 @@ mod tests {
         t.kind = "Non-Consumable".into();
         assert!(credit_for(&t).is_err());
         assert!(credit_for(&tx("com.tokumai.app.credit.5")).is_err());
+    }
+
+    /// A plan transaction, valid for another month.
+    fn plan_tx(product: &str) -> AppleTx {
+        let mut t = tx(product);
+        t.kind = "Auto-Renewable Subscription".into();
+        t.original_transaction_id = "2000000111222333".into();
+        t.expires_at_ms = 2_000_000_000_000;
+        t
+    }
+
+    #[test]
+    fn plan_ids_follow_the_tiers_and_only_known_ones_map_back() {
+        let ids = plan_ids();
+        assert!(ids.contains(&"com.tokumai.app.plan.10".to_string()));
+        assert!(ids.contains(&"com.tokumai.app.plan.50.year".to_string()));
+        assert_eq!(ids.len(), scrai_core::subscription::TIERS.len() * 2);
+        assert_eq!(product_plan("com.tokumai.app.plan.10"), Some((0, false)));
+        assert_eq!(product_plan("com.tokumai.app.plan.20"), Some((1, false)));
+        assert_eq!(product_plan("com.tokumai.app.plan.50.year"), Some((2, true)));
+        // A price we do not sell, and a credit tile, are not plans.
+        assert_eq!(product_plan("com.tokumai.app.plan.99"), None);
+        assert_eq!(product_plan("com.tokumai.app.credit.10"), None);
+    }
+
+    #[test]
+    fn a_plan_is_accepted_only_while_it_is_paid_for() {
+        let now = 1_789_000_000_000;
+        assert_eq!(plan_for(&plan_tx("com.tokumai.app.plan.20"), now), Ok((1, false)));
+
+        // Apple keeps handing the app the LAST transaction of a subscription that has
+        // ended. Treating that as "still paid" would give away months, so an expired
+        // period is refused even though everything else about it checks out.
+        let mut ended = plan_tx("com.tokumai.app.plan.20");
+        ended.expires_at_ms = now - 1;
+        assert!(plan_for(&ended, now).is_err());
+        let mut never = plan_tx("com.tokumai.app.plan.20");
+        never.expires_at_ms = 0;
+        assert!(plan_for(&never, now).is_err());
+
+        // A refund, another app's purchase, a family-shared entitlement, and a consumable
+        // are each refused with their own reason.
+        let mut refunded = plan_tx("com.tokumai.app.plan.20");
+        refunded.revoked = true;
+        assert!(plan_for(&refunded, now).is_err());
+        let mut other = plan_tx("com.tokumai.app.plan.20");
+        other.bundle_id = "com.someone.else".into();
+        assert!(plan_for(&other, now).is_err());
+        let mut shared = plan_tx("com.tokumai.app.plan.20");
+        shared.ownership = "FAMILY_SHARED".into();
+        assert!(plan_for(&shared, now).is_err());
+        assert!(plan_for(&tx("com.tokumai.app.credit.10"), now).is_err());
+
+        // …and a credit tile is still a credit tile: the two paths do not cross.
+        assert!(credit_for(&plan_tx("com.tokumai.app.plan.20")).is_err());
     }
 
     #[test]

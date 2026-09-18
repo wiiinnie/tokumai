@@ -1005,6 +1005,48 @@ impl Pay {
         granted
     }
 
+    /// An App Store plan: start it, or confirm one already running. **Idempotent** — the
+    /// app re-sends its current entitlement at every launch and after every renewal, and a
+    /// second sighting of the same subscription must not grant a second month. The guard is
+    /// the period: a month already granted is not granted again.
+    ///
+    /// Returns true when a month was actually handed out, so the caller can log it.
+    ///
+    /// The first, partial month is granted pro rata like everywhere else. Apple bills a
+    /// full period from the day of purchase, so a subscriber effectively gets the rest of
+    /// the signup month on top — bounded by one month, once, and in their favour.
+    pub fn subscribe_or_renew(&mut self, account_id: &str, tier: usize, rail_id: &str, now_ms_: u64) -> bool {
+        let tier = tier.min(subscription::TIERS.len() - 1);
+        let period = subscription::period_of_ms(now_ms_);
+        let known = self.subs.get(account_id).map(|s| (s.rail_id.clone(), s.allowance.period, s.tier));
+        match known {
+            Some((id, granted_period, old_tier)) if id == rail_id => {
+                let grant = granted_period < period;
+                let (y, m, d) = subscription::civil_from_ms(now_ms_);
+                let (days, total) = subscription::served(y, m, d);
+                if let Some(sub) = self.subs.get_mut(account_id) {
+                    sub.active = true;
+                    sub.checked_at_ms = now_ms_;
+                    sub.tier = tier;
+                    if grant {
+                        sub.allowance.reset(period, subscription::TIERS[tier].0);
+                    } else if tier > old_tier {
+                        // Moved up inside a month Apple has already granted: add the rest
+                        // of it at the difference, the same arithmetic as a web upgrade.
+                        let step = subscription::TIERS[tier].0 - subscription::TIERS[old_tier].0;
+                        sub.allowance.add_upgrade(subscription::prorata_toku(step, days, total));
+                    }
+                }
+                self.rev += 1;
+                grant
+            }
+            _ => {
+                self.subscribe(account_id, tier, rail_id, now_ms_);
+                true
+            }
+        }
+    }
+
     /// Move to a bigger plan mid-month: the rest of the month at the new tier, pro rata,
     /// added to what the customer already has. Returns the TOKU added (0 if it is not an
     /// upgrade — a smaller plan takes effect on the 1st and is only a tier change here).
@@ -3047,6 +3089,42 @@ mod tests {
         assert_eq!(p.allowance_left("acct"), 700_000);
     }
 
+    #[test]
+    fn an_app_store_plan_seen_twice_does_not_grant_twice() {
+        let mut p = Pay::default();
+        let rail = "iap:2000000111222333";
+        // First sighting: the partial first month, pro rata (13 of 30 days).
+        assert!(p.subscribe_or_renew("acct", 0, rail, ms(2026, 9, 18)));
+        assert_eq!(p.allowance_left("acct"), 303_333);
+        p.consume_credit("acct", 300_000);
+
+        // The app re-sends the SAME entitlement at every launch. Nothing is granted again,
+        // and what has been spent stays spent.
+        assert!(!p.subscribe_or_renew("acct", 0, rail, ms(2026, 9, 19)));
+        assert!(!p.subscribe_or_renew("acct", 0, rail, ms(2026, 9, 30)));
+        assert_eq!(p.allowance_left("acct"), 3_333);
+
+        // A new month: granted once, in full, however many times the app reports it.
+        assert!(p.subscribe_or_renew("acct", 0, rail, ms(2026, 10, 1)));
+        assert_eq!(p.allowance_left("acct"), 700_000);
+        assert!(!p.subscribe_or_renew("acct", 0, rail, ms(2026, 10, 1)));
+        assert_eq!(p.allowance_left("acct"), 700_000);
+    }
+
+    #[test]
+    fn moving_up_inside_a_granted_month_adds_only_the_difference() {
+        let mut p = Pay::default();
+        let rail = "iap:2000000111222333";
+        p.subscribe_or_renew("acct", 0, rail, ms(2026, 9, 1));
+        assert_eq!(p.allowance_left("acct"), 700_000);
+        // 19 September, up to the 1.5M tier: 12 of 30 days of the 800k step.
+        assert!(!p.subscribe_or_renew("acct", 1, rail, ms(2026, 9, 19)));
+        assert_eq!(p.allowance_left("acct"), 1_020_000);
+        // Seeing the upgraded plan again does not add it a second time.
+        assert!(!p.subscribe_or_renew("acct", 1, rail, ms(2026, 9, 20)));
+        assert_eq!(p.allowance_left("acct"), 1_020_000);
+    }
+
     /// Unix ms for a UTC date at midnight — the tests read as dates, not as magic numbers.
     fn ms(y: i64, m: u32, d: u32) -> u64 {
         let (yy, mm) = if m <= 2 { (y - 1, m + 9) } else { (y, m - 3) };
@@ -3138,7 +3216,6 @@ mod tests {
 mod card_tests {
     use super::*;
 
-    #[test]
     /// The adapter against the real sandbox. Ignored by default — it needs the network and
     /// a key — and run by hand with:
     ///

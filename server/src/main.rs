@@ -1088,6 +1088,46 @@ const ORDER_TICK_MS: u64 = 1000;
                         "error": "too many purchase checks from this account — try again in a few minutes" }),
                     Some(account) => {
                         let now = pay::now_ms();
+                        // One route carries both products the App Store sells here. A PLAN
+                        // is not a credit purchase: nothing is added to entitlement, the
+                        // month is granted instead, and the claim is keyed by the ORIGINAL
+                        // transaction id so a subscription belongs to one account for its
+                        // whole life — a renewal is the same key, a stranger's replay is
+                        // AlreadyOther.
+                        let plan = iap::verify_jws(jws, now)
+                            .and_then(|tx| iap::plan_for(&tx, now).map(|p| (tx, p)));
+                        if let Ok((tx, (tier, yearly))) = plan {
+                            let hash = iap::tx_hash(&tx.original_transaction_id);
+                            let reply = match db.iap_claim(&hash, &tx.product_id, 0, &tx.environment,
+                                                           &tx.storefront, &account, tx.purchased_at_ms, now) {
+                                store::IapClaim::AlreadyOther => serde_json::json!({ "id": id, "kind": "error",
+                                    "error": "this subscription is already on another account" }),
+                                _ => {
+                                    // Marked credited at once: a plan grants no entitlement,
+                                    // and an unfinished claim would otherwise be "repaired"
+                                    // by credit_pending_vouchers on the next start.
+                                    db.iap_credited(&hash, now);
+                                    let rail = format!("iap:{}", tx.original_transaction_id);
+                                    let granted = paywall.subscribe_or_renew(&account, tier, &rail, now);
+                                    println!(
+                                        "scrai-server: App Store plan tier {tier}{} — {} ({})",
+                                        if yearly { " yearly" } else { "" },
+                                        if granted { "month granted" } else { "already granted this month" },
+                                        tx.environment
+                                    );
+                                    let mut r = paywall.account_reply(&id, &account);
+                                    r["kind"] = serde_json::json!("iap.ok");
+                                    r["toku"] = serde_json::json!(0);
+                                    r
+                                }
+                            };
+                            persist_changed(&mut db, &mut quorum, &paywall, &mut saved);
+                            let out = serde_json::to_vec(&reply).unwrap_or_default();
+                            if let Err(e) = senders[to.idx].read().await.send_reply(to.tag, out).await {
+                                eprintln!("scrai-server: plan reply failed: {e}");
+                            }
+                            continue;
+                        }
                         match iap::verify_jws(jws, now).and_then(|tx| iap::credit_for(&tx).map(|toku| (tx, toku))) {
                             Err(e) => serde_json::json!({ "id": id, "kind": "error", "error": e }),
                             Ok((tx, toku)) => {
