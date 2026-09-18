@@ -182,6 +182,43 @@ for a card to fail.
 **Load.** Everyone drawing on the 1st is a spike. Spread the draw over the first hours of
 the day at random; the anonymity set barely notices, the server does.
 
+## Credit that already exists — the migration rule
+
+Decided 2026-09-18, and it is a constraint rather than a preference: **nobody loses credit they
+have already bought.** One customer holds ~$9 of it, bought under terms that say account credit
+does not expire. That promise is not renegotiable, and the design has to make keeping it cheap
+rather than exceptional.
+
+**Two buckets per account, never one number.**
+
+| | |
+| --- | --- |
+| `entitlements[account]` | what exists today. One-off purchases, redeemed codes, coins handed back from a retired device. **Never expires, never reset.** Untouched by everything below |
+| `allowance[account]` | new. `{ granted, left, period, tier }`. **Set** on the 1st, lapses with the period |
+
+**Spending order: the perishable pocket first.** A withdrawal takes from `allowance.left`, and
+only what is left over comes from `entitlements`. That is the order that costs the customer
+least — the allowance dies on the 1st either way, the bought credit does not.
+
+**Returns go back where they came from.** A device handing coins back (device move, giveback)
+must not turn a monthly allowance into permanent credit — draw a million on the 1st, hand it
+back on the 31st, repeat, and the voucher problem is rebuilt by hand. So the period carries a
+third number, `drawn_from_allowance`, and a return of value `v` restores
+`min(v, drawn_from_allowance)` to the allowance (decrementing it) and only the remainder to
+`entitlements`. Symmetric with the spending order, and it cannot leak in either direction.
+
+**No subscription is a supported state, indefinitely.** As long as anyone holds entitlement the
+app has to work with no plan at all: the buy sheet becomes a subscribe sheet, but the withdraw
+path against `entitlements` stays exactly as it is today, $1 books and all. This is not a
+migration window that closes — it is simply what an account with credit on it does.
+
+**What the customer sees** is screen 2 and screen 6 of the mockups: the old credit is its own
+row, in its own colour, saying "does not expire" and "used once a month's allowance runs out".
+It is deliberately NOT added into the allowance meter — folding non-expiring credit into a
+number labelled "resets 1 Oct" would say the opposite of the truth.
+
+Mockups (2026-09-18): https://claude.ai/code/artifact/e557a83b-2f92-4f58-970e-f49d91f93f48
+
 ## Still open
 
 - **Does Stripe's Customer Portal satisfy §312k**, or must the flow live on our own site?
@@ -189,9 +226,8 @@ the day at random; the anonymity set barely notices, the server does.
   anything is built at all.
 - ~~Is a mid-period top-up a voucher?~~ **Settled by avoiding it**: the answer to running out
   is a bigger tier, not a top-up.
-- **The existing paying customer** bought $10 of one-off credit under terms that say account
-  credit does not expire. That promise stands. Whatever the model becomes, his balance is
-  honoured as bought.
+- ~~The existing paying customer~~ **Settled** — see "Credit that already exists" above: two
+  buckets, allowance spent first, returns capped, and no-subscription stays a supported state.
 - **Invite and gift codes** currently grant non-expiring credit — the same voucher problem in
   miniature. Under a subscription they should grant a *month of service* instead.
 - **Apple.** An auto-renewable subscription is an IAP subscription, and Apple's cut applies
