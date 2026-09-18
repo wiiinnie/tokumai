@@ -25,8 +25,9 @@ lapsing at the end of a month is a mobile data plan, not a voucher.
 
 | | |
 | --- | --- |
-| tiers | **€10 / €20 / €50 a month** for **700k / 1.5M / 3.75M TOKU** (decided 2026-09-18) |
+| tiers | **€10 / €20 / €50 a month** for **700k / 1.5M / 4M TOKU** (decided 2026-09-18) |
 | yearly | 12 × the monthly price less 10 % — €108 / €216 / €540 |
+| the ladder | the rate improves at each step: 70,000 / 75,000 / 80,000 TOKU per euro. Shown on the tier as a **euro figure** — the same TOKU at the entry rate would cost €21.43 and €57.14, so the plans save €1.43 and €7.14 a month. A percentage would beg "off what?"; and two tiers badged with the same number would read as a bug |
 | what 700k TOKU is | roughly 3,400 answers from a fast model, 430 from the strongest, or 50 pictures at 2K. Figures must be GENERATED from `pricing.json`, never typed |
 | why not a round million | the price points stay familiar (€10, not €12.99) and the allowance carries the margin instead. Fewer TOKU per euro — **never** a bigger `MARGIN`, which would change what a TOKU buys for everyone who already holds one |
 | rollover | **none.** The month starts at 1,000,000, not at 1,000,000 plus what is left |
@@ -279,18 +280,25 @@ a TOKU keeps buying exactly what it buys today, and the month simply grants fewe
 Chosen 2026-09-18. €10 for 700,000 TOKU is arithmetically the same trade as €12.99 for a
 million — *(cost(700k) = €4.99; €10 through a store nets €7.14)*:
 
-| | €10 → 700k | €20 → 1.5M | €50 → 3.75M |
+| | €10 → 700k | €20 → 1.5M | €50 → 4M |
 | --- | --- | --- | --- |
-| TOKU per euro | 70,000 | 75,000 | 75,000 |
-| costs us, fully spent | €4.99 | €10.68 | €26.71 |
-| profit, store at 15 % | **+€2.16** | **+€3.60** | **+€9.00** |
-| profit, store at 30 % | +€0.90 | +€1.08 | +€2.70 |
-| profit, web | +€3.02 | +€5.57 | +€14.29 |
+| TOKU per euro | 70,000 | 75,000 | 80,000 |
+| what it saves against the entry rate | — | €1.43 | €7.14 |
+| costs us, fully spent | €4.99 | €10.68 | €28.49 |
+| profit, store at 15 % | **+€2.16** | **+€3.60** | **+€7.22** |
+| profit, store at 30 % | +€0.90 | +€1.08 | +€0.92 |
+| profit, web | +€3.02 | +€5.57 | +€12.53 |
 
-The mild volume discount at €20 is deliberate and sits where it costs least — a fixed fee
-component is paid once per charge, so one €50 subscriber beats five €10 ones. It must stay
-mild: every TOKU given away at the top also shrinks the buffer against Apple's standard 30 %,
-which is the row that says whether exceeding the Small Business threshold hurts or kills.
+The volume discount is deliberate and sits where it costs least — a fixed fee component is paid
+once per charge, so one €50 subscriber beats five €10 ones — and it has to grow along the
+ladder, or the saving shown on two tiers would be the same number twice.
+
+**Read the 30 % row before widening it further.** Every TOKU given away at the top comes
+straight out of the buffer against Apple's standard commission: at 80,000 TOKU per euro the
+€50 tier yields €0.92 there, no better than the entry plan. That is survivable — the 30 % case
+only arrives above $1M of proceeds, by which point the ladder can be repriced — but 85,000
+would put the top tier under water while the small ones stayed healthy, which is the wrong way
+round.
 
 Two consequences for the UI: **never show a euro or dollar value for an allowance** (100,000
 TOKU = $1 of list-price AI is true internally and would read as "€10 buys $7"), and the
