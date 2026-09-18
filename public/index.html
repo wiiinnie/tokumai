@@ -6429,20 +6429,21 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       <p class="hint" style="margin:10px 2px 0;text-align:center">Renews until you cancel. Manage or cancel any time in your Apple ID settings; ${esc(planYearly ? "a year" : "a month")} already paid for stays yours.</p>
       ${planMsg ? `<p class="hint" style="margin:10px 0 0">${esc(planMsg)}</p>` : ``}`;
   }
-  /// The yearly tab's own label. A fixed "−10%" would be a claim about prices the App
-  /// Store sets, and its price points do not always land where we asked — so the discount
-  /// shown is the smallest one actually on offer, rounded DOWN. Nothing, if we cannot work
-  /// it out.
+  /// The yearly tab's own label — read off Apple's prices, never asserted.
+  ///
+  /// NOT a percentage. The discount rises with the tier (roughly half a month free at the
+  /// entry plan, a whole month at the top), so any single percentage is wrong in one
+  /// direction or the other: the smallest would sell the best plan as the weakest offer,
+  /// and the largest would be a claim the entry plan's receipt contradicts. The largest
+  /// saving, named as "up to", is true of the set and specific about what is on offer —
+  /// and each tier still shows its own exact figure. Nothing at all if we cannot work it
+  /// out, which is the case while the App Store has not answered.
   function yearlyPitch(){
-    const pcts = (planList || []).filter(p => planIsYearly(p.id)).map(p => {
-      const monthly = planList.find(q => !planIsYearly(q.id) && planEuro(q.id) === planEuro(p.id));
-      const m = Number(monthly && monthly.price), y = Number(p.price);
-      return (m > 0 && y > 0) ? (1 - y / (m * 12)) * 100 : 0;
-    }).filter(x => x > 0);
-    if(!pcts.length) return "";
-    const worst = Math.floor(Math.min.apply(null, pcts));
-    return worst >= 1 ? ` · −${worst}%` : "";
+    const best = (planList || []).filter(planIsYearlyProduct).map(yearlySavingCents);
+    const top = best.length ? Math.max.apply(null, best) : 0;
+    return top > 0 ? ` · save up to ${euros(top)}` : "";
   }
+  const planIsYearlyProduct = p => planIsYearly(p.id);
   function selectPlan(id){ if(!planList || !planList.some(p => p.id === id)) return; planSel = id; planMsg = ""; renderPlans(); }
   function planPeriod(yearly){ planYearly = !!yearly; planSel = null; renderPlans(); }
   async function subscribePlan(){
