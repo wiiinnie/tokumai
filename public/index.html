@@ -6491,8 +6491,14 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     const tiles = iapList.map(iapTile).join("");
     // A plan is the cheaper way in and belongs above the one-off tiles, not hidden behind
     // them. When one is already running, this row shows the month instead of selling again.
+    // A plan whose paid period ran out. The server works this out from the date rather
+    // than from a message — nothing announces the end of an App Store subscription — so
+    // the app can simply believe `active` here.
+    const planOver = !!(plan && !plan.active && Number(plan.toku_per_month) > 0);
     const planRow = planActive()
       ? `${allowanceHTML()}${keptCreditHTML()}<div class="setrow" data-click="openPlans"><span><b>Your plan</b><small>${esc(formatToku(Number(plan.toku_per_month) || 0))} TOKU a month · change or cancel</small></span><span class="chev">›</span></div>`
+      : planOver
+      ? `${keptCreditHTML()}<div class="setrow" data-click="openPlans" style="border-color:var(--rust)"><span><b>Your plan has ended</b><small>The month you last paid for is finished. Everything already on this device stays yours — start a plan again whenever you want.</small></span><span class="chev">›</span></div>`
       : `<div class="setrow" data-click="openPlans"><span><b>Monthly plan</b><small>A fresh allowance every month — more TOKU per euro than the amounts below.</small></span><span class="chev">›</span></div>`;
     const sel = iapList.find(p => p.id===iapSel);
     const ready = !!sel && iapConsent && !iapBusy;

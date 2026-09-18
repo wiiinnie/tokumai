@@ -614,7 +614,26 @@ pub struct Sub {
     pub active: bool,
     /// When the rail was last asked. The reset asks again if this is stale.
     pub checked_at_ms: u64,
+    /// The end of the period that has been PAID FOR — Apple's `expiresDate`, Stripe's
+    /// `current_period_end`. This is what makes a subscription end without anyone telling
+    /// us: a lapsed one simply stops appearing in what Apple hands the app, so nothing ever
+    /// arrives saying "it is over". The date has to do that job on its own.
+    ///
+    /// Fail closed: 0 means "no paid period known", and a subscription with 0 grants
+    /// nothing. A row restored from a snapshot written before this field existed therefore
+    /// stops granting until the rail confirms it once — which the app does on its next
+    /// launch, and which is the right way round for a field that decides who gets paid for.
+    #[serde(default)]
+    pub paid_until_ms: u64,
     pub allowance: Allowance,
+}
+
+impl Sub {
+    /// Is this subscription paid for right now? Both halves matter: `active` is what the
+    /// rail last SAID, `paid_until_ms` is how long that statement is good for.
+    pub fn paid_at(&self, now_ms_: u64) -> bool {
+        self.active && self.paid_until_ms > now_ms_
+    }
 }
 
 /// The plan ladder as the app should draw it: allowance, price, and what a bigger plan
@@ -1010,7 +1029,7 @@ impl Pay {
     /// A subscription begins (or is re-pointed at a new rail id). The first month is granted
     /// PRO RATA to the day, from the same fraction that priced it — the two cannot drift
     /// because both come out of `subscription::served`.
-    pub fn subscribe(&mut self, account_id: &str, tier: usize, rail_id: &str, now_ms_: u64) -> u64 {
+    pub fn subscribe(&mut self, account_id: &str, tier: usize, rail_id: &str, now_ms_: u64, paid_until_ms: u64) -> u64 {
         let (full_toku, _) = subscription::TIERS[tier.min(subscription::TIERS.len() - 1)];
         let (y, m, d) = subscription::civil_from_ms(now_ms_);
         let (days, total) = subscription::served(y, m, d);
@@ -1020,6 +1039,7 @@ impl Pay {
         sub.rail_id = rail_id.to_string();
         sub.active = true;
         sub.checked_at_ms = now_ms_;
+        sub.paid_until_ms = paid_until_ms;
         sub.allowance.reset(subscription::period_of(y, m), granted);
         self.rev += 1;
         granted
@@ -1035,18 +1055,33 @@ impl Pay {
     /// The first, partial month is granted pro rata like everywhere else. Apple bills a
     /// full period from the day of purchase, so a subscriber effectively gets the rest of
     /// the signup month on top — bounded by one month, once, and in their favour.
-    pub fn subscribe_or_renew(&mut self, account_id: &str, tier: usize, rail_id: &str, now_ms_: u64) -> bool {
+    pub fn subscribe_or_renew(
+        &mut self,
+        account_id: &str,
+        tier: usize,
+        rail_id: &str,
+        now_ms_: u64,
+        paid_until_ms: u64,
+    ) -> bool {
         let tier = tier.min(subscription::TIERS.len() - 1);
         let period = subscription::period_of_ms(now_ms_);
-        let known = self.subs.get(account_id).map(|s| (s.rail_id.clone(), s.allowance.period, s.tier));
+        let known = self
+            .subs
+            .get(account_id)
+            .map(|s| (s.rail_id.clone(), s.allowance.period, s.tier, s.paid_at(now_ms_)));
         match known {
-            Some((id, granted_period, old_tier)) if id == rail_id => {
-                let grant = granted_period < period;
+            Some((id, granted_period, old_tier, was_paid)) if id == rail_id => {
+                // A new month, or a subscription that had lapsed and is paid for again.
+                // The second case matters: the monthly reset already ran and lapsed them,
+                // so without it a subscriber who opens the app on the 5th after a late
+                // renewal would wait until the following month for a month they paid for.
+                let grant = granted_period < period || !was_paid;
                 let (y, m, d) = subscription::civil_from_ms(now_ms_);
                 let (days, total) = subscription::served(y, m, d);
                 if let Some(sub) = self.subs.get_mut(account_id) {
                     sub.active = true;
                     sub.checked_at_ms = now_ms_;
+                    sub.paid_until_ms = paid_until_ms;
                     sub.tier = tier;
                     if grant {
                         sub.allowance.reset(period, subscription::TIERS[tier].0);
@@ -1061,7 +1096,7 @@ impl Pay {
                 grant
             }
             _ => {
-                self.subscribe(account_id, tier, rail_id, now_ms_);
+                self.subscribe(account_id, tier, rail_id, now_ms_, paid_until_ms);
                 true
             }
         }
@@ -1098,11 +1133,38 @@ impl Pay {
         }
     }
 
+    /// A subscription whose paid period has run out is no longer active. Nothing ever
+    /// arrives to say so — a lapsed App Store subscription simply stops appearing in what
+    /// Apple hands the app, and a Stripe one stops being `active` at a moment we are not
+    /// watching — so the date does the job, on the same beat as everything else.
+    ///
+    /// What this does NOT do is take back the current month. That month was paid for; the
+    /// allowance stays until the next reset, and coins already drawn are the customer's
+    /// either way. Only the NEXT month is withheld.
+    ///
+    /// Returns how many rows changed, so the caller persists only when something did.
+    pub fn expire_lapsed(&mut self, now_ms_: u64) -> usize {
+        let mut changed = 0;
+        for sub in self.subs.values_mut() {
+            if sub.active && sub.paid_until_ms <= now_ms_ {
+                sub.active = false;
+                changed += 1;
+            }
+        }
+        if changed > 0 {
+            self.rev += 1;
+        }
+        changed
+    }
+
     /// The monthly reset. For every subscription whose allowance belongs to an older
-    /// period: an active one is **set** (never added — an `+=` would let unspent allowance
-    /// accumulate, and an accumulating balance is the voucher this replaced), an inactive
-    /// one lapses to nothing. Returns how many rows changed, so the caller persists only
-    /// when something did.
+    /// period: one that is paid for is **set** (never added — an `+=` would let unspent
+    /// allowance accumulate, and an accumulating balance is the voucher this replaced), one
+    /// that is not lapses to nothing. Returns how many rows changed, so the caller persists
+    /// only when something did.
+    ///
+    /// "Paid for" is `active AND paid_until_ms > now`, which fails closed: a row whose paid
+    /// period is unknown (0) grants nothing until a rail confirms it.
     pub fn roll_periods(&mut self, now_ms_: u64) -> usize {
         let period = subscription::period_of_ms(now_ms_);
         let mut changed = 0;
@@ -1111,7 +1173,7 @@ impl Pay {
                 continue;
             }
             let (full_toku, _) = subscription::TIERS[sub.tier.min(subscription::TIERS.len() - 1)];
-            if sub.active {
+            if sub.paid_at(now_ms_) {
                 sub.allowance.reset(period, full_toku);
             } else {
                 sub.allowance.period = period;
@@ -1137,7 +1199,8 @@ impl Pay {
             let (toku, cents) = subscription::TIERS[sub.tier.min(subscription::TIERS.len() - 1)];
             v["subscription"] = json!({
                 "tier": sub.tier,
-                "active": sub.active,
+                "active": sub.paid_at(now_ms()),
+                "paidUntil": sub.paid_until_ms,
                 "toku_per_month": toku,
                 "cents_per_month": cents,
                 "period": sub.allowance.period,
@@ -3025,7 +3088,7 @@ mod tests {
         let mut p = Pay::default();
         p.credit_voucher("acct", 300_000); // bought earlier, never expires
         // Subscribed on the 1st, so the pro-rata first month is the whole month.
-        let granted = p.subscribe("acct", 0, "sub_test", ms(2026, 9, 1));
+        let granted = p.subscribe("acct", 0, "sub_test", ms(2026, 9, 1), paid_through(2027));
         assert_eq!(granted, 700_000);
         assert_eq!(p.spendable("acct"), 1_000_000);
 
@@ -3044,7 +3107,7 @@ mod tests {
     fn the_month_is_set_not_added_and_credit_rides_through_it() {
         let mut p = Pay::default();
         p.credit_voucher("acct", 250_000);
-        p.subscribe("acct", 0, "sub_test", ms(2026, 9, 1));
+        p.subscribe("acct", 0, "sub_test", ms(2026, 9, 1), paid_through(2027));
         p.consume_credit("acct", 200_000); // 500k of the month left over
 
         p.roll_periods(ms(2026, 10, 1));
@@ -3062,7 +3125,7 @@ mod tests {
     #[test]
     fn handing_a_month_back_every_month_never_builds_permanent_credit() {
         let mut p = Pay::default();
-        p.subscribe("acct", 0, "sub_test", ms(2026, 9, 1));
+        p.subscribe("acct", 0, "sub_test", ms(2026, 9, 1), paid_through(2027));
         for m in 9..=12 {
             p.roll_periods(ms(2026, m, 1));
             p.consume_credit("acct", 700_000); // draw the whole month
@@ -3075,7 +3138,7 @@ mod tests {
     #[test]
     fn a_device_change_mid_month_costs_a_subscriber_nothing() {
         let mut p = Pay::default();
-        p.subscribe("acct", 1, "sub_test", ms(2026, 9, 1));
+        p.subscribe("acct", 1, "sub_test", ms(2026, 9, 1), paid_through(2027));
         p.consume_credit("acct", 1_500_000); // the whole month onto the old phone
         assert_eq!(p.allowance_left("acct"), 0);
         // The phone is retired with 1.2M unspent.
@@ -3087,7 +3150,7 @@ mod tests {
     #[test]
     fn an_upgrade_adds_the_rest_of_the_month_pro_rata() {
         let mut p = Pay::default();
-        p.subscribe("acct", 0, "sub_test", ms(2026, 9, 1));
+        p.subscribe("acct", 0, "sub_test", ms(2026, 9, 1), paid_through(2027));
         // 19 September: 12 of 30 days of the 800k step from 700k to 1.5M.
         let extra = p.change_tier("acct", 1, ms(2026, 9, 19));
         assert_eq!(extra, 320_000);
@@ -3103,7 +3166,7 @@ mod tests {
     fn a_first_month_is_granted_pro_rata_to_the_day() {
         let mut p = Pay::default();
         // 18 September: 13 of 30 days.
-        assert_eq!(p.subscribe("acct", 0, "sub_test", ms(2026, 9, 18)), 303_333);
+        assert_eq!(p.subscribe("acct", 0, "sub_test", ms(2026, 9, 18), paid_through(2027)), 303_333);
         // …and the FULL month arrives on the 1st, not another part-month.
         p.roll_periods(ms(2026, 10, 1));
         assert_eq!(p.allowance_left("acct"), 700_000);
@@ -3114,20 +3177,20 @@ mod tests {
         let mut p = Pay::default();
         let rail = "iap:2000000111222333";
         // First sighting: the partial first month, pro rata (13 of 30 days).
-        assert!(p.subscribe_or_renew("acct", 0, rail, ms(2026, 9, 18)));
+        assert!(p.subscribe_or_renew("acct", 0, rail, ms(2026, 9, 18), paid_through(2027)));
         assert_eq!(p.allowance_left("acct"), 303_333);
         p.consume_credit("acct", 300_000);
 
         // The app re-sends the SAME entitlement at every launch. Nothing is granted again,
         // and what has been spent stays spent.
-        assert!(!p.subscribe_or_renew("acct", 0, rail, ms(2026, 9, 19)));
-        assert!(!p.subscribe_or_renew("acct", 0, rail, ms(2026, 9, 30)));
+        assert!(!p.subscribe_or_renew("acct", 0, rail, ms(2026, 9, 19), paid_through(2027)));
+        assert!(!p.subscribe_or_renew("acct", 0, rail, ms(2026, 9, 30), paid_through(2027)));
         assert_eq!(p.allowance_left("acct"), 3_333);
 
         // A new month: granted once, in full, however many times the app reports it.
-        assert!(p.subscribe_or_renew("acct", 0, rail, ms(2026, 10, 1)));
+        assert!(p.subscribe_or_renew("acct", 0, rail, ms(2026, 10, 1), paid_through(2027)));
         assert_eq!(p.allowance_left("acct"), 700_000);
-        assert!(!p.subscribe_or_renew("acct", 0, rail, ms(2026, 10, 1)));
+        assert!(!p.subscribe_or_renew("acct", 0, rail, ms(2026, 10, 1), paid_through(2027)));
         assert_eq!(p.allowance_left("acct"), 700_000);
     }
 
@@ -3135,14 +3198,78 @@ mod tests {
     fn moving_up_inside_a_granted_month_adds_only_the_difference() {
         let mut p = Pay::default();
         let rail = "iap:2000000111222333";
-        p.subscribe_or_renew("acct", 0, rail, ms(2026, 9, 1));
+        p.subscribe_or_renew("acct", 0, rail, ms(2026, 9, 1), paid_through(2027));
         assert_eq!(p.allowance_left("acct"), 700_000);
         // 19 September, up to the 1.5M tier: 12 of 30 days of the 800k step.
-        assert!(!p.subscribe_or_renew("acct", 1, rail, ms(2026, 9, 19)));
+        assert!(!p.subscribe_or_renew("acct", 1, rail, ms(2026, 9, 19), paid_through(2027)));
         assert_eq!(p.allowance_left("acct"), 1_020_000);
         // Seeing the upgraded plan again does not add it a second time.
-        assert!(!p.subscribe_or_renew("acct", 1, rail, ms(2026, 9, 20)));
+        assert!(!p.subscribe_or_renew("acct", 1, rail, ms(2026, 9, 20), paid_through(2027)));
         assert_eq!(p.allowance_left("acct"), 1_020_000);
+    }
+
+    /// A paid period that runs to the new year — most of these tests are about the
+    /// allowance, not about when the money stops, so they say so once and move on.
+    fn paid_through(year: i64) -> u64 {
+        ms(year, 12, 31)
+    }
+
+    #[test]
+    fn a_subscription_ends_on_its_own_when_nobody_says_it_has() {
+        let mut p = Pay::default();
+        let rail = "iap:2000000111222333";
+        // Paid up to 20 October — one month, bought on the 20th of September.
+        p.subscribe_or_renew("acct", 0, rail, ms(2026, 9, 20), ms(2026, 10, 20));
+        assert!(p.allowance_left("acct") > 0);
+
+        // Mid-period: nothing changes.
+        assert_eq!(p.expire_lapsed(ms(2026, 10, 1)), 0);
+
+        // The period runs out. Nothing arrives to announce it — a lapsed App Store
+        // subscription simply stops appearing in what Apple hands the app — so the date
+        // has to do it. The month already granted is NOT taken back: it was paid for.
+        let before = p.allowance_left("acct");
+        assert_eq!(p.expire_lapsed(ms(2026, 10, 21)), 1);
+        assert_eq!(p.allowance_left("acct"), before);
+        assert_eq!(p.expire_lapsed(ms(2026, 10, 22)), 0, "…and only once");
+
+        // The NEXT month is withheld.
+        p.roll_periods(ms(2026, 11, 1));
+        assert_eq!(p.allowance_left("acct"), 0);
+    }
+
+    #[test]
+    fn a_late_renewal_still_gets_the_month_it_paid_for() {
+        let mut p = Pay::default();
+        let rail = "iap:2000000111222333";
+        p.subscribe_or_renew("acct", 0, rail, ms(2026, 9, 20), ms(2026, 10, 20));
+        // Apple renews on 20 October, but the app is not opened, so nothing reports it.
+        p.expire_lapsed(ms(2026, 10, 21));
+        p.roll_periods(ms(2026, 11, 1));
+        assert_eq!(p.allowance_left("acct"), 0, "lapsed at the reset, correctly");
+
+        // On 5 November the app is opened and hands over Apple's current transaction.
+        // Waiting for December would withhold a month that has been paid for, so the
+        // month is granted now.
+        assert!(p.subscribe_or_renew("acct", 0, rail, ms(2026, 11, 5), ms(2026, 11, 20)));
+        assert_eq!(p.allowance_left("acct"), 700_000);
+        // …and reporting it again in the same month adds nothing.
+        assert!(!p.subscribe_or_renew("acct", 0, rail, ms(2026, 11, 6), ms(2026, 11, 20)));
+        assert_eq!(p.allowance_left("acct"), 700_000);
+    }
+
+    #[test]
+    fn a_subscription_with_no_known_paid_period_grants_nothing() {
+        // Fail closed. A row restored from a snapshot written before paid_until_ms existed
+        // has 0 there, and 0 must mean "not paid for" — the alternative is a field whose
+        // default hands out months.
+        let old = r#"{"invoices":{},"entitlements":{},"nonces":[],
+            "subs":{"acct":{"tier":0,"rail_id":"iap:1","active":true,"checked_at_ms":0,
+                            "allowance":{"period":202609,"granted":700000,"left":700000,"outstanding":0}}}}"#;
+        let mut p: Pay = serde_json::from_str(old).expect("an older sub row must load");
+        assert_eq!(p.allowance_left("acct"), 700_000, "the month it already had is untouched");
+        p.roll_periods(ms(2026, 10, 1));
+        assert_eq!(p.allowance_left("acct"), 0, "but no further month is granted on trust");
     }
 
     /// Unix ms for a UTC date at midnight — the tests read as dates, not as magic numbers.

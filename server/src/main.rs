@@ -621,6 +621,12 @@ const ORDER_TICK_MS: u64 = 1000;
     // tick after a start always rolls: a box that was down across a 1st must still hand
     // out the new month, and a cached "we are in September" would silently skip it.
     let mut rolled_period: u32 = 0;
+    // Paid periods end at a moment nobody tells us about, so they are checked on a beat of
+    // their own rather than on the second tick: a minute of grace past an expiry costs
+    // nothing (the allowance of the month already granted is the customer's anyway), and a
+    // scan of every subscription once a minute costs nothing either.
+    const EXPIRY_CHECK_MS: u64 = 60_000;
+    let mut expired_checked: u64 = 0;
     loop {
         tokio::select! {
             // Ask the chain about a few open invoices, off the loop like every other
@@ -641,6 +647,18 @@ const ORDER_TICK_MS: u64 = 1000;
                 // is wired in (next step), nothing sets it to false — which is harmless
                 // only because no subscription exists yet. It must land before the first
                 // one is sold.
+                // A paid period that has run out. Nothing ever arrives to announce it —
+                // a lapsed App Store subscription simply stops appearing in what Apple
+                // hands the app — so the date is checked here, on its own beat, and the
+                // CURRENT month is left alone: it was paid for. Only the next is withheld.
+                if pay::now_ms().saturating_sub(expired_checked) >= EXPIRY_CHECK_MS {
+                    expired_checked = pay::now_ms();
+                    let gone = paywall.expire_lapsed(pay::now_ms());
+                    if gone > 0 {
+                        println!("scrai-server: {gone} subscription(s) reached the end of their paid period");
+                        persist_changed(&mut db, &mut quorum, &paywall, &mut saved);
+                    }
+                }
                 let period = scrai_core::subscription::period_of_ms(pay::now_ms());
                 if period != rolled_period {
                     rolled_period = period;
@@ -1108,7 +1126,10 @@ const ORDER_TICK_MS: u64 = 1000;
                                     // by credit_pending_vouchers on the next start.
                                     db.iap_credited(&hash, now);
                                     let rail = format!("iap:{}", tx.original_transaction_id);
-                                    let granted = paywall.subscribe_or_renew(&account, tier, &rail, now);
+                                    // Apple's own end-of-period date travels with the
+                                    // subscription: it is what lets the month stop on time
+                                    // when nothing ever arrives to say it has.
+                                    let granted = paywall.subscribe_or_renew(&account, tier, &rail, now, tx.expires_at_ms);
                                     println!(
                                         "scrai-server: App Store plan tier {tier}{} — {} ({})",
                                         if yearly { " yearly" } else { "" },
