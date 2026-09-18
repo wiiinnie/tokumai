@@ -25,9 +25,10 @@ lapsing at the end of a month is a mobile data plan, not a voucher.
 
 | | |
 | --- | --- |
-| tiers | **€10 / €20 / €30 a month** for **1M / 2M / 3M TOKU**. Linear on purpose: the only reason to take a bigger one is to need it |
-| yearly | 12 × the monthly price less 10 % — €108 / €216 / €324 |
-| what 1M TOKU is | the same allowance the $10 tile buys today: roughly 3,700 fast text answers, or 570 from the strongest model, or 150 pictures |
+| tiers | **€10 / €20 / €50 a month** for **700k / 1.5M / 3.75M TOKU** (decided 2026-09-18) |
+| yearly | 12 × the monthly price less 10 % — €108 / €216 / €540 |
+| what 700k TOKU is | roughly 3,400 answers from a fast model, 430 from the strongest, or 50 pictures at 2K. Figures must be GENERATED from `pricing.json`, never typed |
+| why not a round million | the price points stay familiar (€10, not €12.99) and the allowance carries the margin instead. Fewer TOKU per euro — **never** a bigger `MARGIN`, which would change what a TOKU buys for everyone who already holds one |
 | rollover | **none.** The month starts at 1,000,000, not at 1,000,000 plus what is left |
 | currency | **EUR.** The operator's books are in euro; a USD price would put an FX spread on every monthly charge instead of once |
 | billing period | the **calendar month**, anchored to the 1st, not to the day of signup |
@@ -262,21 +263,38 @@ converted). Against the table above that gives, per subscriber-month:
 at 30 %. That is the whole finding: at today's margin the store rails pay for the AI and
 nothing else.
 
-### The fix is the price, not the margin
+### The fix is the allowance, not the margin and not the price
 
-Two dials do the same arithmetic, and only one of them is safe. Raising `MARGIN` makes every
-TOKU buy less AI **on every rail and for every existing customer**, and the TOKU has to stay one
-unit with one meaning — it is the denomination of the coins. So the store price moves instead:
+Three dials reach the same margin, and they are not equally safe.
 
-**€12.99 a month in the app stores for the same 1,000,000 TOKU that costs €10 on the web.**
+**Raising `MARGIN` is the one to avoid.** It changes what a TOKU buys — on every rail, and for
+everyone who already holds one, including the customer with $9 of bought credit. The TOKU is
+the denomination of the coins; it has to keep one meaning.
 
-| | at 15 % | at 30 % |
-| --- | --- | --- |
-| we receive | €9.28 | €7.64 |
-| profit, allowance fully spent | **+€2.16** | +€0.52 |
+**Raising the price** works (€12.99 for a million) but spends a familiar price point and, if
+the web stays cheaper, forks every figure in the app per platform.
 
-That survives even the standard 30 %, so exceeding the Small Business threshold would not turn
-the app loss-making overnight — but enrolling stays a precondition, not a nice-to-have.
+**Sizing the allowance** does the same arithmetic with none of that: €10 stays €10 everywhere,
+a TOKU keeps buying exactly what it buys today, and the month simply grants fewer of them.
+Chosen 2026-09-18. €10 for 700,000 TOKU is arithmetically the same trade as €12.99 for a
+million — *(cost(700k) = €4.99; €10 through a store nets €7.14)*:
+
+| | €10 → 700k | €20 → 1.5M | €50 → 3.75M |
+| --- | --- | --- | --- |
+| TOKU per euro | 70,000 | 75,000 | 75,000 |
+| costs us, fully spent | €4.99 | €10.68 | €26.71 |
+| profit, store at 15 % | **+€2.16** | **+€3.60** | **+€9.00** |
+| profit, store at 30 % | +€0.90 | +€1.08 | +€2.70 |
+| profit, web | +€3.02 | +€5.57 | +€14.29 |
+
+The mild volume discount at €20 is deliberate and sits where it costs least — a fixed fee
+component is paid once per charge, so one €50 subscriber beats five €10 ones. It must stay
+mild: every TOKU given away at the top also shrinks the buffer against Apple's standard 30 %,
+which is the row that says whether exceeding the Small Business threshold hurts or kills.
+
+Two consequences for the UI: **never show a euro or dollar value for an allowance** (100,000
+TOKU = $1 of list-price AI is true internally and would read as "€10 buys $7"), and the
+per-tier answer/picture figures must be computed from `pricing.json` at build time.
 
 ### A limited company does not recover the VAT on a sale
 
