@@ -472,6 +472,23 @@ async fn main() {
              off before the app is public."
         );
     }
+    // Whether the WEB can sell a plan at all — key plus six prices. Said at boot because
+    // the alternative is finding out from a customer who could not buy.
+    match (pay::card_enabled(), pay::stripe_price_ids().len()) {
+        (true, n) if n == scrai_core::subscription::TIERS.len() * 2 => {
+            println!("scrai-server: plans on the web — {n} Stripe prices configured");
+        }
+        (true, 0) => eprintln!(
+            "scrai-server: plans on the web are OFF — STRIPE_PRICES is not set. Cards can still \
+             buy nothing else, so this server sells nothing on the web."
+        ),
+        (true, n) => eprintln!(
+            "scrai-server: plans on the web are OFF — STRIPE_PRICES has {n} price id(s), needs {}. \
+             All or none: a partial list would sell some tiers and refuse others.",
+            scrai_core::subscription::TIERS.len() * 2
+        ),
+        (false, _) => println!("scrai-server: plans on the web — no card rail configured"),
+    }
     if pay::voucher_key().is_some() {
         println!("scrai-server: voucher codes — fingerprints are keyed (VOUCHER_KEY)");
     } else {

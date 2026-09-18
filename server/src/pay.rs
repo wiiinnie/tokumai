@@ -2408,14 +2408,24 @@ pub enum CardRail {
 /// Stripe before a subscription can reference it, and keeping the ids in the environment
 /// means the dashboard and this server cannot drift into quoting different amounts.
 pub fn stripe_price_ids() -> Vec<String> {
-    crate::net_var("STRIPE_PRICES")
-        .map(|s| {
-            s.split(',')
-                .map(|p| p.trim().to_string())
-                .filter(|p| p.starts_with("price_") && p.len() < 80)
-                .collect()
-        })
-        .unwrap_or_default()
+    let Some(raw) = crate::net_var("STRIPE_PRICES") else { return Vec::new() };
+    let entries: Vec<String> = raw.split(',').map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).collect();
+    let ids: Vec<String> = entries.iter().filter(|p| p.starts_with("price_") && p.len() < 80).cloned().collect();
+    // The product page shows the PRODUCT id in the biggest type, and a product can carry
+    // several prices — which is exactly how the monthly and yearly tiers are set up here.
+    // Pasting prod_ ids is therefore the obvious mistake, and dropping them quietly would
+    // turn it into "this server sells no plans", with nothing to read anywhere.
+    if ids.len() != entries.len() {
+        let wrong = entries.len() - ids.len();
+        eprintln!(
+            "scrai-server: STRIPE_PRICES: {wrong} of {} entries are not price ids{} — a plan names \
+             a PRICE (price_…), not a product (prod_…). Open the product and copy the id of the \
+             individual price.",
+            entries.len(),
+            if entries.iter().any(|p| p.starts_with("prod_")) { " (they look like product ids)" } else { "" }
+        );
+    }
+    ids
 }
 
 /// The price for one plan, or None when this server is not set up to sell it. All six must
@@ -2787,7 +2797,14 @@ async fn stripe(secret_key: &str, req: reqwest::RequestBuilder) -> Result<Value,
             401 | 403 => CardErr::Other(
                 "Stripe rejected the API key — check STRIPE_SECRET_KEY and the key's permissions".into(),
             ),
-            404 => CardErr::Other("Stripe does not know this checkout session".into()),
+            // Not "checkout session": this helper carries the subscription reads too, and
+            // an operator chasing "no allowance on the 1st" must not be told the wrong
+            // object is missing. Stripe's own message names it; ours only says what class
+            // of problem it is.
+            404 => CardErr::Other(format!(
+                "Stripe does not know that object{}",
+                if detail.is_empty() { String::new() } else { format!(" — {detail}") }
+            )),
             429 => CardErr::RateLimited(retry_after),
             502 | 503 | 504 => CardErr::Other(provider_busy("the card processor", retry_after)),
             s => CardErr::Other(format!("Stripe {s}: {}", detail.chars().take(200).collect::<String>())),
@@ -3603,7 +3620,7 @@ mod card_tests {
         // "Subscriptions: read" fails exactly here — and in production it would fail
         // silently, as every plan looking expired on the 1st.
         match rt.block_on(rail.subscription_state("sub_selftestmissing")) {
-            Err(e) if e.contains("No such subscription") || e.contains("resource_missing") => {
+            Err(e) if e.contains("does not know that object") || e.contains("No such subscription") => {
                 println!("sandbox ok (read):    the key may ask about subscriptions");
             }
             Err(e) if e.contains("permission") || e.contains("API key") => {
