@@ -2400,6 +2400,40 @@ pub enum CardRail {
     None,
 }
 
+/// The Stripe price ids for the six plans, in the same order as the App Store ones: the
+/// three monthly tiers, then the three yearly. `STRIPE_PRICES=price_a,…` (six), scoped by
+/// network like the key itself, so a testnet box can never quote a live price.
+///
+/// Ids rather than inline `price_data`: a recurring price has to exist as an object at
+/// Stripe before a subscription can reference it, and keeping the ids in the environment
+/// means the dashboard and this server cannot drift into quoting different amounts.
+pub fn stripe_price_ids() -> Vec<String> {
+    crate::net_var("STRIPE_PRICES")
+        .map(|s| {
+            s.split(',')
+                .map(|p| p.trim().to_string())
+                .filter(|p| p.starts_with("price_") && p.len() < 80)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The price for one plan, or None when this server is not set up to sell it. All six must
+/// be configured or none of them is used: a partial list would sell some tiers and refuse
+/// others, which looks like a fault rather than a decision.
+pub fn stripe_price_for(tier: usize, yearly: bool) -> Option<String> {
+    let ids = stripe_price_ids();
+    if ids.len() != subscription::TIERS.len() * 2 {
+        return None;
+    }
+    ids.get(tier + if yearly { subscription::TIERS.len() } else { 0 }).cloned()
+}
+
+/// Can this server sell a plan on the web at all?
+pub fn plans_sellable() -> bool {
+    matches!(CardRail::from_env(), CardRail::Stripe { .. }) && stripe_price_for(0, false).is_some()
+}
+
 impl CardRail {
     pub fn from_env() -> CardRail {
         // Network-scoped like BTCPay (STRIPE_SECRET_KEY_MAINNET / _TESTNET, bare fallback).
@@ -2502,6 +2536,90 @@ impl CardRail {
         })
     }
 
+    /// A Checkout Session for a PLAN. Same hosted page, a different mode — and one extra
+    /// thing that matters: the billing cycle is anchored to the 1st, with the partial first
+    /// period charged pro rata by Stripe. That is the same fraction the allowance is
+    /// granted from (`subscription::served`), so the money and the TOKU cannot drift apart.
+    ///
+    /// No `customer_creation` or `submit_type` here: Stripe always makes a Customer for a
+    /// subscription (it has to, to bill again), and `submit_type` belongs to payment mode.
+    async fn create_subscription(&self, tier: usize, yearly: bool, reference: &str) -> Result<RaisedInvoice, String> {
+        let CardRail::Stripe { secret_key, redirect_url } = self else {
+            return Err("card payments are not configured on this server".into());
+        };
+        let price = stripe_price_for(tier, yearly).ok_or("this server does not sell plans by card")?;
+        let anchor = (subscription::first_of_next_month_ms(now_ms()) / 1000).to_string();
+        let exp_s = (now_ms() / 1000 + CHECKOUT_MINUTES * 60).to_string();
+        let form: Vec<(&str, &str)> = vec![
+            ("mode", "subscription"),
+            ("line_items[0][price]", &price),
+            ("line_items[0][quantity]", "1"),
+            ("client_reference_id", reference),
+            ("metadata[orderId]", reference),
+            // On the SUBSCRIPTION too, not only the session: the session is gone in a day,
+            // the subscription is what every later poll and every renewal is read from.
+            ("subscription_data[metadata][orderId]", reference),
+            ("subscription_data[billing_cycle_anchor]", &anchor),
+            ("subscription_data[proration_behavior]", "create_prorations"),
+            ("billing_address_collection", "required"),
+            ("name_collection[individual][enabled]", "true"),
+            ("adaptive_pricing[enabled]", "false"),
+            ("locale", "en"),
+            ("expires_at", &exp_s),
+            ("success_url", redirect_url),
+        ];
+        let v = stripe(
+            secret_key,
+            crate::http::client()
+                .post(format!("{STRIPE_API}/checkout/sessions"))
+                .header("Idempotency-Key", reference)
+                .form(&form),
+        )
+        .await?;
+        let provider_ref = v.get("id").and_then(|i| i.as_str()).unwrap_or_default().to_string();
+        if !provider_ref.starts_with("cs_") {
+            return Err("Stripe returned no checkout session id".into());
+        }
+        let checkout = v.get("url").and_then(|h| h.as_str()).unwrap_or_default().to_string();
+        if !is_stripe_url(&checkout) {
+            return Err("Stripe returned no hosted checkout link".into());
+        }
+        let expires_at = v
+            .get("expires_at")
+            .and_then(|e| e.as_u64())
+            .map(|s| s * 1000)
+            .unwrap_or_else(|| now_ms() + CHECKOUT_MINUTES * 60_000);
+        Ok(RaisedInvoice {
+            provider_ref,
+            pay_to: String::new(),
+            instruction: "Finish in your browser — the first month lands here automatically.".into(),
+            options: json!([{ "method": "card", "checkout": checkout }]),
+            expires_at,
+        })
+    }
+
+    /// Is this subscription paid for, and until when? Returns (active, paid-until in ms).
+    ///
+    /// Read the way the expiry check needs it: a date, not an event. Stripe never tells us
+    /// a subscription ended — we would have to run a webhook and an inbound port for that —
+    /// so what is asked here is how long the period that HAS been paid for runs, and the
+    /// server lets it lapse on its own when that passes.
+    pub async fn subscription_state(&self, sub_id: &str) -> Result<(bool, u64), String> {
+        let CardRail::Stripe { secret_key, .. } = self else {
+            return Err("card payments are not configured on this server".into());
+        };
+        if !sub_id.starts_with("sub_") || !sub_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+            return Err("not a Stripe subscription id".into());
+        }
+        let v = match stripe(secret_key, crate::http::client().get(format!("{STRIPE_API}/subscriptions/{sub_id}"))).await {
+            Ok(v) => v,
+            // Nothing new yet — the caller keeps whatever it already believed.
+            Err(CardErr::RateLimited(_)) => return Err("rate limited".into()),
+            Err(CardErr::Other(e)) => return Err(e),
+        };
+        Ok((stripe_sub_paid(&v), stripe_period_end_ms(&v)))
+    }
+
     /// "paid" | "pending" | "expired". A 429 (rate limit) is "nothing new yet": the next
     /// 10 s poll re-asks, and our volume is nowhere near the limit anyway.
     ///
@@ -2550,6 +2668,26 @@ impl CardRail {
 /// the client as a link to open. `stripe.com` on its own would not be enough — a
 /// look-alike under another subdomain would pass that, and this string ends up in a
 /// browser the user trusts because we sent them there.
+/// Which Stripe subscription statuses mean "the customer is paid up right now".
+///
+/// `past_due` is deliberately NOT among them: the card failed and Stripe is retrying. The
+/// month already granted stays — it was paid for — but no further one is handed out until
+/// a payment actually lands, which `active` then says.
+fn stripe_sub_paid(v: &Value) -> bool {
+    matches!(v.get("status").and_then(|s| s.as_str()), Some("active" | "trialing"))
+}
+
+/// When the paid period ends, in ms. Stripe moved this from the subscription onto its
+/// items; read both, newest shape first, so an API version change does not silently make
+/// every subscription look expired.
+fn stripe_period_end_ms(v: &Value) -> u64 {
+    v.pointer("/items/data/0/current_period_end")
+        .and_then(|e| e.as_u64())
+        .or_else(|| v.get("current_period_end").and_then(|e| e.as_u64()))
+        .map(|s| s * 1000)
+        .unwrap_or(0)
+}
+
 fn is_stripe_url(u: &str) -> bool {
     let Some(rest) = u.strip_prefix("https://") else { return false };
     let host = rest.split(['/', '?', '#']).next().unwrap_or("");
@@ -3414,6 +3552,67 @@ mod tests {
 #[cfg(test)]
 mod card_tests {
     use super::*;
+
+    /// The plan half of the sandbox check: does Stripe accept the subscription session we
+    /// build, anchored to the 1st with the partial period prorated?
+    ///
+    /// Run it with the test key AND the six test-mode price ids:
+    ///
+    ///     STRIPE_SECRET_KEY=$(grep ^STRIPE_SECRET_KEY_TESTNET= .env | cut -d= -f2-) \
+    ///     STRIPE_PRICES=$(grep ^STRIPE_PRICES_TESTNET= .env | cut -d= -f2-) \
+    ///       cargo test -p scrai-server --lib stripe_sandbox_opens -- --ignored --nocapture
+    ///
+    /// It does NOT create its own price: the key this server uses is a RESTRICTED key, and
+    /// one that could mint prices would defeat the point of restricting it. What is proved
+    /// is therefore the round trip as production will make it — our request shape against
+    /// the real prices, with the real key's real permissions.
+    #[test]
+    #[ignore = "network + STRIPE_SECRET_KEY"]
+    fn stripe_sandbox_opens_a_subscription_anchored_to_the_first() {
+        let Ok(key) = std::env::var("STRIPE_SECRET_KEY") else {
+            panic!("set STRIPE_SECRET_KEY to a test key to run this");
+        };
+        assert!(key.contains("_test_"), "refusing to run against a live key");
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let reference = format!("selftestsub{}{}", now_ms(), std::process::id());
+
+        let want = subscription::TIERS.len() * 2;
+        assert_eq!(
+            stripe_price_ids().len(),
+            want,
+            "set STRIPE_PRICES to the {want} test-mode price ids: the monthly tiers first, then \
+             the yearly ones, as recurring prices created in the Stripe dashboard"
+        );
+        let rail = CardRail::Stripe { secret_key: key, redirect_url: "https://tokumai.com/paid".into() };
+        let raised = rt.block_on(rail.create_subscription(0, false, &reference)).expect("create subscription session");
+        assert!(raised.provider_ref.starts_with("cs_"), "got {}", raised.provider_ref);
+        let checkout = raised.options[0]["checkout"].as_str().unwrap_or_default();
+        assert!(is_stripe_url(checkout), "checkout url was {checkout}");
+        println!("sandbox ok (monthly): {} · {checkout}", raised.provider_ref);
+
+        // A yearly one too: same session shape, different price, same anchor — the year
+        // then runs from the 1st like everything else.
+        let yearly = rt
+            .block_on(rail.create_subscription(2, true, &format!("{reference}y")))
+            .expect("create a yearly subscription session");
+        assert!(yearly.provider_ref.starts_with("cs_"), "got {}", yearly.provider_ref);
+        println!("sandbox ok (yearly):  {}", yearly.provider_ref);
+
+        // And the READ side, which the expiry check runs on. No subscription exists yet, so
+        // what this proves is that the key may ASK: a restricted key without
+        // "Subscriptions: read" fails exactly here — and in production it would fail
+        // silently, as every plan looking expired on the 1st.
+        match rt.block_on(rail.subscription_state("sub_selftestmissing")) {
+            Err(e) if e.contains("No such subscription") || e.contains("resource_missing") => {
+                println!("sandbox ok (read):    the key may ask about subscriptions");
+            }
+            Err(e) if e.contains("permission") || e.contains("API key") => {
+                panic!("the restricted key may not read subscriptions — add that permission: {e}")
+            }
+            Err(e) => panic!("unexpected error asking Stripe about a subscription: {e}"),
+            Ok(_) => panic!("Stripe claims to know a subscription that cannot exist"),
+        }
+    }
 
     /// The adapter against the real sandbox. Ignored by default — it needs the network and
     /// a key — and run by hand with:

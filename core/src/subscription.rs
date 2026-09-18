@@ -109,6 +109,16 @@ pub fn period_of_ms(ms: u64) -> u32 {
     period_of(y, m)
 }
 
+/// Midnight UTC on the 1st of the month after `ms` — the day a subscription's billing is
+/// anchored to, and the day the allowance resets. ONE function, because a charge anchored
+/// to a different day than the grant is the drift the whole design avoids.
+pub fn first_of_next_month_ms(ms: u64) -> u64 {
+    let (y, m, d) = civil_from_ms(ms);
+    let days_left = (days_in_month(y, m) - d.clamp(1, days_in_month(y, m))) as u64 + 1;
+    // Back to that day's own midnight, then forward to the 1st.
+    (ms / 86_400_000 + days_left) * 86_400_000
+}
+
 /// A calendar month as `YYYYMM` — the period an allowance belongs to. Comparable, so
 /// "has the month rolled" is one integer compare and no date library.
 pub fn period_of(year: i32, month: u32) -> u32 {
@@ -237,6 +247,35 @@ mod tests {
         assert_eq!(period_of_ms(1_759_276_800_000), period_of(2025, 10));
         // Periods sort as integers, which is the only comparison the reset needs.
         assert!(period_of(2026, 12) < period_of(2027, 1));
+    }
+
+    #[test]
+    fn the_anchor_is_midnight_on_the_first() {
+        // 18 Sept 2026, some time in the afternoon → 1 Oct 2026, 00:00 UTC.
+        let sept18 = 1_789_000_000_000u64; // 2026-09-10 in fact; any day in a month will do
+        let a = first_of_next_month_ms(sept18);
+        assert_eq!(civil_from_ms(a), (2026, 10, 1));
+        assert_eq!(a % 86_400_000, 0, "midnight, not the time of day the purchase happened");
+
+        // The LAST day of a month rolls to the next one, not two.
+        let sept30 = a - 86_400_000;
+        assert_eq!(civil_from_ms(sept30), (2026, 9, 30));
+        assert_eq!(civil_from_ms(first_of_next_month_ms(sept30)), (2026, 10, 1));
+        // …and the 1st itself anchors to the NEXT 1st, never to today.
+        assert_eq!(civil_from_ms(first_of_next_month_ms(a)), (2026, 11, 1));
+        // Across a year boundary, and out of a February.
+        assert_eq!(civil_from_ms(first_of_next_month_ms(ms_of(2026, 12, 14))), (2027, 1, 1));
+        assert_eq!(civil_from_ms(first_of_next_month_ms(ms_of(2028, 2, 29))), (2028, 3, 1));
+    }
+
+    /// Unix ms for a UTC date at midnight — the inverse of `civil_from_ms`, for tests.
+    fn ms_of(y: i64, m: u32, d: u32) -> u64 {
+        let (yy, mm) = if m <= 2 { (y - 1, m + 9) } else { (y, m - 3) };
+        let era = yy.div_euclid(400);
+        let yoe = yy - era * 400;
+        let doy = (153 * mm as i64 + 2) / 5 + d as i64 - 1;
+        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+        ((era * 146_097 + doe - 719_468) * 86_400_000) as u64
     }
 
     #[test]
