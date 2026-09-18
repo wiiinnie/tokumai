@@ -21,9 +21,25 @@
 
 use serde::{Deserialize, Serialize};
 
-/// The three plans. TOKU per month and the price in euro cents, monthly.
+/// The three plans as (TOKU a month, euro cents a month). Decided 2026-09-18; the
+/// reasoning, including why the allowance rather than `MARGIN` carries the margin, is in
+/// docs/subscription.md. The rate improves along the ladder — 70,000 / 75,000 / 80,000
+/// TOKU per euro — so the saving shown on a tier is a real and growing number.
 /// The yearly price is twelve months less 10 %, computed by `yearly_cents`.
-pub const TIERS: [(u64, u64); 3] = [(1_000_000, 1000), (2_000_000, 2000), (3_000_000, 3000)];
+pub const TIERS: [(u64, u64); 3] = [(700_000, 1000), (1_500_000, 2000), (4_000_000, 5000)];
+
+/// What a tier's allowance would cost at the ENTRY tier's rate, in cents — the number the
+/// subscribe sheet turns into "saves €1.42 a month". Derived, never typed: a hand-written
+/// saving is a promise that goes stale the first time a tier moves.
+///
+/// The comparison price is FLOORED, so the saving is understated by at most a cent rather
+/// than overstated by one. A number that promises a benefit rounds against us.
+pub fn saving_cents(tier: usize) -> u64 {
+    let (entry_toku, entry_cents) = TIERS[0];
+    let Some(&(toku, cents)) = TIERS.get(tier) else { return 0 };
+    let at_entry_rate = toku * entry_cents / entry_toku;
+    at_entry_rate.saturating_sub(cents)
+}
 
 /// Yearly = twelve months less 10 %, rounded to the cent (down — in the customer's favour).
 pub fn yearly_cents(monthly_cents: u64) -> u64 {
@@ -66,6 +82,31 @@ pub fn prorata_toku(full_toku: u64, served_days: u32, total_days: u32) -> u64 {
         return 0;
     }
     full_toku * served_days as u64 / total_days as u64
+}
+
+/// UTC (year, month, day) from a unix-millisecond timestamp — Howard Hinnant's
+/// `civil_from_days`, which is exact for any date we will ever see and avoids pulling a
+/// date library into the shared core. Everything a subscription needs is UTC: the reset
+/// runs on the server, and the one place a timezone would matter (cancelling on the last
+/// day of a month) is deliberately decided in the customer's favour instead — see
+/// docs/subscription.md.
+pub fn civil_from_ms(ms: u64) -> (i32, u32, u32) {
+    let days = (ms / 86_400_000) as i64 + 719_468; // shift epoch to 0000-03-01
+    let era = days.div_euclid(146_097);
+    let doe = days.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    ((y + i64::from(m <= 2)) as i32, m, d)
+}
+
+/// The `YYYYMM` a moment falls in.
+pub fn period_of_ms(ms: u64) -> u32 {
+    let (y, m, _) = civil_from_ms(ms);
+    period_of(y, m)
 }
 
 /// A calendar month as `YYYYMM` — the period an allowance belongs to. Comparable, so
@@ -183,10 +224,39 @@ mod tests {
     }
 
     #[test]
+    fn the_calendar_comes_out_of_a_timestamp_without_a_date_library() {
+        // Known instants, checked against `date -u -r <s>`.
+        assert_eq!(civil_from_ms(0), (1970, 1, 1));
+        assert_eq!(civil_from_ms(1_789_000_000_000), (2026, 9, 10));
+        assert_eq!(civil_from_ms(1_756_684_800_000), (2025, 9, 1));
+        // Leap day, and the day after.
+        assert_eq!(civil_from_ms(1_709_164_800_000), (2024, 2, 29));
+        assert_eq!(civil_from_ms(1_709_251_200_000), (2024, 3, 1));
+        // The last millisecond of a month still belongs to that month.
+        assert_eq!(period_of_ms(1_759_276_799_999), period_of(2025, 9));
+        assert_eq!(period_of_ms(1_759_276_800_000), period_of(2025, 10));
+        // Periods sort as integers, which is the only comparison the reset needs.
+        assert!(period_of(2026, 12) < period_of(2027, 1));
+    }
+
+    #[test]
     fn yearly_is_twelve_months_less_ten_percent() {
         assert_eq!(yearly_cents(1000), 10_800);
         assert_eq!(yearly_cents(2000), 21_600);
-        assert_eq!(yearly_cents(3000), 32_400);
+        assert_eq!(yearly_cents(5000), 54_000);
+    }
+
+    #[test]
+    fn a_bigger_plan_saves_a_real_and_growing_amount() {
+        // 1.5M TOKU at the entry rate is EUR 21.42 floored, so EUR 20 saves EUR 1.42;
+        // 4M is EUR 57.14, so EUR 50 saves EUR 7.14.
+        assert_eq!(saving_cents(0), 0);
+        assert_eq!(saving_cents(1), 142);
+        assert_eq!(saving_cents(2), 714);
+        // It must GROW along the ladder — two tiers showing the same saving reads as a bug
+        // and invites "why not just buy the middle one twice".
+        assert!(saving_cents(2) > saving_cents(1));
+        assert_eq!(saving_cents(9), 0); // out of range is 0, never a panic
     }
 
     #[test]

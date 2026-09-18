@@ -617,6 +617,10 @@ const ORDER_TICK_MS: u64 = 1000;
     // Spend-record retention: rows older than QUORUM_RETAIN_DAYS go, every six hours.
     let mut prune_tick = tokio::time::interval(std::time::Duration::from_secs(6 * 3600));
     prune_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // The calendar month the allowances were last rolled into. Starts at 0 so the FIRST
+    // tick after a start always rolls: a box that was down across a 1st must still hand
+    // out the new month, and a cached "we are in September" would silently skip it.
+    let mut rolled_period: u32 = 0;
     loop {
         tokio::select! {
             // Ask the chain about a few open invoices, off the loop like every other
@@ -628,6 +632,24 @@ const ORDER_TICK_MS: u64 = 1000;
             // chain poll, but somebody IS watching a spinner while this happens. The query is
             // one indexed lookup on a table that is almost always empty.
             _ = order_tick.tick() => {
+                // The 1st of a month: every active subscription is SET to its tier's
+                // allowance (never added — accumulating allowance is the voucher this
+                // model replaced), every inactive one lapses. One integer compare on the
+                // common tick; the scan only runs when the month has actually turned.
+                //
+                // `active` is whatever the rail last said. Until the Stripe/App Store poll
+                // is wired in (next step), nothing sets it to false — which is harmless
+                // only because no subscription exists yet. It must land before the first
+                // one is sold.
+                let period = scrai_core::subscription::period_of_ms(pay::now_ms());
+                if period != rolled_period {
+                    rolled_period = period;
+                    let changed = paywall.roll_periods(pay::now_ms());
+                    if changed > 0 {
+                        println!("scrai-server: monthly reset — {changed} subscription(s) rolled into {period}");
+                        persist_changed(&mut db, &mut quorum, &paywall, &mut saved);
+                    }
+                }
                 // Support notifications the first attempt could not deliver — an MTA that
                 // was down, a box that had none yet. The report itself was never at risk;
                 // this only catches the knock up. Also picks up tickets the FAUCET filed,
@@ -821,7 +843,7 @@ const ORDER_TICK_MS: u64 = 1000;
                         if matches!(resp, federation::FedResponse::Withdraw { .. }) {
                             paywall.finish_issuance(&req_key, serde_json::to_value(&resp).unwrap_or(serde_json::Value::Null));
                         } else {
-                            paywall.restore_entitlement(&account_id, book_toku);
+                            paywall.restore_credit(&account_id, book_toku);
                             paywall.abort_issuance(&req_key);
                         }
                         let reply = serde_json::json!({ "id": id, "fed": serde_json::to_value(&resp).unwrap_or(serde_json::Value::Null) });
@@ -844,10 +866,19 @@ const ORDER_TICK_MS: u64 = 1000;
                                         credited += n.value_toku();
                                     }
                                 }
-                                paywall.credit_voucher(&account, credited);
-                                println!("scrai-server: coins returned to an account — {credited} TOKU");
+                                // Value goes back to the pocket it came from: a subscriber's
+                                // allowance (lapsing with its month) before bought credit.
+                                // Without that split, draw-on-the-1st / hand-back-on-the-30th
+                                // would mint permanent credit out of a monthly plan — see
+                                // pay::Pay::value_returned.
+                                let (to_allowance, to_credit) = paywall.value_returned(&account, credited);
+                                println!(
+                                    "scrai-server: coins returned to an account — {credited} TOKU ({to_allowance} to this month's allowance, {to_credit} to credit)"
+                                );
                                 serde_json::json!({ "id": id, "kind": "coins.ok", "credited": credited,
-                                    "entitlement": paywall.entitlement(&account) })
+                                    "to_allowance": to_allowance,
+                                    "entitlement": paywall.entitlement(&account),
+                                    "allowance": paywall.allowance_left(&account) })
                             }
                         };
                         ("coins.return", serde_json::to_vec(&reply).unwrap_or_default())
@@ -1379,7 +1410,7 @@ const ORDER_TICK_MS: u64 = 1000;
                                     // issuing — issue now without charging again.
                                     let book_toku = ticketbook_coins() * issuing.denom_toku();
                                     if !prepaid {
-                                        paywall.consume_entitlement(&account_id, book_toku);
+                                        paywall.consume_credit(&account_id, book_toku);
                                     } else {
                                         println!("scrai-server: withdraw retry for a charged-but-unissued body — issuing without a second charge");
                                     }

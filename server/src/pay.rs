@@ -24,6 +24,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use scrai_core::auth;
 use scrai_core::coconut::TOKU_PER_USD;
+use scrai_core::subscription::{self, Allowance};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -595,13 +596,43 @@ pub struct TestnetInv {
     pub expires_at: u64,
 }
 
+/// A subscription on an account: which plan, whether it is still being paid for, and the
+/// month it has been granted so far.
+///
+/// The RAIL matters for the reset: a Stripe subscription is polled by id, an App Store one
+/// is re-checked against its latest transaction. Either way the answer we need is a single
+/// bit — is it paid up — and the monthly grant is ours, which is why an annual plan needs
+/// no separate machinery: same reset, one payment behind it instead of twelve.
+#[derive(Default, Serialize, Deserialize, Clone, Debug)]
+pub struct Sub {
+    /// Index into `subscription::TIERS`.
+    pub tier: usize,
+    /// `sub_…` at Stripe, or `iap:<original transaction id>` from the App Store.
+    pub rail_id: String,
+    /// Paid up as of the last check. False lets the allowance lapse without deleting the
+    /// row — a card that fails today may work tomorrow, and the customer keeps their tier.
+    pub active: bool,
+    /// When the rail was last asked. The reset asks again if this is stale.
+    pub checked_at_ms: u64,
+    pub allowance: Allowance,
+}
+
 /// Durable paywall state (invoices, entitlements, burned nonces) + the volatile
 /// rate-limit windows. Snapshot/restore mirrors SessionStore so main.rs persists
 /// it with the same revision-gated write.
 #[derive(Default, Serialize, Deserialize)]
 pub struct Pay {
     invoices: HashMap<String, Inv>,
+    /// Credit BOUGHT: one-off purchases, redeemed codes, coins handed back that were not
+    /// granted. **Never expires and no reset touches it** — the promise the terms made to
+    /// everyone who bought credit before subscriptions existed, kept by leaving this map
+    /// exactly where it was. `subs` is the new, separate pocket.
     entitlements: HashMap<String, u64>,
+    /// Subscriptions by account. `serde(default)` is load-bearing: a snapshot written by a
+    /// build that predates subscriptions restores with an empty map and every account keeps
+    /// its entitlement, which is the migration.
+    #[serde(default)]
+    subs: HashMap<String, Sub>,
     nonces: HashSet<String>,
     // H4: bound the burned-nonce store. `nonces` alone grew without limit (serialised into
     // every snapshot → quadratic disk writes → OOM/disk-full under a signed-nonce flood).
@@ -893,20 +924,175 @@ impl Pay {
         self.account_owns(v, "drain")
     }
 
-    /// Deduct entitlement for a coconut issuance. Called BEFORE the (off-loop) issuance
-    /// runs, so two withdraws of the same account in flight can't both pass the gate;
-    /// `restore_entitlement` gives it back when issuance fails.
-    pub fn consume_entitlement(&mut self, account_id: &str, amount: u64) {
-        let e = self.entitlements.entry(account_id.to_string()).or_default();
-        *e = e.saturating_sub(amount);
+    /// Everything this account can draw right now: the month's remaining allowance plus
+    /// bought credit. What the withdraw gate compares a ticketbook against.
+    pub fn spendable(&self, account_id: &str) -> u64 {
+        self.allowance_left(account_id).saturating_add(self.entitlement(account_id))
+    }
+
+    /// What is left of this month's allowance (0 with no subscription).
+    pub fn allowance_left(&self, account_id: &str) -> u64 {
+        self.subs.get(account_id).map(|s| s.allowance.left).unwrap_or(0)
+    }
+
+    pub fn subscription(&self, account_id: &str) -> Option<&Sub> {
+        self.subs.get(account_id)
+    }
+
+    /// Deduct for a coconut issuance, **allowance first**. Called BEFORE the (off-loop)
+    /// issuance runs, so two withdraws of the same account in flight can't both pass the
+    /// gate; `restore_credit` gives it back when issuance fails.
+    ///
+    /// The perishable pocket goes first because it dies on the 1st either way and bought
+    /// credit does not — the order that costs the customer least. An account with no
+    /// subscription takes the `else` branch and behaves exactly as it did before
+    /// subscriptions existed.
+    pub fn consume_credit(&mut self, account_id: &str, amount: u64) {
+        let rest = match self.subs.get_mut(account_id) {
+            Some(sub) => sub.allowance.spend(amount).1,
+            None => amount,
+        };
+        if rest > 0 {
+            let e = self.entitlements.entry(account_id.to_string()).or_default();
+            *e = e.saturating_sub(rest);
+        }
         self.rev += 1;
     }
 
-    /// Undo a `consume_entitlement` whose issuance did not produce a credential.
-    pub fn restore_entitlement(&mut self, account_id: &str, amount: u64) {
-        let e = self.entitlements.entry(account_id.to_string()).or_default();
-        *e = e.saturating_add(amount);
+    /// Undo a `consume_credit` whose issuance did not produce a credential. Uses the same
+    /// path as coins coming home, so value can only ever return to the pocket it left.
+    pub fn restore_credit(&mut self, account_id: &str, amount: u64) {
+        self.value_returned(account_id, amount);
+    }
+
+    /// Value coming back to an account — a failed issuance, or a device handing coins home.
+    /// Returns (restored to the allowance, credited as entitlement).
+    ///
+    /// This is the rule that keeps a subscription a subscription: up to what the account
+    /// has outstanding from an allowance, value goes back to that allowance and lapses with
+    /// it; only value that was BOUGHT becomes entitlement. Without it, drawing a month on
+    /// the 1st and handing it back on the 30th would mint permanent credit out of a monthly
+    /// plan — the forfeiture problem the subscription exists to avoid. See
+    /// `scrai_core::subscription::Allowance::give_back` and docs/subscription.md.
+    pub fn value_returned(&mut self, account_id: &str, value: u64) -> (u64, u64) {
+        let (to_allowance, to_entitlement) = match self.subs.get_mut(account_id) {
+            Some(sub) => sub.allowance.give_back(value),
+            None => (0, value),
+        };
+        if to_entitlement > 0 {
+            let e = self.entitlements.entry(account_id.to_string()).or_default();
+            *e = e.saturating_add(to_entitlement);
+        }
         self.rev += 1;
+        (to_allowance, to_entitlement)
+    }
+
+    /// A subscription begins (or is re-pointed at a new rail id). The first month is granted
+    /// PRO RATA to the day, from the same fraction that priced it — the two cannot drift
+    /// because both come out of `subscription::served`.
+    pub fn subscribe(&mut self, account_id: &str, tier: usize, rail_id: &str, now_ms_: u64) -> u64 {
+        let (full_toku, _) = subscription::TIERS[tier.min(subscription::TIERS.len() - 1)];
+        let (y, m, d) = subscription::civil_from_ms(now_ms_);
+        let (days, total) = subscription::served(y, m, d);
+        let granted = subscription::prorata_toku(full_toku, days, total);
+        let sub = self.subs.entry(account_id.to_string()).or_default();
+        sub.tier = tier;
+        sub.rail_id = rail_id.to_string();
+        sub.active = true;
+        sub.checked_at_ms = now_ms_;
+        sub.allowance.reset(subscription::period_of(y, m), granted);
+        self.rev += 1;
+        granted
+    }
+
+    /// Move to a bigger plan mid-month: the rest of the month at the new tier, pro rata,
+    /// added to what the customer already has. Returns the TOKU added (0 if it is not an
+    /// upgrade — a smaller plan takes effect on the 1st and is only a tier change here).
+    pub fn change_tier(&mut self, account_id: &str, tier: usize, now_ms_: u64) -> u64 {
+        let tier = tier.min(subscription::TIERS.len() - 1);
+        let Some(sub) = self.subs.get_mut(account_id) else { return 0 };
+        let (new_toku, _) = subscription::TIERS[tier];
+        let (old_toku, _) = subscription::TIERS[sub.tier];
+        let was = sub.tier;
+        sub.tier = tier;
+        self.rev += 1;
+        if new_toku <= old_toku || was == tier {
+            return 0; // downgrade: the new, smaller month starts on the 1st
+        }
+        let (y, m, d) = subscription::civil_from_ms(now_ms_);
+        let (days, total) = subscription::served(y, m, d);
+        let extra = subscription::prorata_toku(new_toku - old_toku, days, total);
+        sub.allowance.add_upgrade(extra);
+        extra
+    }
+
+    /// What the rail said when last asked. `false` does not delete the row: a card that
+    /// failed today may work tomorrow, and the customer keeps their tier and their history.
+    pub fn set_subscription_active(&mut self, account_id: &str, active: bool, now_ms_: u64) {
+        if let Some(sub) = self.subs.get_mut(account_id) {
+            sub.active = active;
+            sub.checked_at_ms = now_ms_;
+            self.rev += 1;
+        }
+    }
+
+    /// The monthly reset. For every subscription whose allowance belongs to an older
+    /// period: an active one is **set** (never added — an `+=` would let unspent allowance
+    /// accumulate, and an accumulating balance is the voucher this replaced), an inactive
+    /// one lapses to nothing. Returns how many rows changed, so the caller persists only
+    /// when something did.
+    pub fn roll_periods(&mut self, now_ms_: u64) -> usize {
+        let period = subscription::period_of_ms(now_ms_);
+        let mut changed = 0;
+        for sub in self.subs.values_mut() {
+            if sub.allowance.period >= period {
+                continue;
+            }
+            let (full_toku, _) = subscription::TIERS[sub.tier.min(subscription::TIERS.len() - 1)];
+            if sub.active {
+                sub.allowance.reset(period, full_toku);
+            } else {
+                sub.allowance.period = period;
+                sub.allowance.lapse();
+            }
+            changed += 1;
+        }
+        if changed > 0 {
+            self.rev += 1;
+        }
+        changed
+    }
+
+    /// Everything the app needs to draw the credit screen: bought credit, this month's
+    /// allowance, and the plan behind it. ONE builder, so the fields cannot drift apart
+    /// between the call sites that answer a balance question.
+    ///
+    /// `entitlement` keeps its old name and old meaning for older builds: a 0.6.x client
+    /// reads it, finds the credit it always found, and ignores the rest.
+    pub fn account_reply(&self, id: &Value, account: &str) -> Value {
+        let mut v = json!({ "id": id, "entitlement": self.entitlement(account) });
+        if let Some(sub) = self.subs.get(account) {
+            let (toku, cents) = subscription::TIERS[sub.tier.min(subscription::TIERS.len() - 1)];
+            v["subscription"] = json!({
+                "tier": sub.tier,
+                "active": sub.active,
+                "toku_per_month": toku,
+                "cents_per_month": cents,
+                "period": sub.allowance.period,
+                "granted": sub.allowance.granted,
+                "left": sub.allowance.left,
+            });
+        }
+        v
+    }
+
+    /// Accounts whose rail has not been asked about in `stale_ms` — the reset's to-do list.
+    pub fn subs_to_check(&self, now_ms_: u64, stale_ms: u64) -> Vec<(String, String)> {
+        self.subs
+            .iter()
+            .filter(|(_, s)| now_ms_.saturating_sub(s.checked_at_ms) >= stale_ms)
+            .map(|(a, s)| (a.clone(), s.rail_id.clone()))
+            .collect()
     }
 
     /// The issuance record for a Withdraw body, if this server charged for it (M-cl-2).
@@ -1115,7 +1301,7 @@ impl Pay {
                 for (inv_id, country) in paid {
                     self.settle(&inv_id, country);
                 }
-                json!({ "id": id, "entitlement": self.entitlement(&account) })
+                self.account_reply(&id, &account)
             }
             // The watcher has no client to answer — it just credits what the chain shows,
             // so the app finds the money already there and the claim page stops waiting.
@@ -1473,11 +1659,13 @@ impl Pay {
             }
             return Gate::Authorized { account_id: account, req_key, prepaid: true };
         }
-        let held = self.entitlement(&account);
+        // Allowance + bought credit: the gate does not care which pocket pays, only that
+        // the account can. `consume_credit` then empties the perishable one first.
+        let held = self.spendable(&account);
         if held < book_toku {
             return Gate::Denied(encode(&err(
                 &id,
-                &format!("not enough entitlement: a ticketbook costs {book_toku} TOKU, this account holds {held} — buy credit first"),
+                &format!("not enough credit: a ticketbook costs {book_toku} TOKU, this account holds {held} — subscribe or top up first"),
             )));
         }
         Gate::Authorized { account_id: account, req_key, prepaid: false }
@@ -2678,7 +2866,7 @@ mod tests {
             Gate::Authorized { account_id, req_key, prepaid } => {
                 assert_eq!(account_id, aid);
                 assert!(!prepaid);
-                pay.consume_entitlement(&account_id, book);
+                pay.consume_credit(&account_id, book);
                 pay.begin_issuance(&req_key, &account_id);
                 assert_eq!(pay.entitlement(&aid), 0);
                 req_key
@@ -2731,6 +2919,142 @@ mod tests {
             let e = r["error"].as_str().unwrap_or_default();
             assert!(!e.contains("unknown kind"), "{kind} is routed but not handled: {r}");
         }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Subscriptions beside bought credit. The property under test in most of these is
+    // not a feature — it is that the customer who paid before subscriptions existed is
+    // untouched by all of it. See docs/subscription.md.
+    // ---------------------------------------------------------------------------
+
+    /// The migration, such as it is: a snapshot written before subscriptions existed must
+    /// restore with every account's credit intact and no subscription attached. Nothing
+    /// converts, nothing is rewritten — the new pocket is simply empty.
+    #[test]
+    fn a_snapshot_from_before_subscriptions_keeps_every_account_its_credit() {
+        let old = r#"{"invoices":{},"entitlements":{"paid_user":900000},"nonces":[]}"#;
+        let mut p: Pay = serde_json::from_str(old).expect("a pre-subscription snapshot must load");
+        assert_eq!(p.entitlement("paid_user"), 900_000);
+        assert_eq!(p.spendable("paid_user"), 900_000, "credit must be spendable with no plan");
+        assert!(p.subscription("paid_user").is_none());
+
+        // He withdraws a ticketbook, exactly as before: it comes out of credit, and the
+        // monthly reset — which runs for everyone, every month — does not touch him.
+        p.consume_credit("paid_user", 100_000);
+        assert_eq!(p.entitlement("paid_user"), 800_000);
+        p.roll_periods(1_789_000_000_000);
+        assert_eq!(p.entitlement("paid_user"), 800_000, "a reset must never reach bought credit");
+
+        // And what he hands back from a retired device comes back as credit, in full.
+        assert_eq!(p.value_returned("paid_user", 100_000), (0, 100_000));
+        assert_eq!(p.entitlement("paid_user"), 900_000);
+        // A failed issuance restores the same way.
+        p.consume_credit("paid_user", 50_000);
+        p.restore_credit("paid_user", 50_000);
+        assert_eq!(p.entitlement("paid_user"), 900_000);
+        // The row survives a round trip through the snapshot with no subscription invented.
+        let back: Pay = serde_json::from_str(&p.snapshot()).unwrap();
+        assert_eq!(back.entitlement("paid_user"), 900_000);
+        assert!(back.subscription("paid_user").is_none());
+    }
+
+    #[test]
+    fn a_subscriber_spends_the_month_before_touching_what_they_bought() {
+        let mut p = Pay::default();
+        p.credit_voucher("acct", 300_000); // bought earlier, never expires
+        // Subscribed on the 1st, so the pro-rata first month is the whole month.
+        let granted = p.subscribe("acct", 0, "sub_test", ms(2026, 9, 1));
+        assert_eq!(granted, 700_000);
+        assert_eq!(p.spendable("acct"), 1_000_000);
+
+        // Two books inside the allowance: the bought credit is not touched.
+        p.consume_credit("acct", 400_000);
+        assert_eq!(p.allowance_left("acct"), 300_000);
+        assert_eq!(p.entitlement("acct"), 300_000);
+
+        // Past the allowance: the remainder comes from credit, and only the remainder.
+        p.consume_credit("acct", 500_000);
+        assert_eq!(p.allowance_left("acct"), 0);
+        assert_eq!(p.entitlement("acct"), 100_000);
+    }
+
+    #[test]
+    fn the_month_is_set_not_added_and_credit_rides_through_it() {
+        let mut p = Pay::default();
+        p.credit_voucher("acct", 250_000);
+        p.subscribe("acct", 0, "sub_test", ms(2026, 9, 1));
+        p.consume_credit("acct", 200_000); // 500k of the month left over
+
+        p.roll_periods(ms(2026, 10, 1));
+        assert_eq!(p.allowance_left("acct"), 700_000, "October is SET to the tier, not added to");
+        assert_eq!(p.entitlement("acct"), 250_000, "bought credit rides through the reset");
+
+        // A lapsed subscription grants nothing — and still does not touch the credit.
+        p.set_subscription_active("acct", false, ms(2026, 10, 2));
+        p.roll_periods(ms(2026, 11, 1));
+        assert_eq!(p.allowance_left("acct"), 0);
+        assert_eq!(p.entitlement("acct"), 250_000);
+        assert_eq!(p.spendable("acct"), 250_000, "he can still spend what he bought");
+    }
+
+    #[test]
+    fn handing_a_month_back_every_month_never_builds_permanent_credit() {
+        let mut p = Pay::default();
+        p.subscribe("acct", 0, "sub_test", ms(2026, 9, 1));
+        for m in 9..=12 {
+            p.roll_periods(ms(2026, m, 1));
+            p.consume_credit("acct", 700_000); // draw the whole month
+            p.value_returned("acct", 650_000); // hand almost all of it back
+        }
+        assert_eq!(p.entitlement("acct"), 0, "an allowance must never become credit");
+        assert!(p.allowance_left("acct") <= 700_000);
+    }
+
+    #[test]
+    fn a_device_change_mid_month_costs_a_subscriber_nothing() {
+        let mut p = Pay::default();
+        p.subscribe("acct", 1, "sub_test", ms(2026, 9, 1));
+        p.consume_credit("acct", 1_500_000); // the whole month onto the old phone
+        assert_eq!(p.allowance_left("acct"), 0);
+        // The phone is retired with 1.2M unspent.
+        assert_eq!(p.value_returned("acct", 1_200_000), (1_200_000, 0));
+        assert_eq!(p.allowance_left("acct"), 1_200_000, "it can be drawn onto the new phone");
+        assert_eq!(p.entitlement("acct"), 0, "…but it is still this month's, not credit");
+    }
+
+    #[test]
+    fn an_upgrade_adds_the_rest_of_the_month_pro_rata() {
+        let mut p = Pay::default();
+        p.subscribe("acct", 0, "sub_test", ms(2026, 9, 1));
+        // 19 September: 12 of 30 days of the 800k step from 700k to 1.5M.
+        let extra = p.change_tier("acct", 1, ms(2026, 9, 19));
+        assert_eq!(extra, 320_000);
+        assert_eq!(p.allowance_left("acct"), 1_020_000);
+        // A downgrade changes the tier but adds nothing: the smaller month starts on the 1st.
+        assert_eq!(p.change_tier("acct", 0, ms(2026, 9, 20)), 0);
+        assert_eq!(p.allowance_left("acct"), 1_020_000);
+        p.roll_periods(ms(2026, 10, 1));
+        assert_eq!(p.allowance_left("acct"), 700_000);
+    }
+
+    #[test]
+    fn a_first_month_is_granted_pro_rata_to_the_day() {
+        let mut p = Pay::default();
+        // 18 September: 13 of 30 days.
+        assert_eq!(p.subscribe("acct", 0, "sub_test", ms(2026, 9, 18)), 303_333);
+        // …and the FULL month arrives on the 1st, not another part-month.
+        p.roll_periods(ms(2026, 10, 1));
+        assert_eq!(p.allowance_left("acct"), 700_000);
+    }
+
+    /// Unix ms for a UTC date at midnight — the tests read as dates, not as magic numbers.
+    fn ms(y: i64, m: u32, d: u32) -> u64 {
+        let (yy, mm) = if m <= 2 { (y - 1, m + 9) } else { (y, m - 3) };
+        let era = yy.div_euclid(400);
+        let yoe = yy - era * 400;
+        let doy = (153 * mm as i64 + 2) / 5 + d as i64 - 1;
+        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+        ((era * 146_097 + doe - 719_468) * 86_400_000) as u64
     }
 
     /// The pay snapshot is the one place where a field NAME is a wire format: main.rs
@@ -2813,8 +3137,6 @@ mod tests {
 #[cfg(test)]
 mod card_tests {
     use super::*;
-
-    #[test]
 
     #[test]
     /// The adapter against the real sandbox. Ignored by default — it needs the network and
