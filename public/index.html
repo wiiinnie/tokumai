@@ -565,6 +565,10 @@
   .mpticks.ends span:last-child{color:var(--mix)}
   .cursor{display:inline-block;width:7px;height:15px;background:var(--mix);vertical-align:-2px;margin-left:2px;animation:blink 1s steps(2) infinite}
   .mixphase{font-family:var(--mono);font-size:12.5px;letter-spacing:.02em;color:var(--mix);opacity:.9}
+  /* elapsed seconds beside the held phase word: the wait is long enough (a 2K picture is
+     ~26 s of drawing) that a motionless line reads as a hang. Dimmer than the word — it
+     is reassurance, not the message. */
+  .mixwait{color:var(--muted);opacity:.85}
   /* picture download: label + bar, replaces the held "Thinking…" once chunks flow */
   .dlprog{display:block;max-width:460px;margin-top:2px}
   .dlprog .dllbl{font-family:var(--mono);font-size:12.5px;letter-spacing:.02em;color:var(--mix);opacity:.9;margin-bottom:7px}
@@ -2701,7 +2705,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       // expanded after "Show" → normal rendering plus a quiet provenance note below
     }
     const cursor='<span class="cursor"></span>';
-    const mixphase='<span id="mixphase" class="mixphase">'+(dlProg?dlProgHTML(dlProg):esc(mixShown)+cursor)+'</span>';
+    const mixphase='<span id="mixphase" class="mixphase">'+mixPhaseHTML()+'</span>';
     const text = m.role==='ai'
       ? mdHtml(m.text, (m.streaming&&m.text)?cursor:'') + ((m.streaming&&!m.text)?mixphase:'')
       : linkify(esc(m.text)) + (m.streaming?(m.text?cursor:mixphase):'');
@@ -3075,25 +3079,54 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // (No "receiving" phase: the reply replaces the status the moment data lands,
   // so it was never readable.) Each line types out, then holds with the blinking
   // cursor until the NEXT real signal (Backend.chat's onPhase) advances it.
-  const MIX_STEPS=["Sending to mixnet","Thinking"];
   const MIX_TICK=26;   // ~26ms/char typing speed
-  let mixTimer=null, mixShown="", mixStep=-1;
+  // The word for the working phase: a picture model is not "thinking", and naming what it
+  // is actually doing is what makes a 26 s wait legible (measured 2026-09-17).
+  function mixSteps(){ return ["Sending to mixnet", modelKind==="image" ? "Drawing" : "Thinking"]; }
+  // What that wait usually costs, from the measurements in docs/unlinkability.md. Shown
+  // beside the counter so a long wait reads as expected rather than as a hang. Ranges, not
+  // averages: the model varies, and a number the user beats feels broken.
+  function mixHintFor(step){
+    if(step!==1 || modelKind!=="image") return "";
+    return imageSize()==="2K" ? "2K pictures take 25–40 s" : "usually 8–15 s";
+  }
+  const MIX_COUNT_AFTER=3;   // seconds of silence before the counter appears
+  let mixTimer=null, mixShown="", mixStep=-1, mixWord="", mixSince=0, mixSecTimer=null, mixHint="";
+  // ONE renderer for the phase line, used by the typing timer, the per-second tick AND the
+  // thread re-render — so a re-render mid-wait draws the counter instead of resetting to
+  // a bare cursor.
+  function mixPhaseHTML(){
+    if(dlProg) return dlProgHTML(dlProg);
+    const secs = mixSince ? Math.floor((performance.now()-mixSince)/1000) : 0;
+    // Still typing, or too early to be worth a number: blinking cursor as before.
+    if(mixShown.length<mixWord.length || secs<MIX_COUNT_AFTER) return esc(mixShown)+'<span class="cursor"></span>';
+    return esc(mixShown)+`<span class="mixwait"> ${secs}s${mixHint?" · "+esc(mixHint):""}</span>`;
+  }
+  function paintMixPhase(){
+    const node=document.getElementById("mixphase");
+    if(!node){ stopMixPhase(); return false; }    // bubble gone → answer arrived
+    node.innerHTML=mixPhaseHTML();
+    return true;
+  }
   function startMixPhase(){ stopMixPhase(); setMixPhase(0); }
   function setMixPhase(step){
     if(step<=mixStep) return;                     // forward only — never regress
     mixStep=step;
     if(mixTimer){ clearInterval(mixTimer); mixTimer=null; }
-    const word=MIX_STEPS[step]+"...";
+    mixWord=mixSteps()[step]+"..."; mixHint=mixHintFor(step); mixSince=performance.now();
     let i=0; mixShown="";
     mixTimer=setInterval(()=>{
-      const node=document.getElementById("mixphase");
-      if(!node){ stopMixPhase(); return; }        // bubble gone → answer arrived
-      i++; mixShown=word.slice(0,i);
-      node.innerHTML=esc(mixShown)+'<span class="cursor"></span>';
-      if(i>=word.length){ clearInterval(mixTimer); mixTimer=null; }  // hold, cursor blinks
+      i++; mixShown=mixWord.slice(0,i);
+      if(!paintMixPhase()) return;
+      if(i>=mixWord.length){ clearInterval(mixTimer); mixTimer=null; }  // hold: the counter takes over
     }, MIX_TICK);
+    if(!mixSecTimer) mixSecTimer=setInterval(paintMixPhase, 1000);
   }
-  function stopMixPhase(){ if(mixTimer){ clearInterval(mixTimer); mixTimer=null; } mixShown=""; mixStep=-1; }
+  function stopMixPhase(){
+    if(mixTimer){ clearInterval(mixTimer); mixTimer=null; }
+    if(mixSecTimer){ clearInterval(mixSecTimer); mixSecTimer=null; }
+    mixShown=""; mixStep=-1; mixWord=""; mixSince=0; mixHint="";
+  }
   // Picture download progress ({done,total} chunks) — lives here (not only in the DOM) so a
   // re-render mid-download draws the bar again instead of a stale phase word.
   let dlProg=null;
