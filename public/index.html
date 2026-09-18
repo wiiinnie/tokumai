@@ -6354,7 +6354,14 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       const list = Array.isArray(r && r.products) ? r.products : [];
       if(Array.isArray(r && r.ladder)) planLadder = r.ladder;
       planList = list.filter(p => p && typeof p.id === "string" && planEuro(p.id) > 0);
-      if(!planList.length){ planList = null; planErr = "The App Store returned no plans for this app."; }
+      // The App Store answered and knows none of them. On a shipped app that is a server
+      // offering plans this build cannot see; while the products are new it is simply
+      // Apple not having published them yet, which takes a while after they go Ready to
+      // Submit. Say both, because from here the two look identical.
+      if(!planList.length){
+        planList = null;
+        planErr = "The App Store knows no plans for this app yet. If they were only just made ready for review, give Apple a little while.";
+      }
     }catch(e){ planList = null; planErr = String((e && e.message) || e || "The App Store is not answering."); }
     planLoading = false; renderPlans();
   }

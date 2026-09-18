@@ -4852,17 +4852,15 @@ fn remember_iap_products(resp: &Value) {
         resp.get("plans").filter(|p| p.is_array()).cloned();
 }
 
-/// The remembered ids — or, when the catalog was cached before the server learned to
-/// sell through the App Store (a deploy while the app was open), one fresh catalog fetch.
+/// One catalog fetch, for its side effect: the App Store product and plan lists this
+/// server publishes. Separate from `iap_product_ids` because the two callers disagree
+/// about what "already known" means — an app holding a credit list may still know nothing
+/// about plans.
 #[cfg(target_os = "ios")]
-async fn iap_product_ids(app: &AppHandle, transport: &Transport) -> Vec<String> {
-    let ids = IAP_PRODUCTS.lock().unwrap_or_else(|e| e.into_inner()).clone();
-    if !ids.is_empty() {
-        return ids;
-    }
-    let Ok(dir) = data_dir(app) else { return ids };
+async fn refresh_catalog(app: &AppHandle, transport: &Transport) {
+    let Ok(dir) = data_dir(app) else { return };
     let w = wallet::load(&dir);
-    let Ok(srv) = server_addr(&w) else { return ids };
+    let Ok(srv) = server_addr(&w) else { return };
     if let Ok(resp) = transport
         .round_trip(&srv, &json!({"v":PROTO,"kind":"models","id":rand_hex(16)}), SURBS_META, META_TIMEOUT_MS)
         .await
@@ -4872,6 +4870,17 @@ async fn iap_product_ids(app: &AppHandle, transport: &Transport) -> Vec<String> 
             transport.set_cached_models(m.clone()).await;
         }
     }
+}
+
+/// The remembered ids — or, when the catalog was cached before the server learned to
+/// sell through the App Store (a deploy while the app was open), one fresh catalog fetch.
+#[cfg(target_os = "ios")]
+async fn iap_product_ids(app: &AppHandle, transport: &Transport) -> Vec<String> {
+    let ids = IAP_PRODUCTS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    if !ids.is_empty() {
+        return ids;
+    }
+    refresh_catalog(app, transport).await;
     IAP_PRODUCTS.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
@@ -4957,8 +4966,13 @@ async fn iap_plans(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Resu
     let ids = {
         let have = IAP_PLANS.lock().unwrap_or_else(|e| e.into_inner()).clone();
         if have.is_empty() {
-            // The catalog was cached before this server sold plans — fetch it once.
-            Box::pin(iap_product_ids(&app, &transport)).await;
+            // The catalog this app is holding predates plans — fetch a fresh one.
+            //
+            // NOT via iap_product_ids: that returns early whenever the CREDIT list is
+            // already filled, which is exactly the state an app that talked to the old
+            // server is in. It would have skipped the fetch and reported "no plans" for
+            // as long as the app stayed open.
+            Box::pin(refresh_catalog(&app, &transport)).await;
             IAP_PLANS.lock().unwrap_or_else(|e| e.into_inner()).clone()
         } else {
             have
