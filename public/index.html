@@ -2460,9 +2460,11 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     // A subscriber's bar is the MONTH running down, with the day it refills — the same
     // meter as on the account page, so the two never disagree. Without a plan there is no
     // budget to run down, and the bar keeps its old scale.
-    if(planActive()){
+    if(monthOpen()){
       $("balbar").style.width = Math.max(2, monthPct())+'%';
-      $("planText").textContent = `${monthPct()} % of this month left · resets ${resetDateLabel()}`;
+      $("planText").textContent = planActive()
+        ? `${monthPct()} % of this month left · resets ${resetDateLabel()}`
+        : `${monthPct()} % of this month left · plan ended, lasts until ${resetDateLabel()}`;
       $("planLine").style.display = "flex";
     } else {
       $("balbar").style.width = Math.max(2,Math.min(100, balance/10000))+'%';
@@ -6362,6 +6364,13 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // resets on the 1st, the bought credit does not. Folding them together would label money
   // as perishable that is not. See docs/subscription.md.
   function planActive(){ return !!(plan && plan.active && Number(plan.granted) > 0); }
+  /// Is there a month's allowance to show — whether or not the plan behind it still renews?
+  /// An allowance belongs to the calendar month it was granted for and lapses on the 1st
+  /// (server: `roll_periods`), so a plan that has ENDED still has a month running: the
+  /// money is there, drawable, and counted in the headline. Keying the meter on `active`
+  /// made it vanish at that moment and left a balance nobody could place — "my plan has
+  /// expired, so whose coins are these?" (2026-09-19).
+  function monthOpen(){ return !!(plan && Number(plan.granted) > 0); }
   /// What the account holds: this month's remaining allowance plus credit bought outright.
   /// The device/account split is about WHERE money is; which pocket it came from is a
   /// different question, answered by the meter and the credit row below.
@@ -6391,11 +6400,11 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     // A plan the rail no longer calls paid: say so rather than showing nothing. An empty
     // space is indistinguishable from "never had a plan", and this is the state somebody
     // needs explained the most.
-    if(plan && !planActive() && Number(plan.toku_per_month) > 0){
+    if(plan && !planActive() && !monthOpen() && Number(plan.toku_per_month) > 0){
       return `<div class="keepbox" style="border-color:#4a2f2a;background:#231a18"><span class="ic" style="color:var(--rust)">!</span><span><b>Your plan has ended</b>
         <small>The month you last paid for is finished. Everything already drawn stays yours.</small></span></div>`;
     }
-    if(!planActive()) return "";
+    if(!monthOpen()) return "";
     // What is left of the MONTH — account plus coins already drawn and not yet spent. The
     // meter used to show the account part alone, so that a withdrawal would not read as
     // spending; it did exactly that: "600.000 of 700.000" under a headline of 698.700 read
@@ -6406,13 +6415,13 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     return `<div class="allow">
       <div class="top"><span class="big">${esc(formatToku(left))}</span><span class="of">of ${esc(formatToku(granted))} TOKU this month</span></div>
       <div class="track${pct <= 10 ? " low" : ""}"><i style="width:${pct}%"></i></div>
-      <div class="foot"><span>${esc(formatToku(planLeft()))} on your account${onDevice > 0 ? ` · ${esc(formatToku(onDevice))} on this device` : ""}</span><span>resets <b>${esc(resetDateLabel())}</b></span></div>
+      <div class="foot"><span>${esc(formatToku(planLeft()))} on your account${onDevice > 0 ? ` · ${esc(formatToku(onDevice))} on this device` : ""}</span><span>${planActive() ? "resets" : "plan ended · lasts until"} <b>${esc(resetDateLabel())}</b></span></div>
     </div>`;
   }
   /// Credit bought outright, shown only when there IS a plan beside it — on its own, the
   /// balance line already says it, and a second box would just repeat.
   function keptCreditHTML(){
-    if(!planActive() || entitlement <= 0) return "";
+    if(!monthOpen() || entitlement <= 0) return "";
     return `<div class="keepbox"><span class="ic">✓</span><span><b>Credit you bought earlier · ${esc(formatToku(entitlement))} TOKU</b>
       <small>Does not expire. Used automatically once a month's allowance runs out.</small></span></div>`;
   }
