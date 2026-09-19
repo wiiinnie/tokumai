@@ -1418,7 +1418,13 @@ fn build_tender(
     // note was three coins.
     let small_value: u64 = notes.iter().map(|n| n.value_toku()).filter(|v| *v < COARSE_TOKU).sum();
     let has_single_coin = notes.iter().any(|n| n.value_toku() == COIN_TOKU);
-    let need_granularity = !has_single_coin || small_value < COARSE_TOKU.saturating_sub(COIN_TOKU);
+    let thin = small_value < COARSE_TOKU.saturating_sub(COIN_TOKU);
+    let need_granularity = thin || !has_single_coin;
+    // How much to mint. A table that is THIN on small money needs the whole fine plan; a
+    // table that has plenty of it and only lacks a single-coin note needs exactly that one
+    // coin. Minting the full plan for a missing 1 would pull ten coins out of a book to
+    // solve a hundred-TOKU problem.
+    let granularity_coins = if thin { fine_span_coins } else { 1 };
     if need_granularity && fine_span_coins > 0 && notes.len() + fine_slots <= MAX_NOTES {
         if let Some((idx, mut purse)) = first_funded_purse_of(&w.coconut_purses, COIN_TOKU) {
             // No material for that book's epoch: it cannot be spent here. Leave it alone
@@ -1428,7 +1434,7 @@ fn build_tender(
                 log::warn!("[tender] a fine book's epoch material is not on this device — skipping it");
             }
             if let Some(k) = k {
-            let coins = purse.remaining_coins().min(fine_span_coins);
+            let coins = purse.remaining_coins().min(granularity_coins);
             let spend_date = purse.expiration_date().saturating_sub(86_400);
             let mut fresh = purse.spend_tender(k, &plan_coins(coins), spend_date)?;
             notes.append(&mut fresh);
@@ -5613,7 +5619,14 @@ mod tender_tests {
         assert_eq!(burned_toku, t1.notes[0].value_toku(), "what was burned is what it was worth");
         assert_eq!(w.spare_notes.len(), t1.notes.len() - 1, "every other note came home");
 
-        // Second request, small enough for the spares: the book is not touched again.
+        // Second request, small enough for the spares: they carry the value, and the book
+        // gives up AT MOST one more coin — for change.
+        //
+        // That one coin is the point. This test used to insist the book was not touched at
+        // all, which is what let a tender go out with no single-coin note on it: a note is
+        // burned whole, so the cheapest thing such a tender can buy costs whatever its
+        // smallest note is worth. On 2026-09-19 that was three coins, and a 20-TOKU answer
+        // was charged 300. One coin of fine change is worth far less than that mistake.
         let spare_toku: u64 = w
             .spare_notes
             .iter()
@@ -5622,10 +5635,14 @@ mod tender_tests {
             .sum();
         let t2 = build_tender(&mut w, &keys, spare_toku).unwrap();
         assert!(t2.total_toku() >= spare_toku);
-        assert_eq!(
-            scrai_core::purse::Purse::restore(&w.coconut_purses[0]).unwrap().remaining_coins(),
-            left_in_book,
-            "spares are spent before a fresh coin is taken out of a book"
+        let after = scrai_core::purse::Purse::restore(&w.coconut_purses[0]).unwrap().remaining_coins();
+        assert!(
+            left_in_book.saturating_sub(after) <= 1,
+            "the spares carry the value: at most one coin of change came out of the book ({left_in_book} → {after})"
+        );
+        assert!(
+            t2.notes.iter().any(|n| n.value_toku() == scrai_core::coconut::COIN_TOKU),
+            "and the tender has a single-coin note, so a cheap answer can be paid exactly"
         );
     }
 
