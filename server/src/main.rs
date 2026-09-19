@@ -1256,9 +1256,9 @@ const ORDER_TICK_MS: u64 = 1000;
                 let reply = match paywall.iap_claimant(&v) {
                     None => serde_json::json!({ "id": id, "kind": "error",
                         "error": "account signature does not check out, or the nonce was reused" }),
-                    Some(account) if paywall.admit_voucher(&account).is_err() => serde_json::json!({
+                    Some(account) if paywall.admit_iap(&account).is_err() => serde_json::json!({
                         "id": id, "kind": "error",
-                        "error": "too many purchase checks from this account — try again in a few minutes" }),
+                        "error": "too many App Store checks from this account — try again in a few minutes" }),
                     Some(account) => {
                         let now = pay::now_ms();
                         // One route carries both products the App Store sells here. A PLAN
@@ -1300,6 +1300,7 @@ const ORDER_TICK_MS: u64 = 1000;
                                     // and an unfinished claim would otherwise be "repaired"
                                     // by credit_pending_vouchers on the next start.
                                     db.iap_credited(&hash, now);
+                                    paywall.forgive_iap(&account);
                                     let rail = format!("iap:{}", tx.original_transaction_id);
                                     // Apple's own end-of-period date travels with the
                                     // subscription: it is what lets the month stop on time
@@ -1331,6 +1332,7 @@ const ORDER_TICK_MS: u64 = 1000;
                                 match db.iap_claim(&hash, &tx.product_id, toku, &tx.environment, &tx.storefront,
                                                    &account, tx.purchased_at_ms, now) {
                                     store::IapClaim::New => {
+                                        paywall.forgive_iap(&account);
                                         paywall.credit_voucher(&account, toku);
                                         db.iap_credited(&hash, now);
                                         println!("scrai-server: App Store purchase credited — {toku} TOKU ({})", tx.environment);

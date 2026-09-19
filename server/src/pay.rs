@@ -40,6 +40,10 @@ const CARD_PER_ACCT: usize = 3;
 /// so guessing is hopeless anyway — this is here so the check cannot be used as a cheap
 /// oracle, and so a stuck client cannot hammer the ledger.
 const CODE_CHECKS_PER_ACCT: usize = 12;
+/// App Store checks per account and window. Wide on purpose: the app reports its
+/// entitlement on every launch, a subscription cannot be guessed, and a successful check is
+/// refunded — so what this bounds is a client sending rubbish, nothing else.
+const IAP_CHECKS_PER_ACCT: usize = 60;
 /// The chain watcher keeps checking a little past expiry, for the same reason `settle`
 /// honours a late payment: the money is on chain either way.
 const WATCH_GRACE_MS: u64 = 48 * 3_600_000;
@@ -700,6 +704,9 @@ pub struct Pay {
     /// invite-code checks per account in the window
     #[serde(skip)]
     code_hits: HashMap<String, Vec<u64>>,
+    /// App Store verifications per account in the window — its own budget, see `admit_iap`
+    #[serde(skip)]
+    iap_hits: HashMap<String, Vec<u64>>,
     #[serde(skip)]
     global_hits: Vec<u64>,
     /// last "global invoice cap" log line (ms) — one per minute, not one per refused request
@@ -833,6 +840,41 @@ impl Pay {
     /// the limit sat one handler away from being bypassed (audit 2026-09-08, M3).
     pub fn admit_voucher(&mut self, account_id: &str) -> Result<(), String> {
         self.admit_code_check(account_id)
+    }
+
+    /// The App Store path needs its OWN budget, and a much larger one.
+    ///
+    /// It used to share the invite-code limiter: twelve attempts per ten minutes, sized for
+    /// somebody guessing a twelve-character code. But the app reports its App Store
+    /// entitlement on EVERY launch and on every Restore, and a subscription cannot be
+    /// guessed — Apple signs it. On 2026-09-19 an afternoon of test restarts used the
+    /// budget up, and then a real purchase was refused with "too many purchase checks":
+    /// money taken by Apple, no plan granted, and the retry blocked as well. The worst
+    /// shape a failure can have.
+    ///
+    /// So: a wide cap, and a SUCCESSFUL verification costs nothing (`forgive_iap`). What is
+    /// left being limited is the only thing worth limiting — a client sending rubbish.
+    pub fn admit_iap(&mut self, account_id: &str) -> Result<(), String> {
+        let now = now_ms();
+        let hits = self.iap_hits.entry(account_id.to_string()).or_default();
+        hits.retain(|t| now - t < INVOICE_ACCT_WINDOW_MS);
+        if hits.len() >= IAP_CHECKS_PER_ACCT {
+            let retry = (INVOICE_ACCT_WINDOW_MS - (now - hits[0])).div_ceil(1000).max(1);
+            return Err(format!(
+                "too many App Store checks from this account — retry in ~{retry}s (nothing was lost; \
+                 the app asks again on its next launch)"
+            ));
+        }
+        hits.push(now);
+        self.iap_hits.retain(|_, v| v.iter().any(|t| now - t < INVOICE_ACCT_WINDOW_MS));
+        Ok(())
+    }
+
+    /// A verification that checked out costs nothing: give the attempt back.
+    pub fn forgive_iap(&mut self, account_id: &str) {
+        if let Some(v) = self.iap_hits.get_mut(account_id) {
+            v.pop();
+        }
     }
 
     fn admit_code_check(&mut self, account_id: &str) -> Result<(), String> {
@@ -3606,6 +3648,25 @@ mod tests {
         p.expire_lapsed(ms(2027, 9, 2));
         p.roll_periods(ms(2027, 10, 1));
         assert_eq!(p.allowance_left("acct"), 0);
+    }
+
+    #[test]
+    fn checking_an_app_store_purchase_is_not_rate_limited_like_guessing_a_code() {
+        let mut p = Pay::default();
+        // The app reports its entitlement on every launch. A dozen restarts used to exhaust
+        // the invite-code budget, and the next REAL purchase was refused — money taken by
+        // Apple, no plan, and the retry blocked too.
+        for i in 0..40 {
+            assert!(p.admit_iap("acct").is_ok(), "launch {i} must not be refused");
+            p.forgive_iap("acct"); // it verified: the attempt costs nothing
+        }
+        // Rubbish is still bounded.
+        for _ in 0..IAP_CHECKS_PER_ACCT {
+            assert!(p.admit_iap("junk").is_ok());
+        }
+        assert!(p.admit_iap("junk").is_err(), "a client sending nonsense is still stopped");
+        // …and the code-guessing budget is untouched by any of it.
+        assert!(p.admit_voucher("acct").is_ok());
     }
 
     #[test]
