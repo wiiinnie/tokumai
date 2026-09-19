@@ -1333,7 +1333,13 @@ const ORDER_TICK_MS: u64 = 1000;
                             // re-sending it on every launch, which is what five expired
                             // sandbox subscriptions were doing on 2026-09-19, spending the
                             // verification budget on transactions that can never be claimed.
-                            Err(e) => serde_json::json!({ "id": id, "kind": "error", "error": e, "final": true }),
+                            Err(e) => {
+                                // A refused verification used to leave NO trace here at all,
+                                // which is how five rejections a minute looked like silence
+                                // while the app kept saying "still unclaimed" (2026-09-19).
+                                println!("scrai-server: App Store check refused as final — {e}");
+                                serde_json::json!({ "id": id, "kind": "error", "error": e, "final": true })
+                            }
                             Ok((tx, toku)) => {
                                 let hash = iap::tx_hash(&tx.transaction_id);
                                 match db.iap_claim(&hash, &tx.product_id, toku, &tx.environment, &tx.storefront,

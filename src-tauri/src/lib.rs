@@ -5158,6 +5158,11 @@ async fn iap_purchase(app: AppHandle, transport: State<'_, Arc<Transport>>, prod
 #[cfg(target_os = "ios")]
 async fn iap_restore_impl(app: AppHandle, transport: Arc<Transport>) -> Result<Value, String> {
     let list = iap_ios::unfinished().await?;
+    // Every step of this path is now on the record. Twice today a restore "did nothing"
+    // and the only evidence was a sentence on screen: the device log knew how many
+    // transactions Apple offered, and the server log knew how many arrived, and neither
+    // knew the other's half.
+    log::warn!("[iap] restore: Apple offers {} unfinished transaction(s)", list.len());
     let (mut claimed, mut toku_sum, mut errors) = (0u32, 0u64, Vec::<String>::new());
     // Transactions the server refused for good, acknowledged to Apple so they stop coming
     // back. Counted separately: they are neither a success nor something still pending.
@@ -5166,8 +5171,10 @@ async fn iap_restore_impl(app: AppHandle, transport: Arc<Transport>) -> Result<V
         let jws = t.get("jws").and_then(|j| j.as_str()).unwrap_or("");
         let tx = t.get("transactionId").and_then(|x| x.as_str()).unwrap_or("");
         if jws.is_empty() || tx.is_empty() {
+            log::warn!("[iap] restore: a transaction without a jws or an id — skipping it");
             continue;
         }
+        log::warn!("[iap] restore: asking the server about {tx}");
         match iap_verify_on_server(&app, &transport, jws).await {
             Ok((toku, _)) => {
                 let _ = iap_ios::finish(tx).await;
@@ -5184,9 +5191,13 @@ async fn iap_restore_impl(app: AppHandle, transport: Arc<Transport>) -> Result<V
                 let _ = iap_ios::finish(tx).await;
                 dropped += 1;
             }
-            Err(e) => errors.push(e),
+            Err(e) => {
+                log::warn!("[iap] restore: {tx} not settled this time: {e}");
+                errors.push(e);
+            }
         }
     }
+    log::warn!("[iap] restore: {claimed} claimed, {dropped} closed, {} still pending", errors.len());
     Ok(json!({ "found": list.len(), "claimed": claimed, "toku": toku_sum, "dropped": dropped,
                "pending": errors.len(), "error": errors.first() }))
 }
@@ -5274,6 +5285,7 @@ async fn iap_sync_plan_impl(app: AppHandle, transport: Arc<Transport>) -> Result
     // the app only learns of it by asking. So every launch asks, and hands Apple's signed
     // answer to the server — which grants the month only if it has not granted one yet.
     let live = iap_ios::entitlements().await?;
+    log::warn!("[iap] sync: Apple reports {} current entitlement(s)", live.len());
     let plans = IAP_PLANS.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let mut last = Value::Null;
     let mut errors: Vec<String> = Vec::new();
