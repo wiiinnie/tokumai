@@ -4981,8 +4981,16 @@ async fn iap_plans(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Resu
     if ids.is_empty() {
         return Err("this server sells no plans through the App Store".into());
     }
-    let products = Box::pin(iap_ios::products(&ids)).await?;
-    Ok(json!({ "products": products, "ladder": PLAN_LADDER.lock().unwrap_or_else(|e| e.into_inner()).clone() }))
+    // FLATTEN, do not nest. `iap_ios::products` already answers `{products, asked,
+    // missing}`; wrapping that in another `products` field is what made this sheet report
+    // "the App Store knows no plans" for a day — the app checked `products` for an array
+    // and found an object. The credit path never showed it because it passes the answer
+    // through untouched.
+    let mut out = Box::pin(iap_ios::products(&ids)).await?;
+    if let Some(o) = out.as_object_mut() {
+        o.insert("ladder".into(), PLAN_LADDER.lock().unwrap_or_else(|e| e.into_inner()).clone().unwrap_or(Value::Null));
+    }
+    Ok(out)
 }
 
 #[cfg(target_os = "ios")]

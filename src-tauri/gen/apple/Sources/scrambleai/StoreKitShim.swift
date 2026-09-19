@@ -57,7 +57,12 @@ public func tokumai_iap_products(_ idsJson: UnsafePointer<CChar>?, _ ctx: Unsafe
                 guard let p = products.first(where: { $0.id == id }) else { return nil }
                 return ["id": p.id, "displayName": p.displayName, "displayPrice": p.displayPrice, "price": "\(p.price)"]
             }
-            reply.send(["products": list])
+            // StoreKit does not say WHY an identifier came back empty — it simply omits it,
+            // and an app that only sees the empty list cannot tell "Apple has not published
+            // it" from "we asked for the wrong string". So report what was asked and what
+            // was missing; the app shows it in the developer diagnostics.
+            let missing = ids.filter { id in !products.contains(where: { $0.id == id }) }
+            reply.send(["products": list, "asked": ids, "missing": missing])
         } catch {
             reply.fail("the App Store did not answer: \(error.localizedDescription)")
         }

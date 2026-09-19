@@ -6361,6 +6361,11 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       if(!planList.length){
         planList = null;
         planErr = "The App Store knows no plans for this app yet. If they were only just made ready for review, give Apple a little while.";
+        // On a debug build, name the identifiers StoreKit did not recognise. Without them
+        // "no plans" looks the same whether Apple has not published them or we asked for
+        // the wrong strings — a day was spent on that distinction once.
+        const missing = Array.isArray(r && r.missing) ? r.missing : [];
+        if(devBuild && missing.length) planErr += ` Asked for ${missing.length}, none known: ${missing.join(", ")}`;
       }
     }catch(e){ planList = null; planErr = String((e && e.message) || e || "The App Store is not answering."); }
     planLoading = false; renderPlans();
