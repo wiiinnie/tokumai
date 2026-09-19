@@ -2952,9 +2952,13 @@ fn withdraw_plan(
 /// is simply to fetch change before it bites.
 fn has_fine_change(w: &wallet::Wallet) -> bool {
     use scrai_core::coconut::COIN_TOKU;
+    // A note is burned whole, so "change" means a note worth ONE fine coin — not merely
+    // one worth less than a coarse coin. A 300-TOKU spare counted as change here while
+    // being unable to pay 100, which both hid a real shortage and, when it did fire,
+    // scheduled top-ups that block the next question (see `chat`).
     let in_spares = w.spare_notes.iter().any(|v| {
         serde_json::from_value::<scrai_core::tender::Note>(v.clone())
-            .map(|n| n.value_toku() < scrai_core::coconut::COARSE_TOKU)
+            .map(|n| n.value_toku() == COIN_TOKU)
             .unwrap_or(false)
     });
     in_spares
@@ -3311,6 +3315,15 @@ async fn chat_impl(
 ) -> Result<Value, String> {
     // Serialise the whole command: session_status + chat must be one atomic unit,
     // or two concurrent chats race the session counter (crossed replies / hangs).
+    //
+    // A background top-up holds this SAME lock while it fetches epoch material and draws
+    // books — several mixnet round trips, half a minute or more. The question then sits
+    // here, and the app said "Sending to mixnet…" the whole time: a message that had not
+    // left, for a reason that had nothing to do with the mixnet (2026-09-19, half a day
+    // spent chasing gateways and packet loss). Say what is actually happening.
+    if transport.op_in_flight() {
+        let _ = app.emit("chat-topup", ());
+    }
     let _op = transport.begin_op().await;
     // Route down (app just woke up, or a drop): the send below queues behind the rebuild —
     // say so, instead of "Sending to mixnet…" for a message that hasn't left.

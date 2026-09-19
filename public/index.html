@@ -4260,6 +4260,9 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       // "Thinking…", which holds until the answer itself takes over.
       onPhase:(p,info)=>{
         if(p==="route"){ updateRouteUI(); return; }                 // queued behind a route rebuild
+        // Queued behind a top-up, which holds the same lock while it draws books. Not the
+        // mixnet, not the model: our own housekeeping, and it can take half a minute.
+        if(p==="topup"){ setMixPhase(0); mixWord = "Topping up your coins..."; mixShown = ""; mixHint = "your question goes out right after"; return; }
         if(p==="sent"){ setMixPhase(1); tSent=performance.now(); }
         else if(p==="image"&&info){
           // The picture was generated (and charged) — now its chunks trickle through the

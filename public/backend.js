@@ -286,6 +286,10 @@ const tauriBackend = (invoke) => ({
         unlisten.push(await ev.listen("image-progress", (e) => onPhase("image", e.payload)));
         // The route is down: this request waits for the rebuild before it leaves.
         unlisten.push(await ev.listen("chat-route", () => onPhase("route")));
+        // A top-up is holding the operation lock: the question has not left the device and
+        // will not until that finishes. Its own phase, because "Sending to mixnet…" for a
+        // message that is queued behind a withdrawal is simply untrue.
+        unlisten.push(await ev.listen("chat-topup", () => onPhase("topup")));
       }
       const r = await invoke("chat", { model: body.model, messages: body.messages, maxTokens: body.maxTokens, live: !!body.live, thinkingBudget: (typeof body.thinkingBudget==="number"?body.thinkingBudget:null), bigReply: !!body.bigReply, retry: !!body.retry, imageSize: (typeof body.imageSize==="string"?body.imageSize:null) });
       if (onPhase) onPhase("receiving");
