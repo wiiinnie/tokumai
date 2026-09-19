@@ -793,7 +793,9 @@ fn epoch_key(srv: &str, denom_toku: u64, expiration_date: u32) -> String {
 
 fn epoch_keys(dir: &Path, srv: &str, denom_toku: u64) -> Option<scrai_core::purse::EpochKeys> {
     use scrai_core::federation::FedResponse;
-    let (_, v) = read_keys_file(dir, &format!("{srv}#{denom_toku}"))?;
+    let (_, v) = key_aliases(dir, srv)
+        .iter()
+        .find_map(|a| read_keys_file(dir, &format!("{a}#{denom_toku}")))?;
     match serde_json::from_value::<FedResponse>(v).ok()? {
         FedResponse::Keys { vk, coin_sigs, date_sigs, expiration_date, total_coins, denom_toku, .. } => {
             Some(scrai_core::purse::EpochKeys { vk, coin_sigs, date_sigs, expiration_date, total_coins, denom_toku })
@@ -847,13 +849,42 @@ fn missing_epochs(w: &wallet::Wallet, dir: &Path, srv: &str) -> Vec<(u64, u32)> 
 /// The material of ONE epoch, if this device kept it.
 fn keys_of_epoch(dir: &Path, srv: &str, denom_toku: u64, expiration_date: u32) -> Option<scrai_core::purse::EpochKeys> {
     use scrai_core::federation::FedResponse;
-    let (_, v) = read_keys_file(dir, &epoch_key(srv, denom_toku, expiration_date))?;
+    let (_, v) = key_aliases(dir, srv)
+        .iter()
+        .find_map(|a| read_keys_file(dir, &epoch_key(a, denom_toku, expiration_date)))?;
     match serde_json::from_value::<FedResponse>(v).ok()? {
         FedResponse::Keys { vk, coin_sigs, date_sigs, expiration_date, total_coins, denom_toku, .. } => {
             Some(scrai_core::purse::EpochKeys { vk, coin_sigs, date_sigs, expiration_date, total_coins, denom_toku })
         }
         _ => None,
     }
+}
+
+/// Every address this server is reachable at: the one in use, then its known alternates.
+///
+/// The issuing keys belong to the AUTHORITY, not to a mixnet address — one server answers
+/// on several identities (one per entry gateway) and they all issue from the same mint.
+/// Caching them under the address meant a gateway switch looked like a different server:
+/// the material was on the device, under another name, and the app said "the server's
+/// issuing keys are not on this device yet" and refused to pay until it had fetched 109 KB
+/// again. Seen on 2026-09-19, after a reconnect moved the route from CH to PL.
+///
+/// Reading through the aliases fixes it without a migration: whatever name the file was
+/// written under, the lookup finds it.
+fn key_aliases(dir: &Path, srv: &str) -> Vec<String> {
+    key_aliases_of(srv, &wallet::load(dir).server_alternates)
+}
+
+/// The address in use first, then the alternates, each once. Pure, so the rule can be
+/// tested without a wallet on disk.
+fn key_aliases_of(srv: &str, alternates: &[String]) -> Vec<String> {
+    let mut out = vec![srv.to_string()];
+    for a in alternates {
+        if a != srv && !out.contains(a) {
+            out.push(a.clone());
+        }
+    }
+    out
 }
 
 fn read_keys_file(dir: &Path, srv: &str) -> Option<(u32, Value)> {
@@ -5278,6 +5309,21 @@ mod c3_tests {
         // multimodal content (image parts) can't be char-estimated → guard must skip
         let mm = json!([{"role":"user","content":[{"type":"image_url","image_url":{"url":"..."}}]}]);
         assert!(messages_plaintext(&mm).is_none());
+    }
+
+    #[test]
+    fn issuing_keys_are_looked_for_under_every_address_this_server_answers_on() {
+        // One server, three identities — one per entry gateway — and one mint behind them.
+        // A reconnect that moves the route must not make the keys on this device look
+        // missing, which is what "the server's issuing keys are not on this device yet"
+        // meant on 2026-09-19 after the route went from CH to PL.
+        let alts = vec!["addrDE".to_string(), "addrAT".to_string(), "addrPL".to_string()];
+        let seen = key_aliases_of("addrAT", &alts);
+        assert_eq!(seen[0], "addrAT", "the one in use is tried first");
+        assert!(seen.contains(&"addrDE".to_string()) && seen.contains(&"addrPL".to_string()));
+        assert_eq!(seen.len(), 3, "each address once");
+        // A server with no known alternates is just itself.
+        assert_eq!(key_aliases_of("solo", &[]), vec!["solo".to_string()]);
     }
 
     #[test]
