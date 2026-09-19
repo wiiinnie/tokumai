@@ -6679,6 +6679,8 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     }catch(e){ iapMsg = "Failed: " + String((e && e.message) || e); }
     iapBusy = false; renderIosStore();
   }
+  /// Anything left that the server might still accept on a later try.
+  function errsLeft(r){ return (Number(r && r.pending)||0) > 0; }
   async function restoreIap(){
     if(iapBusy) return;
     iapBusy = true; iapMsg = "Checking with the App Store, then with our server…"; renderIosStore();
@@ -6693,6 +6695,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       }catch(_){ /* the credit half below still reports what it finds */ }
       const r = await Backend.iapRestore();
       const claimed = Number(r && r.claimed)||0, found = Number(r && r.found)||0, toku = Number(r && r.toku)||0;
+      const dropped = Number(r && r.dropped)||0;
       if(claimed>0){ iapMsg = "✓ " + iapCreditedLine(r); disarmIapRetry(); await collectAfterIap(); }
       else if(found===0){
         iapMsg = planActive()
@@ -6704,7 +6707,13 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         disarmIapRetry();
         if(planActive()) await collectAfterIap();
       }
-      else { iapMsg = `${found} paid purchase${found>1?"s":""} still unclaimed: ${String((r && r.error)||"the server did not answer")}. The app keeps trying.`; armIapRetry(); }
+      else if(found && !errsLeft(r)){
+        // Everything Apple still had was refused for good and has been acknowledged —
+        // ended sandbox subscriptions, most often. Nothing is pending and nothing is owed.
+        iapMsg = `Nothing to restore — ${dropped || found} old purchase${(dropped||found)>1?"s":""} could not be claimed any more and ${(dropped||found)>1?"were":"was"} closed.`;
+        disarmIapRetry();
+      }
+      else { iapMsg = `${found - dropped} paid purchase${(found-dropped)>1?"s":""} still unclaimed: ${String((r && r.error)||"the server did not answer")}. The app keeps trying.`; armIapRetry(); }
     }catch(e){ iapMsg = "Failed: " + String((e && e.message) || e); }
     iapBusy = false; renderIosStore();
   }

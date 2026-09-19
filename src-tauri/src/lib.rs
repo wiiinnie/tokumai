@@ -5016,6 +5016,8 @@ async fn iap_verify_on_server(app: &AppHandle, transport: &Transport, jws: &str)
 /// the server decides which product it is looking at.
 #[cfg(target_os = "ios")]
 async fn iap_verify_value(app: &AppHandle, transport: &Transport, jws: &str) -> Result<Value, String> {
+    // A rejection the server calls FINAL is marked in the error text, so the caller can
+    // tell "try again later" from "never" — see `iap_restore_impl`.
     let transport = buy_transport(app, transport).await;
     let w = wallet::load(&data_dir(app)?);
     let srv = server_addr(&w)?;
@@ -5033,10 +5035,16 @@ async fn iap_verify_value(app: &AppHandle, transport: &Transport, jws: &str) -> 
         )
         .await?;
     if let Some(e) = resp.get("error").and_then(|e| e.as_str()) {
-        return Err(e.to_string());
+        let is_final = resp.get("final").and_then(|f| f.as_bool()) == Some(true);
+        return Err(if is_final { format!("{FINAL_PREFIX}{e}") } else { e.to_string() });
     }
     Ok(resp)
 }
+
+/// Marks a rejection nothing can fix. Kept as a prefix rather than a second return value
+/// because every caller of this function already handles a `String` error.
+#[cfg(target_os = "ios")]
+const FINAL_PREFIX: &str = "final: ";
 
 /// App Store product ids from a catalog reply: plain reverse-DNS strings, a handful at most.
 fn remember_iap_products(resp: &Value) {
@@ -5151,6 +5159,9 @@ async fn iap_purchase(app: AppHandle, transport: State<'_, Arc<Transport>>, prod
 async fn iap_restore_impl(app: AppHandle, transport: Arc<Transport>) -> Result<Value, String> {
     let list = iap_ios::unfinished().await?;
     let (mut claimed, mut toku_sum, mut errors) = (0u32, 0u64, Vec::<String>::new());
+    // Transactions the server refused for good, acknowledged to Apple so they stop coming
+    // back. Counted separately: they are neither a success nor something still pending.
+    let mut dropped = 0u32;
     for t in list.iter().take(20) {
         let jws = t.get("jws").and_then(|j| j.as_str()).unwrap_or("");
         let tx = t.get("transactionId").and_then(|x| x.as_str()).unwrap_or("");
@@ -5163,10 +5174,20 @@ async fn iap_restore_impl(app: AppHandle, transport: Arc<Transport>) -> Result<V
                 claimed += 1;
                 toku_sum += toku;
             }
+            // Refused for good: an ended subscription, a product this server does not sell,
+            // another app's purchase. Finishing it is the only honest thing to do — leaving
+            // it unfinished means re-sending it on every launch forever, which spends the
+            // verification budget on something that can never be claimed and buries a real
+            // failure among five dead ones (2026-09-19).
+            Err(e) if e.starts_with(FINAL_PREFIX) => {
+                log::warn!("[iap] a transaction was refused for good, finishing it: {e}");
+                let _ = iap_ios::finish(tx).await;
+                dropped += 1;
+            }
             Err(e) => errors.push(e),
         }
     }
-    Ok(json!({ "found": list.len(), "claimed": claimed, "toku": toku_sum,
+    Ok(json!({ "found": list.len(), "claimed": claimed, "toku": toku_sum, "dropped": dropped,
                "pending": errors.len(), "error": errors.first() }))
 }
 

@@ -1326,7 +1326,14 @@ const ORDER_TICK_MS: u64 = 1000;
                             continue;
                         }
                         match iap::verify_jws(jws, now).and_then(|tx| iap::credit_for(&tx).map(|toku| (tx, toku))) {
-                            Err(e) => serde_json::json!({ "id": id, "kind": "error", "error": e }),
+                            // FINAL: this transaction is neither a plan (the branch above
+                            // declined it) nor credit, and no amount of retrying will change
+                            // that — an ended subscription, a product we do not sell, another
+                            // app's purchase. The app finishes it with Apple instead of
+                            // re-sending it on every launch, which is what five expired
+                            // sandbox subscriptions were doing on 2026-09-19, spending the
+                            // verification budget on transactions that can never be claimed.
+                            Err(e) => serde_json::json!({ "id": id, "kind": "error", "error": e, "final": true }),
                             Ok((tx, toku)) => {
                                 let hash = iap::tx_hash(&tx.transaction_id);
                                 match db.iap_claim(&hash, &tx.product_id, toku, &tx.environment, &tx.storefront,
