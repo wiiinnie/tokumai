@@ -1408,8 +1408,17 @@ fn build_tender(
     // the table that are worth less than a coarse coin are granularity too, and minting a
     // fresh plan beside them would spend coins nobody needs (a spare-covered tender used
     // to reach into a book for it anyway).
+    //
+    // The test is about STUCKELUNG, not about the total. It used to ask whether the small
+    // notes added up to nearly a coarse coin — and three notes of three coins each add up
+    // to nine, which passed, while nothing under 300 TOKU could be paid with them at all.
+    // A note is burned whole, so what makes a cheap answer cheap is the presence of a
+    // ONE-COIN note, not the sum of the small ones. Measured on 2026-09-19: an answer
+    // priced at 20 TOKU was charged 300, fifteen times over, on a tender whose smallest
+    // note was three coins.
     let small_value: u64 = notes.iter().map(|n| n.value_toku()).filter(|v| *v < COARSE_TOKU).sum();
-    let need_granularity = small_value < COARSE_TOKU.saturating_sub(COIN_TOKU);
+    let has_single_coin = notes.iter().any(|n| n.value_toku() == COIN_TOKU);
+    let need_granularity = !has_single_coin || small_value < COARSE_TOKU.saturating_sub(COIN_TOKU);
     if need_granularity && fine_span_coins > 0 && notes.len() + fine_slots <= MAX_NOTES {
         if let Some((idx, mut purse)) = first_funded_purse_of(&w.coconut_purses, COIN_TOKU) {
             // No material for that book's epoch: it cannot be spent here. Leave it alone

@@ -185,6 +185,28 @@ pub fn select_from(values: &[u64], cost: u64) -> Option<Vec<usize>> {
 mod tests {
     use super::*;
 
+    /// What a tender's SMALLEST note costs a cheap answer.
+    ///
+    /// A note is burned whole, so the least anything can cost is the smallest note on the
+    /// table — never mind how much small money is there in total. Three notes of three
+    /// coins are nine coins of "small change" that cannot pay for one.
+    #[test]
+    fn small_notes_are_not_change_unless_one_of_them_is_a_single_coin() {
+        // A proper plan: every cost from 1 up is paid exactly.
+        let plan = plan_coins(16);
+        for cost in 1..=16 {
+            let picked = select_from(&plan, cost).expect("a plan pays anything up to its ceiling");
+            assert_eq!(picked.iter().map(|i| plan[*i]).sum::<u64>(), cost, "exact for {cost}");
+        }
+        // Leftovers from earlier tenders, none of them a single coin: nine coins on the
+        // table, and the cheapest thing they can buy costs three.
+        let leftovers = vec![3u64, 3, 3];
+        let picked = select_from(&leftovers, 1).expect("it can still pay, by overpaying");
+        assert_eq!(picked.iter().map(|i| leftovers[*i]).sum::<u64>(), 3, "one coin costs three");
+        // Which is why the client puts a single-coin note on the table regardless of how
+        // much small value the leftovers add up to (src-tauri: need_granularity).
+    }
+
     #[test]
     fn a_plan_can_pay_every_whole_number_of_coins_up_to_its_ceiling() {
         for ceiling in [1u64, 2, 3, 7, 8, 30, 31, 32, 100, 1000] {
