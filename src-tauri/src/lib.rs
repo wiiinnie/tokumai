@@ -1876,6 +1876,20 @@ async fn support_diag(app: AppHandle, last_error: Option<String>) -> Result<Stri
             w.entry_gateway.as_deref().map(short).unwrap_or_else(|| "not chosen yet".into())
         },
     );
+    // The plan, if there is one. Shapes and dates, never the money: which tier, whether the
+    // rail still calls it paid, and how far the paid period runs. "My plan is not showing"
+    // is otherwise a report nobody can act on.
+    if let Some(p) = w.plan_seen.as_ref() {
+        let g = |k: &str| p.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
+        out.push_str(&format!(
+            "plan     tier {} · {} · period {} · granted {} · left {}\n",
+            g("tier"),
+            if p.get("active").and_then(|a| a.as_bool()) == Some(true) { "paid" } else { "NOT paid" },
+            g("period"),
+            g("granted"),
+            g("left"),
+        ));
+    }
     if let Some(e) = last_error.as_deref().filter(|e| !e.trim().is_empty()) {
         let one: String = e.chars().filter(|c| *c != '\n').take(140).collect();
         out.push_str(&format!("last     {one}\n"));
@@ -3016,7 +3030,8 @@ async fn collect_now(app: AppHandle, main: Arc<Transport>) -> Result<Value, Stri
     // (Reading `entitlement` alone here would leave every subscriber's month on the server.)
     let plan = resp.get("subscription").cloned();
     let allowance = plan.as_ref().and_then(|p| p.get("left")).and_then(|l| l.as_u64()).unwrap_or(0);
-    let owed = resp.get("entitlement").and_then(|e| e.as_u64()).unwrap_or(0).saturating_add(allowance);
+    let credit = resp.get("entitlement").and_then(|e| e.as_u64()).unwrap_or(0);
+    let owed = credit.saturating_add(allowance);
     {
         let mut w = wallet::load(&dir);
         if w.plan_seen != plan {
@@ -3081,9 +3096,20 @@ async fn collect_now(app: AppHandle, main: Arc<Transport>) -> Result<Value, Stri
 
     diag(&app, "collect: about to respond");
     let left = owed.saturating_sub(collected);
+    // Split what is left back into the two pockets it came from. Not a guess: the server
+    // spends the allowance first (`Pay::consume_credit`), so the same arithmetic here gives
+    // the same answer it holds — and the app can go on telling a month that lapses apart
+    // from credit that does not. Carrying only the SUM was wrong for exactly one screen and
+    // one day: "on your account" then showed both pockets as one number.
+    let drawn_from_allowance = collected.min(allowance);
+    let credit_left = credit.saturating_sub(collected - drawn_from_allowance);
+    let allowance_left = allowance - drawn_from_allowance;
     {
         let mut w = wallet::load(&dir);
-        w.entitlement_seen = left;
+        w.entitlement_seen = credit_left;
+        if let Some(p) = w.plan_seen.as_mut().and_then(|p| p.as_object_mut()) {
+            p.insert("left".into(), json!(allowance_left));
+        }
         let _ = wallet::save(&dir, &w);
     }
     // The books on this device just changed, so the reminder does too: it is set for three

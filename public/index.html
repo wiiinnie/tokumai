@@ -2455,7 +2455,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     flashSaved._t=setTimeout(()=>{ s.style.opacity="0"; },1400);
   }
   function renderBal(){
-    $("bal").innerHTML = formatToku(balance + entitlement)+'<small> TOKU</small>';
+    $("bal").innerHTML = formatToku(balance + accountToku())+'<small> TOKU</small>';
     $("balbar").style.width = Math.max(2,Math.min(100, balance/10000))+'%';
     // The session pseudonym is meaningless once coins pay for each answer — nothing is
     // billed to it — so it is only named while the session path is the one in use.
@@ -5678,10 +5678,10 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     const session = Math.max(0, balance - held);
     const parts = [];
     if(held > 0) parts.push(`<span style="color:var(--rust)">${esc(formatToku(held))} on this device only</span>`);
-    if(entitlement > 0) parts.push(`${esc(formatToku(entitlement))} on your account`);
+    if(accountToku() > 0) parts.push(`${esc(formatToku(accountToku()))} on your account`);
     if(session > 0) parts.push(`${esc(formatToku(session))} on your old session`);
     if(!parts.length) return "no credit yet";
-    const phrase = (entitlement > 0 || session > 0) ? " · your phrase brings the account part back" : "";
+    const phrase = (accountToku() > 0 || session > 0) ? " · your phrase brings the account part back" : "";
     return parts.join(" · ") + phrase;
   }
 
@@ -5752,7 +5752,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     const idcard = `<div class="idcard">
       <div class="fp">${esc(account.fingerprint)}</div>
       <div class="ses">paid with coins · fingerprint</div>
-      <div class="bal">${esc(tokuLine(balance + entitlement))}</div>
+      <div class="bal">${esc(tokuLine(balance + accountToku()))}</div>
       <div class="held">${creditSplit()}</div>
       ${allowanceHTML()}${keptCreditHTML()}
       ${entitlement>0 && entitlement<bookToku ? `<div class="held" style="color:var(--rust)">Coins are drawn a whole book at a time (${esc(formatToku(bookToku))} TOKU), so this rest waits here until your next top-up. It is on your recovery phrase and cannot be lost.</div>` : ``}
@@ -6302,6 +6302,10 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // resets on the 1st, the bought credit does not. Folding them together would label money
   // as perishable that is not. See docs/subscription.md.
   function planActive(){ return !!(plan && plan.active && Number(plan.granted) > 0); }
+  /// What the account holds: this month's remaining allowance plus credit bought outright.
+  /// The device/account split is about WHERE money is; which pocket it came from is a
+  /// different question, answered by the meter and the credit row below.
+  function accountToku(){ return entitlement + planLeft(); }
   function planLeft(){ return Number(plan && plan.left) || 0; }
   /// The 1st of next month, in the reader's own locale — the date the meter refills.
   function resetDateLabel(){
@@ -6311,13 +6315,23 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     catch(_){ return "the 1st"; }
   }
   function allowanceHTML(){
+    // A plan the rail no longer calls paid: say so rather than showing nothing. An empty
+    // space is indistinguishable from "never had a plan", and this is the state somebody
+    // needs explained the most.
+    if(plan && !planActive() && Number(plan.toku_per_month) > 0){
+      return `<div class="keepbox" style="border-color:#4a2f2a;background:#231a18"><span class="ic" style="color:var(--rust)">!</span><span><b>Your plan has ended</b>
+        <small>The month you last paid for is finished. Everything already drawn stays yours.</small></span></div>`;
+    }
     if(!planActive()) return "";
+    // What is LEFT on the account, not what is unspent: drawing coins moves allowance onto
+    // the device, where it is still the customer's and still this month's. A bar that
+    // counted a withdrawal as spending would read as money disappearing.
     const left = planLeft(), granted = Number(plan.granted) || 0;
     const pct = granted > 0 ? Math.max(0, Math.min(100, Math.round(left / granted * 100))) : 0;
     return `<div class="allow">
       <div class="top"><span class="big">${esc(formatToku(left))}</span><span class="of">of ${esc(formatToku(granted))} TOKU</span></div>
       <div class="track${pct <= 10 ? " low" : ""}"><i style="width:${pct}%"></i></div>
-      <div class="foot"><span>${pct}% of this month left</span><span>resets <b>${esc(resetDateLabel())}</b></span></div>
+      <div class="foot"><span>still on your account${balance > 0 ? ` · ${esc(formatToku(balance))} already drawn` : ""}</span><span>resets <b>${esc(resetDateLabel())}</b></span></div>
     </div>`;
   }
   /// Credit bought outright, shown only when there IS a plan beside it — on its own, the
@@ -6582,6 +6596,9 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     try{
       const r = await Backend.collect();
       await refreshState(); renderBuyBal();
+      // The sheets that show a plan have to be redrawn, not just the balance line: after a
+      // subscription is bought, the month is the thing the buyer is looking for.
+      renderIosStore(); if(typeof renderAccount === "function" && $("acctScrim").classList.contains("open")) renderAccount();
       maybeAskPhraseBackup(r && r.collected);
     }catch(_){ /* the next "Check for credit" collects it */ }
   }
