@@ -676,6 +676,17 @@ impl Store {
         }
     }
 
+    /// Re-point a claimed transaction at another account. Only the subscription path uses
+    /// it, and only after `Pay::move_subscription` has agreed to the move: the row and the
+    /// pay snapshot have to name the same account, or the next launch would see a claim
+    /// belonging to somebody else and refuse the renewal.
+    pub fn iap_claim_reassign(&self, hash: &str, account: &str, now: u64) {
+        let _ = self.conn.execute(
+            "UPDATE iap_transactions SET account = ?2, claimed_at = ?3 WHERE hash = ?1",
+            params![hash, account, now as i64],
+        );
+    }
+
     pub fn iap_credited(&self, hash: &str, now: u64) {
         let _ = self.conn.execute(
             "UPDATE iap_transactions SET credited_at = ?2 WHERE hash = ?1 AND credited_at IS NULL",

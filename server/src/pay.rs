@@ -985,6 +985,33 @@ impl Pay {
         self.subs.iter().find(|(_, s)| s.rail_id == rail_id).map(|(a, _)| a.clone())
     }
 
+    /// Move a subscription to another account, KEEPING the month exactly as it stands.
+    ///
+    /// The case this exists for: somebody loses their recovery phrase. The account is gone,
+    /// and with it the only thing that could ever claim their subscription — while Apple
+    /// will not sell the same Apple ID a second one in the same group. Refusing then does
+    /// not protect anybody; it strands a paying customer with a subscription they cannot
+    /// use and cannot replace (seen 2026-09-19 on a test device, and it would have been a
+    /// support case nothing could fix).
+    ///
+    /// Safe because of WHAT proves the claim: Apple's signed transaction, which only the
+    /// device holding that Apple ID can produce. The person is the same person.
+    ///
+    /// And the allowance MOVES rather than restarts — same tier, same period, same
+    /// remaining month, same outstanding. A transfer that granted a fresh month would be a
+    /// free month for anyone willing to make a new account, once per month, forever.
+    pub fn move_subscription(&mut self, rail_id: &str, to_account: &str) -> bool {
+        let Some(from) = self.rail_owner(rail_id) else { return false };
+        if from == to_account {
+            return false;
+        }
+        let Some(sub) = self.subs.remove(&from) else { return false };
+        self.subs.insert(to_account.to_string(), sub);
+        self.rev += 1;
+        println!("scrai-server: a subscription moved to another account (the old one proved unreachable)");
+        true
+    }
+
     /// Prove the caller owns the account a plan is being attached to. Its own purpose
     /// string, so no signature this account made for anything else can be replayed here.
     pub fn plan_claimant(&mut self, v: &Value) -> Option<String> {
@@ -3579,6 +3606,40 @@ mod tests {
         p.expire_lapsed(ms(2027, 9, 2));
         p.roll_periods(ms(2027, 10, 1));
         assert_eq!(p.allowance_left("acct"), 0);
+    }
+
+    #[test]
+    fn a_lost_account_does_not_strand_its_subscription() {
+        // Somebody loses their recovery phrase. The old account is unreachable forever, and
+        // Apple will not sell that Apple ID a second subscription in the same group — so
+        // refusing the claim would leave a paying customer with something they can neither
+        // use nor replace.
+        let mut p = Pay::default();
+        let rail = "iap:2000000111222333";
+        p.subscribe_or_renew("lost", 1, rail, ms(2026, 9, 1), ms(2026, 10, 1));
+        p.credit_voucher("lost", 250_000); // credit they had bought, separately
+        p.consume_credit("lost", 900_000); // and most of the month already drawn
+
+        let before = p.subscription("lost").cloned().expect("a plan on the old account");
+        assert!(p.move_subscription(rail, "fresh"));
+
+        // The month MOVES as it stands. A transfer that granted a fresh one would be a free
+        // month for anyone willing to make a new account, once a month, forever.
+        let after = p.subscription("fresh").expect("the plan is on the new account");
+        assert_eq!(after.allowance, before.allowance, "same month, same remainder");
+        assert_eq!(after.tier, before.tier);
+        assert_eq!(after.rail_id, before.rail_id);
+        assert!(p.subscription("lost").is_none(), "and it is not on both");
+
+        // Reporting the same subscription again changes nothing further.
+        assert!(!p.move_subscription(rail, "fresh"));
+        assert!(!p.subscribe_or_renew("fresh", 1, rail, ms(2026, 9, 2), ms(2026, 10, 1)),
+            "no second month inside the same period");
+
+        // What does NOT move: credit that was bought. That belongs to the phrase, and the
+        // phrase is what was lost.
+        assert_eq!(p.entitlement("fresh"), 0);
+        assert_eq!(p.entitlement("lost"), 250_000);
     }
 
     #[test]

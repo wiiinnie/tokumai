@@ -1273,8 +1273,28 @@ const ORDER_TICK_MS: u64 = 1000;
                             let hash = iap::tx_hash(&tx.original_transaction_id);
                             let reply = match db.iap_claim(&hash, &tx.product_id, 0, &tx.environment,
                                                            &tx.storefront, &account, tx.purchased_at_ms, now) {
-                                store::IapClaim::AlreadyOther => serde_json::json!({ "id": id, "kind": "error",
-                                    "error": "this subscription is already on another account" }),
+                                // The same Apple ID, a different tokumai account: somebody
+                                // lost their recovery phrase. Apple will not sell them a
+                                // second subscription in this group, so refusing would
+                                // strand a paying customer for good. Apple's signature
+                                // proves it is the same person, so the subscription MOVES —
+                                // with its month exactly as it stands, never a fresh one.
+                                store::IapClaim::AlreadyOther => {
+                                    let rail = format!("iap:{}", tx.original_transaction_id);
+                                    if paywall.move_subscription(&rail, &account) {
+                                        db.iap_claim_reassign(&hash, &account, now);
+                                        let granted = paywall.subscribe_or_renew(&account, tier, &rail, now, tx.expires_at_ms);
+                                        println!("scrai-server: App Store plan moved to another account — {}",
+                                            if granted { "and a month was due" } else { "month carried over" });
+                                        let mut r = paywall.account_reply(&id, &account);
+                                        r["kind"] = serde_json::json!("iap.ok");
+                                        r["moved"] = serde_json::json!(true);
+                                        r
+                                    } else {
+                                        serde_json::json!({ "id": id, "kind": "error",
+                                            "error": "this subscription is already on another account" })
+                                    }
+                                }
                                 _ => {
                                     // Marked credited at once: a plan grants no entitlement,
                                     // and an unfinished claim would otherwise be "repaired"
