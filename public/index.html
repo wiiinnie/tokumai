@@ -6524,10 +6524,22 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         planSel = null;
         await collectAfterIap();
       }
-      else if(st === "cancelled"){ planMsg = ""; }
+      // A silent close is the worst answer of the three. The sheet used to blank the
+      // message and re-render, which from the outside looks exactly like a purchase that
+      // failed for no reason — and Apple sends `cancelled` both when somebody taps away
+      // AND when its own sheet refuses (an existing subscription in the same group, most
+      // often). Say so, and say what to do.
+      else if(st === "cancelled"){
+        planMsg = planActive()
+          ? "Nothing was charged — you already have a plan. Use “Change plan” to move between them."
+          : "Nothing was charged. If the App Store sheet closed by itself, you may already have a subscription in this group — tap “Restore purchases”.";
+      }
       else if(st === "pending"){ planMsg = "Waiting for approval (Ask to Buy). The plan starts once it is approved."; }
       else if(st === "unclaimed"){ planMsg = `Paid — but the server has not confirmed the plan yet: ${String((r && r.error) || "no answer")}. Nothing is lost: the app checks again on its own, and on the next launch.`; }
       else { planMsg = "The App Store gave an unexpected answer."; }
+      // On a debug build, the raw word Apple used — "cancelled" and "failed" are a world
+      // apart when you are trying to work out why nothing happened.
+      if(devBuild && st && st !== "subscribed") planMsg += ` [${st}]`;
     }catch(e){ planMsg = "Failed: " + String((e && e.message) || e); }
     planBusy = false; renderPlans();
   }
