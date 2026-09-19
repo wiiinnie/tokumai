@@ -1649,8 +1649,8 @@ fn coin_request(
     let mut req = json!({
         "v": PROTO, "kind": "chat", "id": rand_hex(16), "model": model, "messages": messages,
         "stream": false, "chunkedImages": true,
-        "tender": serde_json::to_value(&tender).map_err(|e| e.to_string())?,
     });
+    attach_tender(&mut req, &tender)?;
     if let Some(mt) = maxTokens {
         req["maxTokens"] = json!(mt);
     }
@@ -2090,11 +2090,11 @@ async fn return_coins(app: AppHandle, transport: Arc<Transport>, what: Returning
                 };
                 let nonce = rand_hex(16);
                 let sig = a.sign("return", &nonce);
-                let req = json!({
+                let mut req = json!({
                     "v": PROTO, "kind": "coins.return", "id": rand_hex(16),
                     "publicKey": a.public_key_pem, "nonce": nonce, "sig": sig,
-                    "tender": serde_json::to_value(&tender).map_err(|e| e.to_string())?,
                 });
+                attach_tender(&mut req, &tender)?;
                 w.pending_return = Some(wallet::PendingTender {
                     request: req.clone(),
                     notes: tender.notes.iter().map(|n| serde_json::to_value(n).unwrap_or(Value::Null)).collect(),
@@ -2218,6 +2218,7 @@ async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<V
                         }
                     }
                     remember_iap_products(&resp);
+                    remember_wire_caps(&resp);
                     {
                         let mut u = SERVER_UPDATE.lock().unwrap_or_else(|e| e.into_inner());
                         *u = resp.get("update").filter(|u| u.get("required").and_then(|r| r.as_bool()) == Some(true)).cloned();
@@ -5216,6 +5217,28 @@ async fn iap_verify_value(app: &AppHandle, transport: &Transport, jws: &str) -> 
 #[cfg(target_os = "ios")]
 const FINAL_PREFIX: &str = "final: ";
 
+/// Does the server we are talking to read the compact tender (`tender64`)? It says so in
+/// its catalog reply. Until it has, every tender goes out in the old form: a server that
+/// predates this would find no `tender` field and answer "this request carries no coins",
+/// which is a worse failure than a heavy request.
+static SERVER_TENDER64: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn remember_wire_caps(resp: &Value) {
+    let yes = resp.get("tender64").and_then(|b| b.as_bool()) == Some(true);
+    SERVER_TENDER64.store(yes, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Put a tender into a request under the name this server understands. Roughly half the
+/// bytes in the compact form — see `scrai_core::tender::WireNote`.
+fn attach_tender(req: &mut Value, tender: &scrai_core::tender::Tender) -> Result<(), String> {
+    if SERVER_TENDER64.load(std::sync::atomic::Ordering::Relaxed) {
+        req["tender64"] = tender.to_wire();
+    } else {
+        req["tender"] = serde_json::to_value(tender).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 /// App Store product ids from a catalog reply: plain reverse-DNS strings, a handful at most.
 fn remember_iap_products(resp: &Value) {
     let ids: Vec<String> = resp
@@ -5264,6 +5287,7 @@ async fn refresh_catalog(app: &AppHandle, transport: &Transport) {
         .await
     {
         remember_iap_products(&resp);
+                    remember_wire_caps(&resp);
         if let Some(m) = resp.get("models") {
             transport.set_cached_models(m.clone()).await;
         }

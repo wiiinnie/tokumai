@@ -488,10 +488,10 @@ pub fn reserve(
     // bearer money, and whoever holds them may ask. The loop-side work is deliberately
     // cheap — shape check, replay cache, and holding the serials against a concurrent
     // tender of the same coins; the pairings run off the loop in `run_provider`.
-    if let Some(t) = v.get("tender") {
-        let tender: scrai_core::tender::Tender = match serde_json::from_value(t.clone()) {
+    if let Some(parsed) = scrai_core::tender::Tender::from_request(&v) {
+        let tender: scrai_core::tender::Tender = match parsed {
             Ok(t) => t,
-            Err(e) => return err(&format!("bad tender: {e}")),
+            Err(e) => return err(&e),
         };
         if let Err(e) = tender.well_formed() {
             return err(&e);
@@ -1392,6 +1392,40 @@ mod tests {
         else {
             panic!("a verbatim re-send must still replay");
         };
+    }
+
+    /// An app that was told `tender64` sends the compact form; it must pay exactly like
+    /// the old one — reserve, settle, and replay on a verbatim re-send.
+    #[tokio::test]
+    async fn a_compact_tender_pays_like_the_old_form() {
+        use scrai_core::coconut::testkit;
+        let fk = testkit::funded();
+        let mut purse = fk.new_purse();
+        let mut quorum = scrai_core::quorum::QuorumStore::default();
+        let mut uploads = crate::uploads::UploadStore::default();
+        let mut replies: std::collections::HashMap<String, (u64, Vec<u8>, std::time::Instant)> = std::collections::HashMap::new();
+        let pricing = coin_pricing();
+
+        let (_, tender) = coin_chat(&mut purse, &fk.keys(), 31, fk.spend_date());
+        let req = serde_json::to_vec(&json!({
+            "v": 1, "kind": "chat", "id": "w1", "model": "gemini-b",
+            "messages": [{ "role": "user", "content": "hi" }],
+            "tender64": tender.to_wire(),
+        }))
+        .unwrap();
+        let Reserved::Proceed(p) = reserve(&req, &mut quorum, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH)
+        else {
+            panic!("a compact tender reserves");
+        };
+        let usage = TokenUsage { input: 10, output: 10, ..Default::default() };
+        let first = settle(*p, Ok(("hi".to_string(), usage, None)), &mut quorum, &mut replies).reply;
+        let v: Value = serde_json::from_slice(&first).unwrap();
+        assert!(v["burned"].as_array().map(|b| !b.is_empty()).unwrap_or(false), "{v}");
+        let Reserved::Reply(again) = reserve(&req, &mut quorum, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH)
+        else {
+            panic!("a verbatim re-send replays");
+        };
+        assert_eq!(first, again);
     }
 
     #[tokio::test]

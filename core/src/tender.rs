@@ -79,7 +79,82 @@ pub struct Tender {
     pub notes: Vec<Note>,
 }
 
+/// A note as it travels. `Note` serialises the way serde gives it: every group element a
+/// hex string, `pay_info` an array of numbers — 2,987 bytes of JSON for a one-coin payment
+/// that is 1,157 bytes of bincode, and a question that weighs 39 KB before a word of it has
+/// been asked (measured 2026-09-19). On a mixnet every 2 KB is a Sphinx packet that has to
+/// arrive. This is the same note with the payment as base64 of its binary form.
+///
+/// The WALLET keeps the old form on purpose: a build that predates this must still be able
+/// to read the notes a newer one left behind, or a downgrade drops them as unreadable.
+#[derive(Serialize, Deserialize)]
+struct WireNote {
+    c: u64,
+    p: String,
+    i: String,
+    s: u32,
+    d: u64,
+    #[serde(default)]
+    e: u32,
+}
+
+/// Largest base64 payment accepted from the wire: a full fine book in ONE note is ~50 KB
+/// of bincode, so this is generous — it exists so a hostile length cannot become an
+/// allocation before `MAX_NOTES` and the request-size limit have had their say.
+const MAX_WIRE_PAYMENT_B64: usize = 256 * 1024;
+
 impl Tender {
+    /// The compact wire form, carried as `tender64` (see `WireNote`).
+    pub fn to_wire(&self) -> serde_json::Value {
+        use base64::Engine;
+        let b64 = base64::engine::general_purpose::STANDARD_NO_PAD;
+        let notes: Vec<WireNote> = self
+            .notes
+            .iter()
+            .map(|n| WireNote {
+                c: n.coins,
+                p: b64.encode(n.payment.to_bytes()),
+                i: b64.encode(&n.pay_info),
+                s: n.spend_date,
+                d: n.denom_toku,
+                e: n.exp_date,
+            })
+            .collect();
+        serde_json::json!({ "notes": notes })
+    }
+
+    pub fn from_wire(v: &serde_json::Value) -> Result<Tender, String> {
+        use base64::Engine;
+        let b64 = base64::engine::general_purpose::STANDARD_NO_PAD;
+        let raw: Vec<WireNote> = serde_json::from_value(v.get("notes").cloned().unwrap_or_default())
+            .map_err(|e| format!("bad tender: {e}"))?;
+        if raw.len() > MAX_NOTES {
+            return Err(format!("too many notes in one tender (max {MAX_NOTES})"));
+        }
+        let mut notes = Vec::with_capacity(raw.len());
+        for w in raw {
+            if w.p.len() > MAX_WIRE_PAYMENT_B64 {
+                return Err("bad tender: a payment is too large".into());
+            }
+            let bytes = b64.decode(w.p.as_bytes()).map_err(|_| "bad tender: payment is not base64".to_string())?;
+            let payment = Payment::from_bytes(&bytes).map_err(|_| "bad tender: payment does not parse".to_string())?;
+            let pay_info = b64.decode(w.i.as_bytes()).map_err(|_| "bad tender: pay_info is not base64".to_string())?;
+            notes.push(Note { coins: w.c, payment, pay_info, spend_date: w.s, denom_toku: w.d, exp_date: w.e });
+        }
+        Ok(Tender { notes })
+    }
+
+    /// The tender a request carries, in whichever form it came: `tender64` (compact) from
+    /// an app that was told this server reads it, `tender` from every build before that.
+    /// `None` = the request carries no coins at all.
+    pub fn from_request(req: &serde_json::Value) -> Option<Result<Tender, String>> {
+        if let Some(w) = req.get("tender64") {
+            return Some(Tender::from_wire(w));
+        }
+        req.get("tender")
+            .map(|t| serde_json::from_value(t.clone()).map_err(|e| format!("bad tender: {e}")))
+    }
+
     pub fn total_coins(&self) -> u64 {
         self.notes.iter().map(|n| n.coins).sum()
     }
@@ -255,6 +330,37 @@ mod tests {
         // And the coins actually on the table: 9 coarse + 10 fine = 19, not 90.
         let coins_on_table = coarse + (COARSE_TOKU / COIN_TOKU);
         assert_eq!(coins_on_table, 19);
+    }
+
+    /// The compact form must be the SAME tender — every serial, every proof — at about
+    /// half the weight, and a request may carry either.
+    #[test]
+    fn the_compact_wire_form_is_the_same_tender_at_half_the_weight() {
+        use crate::coconut::testkit;
+        let fk = testkit::funded();
+        let mut purse = fk.new_purse();
+        let notes = purse.spend_tender(&fk.keys(), &plan_coins(10), fk.spend_date()).unwrap();
+        let tender = Tender { notes };
+
+        let old = serde_json::to_vec(&serde_json::json!({ "tender": tender })).unwrap();
+        let new = serde_json::to_vec(&serde_json::json!({ "tender64": tender.to_wire() })).unwrap();
+        assert!(new.len() * 100 < old.len() * 70, "compact {} bytes against {} — not worth a wire change", new.len(), old.len());
+
+        let req: serde_json::Value = serde_json::from_slice(&new).unwrap();
+        let back = Tender::from_request(&req).expect("a tender is there").expect("and it parses");
+        back.well_formed().expect("still a tender the server accepts");
+        assert_eq!(back.notes.len(), tender.notes.len());
+        for (a, b) in tender.notes.iter().zip(&back.notes) {
+            assert_eq!(a.payment, b.payment, "the payment must survive byte for byte");
+            assert_eq!((a.coins, &a.pay_info, a.spend_date, a.denom_toku, a.exp_date),
+                       (b.coins, &b.pay_info, b.spend_date, b.denom_toku, b.exp_date));
+        }
+        // …and the old form still reads, for every build that predates this.
+        let req_old: serde_json::Value = serde_json::from_slice(&old).unwrap();
+        assert_eq!(Tender::from_request(&req_old).unwrap().unwrap().total_coins(), 10);
+        // Garbage is refused, not unwrapped.
+        assert!(Tender::from_request(&serde_json::json!({ "tender64": { "notes": [{ "c": 1, "p": "!!", "i": "", "s": 0, "d": 100 }] } })).unwrap().is_err());
+        assert!(Tender::from_request(&serde_json::json!({ "kind": "chat" })).is_none());
     }
 
     #[test]

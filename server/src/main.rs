@@ -1576,7 +1576,7 @@ const ORDER_TICK_MS: u64 = 1000;
                 let bad = |e: &str| serde_json::to_vec(&serde_json::json!({ "id": id, "kind": "error", "error": e })).unwrap_or_default();
                 let account = paywall.return_claimant(&envelope);
                 let tender: Option<scrai_core::tender::Tender> =
-                    serde_json::from_value(envelope.get("tender").cloned().unwrap_or(serde_json::Value::Null)).ok();
+                    scrai_core::tender::Tender::from_request(&envelope).and_then(|t| t.ok());
                 let response = match (account, tender) {
                     (None, _) => Some(bad("account signature does not check out, or the nonce was reused")),
                     (_, None) => Some(bad("no coins in this request")),
