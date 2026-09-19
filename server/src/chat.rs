@@ -497,10 +497,19 @@ pub fn reserve(
             return err(&e);
         }
         let key = match tender.notes.first().and_then(|n| scrai_core::quorum::payment_serials(&n.payment).into_iter().next()) {
-            Some(k) => k,
+            // The REQUEST is what is replayed, so the request is what the key names: the
+            // first note's serial AND the request id. The serial alone was the key until
+            // 2026-09-19, and that made every question after the first one hang: a note
+            // the server did not burn goes home, and — being the biggest — comes back as
+            // the FIRST note of the next tender. Same serial, cache hit, and the new
+            // question was handed the OLD answer under the OLD id, which the app, waiting
+            // for its own id, rightly ignored. For exactly REPLY_CACHE_TTL, after which
+            // it "went through after a long wait". A verbatim re-send carries the same id
+            // and still replays; anything else is a new question and is served as one.
+            Some(k) => format!("{k}:{}", id.as_str().map(str::to_string).unwrap_or_else(|| id.to_string())),
             None => return err("a note with no coins"),
         };
-        // Idempotent retry: the identical tender already bought an answer whose reply was
+        // Idempotent retry: the identical request already bought an answer whose reply was
         // lost. Hand the same one back rather than burning a second time.
         if let Some((_, bytes, _)) = replies.get(&key) {
             return Reserved::Reply(bytes.clone());
@@ -1330,6 +1339,59 @@ mod tests {
                 assert_eq!(v, scrai_core::quorum::Verdict::Accepted, "note {i} is still spendable");
             }
         }
+    }
+
+    /// 2026-09-19, the bug behind "the first question works, the second hangs": the replay
+    /// cache was keyed on the first note's serial alone. An unburned note goes home and
+    /// leads the NEXT tender, so the next question hit the cache and was answered with the
+    /// previous answer under the previous id — which the app ignores, forever, or rather
+    /// for the ten minutes the cache lives.
+    #[tokio::test]
+    async fn a_new_question_led_by_a_leftover_note_is_not_answered_from_the_cache() {
+        use scrai_core::coconut::testkit;
+        let fk = testkit::funded();
+        let mut purse = fk.new_purse();
+        let mut quorum = scrai_core::quorum::QuorumStore::default();
+        let mut uploads = crate::uploads::UploadStore::default();
+        let mut replies: std::collections::HashMap<String, (u64, Vec<u8>, std::time::Instant)> = std::collections::HashMap::new();
+        let pricing = coin_pricing();
+
+        // Biggest note first, the way the app packs its spares.
+        let (_, mut tender) = coin_chat(&mut purse, &fk.keys(), 31, fk.spend_date());
+        tender.notes.sort_by(|a, b| b.coins.cmp(&a.coins));
+        let ask = |id: &str, notes: &[scrai_core::tender::Note]| {
+            serde_json::to_vec(&json!({
+                "v": 1, "kind": "chat", "id": id, "model": "gemini-b",
+                "messages": [{ "role": "user", "content": "hi" }],
+                "tender": { "notes": notes },
+            }))
+            .unwrap()
+        };
+        let first = ask("q1", &tender.notes);
+        let Reserved::Proceed(p) = reserve(&first, &mut quorum, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH)
+        else {
+            panic!("the first question reserves");
+        };
+        let usage = TokenUsage { input: 10, output: 10, ..Default::default() };
+        let answer: Value = serde_json::from_slice(&settle(*p, Ok(("one".to_string(), usage, None)), &mut quorum, &mut replies).reply).unwrap();
+        let burned: Vec<usize> = serde_json::from_value(answer["burned"].clone()).unwrap();
+        assert!(!burned.contains(&0), "the fixture needs the leading note to survive: {burned:?}");
+
+        // The next question: the notes that came home, the same one in front.
+        let left: Vec<_> = tender.notes.iter().enumerate().filter(|(i, _)| !burned.contains(i)).map(|(_, n)| n.clone()).collect();
+        let second = ask("q2", &left);
+        match reserve(&second, &mut quorum, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH) {
+            Reserved::Proceed(_) => {}
+            Reserved::Reply(bytes) => panic!(
+                "a NEW question was answered without being asked: {}",
+                String::from_utf8_lossy(&bytes)
+            ),
+        }
+        // …while the first question, re-sent verbatim, still replays.
+        let Reserved::Reply(_) = reserve(&first, &mut quorum, &mut uploads, &pricing, 1.4, &mut replies, GROUNDING_FREE_PER_MONTH)
+        else {
+            panic!("a verbatim re-send must still replay");
+        };
     }
 
     #[tokio::test]
