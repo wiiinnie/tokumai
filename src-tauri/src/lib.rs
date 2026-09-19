@@ -792,10 +792,12 @@ fn epoch_key(srv: &str, denom_toku: u64, expiration_date: u32) -> String {
 }
 
 fn epoch_keys(dir: &Path, srv: &str, denom_toku: u64) -> Option<scrai_core::purse::EpochKeys> {
+    epoch_keys_via(dir, &key_aliases(dir, srv), denom_toku)
+}
+
+fn epoch_keys_via(dir: &Path, aliases: &[String], denom_toku: u64) -> Option<scrai_core::purse::EpochKeys> {
     use scrai_core::federation::FedResponse;
-    let (_, v) = key_aliases(dir, srv)
-        .iter()
-        .find_map(|a| read_keys_file(dir, &format!("{a}#{denom_toku}")))?;
+    let (_, v) = aliases.iter().find_map(|a| read_keys_file(dir, &format!("{a}#{denom_toku}")))?;
     match serde_json::from_value::<FedResponse>(v).ok()? {
         FedResponse::Keys { vk, coin_sigs, date_sigs, expiration_date, total_coins, denom_toku, .. } => {
             Some(scrai_core::purse::EpochKeys { vk, coin_sigs, date_sigs, expiration_date, total_coins, denom_toku })
@@ -809,6 +811,11 @@ fn epoch_keys(dir: &Path, srv: &str, denom_toku: u64) -> Option<scrai_core::purs
 /// more than one at a time.
 fn all_epoch_keys(dir: &Path, srv: &str) -> Vec<scrai_core::purse::EpochKeys> {
     use scrai_core::purse::EpochKeys;
+    // Read the wallet ONCE. The alias lookup below needs the alternates, and asking for
+    // them per book meant re-reading and re-parsing the whole wallet — every purse in it —
+    // for every purse in it. Harmless on a device with two books, quadratic on a busy one,
+    // and this runs in the "Sending to mixnet" phase where nobody can see it happening.
+    let aliases = key_aliases(dir, srv);
     let mut out: Vec<EpochKeys> = Vec::new();
     let mut add = |k: EpochKeys| {
         if !out.iter().any(|o| o.denom_toku == k.denom_toku && o.expiration_date == k.expiration_date) {
@@ -818,14 +825,14 @@ fn all_epoch_keys(dir: &Path, srv: &str) -> Vec<scrai_core::purse::EpochKeys> {
     // What the books on this device were issued in, first…
     for w in wallet::load(dir).coconut_purses.iter() {
         if let Ok(p) = scrai_core::purse::Purse::restore(w) {
-            if let Some(k) = keys_of_epoch(dir, srv, p.denom_toku(), p.expiration_date()) {
+            if let Some(k) = keys_of_epoch_via(dir, &aliases, p.denom_toku(), p.expiration_date()) {
                 add(k);
             }
         }
     }
     // …and the current one per denomination, which is what a fresh book will need.
     for d in scrai_core::coconut::DENOMS {
-        if let Some(k) = epoch_keys(dir, srv, d) {
+        if let Some(k) = epoch_keys_via(dir, &aliases, d) {
             add(k);
         }
     }
@@ -835,11 +842,13 @@ fn all_epoch_keys(dir: &Path, srv: &str) -> Vec<scrai_core::purse::EpochKeys> {
 /// Epochs this device holds books from but has no material for — what it has to fetch
 /// before those books can be spent at all.
 fn missing_epochs(w: &wallet::Wallet, dir: &Path, srv: &str) -> Vec<(u64, u32)> {
+    // Same reason as `all_epoch_keys`: the aliases are read once, not once per book.
+    let aliases = key_aliases_of(srv, &w.server_alternates);
     let mut out: Vec<(u64, u32)> = Vec::new();
     for j in &w.coconut_purses {
         let Ok(p) = scrai_core::purse::Purse::restore(j) else { continue };
         let k = (p.denom_toku(), p.expiration_date());
-        if p.remaining_coins() > 0 && !out.contains(&k) && keys_of_epoch(dir, srv, k.0, k.1).is_none() {
+        if p.remaining_coins() > 0 && !out.contains(&k) && keys_of_epoch_via(dir, &aliases, k.0, k.1).is_none() {
             out.push(k);
         }
     }
@@ -848,10 +857,17 @@ fn missing_epochs(w: &wallet::Wallet, dir: &Path, srv: &str) -> Vec<(u64, u32)> 
 
 /// The material of ONE epoch, if this device kept it.
 fn keys_of_epoch(dir: &Path, srv: &str, denom_toku: u64, expiration_date: u32) -> Option<scrai_core::purse::EpochKeys> {
+    keys_of_epoch_via(dir, &key_aliases(dir, srv), denom_toku, expiration_date)
+}
+
+fn keys_of_epoch_via(
+    dir: &Path,
+    aliases: &[String],
+    denom_toku: u64,
+    expiration_date: u32,
+) -> Option<scrai_core::purse::EpochKeys> {
     use scrai_core::federation::FedResponse;
-    let (_, v) = key_aliases(dir, srv)
-        .iter()
-        .find_map(|a| read_keys_file(dir, &epoch_key(a, denom_toku, expiration_date)))?;
+    let (_, v) = aliases.iter().find_map(|a| read_keys_file(dir, &epoch_key(a, denom_toku, expiration_date)))?;
     match serde_json::from_value::<FedResponse>(v).ok()? {
         FedResponse::Keys { vk, coin_sigs, date_sigs, expiration_date, total_coins, denom_toku, .. } => {
             Some(scrai_core::purse::EpochKeys { vk, coin_sigs, date_sigs, expiration_date, total_coins, denom_toku })

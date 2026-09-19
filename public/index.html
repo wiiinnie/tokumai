@@ -2866,7 +2866,13 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     // Round-trip timing: total (send→done) and, when known, first-byte latency
     // (request-left→first-reply) which isolates mixnet+provider from local time.
     const secs = ms => (ms/1000).toFixed(ms<10000?2:1)+"s";
-    const t = (a.size ? ` · ${a.size}` : "") + (a.ms ? ` · ⏱ ${secs(a.ms)}${a.net?` (first byte ${secs(a.net)})`:''}` : "");
+    // `sent` is how long the request took to LEAVE this device — tender, keys, and above
+    // all a route that had to be rebuilt because the socket died while nothing was being
+    // sent. It is the number that was missing on 2026-09-19, when 44 of 53 seconds were
+    // spent before a single packet went out and the server looked slow.
+    const sent = Number(a.sent)||0;
+    const t = (a.size ? ` · ${a.size}` : "")
+      + (a.ms ? ` · ⏱ ${secs(a.ms)}${a.net?` (first byte ${secs(a.net)}${sent>2000?`, left after ${secs(sent)}`:''})`:''}` : "");
     const cost=+a.cost||0, charge=+a.charge||0;
     if(cost<=0) return `<div class="costaudit">⚙ provider free · charged ${usd(charge)}${t}</div>`;
     const pct=(charge/cost-1)*100;
@@ -3334,6 +3340,13 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     const my=rt.seq; let c=0;
     (function type(){ if(my!==rt.seq) return; if(c<line.text.length){ tx.textContent+=line.text[c++]; rt.timers.push(setTimeout(type,18)); return; } line.typed=true; if(line.ok!==null) routeFinish(line, line.ok); })();
   }
+  /// A fresh attempt in an overlay that is already open: drop the finished lines, keep the
+  /// box, the title and the running clock.
+  function routeRestart(){
+    rt.timers.forEach(clearTimeout);
+    rt = { lines:[], timers:[], seq:rt.seq+1 };
+    const host=$("routeCons"); if(host) host.innerHTML="";
+  }
   function routeFinish(line, ok){
     line.ok = ok;
     if(!line.typed || line.closed) return;          // stamps once its text is fully typed
@@ -3355,6 +3368,10 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       case "check": setMixState("checking"); return;
       case "directory": case "keys": case "client": case "gateway": case "cover": case "server": case "reuse":
         if(mixState!=="reconnecting") setMixState("reconnecting");
+        // "keys" is the first step of every attempt. A second attempt while the overlay is
+        // already open used to append its steps under the first one's, so the sheet showed
+        // the whole sequence twice and read as if two reconnects were racing.
+        if(p.step==="keys" && rt.lines.length) routeRestart();
         routeLine(PHASE_LABEL[p.step] + (p.detail ? " · " + p.detail : ""));
         return;
       case "ready":
@@ -4277,7 +4294,12 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         }
         // Dev cost-audit: provider cost + what we charged + round-trip timings, per answer.
         const bf = evt.usage && evt.usage.billing;
-        const timing = { ms: Math.round(performance.now()-t0), net: tSent ? Math.round(tFirst-tSent) : 0 };
+        const timing = {
+          ms: Math.round(performance.now()-t0),
+          net: tSent ? Math.round(tFirst-tSent) : 0,
+          // How long the request took to leave the device at all.
+          sent: tSent ? Math.round(tSent-t0) : 0,
+        };
         const drawn = evt.usage && evt.usage.imageSize;
         ai.audit = bf ? { cost: (bf.costToku ?? bf.costScrai), charge: (bf.priceToku ?? bf.priceScrai), ...timing } : { ...timing };
         if(timing.net) lastRtt = timing.net;
