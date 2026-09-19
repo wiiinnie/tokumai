@@ -5804,7 +5804,6 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     // — when coins sit on this device — what that means and the one tap that fixes it.
     // "Credit" used to be a menu row holding two unrelated actions; a state is not a page.
     const heldBox = held>0 ? `<div class="heldbox">
-        <div class="hh"><span class="amt">${esc(formatToku(held))} TOKU</span><span class="where">on this device only</span></div>
         <p>Coins are held here, not on your account. A <b>recovery phrase does not bring them back</b> — before you
            give this device away or move to another one, send them back.</p>
         <div class="act">
@@ -6409,13 +6408,13 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     // meter used to show the account part alone, so that a withdrawal would not read as
     // spending; it did exactly that: "600.000 of 700.000" under a headline of 698.700 read
     // as a hundred thousand gone, and two numbers for one budget (2026-09-19). Where the
-    // money SITS is the line underneath, not the bar.
+    // money SITS is said once, in the red line under the headline — not again here, and
+    // not a third time above the return button (it stood there three times, 2026-09-19).
     const left = monthLeft(), granted = Number(plan.granted) || 0, pct = monthPct();
-    const onDevice = Math.max(0, left - planLeft());
     return `<div class="allow">
       <div class="top"><span class="big">${esc(formatToku(left))}</span><span class="of">of ${esc(formatToku(granted))} TOKU this month</span></div>
       <div class="track${pct <= 10 ? " low" : ""}"><i style="width:${pct}%"></i></div>
-      <div class="foot"><span>${esc(formatToku(planLeft()))} on your account${onDevice > 0 ? ` · ${esc(formatToku(onDevice))} on this device` : ""}</span><span>${planActive() ? "resets" : "plan ended · lasts until"} <b>${esc(resetDateLabel())}</b></span></div>
+      <div class="foot"><span>${planActive() ? "resets" : "plan ended · lasts until"} <b>${esc(resetDateLabel())}</b></span></div>
     </div>`;
   }
   /// Credit bought outright, shown only when there IS a plan beside it — on its own, the
