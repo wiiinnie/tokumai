@@ -1120,6 +1120,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     <div class="ticket">
       <div class="row"><span class="lbl">Balance</span><span class="bal" id="bal">0<small> TOKU</small></span></div>
       <div class="bar"><i id="balbar"></i></div>
+      <div class="meta" id="planLine" style="display:none"><span class="d" style="background:var(--mix)"></span> <span id="planText"></span></div>
       <div class="meta"><span class="d"></span> <span id="acctLine">no account</span></div>
       <div class="meta" id="heldLine" style="display:none"><span class="d" style="background:var(--signal)"></span> <span id="heldText"></span></div>
       <button class="refill" id="buyBtn" data-click="openBuy">+ Buy credit</button>
@@ -2456,7 +2457,17 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   }
   function renderBal(){
     $("bal").innerHTML = formatToku(balance + accountToku())+'<small> TOKU</small>';
-    $("balbar").style.width = Math.max(2,Math.min(100, balance/10000))+'%';
+    // A subscriber's bar is the MONTH running down, with the day it refills — the same
+    // meter as on the account page, so the two never disagree. Without a plan there is no
+    // budget to run down, and the bar keeps its old scale.
+    if(planActive()){
+      $("balbar").style.width = Math.max(2, monthPct())+'%';
+      $("planText").textContent = `${monthPct()} % of this month left · resets ${resetDateLabel()}`;
+      $("planLine").style.display = "flex";
+    } else {
+      $("balbar").style.width = Math.max(2,Math.min(100, balance/10000))+'%';
+      $("planLine").style.display = "none";
+    }
     // The session pseudonym is meaningless once coins pay for each answer — nothing is
     // billed to it — so it is only named while the session path is the one in use.
     $("acctLine").textContent = account
@@ -5801,7 +5812,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     const idcard = `<div class="idcard">
       <div class="fp">${esc(account.fingerprint)}</div>
       <div class="ses">paid with coins · fingerprint</div>
-      <div class="bal">${esc(tokuLine(balance + accountToku()))}</div>
+      <div class="bal">${esc(formatToku(balance + accountToku()))} TOKU</div>
       <div class="held">${creditSplit()}</div>
       ${allowanceHTML()}${keptCreditHTML()}
       ${entitlement>0 && entitlement<bookToku ? `<div class="held" style="color:var(--rust)">Coins are drawn a whole book at a time (${esc(formatToku(bookToku))} TOKU), so this rest waits here until your next top-up. It is on your recovery phrase and cannot be lost.</div>` : ``}
@@ -6356,6 +6367,19 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   /// different question, answered by the meter and the credit row below.
   function accountToku(){ return entitlement + planLeft(); }
   function planLeft(){ return Number(plan && plan.left) || 0; }
+  /// What is left of THIS MONTH, wherever it sits. Drawing coins moves allowance from the
+  /// account onto the device; it is still this month's and still unspent. So the month is
+  /// what the account still holds plus what was drawn and not yet spent — and "drawn" can
+  /// never be more than granted − left, which is what keeps credit bought outright (it sits
+  /// on the device as the same coins) from being counted as allowance.
+  function monthLeft(){
+    const granted = Number(plan && plan.granted) || 0;
+    return planLeft() + Math.min(Math.max(0, held), Math.max(0, granted - planLeft()));
+  }
+  function monthPct(){
+    const granted = Number(plan && plan.granted) || 0;
+    return granted > 0 ? Math.max(0, Math.min(100, Math.round(monthLeft() / granted * 100))) : 0;
+  }
   /// The 1st of next month, in the reader's own locale — the date the meter refills.
   function resetDateLabel(){
     const d = new Date();
@@ -6372,15 +6396,17 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         <small>The month you last paid for is finished. Everything already drawn stays yours.</small></span></div>`;
     }
     if(!planActive()) return "";
-    // What is LEFT on the account, not what is unspent: drawing coins moves allowance onto
-    // the device, where it is still the customer's and still this month's. A bar that
-    // counted a withdrawal as spending would read as money disappearing.
-    const left = planLeft(), granted = Number(plan.granted) || 0;
-    const pct = granted > 0 ? Math.max(0, Math.min(100, Math.round(left / granted * 100))) : 0;
+    // What is left of the MONTH — account plus coins already drawn and not yet spent. The
+    // meter used to show the account part alone, so that a withdrawal would not read as
+    // spending; it did exactly that: "600.000 of 700.000" under a headline of 698.700 read
+    // as a hundred thousand gone, and two numbers for one budget (2026-09-19). Where the
+    // money SITS is the line underneath, not the bar.
+    const left = monthLeft(), granted = Number(plan.granted) || 0, pct = monthPct();
+    const onDevice = Math.max(0, left - planLeft());
     return `<div class="allow">
-      <div class="top"><span class="big">${esc(formatToku(left))}</span><span class="of">of ${esc(formatToku(granted))} TOKU</span></div>
+      <div class="top"><span class="big">${esc(formatToku(left))}</span><span class="of">of ${esc(formatToku(granted))} TOKU this month</span></div>
       <div class="track${pct <= 10 ? " low" : ""}"><i style="width:${pct}%"></i></div>
-      <div class="foot"><span>still on your account${balance > 0 ? ` · ${esc(formatToku(balance))} already drawn` : ""}</span><span>resets <b>${esc(resetDateLabel())}</b></span></div>
+      <div class="foot"><span>${esc(formatToku(planLeft()))} on your account${onDevice > 0 ? ` · ${esc(formatToku(onDevice))} on this device` : ""}</span><span>resets <b>${esc(resetDateLabel())}</b></span></div>
     </div>`;
   }
   /// Credit bought outright, shown only when there IS a plan beside it — on its own, the
