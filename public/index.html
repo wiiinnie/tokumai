@@ -6603,7 +6603,12 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       // auto-renewable subscription must offer a way to get it back on a new device or
       // after a reinstall — App Review checks for it, and a customer who paid and sees
       // nothing needs it more than any other button on this sheet.
-      box.innerHTML = row + restoreLinkHTML();
+      //
+      // …and it has to SAY what it found. This branch drew the link without iapMsg, so
+      // Restore ran, reported "nothing to restore", and the sheet looked untouched — which
+      // reads exactly like a button that does nothing (2026-09-19).
+      box.innerHTML = row + restoreLinkHTML()
+        + (iapMsg ? `<p class="hint" style="margin:10px 0 0">${esc(iapMsg)}</p>` : ``);
       return;
     }
     if(iapErr || !iapList){
@@ -6692,7 +6697,10 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       else if(found===0){
         iapMsg = planActive()
           ? "✓ Your plan is back — this month's allowance is on your account."
-          : "Nothing to restore — every purchase has been credited.";
+          // Not the same as "nothing was bought": an App Store subscription that has ENDED
+          // is not in what Apple calls current, so there is genuinely nothing to hand over.
+          // Say both halves, or somebody with an expired plan reads this as a failure.
+          : "Nothing to restore. The App Store reports no active subscription and no uncredited purchase for this Apple ID — an ended plan is not restorable, only a new one.";
         disarmIapRetry();
         if(planActive()) await collectAfterIap();
       }
