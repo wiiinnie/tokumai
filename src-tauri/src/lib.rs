@@ -1692,10 +1692,10 @@ fn coin_request(
 /// already gave or serves it now, and either way tells us which notes it burned, so the
 /// rest come home. Best effort — one attempt each, and a tender that still gets no reply
 /// stays pending for the next try rather than being written off.
-async fn settle_pending_tenders(app: &AppHandle, transport: &Transport, srv: &str) {
+async fn settle_pending_tenders(app: &AppHandle, transport: &Transport, srv: &str, limit: usize) {
     let Ok(dir) = data_dir(app) else { return };
     let pending = wallet::load(&dir).pending_tenders;
-    for pt in pending {
+    for pt in pending.into_iter().take(limit) {
         let Some(id) = pt.request.get("id").and_then(|i| i.as_str()).map(|s| s.to_string()) else { continue };
         let notes: Vec<scrai_core::tender::Note> =
             pt.notes.iter().filter_map(|v| serde_json::from_value(v.clone()).ok()).collect();
@@ -1707,7 +1707,13 @@ async fn settle_pending_tenders(app: &AppHandle, transport: &Transport, srv: &st
             continue;
         }
         log::info!("[tender] settling an unanswered tender before the new question");
-        match transport.round_trip_raw_notify(srv, &pt.request, SURBS_TEXT, SETTLE_TIMEOUT_MS, || {}).await {
+        // PATIENT: a settle that gets no answer must not take the mixnet client down with
+        // it. `round_trip_raw_notify` drops the client on a reply timeout — sound when the
+        // client is the suspect, catastrophic here: this runs BEFORE the user's question,
+        // once per unanswered tender, so a clogged wallet tore the route down a dozen
+        // times in a row and every reply in flight died with it (2026-09-19). Silence from
+        // one old tender says nothing about the connection.
+        match transport.round_trip_raw_patient(srv, &pt.request, SURBS_TEXT, SETTLE_TIMEOUT_MS).await {
             Ok(reply) => {
                 if let Err(e) = coin_settle(&dir, &id, &notes, &reply) {
                     log::warn!("[tender] settling failed: {e}");
@@ -1725,6 +1731,19 @@ fn coin_settle(dir: &std::path::Path, req_id: &str, notes: &[scrai_core::tender:
         .get("burned")
         .and_then(|b| serde_json::from_value(b.clone()).ok())
         .unwrap_or_default();
+    // An error reply normally burned nothing, so every note goes home — except the one
+    // refusal that means the opposite: coins the server has already spent. Handing those
+    // back would fill the wallet with notes that can never pay again, and every tender
+    // built from them would be refused for a reason that looks exactly like tonight's bug.
+    let spent_for_good = resp
+        .get("error")
+        .and_then(|e| e.as_str())
+        .map(|e| e.contains("already been spent"))
+        .unwrap_or(false);
+    let burned: Vec<usize> = if spent_for_good { (0..notes.len()).collect() } else { burned };
+    if spent_for_good {
+        log::warn!("[tender] the server had already spent these coins — closing the tender without them");
+    }
     let mut w = wallet::load(dir);
     let spent = keep_unburned(&mut w, notes, &burned);
     // Only the tender this reply answers: another one may still be outstanding.
@@ -2937,6 +2956,10 @@ fn collect_later(app: AppHandle, force: Option<bool>) -> Result<Value, String> {
     if go {
         spawn_refill_soon(&app);
     }
+    // Unrelated to whether books are needed: leftovers from unanswered questions are
+    // cleared out here too, because this is the one moment the route is fresh and nobody
+    // is waiting on a cursor.
+    spawn_tender_flush(&app);
     Ok(json!({ "started": go }))
 }
 
@@ -3217,6 +3240,42 @@ fn spawn_refill(app: &AppHandle) {
     spawn_refill_in(app, 30, 90)
 }
 
+/// Clear out EVERY tender left unanswered, in the background.
+///
+/// A question that goes unanswered leaves its coins on the table: recorded as pending,
+/// out of the wallet until the server says which of them it burned. Those pile up — and a
+/// wallet full of leftovers makes every following question heavier, which is how a bad
+/// evening turns into a worse one (2026-09-19: thirteen of them, and a 54 KB question for
+/// an answer that cost one coin).
+///
+/// Each is re-sent VERBATIM, which is the only safe way to ask: the server recognises an
+/// identical tender as a replay rather than a second spend. Start-up is the right moment —
+/// the route is fresh and nobody is waiting on a cursor.
+fn spawn_tender_flush(app: &AppHandle) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static RUNNING: AtomicBool = AtomicBool::new(false);
+    if RUNNING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        let t = app.state::<Arc<Transport>>().inner().clone();
+        let open = data_dir(&app).map(|d| wallet::load(&d).pending_tenders.len()).unwrap_or(0);
+        if open > 0 {
+            log::warn!("[tender] {open} unanswered tender(s) from earlier — clearing them out");
+            if let Ok(srv) = data_dir(&app).and_then(|d| server_addr(&wallet::load(&d))) {
+                let _op = t.begin_op().await;
+                settle_pending_tenders(&app, &t, &srv, usize::MAX).await;
+            }
+            let left = data_dir(&app).map(|d| wallet::load(&d).pending_tenders.len()).unwrap_or(0);
+            log::warn!("[tender] {} of {open} still open after the sweep", left);
+            let _ = app.emit("top-up", json!({ "ok": true, "collected": 0 }));
+        }
+        RUNNING.store(false, Ordering::SeqCst);
+    });
+}
+
 /// The same, but soon — used at start-up, where there is no question to sit next to and a
 /// user who just bought credit is watching for it.
 fn spawn_refill_soon(app: &AppHandle) {
@@ -3416,7 +3475,12 @@ async fn chat_impl(
         // its replay cache — so carrying one into a new question would answer the new
         // question with the old answer (2026-09-14: "test" came back as a picture).
         if !retry.unwrap_or(false) {
-            settle_pending_tenders(&app, &transport, &srv).await;
+            // ONE, not all. This is housekeeping and the user is waiting: a wallet holding a
+            // dozen unanswered tenders spent minutes here before the question left the
+            // device, which the app showed as "Sending to mixnet…" (2026-09-19). The rest
+            // are cleared by `spawn_tender_flush`, off the critical path, where nobody is
+            // watching a cursor blink.
+            settle_pending_tenders(&app, &transport, &srv, 1).await;
         }
         let (req, notes, resumed) =
             coin_request(&dir, &srv, &model, &messages, maxTokens, live, thinkingBudget, &imageSize, retry.unwrap_or(false))?;
