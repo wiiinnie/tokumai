@@ -3266,6 +3266,12 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // whole app: typewriter + ✓ per REAL step, same words as the boot animation) · offline.
   // Every step is reported by Rust as it actually starts — nothing is typed on a timer.
   let mixState = "ok", routeStart = 0, routeTicker = null, routeFail = "", connectedAt = 0, hiddenAt = 0, lastRtt = 0, lastRebuildSecs = 0, routeWhy = "";
+  // Heartbeat state lives HERE, at module scope, because the send path touches it too — a
+  // question resets the clock. Declared inside the init block it would have thrown a
+  // ReferenceError on every chat, and the smoke test would not have caught it: that test
+  // opens screens, it never sends anything.
+  const HEARTBEAT_MS = 60_000;
+  let heartbeatTimer = null, lastBeatAt = 0;
   // "server" reads as a liveness check here (the boot animation keeps "Connecting to
   // tokumai server"): the step sends a tiny ping through the mixnet and waits for
   // the answer — "reuse" narrates the fast path where the live route is kept as-is.
@@ -4236,6 +4242,9 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     // for the mixnet; tFirst = first reply byte. total captures the full round-trip;
     // (tFirst − tSent) isolates the mixnet+provider latency from local upload time.
     const t0 = performance.now(); let tSent = 0, tFirst = 0, dlFirstChunkAt = 0, dlChunks = 0;
+    // A question is a heartbeat: it proves the route far better than a ping, and pushes the
+    // next beat a full minute out. Without this the timer would fire mid-conversation.
+    lastBeatAt = Date.now();
     // The size we ASKED for — compared with usage.imageSize (what was actually drawn) so a
     // downgrade (2K on Lite → 1K) is told to the user, not silently swallowed.
     const reqSize = imageSize(), reqLabel = $("mName").textContent || currentModel;
@@ -7734,6 +7743,30 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         if(everConnected && away > 3000) Promise.resolve(appResumed(away)).finally(after); else { refreshRoute(); after(); }
       }
     });
+    // ---- heartbeat ----
+    // A socket can die while nothing is being sent — iOS suspending the app, a gateway
+    // closing, an epoch turning over — and nothing notices, because `is_connected` only
+    // goes false when a send FAILS. The next question then pays for the discovery and the
+    // rebuild: 44 seconds before a packet left the device, measured 2026-09-19, for a
+    // request the server answered in one.
+    //
+    // So while the app is OPEN and IDLE, ask once a minute. One small round trip, in the
+    // background, and a dead route is rebuilt before anybody is waiting on it. Not while
+    // hidden (iOS suspends the timer anyway, and the resume path already checks), not while
+    // busy (traffic in flight is its own proof of life), and not before the first connect.
+    async function heartbeat(){
+      if(!isTauri() || !mixOn || !everConnected || busy) return;
+      if(document.visibilityState !== "visible") return;
+      if(Date.now() - lastBeatAt < HEARTBEAT_MS - 1000) return;
+      lastBeatAt = Date.now();
+      try{
+        const r = await Backend.mixnetHeartbeat();
+        // "reconnect" surfaces on its own through the phase events; nothing to say here.
+        if(r && r.action === "alive") connectedAt = connectedAt || Date.now();
+      }catch(_){ /* the next beat asks again; a heartbeat must never be the thing that breaks */ }
+    }
+    if(!heartbeatTimer) heartbeatTimer = setInterval(heartbeat, 15_000);
+
     // Connect progress from Rust (every reconnect after the first): drives the chip + card.
     if(isTauri()){ try{ Backend.onMixnetPhase(onMixnetPhase); }catch(_){} try{ Backend.onBuyPhase(onBuyPhase); }catch(_){}
       try{ Backend.onCoinsReturn(p=>{ if(!p) return; returnPct = Math.max(returnPct, Number(p.percent)||0); returnDone = Number(p.credited)||returnDone; if(returning) renderAccount(); }); }catch(_){}

@@ -3632,6 +3632,50 @@ async fn app_resumed(
     }
 }
 
+/// While the app is open and nothing is being sent: prove the route is still there.
+///
+/// The gap this fills is that a dead socket is INVISIBLE until something tries to use it —
+/// `is_connected` only goes false when a send fails. So a connection that died quietly
+/// (iOS suspending the app, a gateway closing, a Nym epoch turning over) stayed "connected"
+/// until the next question, which then paid for the discovery AND the rebuild inside
+/// `ensure_connected`: 44 seconds before a single packet left the device, measured on
+/// 2026-09-19, while the server answered the same request in one second.
+///
+/// A ping costs one small round trip and finds the same thing in one to three seconds,
+/// in the background, before anybody is waiting on it.
+///
+/// Quiet by design: no phase events and no resume-stats row on the normal "alive" path, or
+/// a minute timer would flicker the route chip and fill the log with proof that nothing
+/// happened. Only a FAILURE is loud — it rebuilds, with the usual overlay.
+#[tauri::command]
+async fn mixnet_heartbeat(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<Value, String> {
+    const PING_BUDGET_MS: u64 = 5_000;
+    let t: Arc<Transport> = transport.inner().clone();
+    // Traffic in flight is its own proof of life, and a heartbeat that queued behind a
+    // picture download would block for minutes and then report a stale answer.
+    if t.op_in_flight() {
+        return Ok(json!({ "action": "busy" }));
+    }
+    if !t.is_connected() {
+        spawn_rebuild(app.clone(), t.clone());
+        return Ok(json!({ "action": "reconnect", "reason": "dead" }));
+    }
+    let w = wallet::load(&data_dir(&app)?);
+    let srv = server_addr(&w)?;
+    let req = json!({ "v": PROTO, "kind": "ping", "id": rand_hex(8) });
+    let t0 = std::time::Instant::now();
+    match t.round_trip(&srv, &req, SURBS_SMALL, PING_BUDGET_MS).await {
+        Ok(_) => Ok(json!({ "action": "alive", "ms": t0.elapsed().as_millis() as u64 })),
+        Err(e) if e.starts_with("cancelled") => Ok(json!({ "action": "busy" })),
+        Err(_) => {
+            // round_trip already dropped the client and marked it dead.
+            record_resume(&app, 0, "reconnect", Some(false), None, "heartbeat-failed");
+            spawn_rebuild(app.clone(), t.clone());
+            Ok(json!({ "action": "reconnect", "reason": "ping-failed" }))
+        }
+    }
+}
+
 /// THE reconnect path (route poll + resume + "rebuild now"): rebuild the route — keys,
 /// client, gateway, cover traffic are reported by ensure_connected — then prove the far end
 /// with a ping ("Connecting to tokumai server"), and only then report `online`. One at
@@ -5268,6 +5312,7 @@ pub fn run() {
             phrase_backup_get, iap_products, iap_purchase, iap_restore,
             phrase_check_start,
             phrase_check_verify,
+            mixnet_heartbeat,
             iap_plans,
             iap_subscribe,
             iap_sync_plan,

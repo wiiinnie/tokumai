@@ -242,6 +242,13 @@ impl Transport {
         self.op_lock.lock().await
     }
 
+    /// Is an operation running right now? Asked by the heartbeat, which must never queue
+    /// behind a chat or a picture download: traffic in flight is itself proof the route is
+    /// alive, so the honest answer in that moment is "no need to check".
+    pub fn op_in_flight(&self) -> bool {
+        self.op_lock.try_lock().is_err()
+    }
+
     /// Set the mixnet performance/privacy tradeoff and drop the live client so the next
     /// request reconnects with the new cover-traffic rate + mixing delay. No-op (and no
     /// reconnect) if the values are unchanged, so the UI can push it freely on startup.

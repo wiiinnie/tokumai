@@ -127,6 +127,7 @@ const httpBackend = {
   mixnetPing: () => Promise.reject(new Error("mixnet ping is native-only")),
   cancelChat: () => Promise.resolve(),
   appResumed: () => Promise.resolve({ action: "alive", ms: 0 }),
+  mixnetHeartbeat: () => Promise.resolve({ action: "alive", ms: 0 }),
   appHidden: () => Promise.resolve(),
   resumeStats: () => Promise.resolve({ count: 0, alive: 0, dead: 0, rebuilt: 0, longest_alive_ms: 0, shortest_dead_ms: null, log: "", path: "" }),
   onMixnetPhase: async () => () => {},
@@ -228,6 +229,7 @@ const tauriBackend = (invoke) => ({
   cancelChat: () => invoke("cancel_chat"),
   // App back in the foreground after hiddenMs; force=true rebuilds the route unconditionally.
   appResumed: (hiddenMs, force) => invoke("app_resumed", { hiddenMs: Math.max(0, Math.round(hiddenMs||0)), force: !!force }),
+  mixnetHeartbeat: () => invoke("mixnet_heartbeat"),
   // Android: hidden long enough → drop the client so cover traffic stops burning battery.
   appHidden: () => invoke("app_hidden"),
   // Local resume log (hidden duration → route alive?), summary + tail. Never leaves the device.
@@ -356,6 +358,7 @@ export const Backend = {
   mixnetPing: () => pick("mixnetPing"),
   cancelChat: () => pick("cancelChat"),
   appResumed: (...a) => pick("appResumed", ...a),
+  mixnetHeartbeat: () => pick("mixnetHeartbeat"),
   appHidden: () => pick("appHidden"),
   resumeStats: () => pick("resumeStats"),
   onMixnetPhase: (...a) => pick("onMixnetPhase", ...a),
