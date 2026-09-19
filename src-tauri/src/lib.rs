@@ -3355,6 +3355,10 @@ async fn chat_impl(
     let w = wallet::load(&dir);
     let srv = server_addr(&w)?;
 
+    // Before anything is signed, spent or shown as "sending": is this route still real?
+    // Only asked of a connection that has been silent (see `ROUTE_STALE_AFTER`).
+    prove_route(&app, &transport, &srv).await;
+
     let m = w.mnemonic.clone().ok_or("no account — create one and buy credit")?;
 
     // A LOCAL key for the two in-app maps that remember an interrupted request: an
@@ -3397,10 +3401,24 @@ async fn chat_impl(
             log::info!("[tender] resuming an unanswered tender verbatim");
         }
         let sent_app = app.clone();
+        let note_app = app.clone();
+        // Not the plain round trip: this one keeps checking that the route is still
+        // carrying while it waits, and rebuilds + resends the question if it is not.
+        // Safe to resend because it is byte-identical — the server replays an identical
+        // tender from its cache instead of charging twice.
         let reply = transport
-            .round_trip_raw_notify(&srv, &req, surbs, chat_timeout_ms, move || {
-                let _ = sent_app.emit("chat-sent", ());
-            })
+            .round_trip_resilient(
+                &srv,
+                &req,
+                surbs,
+                chat_timeout_ms,
+                move || {
+                    let _ = sent_app.emit("chat-sent", ());
+                },
+                move |note| {
+                    let _ = note_app.emit("chat-note", note);
+                },
+            )
             .await?;
         // A delivered reply — answer or refusal — settles the tender either way: an error
         // reply burned nothing, so every note goes back into the wallet.
@@ -3657,6 +3675,40 @@ async fn app_resumed(
             spawn_rebuild(app.clone(), t.clone());
             Ok(json!({ "action": "reconnect", "reason": "ping-failed" }))
         }
+    }
+}
+
+/// How long a quiet connection stays trustworthy.
+///
+/// `is_connected()` is a latch — it only falls when a send FAILS, and a send into a
+/// socket that died quietly succeeds, because the SDK takes the packet into its own
+/// channel and the gateway never carries it. The heartbeat would find that, but it is
+/// off while a chat is busy and every question pushes it a minute out, so the gap
+/// between two questions is exactly where it cannot look. That gap is where the second
+/// question of a session vanished on 2026-09-19.
+const ROUTE_STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(20);
+/// The pre-flight ping's budget. Small on purpose: this runs before the user's question,
+/// so it may cost a moment, never a wait.
+const ROUTE_PROBE_MS: u64 = 4_000;
+
+/// Prove the route before a question rides on it — but only when the connection has been
+/// quiet long enough to be doubtful. A live conversation never pays for this: a reply
+/// that arrived seconds ago is the proof.
+///
+/// On failure `round_trip` has already dropped the client and marked it dead, so the send
+/// that follows rebuilds instead of talking into a socket that is not there.
+async fn prove_route(app: &AppHandle, transport: &Transport, srv: &str) {
+    if !transport.is_connected() {
+        return; // already known dead — `ensure_connected` will rebuild
+    }
+    match transport.silent_for() {
+        Some(quiet) if quiet >= ROUTE_STALE_AFTER => {}
+        _ => return,
+    }
+    let req = json!({ "v": PROTO, "kind": "ping", "id": rand_hex(8) });
+    if transport.round_trip(srv, &req, SURBS_ONE_PACKET, ROUTE_PROBE_MS).await.is_err() {
+        log::warn!("[mixnet] the route was quiet and did not answer — rebuilding before the question goes out");
+        let _ = app.emit("chat-route", ());
     }
 }
 

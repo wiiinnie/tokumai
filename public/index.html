@@ -4263,6 +4263,15 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         // Queued behind a top-up, which holds the same lock while it draws books. Not the
         // mixnet, not the model: our own housekeeping, and it can take half a minute.
         if(p==="topup"){ setMixPhase(0); mixWord = "Topping up your coins..."; mixShown = ""; mixHint = "your question goes out right after"; return; }
+        // The wait talking about itself. A counter that just climbs cannot tell a model
+        // that is thinking from a route that is gone — these can.
+        if(p==="note"){
+          mixHint = info==="resent" ? "no answer — asked again, you are not charged twice"
+                  : info==="busy"   ? "the first attempt is still running"
+                  :                   "checking the route";
+          paintMixPhase();
+          return;
+        }
         if(p==="sent"){ setMixPhase(1); tSent=performance.now(); }
         else if(p==="image"&&info){
           // The picture was generated (and charged) — now its chunks trickle through the

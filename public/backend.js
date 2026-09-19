@@ -290,6 +290,12 @@ const tauriBackend = (invoke) => ({
         // will not until that finishes. Its own phase, because "Sending to mixnet…" for a
         // message that is queued behind a withdrawal is simply untrue.
         unlisten.push(await ev.listen("chat-topup", () => onPhase("topup")));
+        // The wait itself reporting on the route: "checking" (silence long enough to
+        // doubt it), "resent" (it was dead, the question went out again — the server
+        // replays an identical tender, so nothing is charged twice), "busy" (the server
+        // still has the first copy). Without these a dead route looks exactly like a
+        // model that is thinking, for two minutes.
+        unlisten.push(await ev.listen("chat-note", (e) => onPhase("note", e.payload)));
       }
       const r = await invoke("chat", { model: body.model, messages: body.messages, maxTokens: body.maxTokens, live: !!body.live, thinkingBudget: (typeof body.thinkingBudget==="number"?body.thinkingBudget:null), bigReply: !!body.bigReply, retry: !!body.retry, imageSize: (typeof body.imageSize==="string"?body.imageSize:null) });
       if (onPhase) onPhase("receiving");

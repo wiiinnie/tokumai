@@ -106,6 +106,16 @@ pub fn debug_config_for(cover_ms: u64, mix_ms: u64, send_ms: u64, continuous: bo
     dbg
 }
 
+const TIMEOUT_MSG: &str = "no reply from the mixnet in time — reconnecting on the next attempt";
+const CANCELLED_MSG: &str = "cancelled — the request already left for the mixnet and may still be processed; Retry replays it without a second charge";
+
+/// Monotonic base for `Transport::last_heard` — an `Instant` cannot live in an atomic,
+/// so the atomic holds milliseconds since the first time this is asked.
+fn since_base() -> std::time::Instant {
+    static B: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    *B.get_or_init(std::time::Instant::now)
+}
+
 #[derive(Clone, serde::Serialize)]
 pub struct GatewayInfo {
     pub id: String,
@@ -130,6 +140,17 @@ pub struct Transport {
     /// so a status query must never need it — or the route indicator freezes
     /// grey exactly while traffic is flowing.
     live: std::sync::atomic::AtomicBool,
+    /// When something last really ARRIVED through this transport, in milliseconds since
+    /// `since_base()`. 0 = nothing ever has.
+    ///
+    /// `live` on its own is a latch: it only falls when a send FAILS, and a send into a
+    /// socket that died quietly SUCCEEDS — the SDK takes the packet into its own channel
+    /// and the gateway never carries it. So the route reads green while questions vanish.
+    /// That is 2026-09-19: the second question of a session never reached the server (no
+    /// `tender` line in its log), the app said "Thinking…" because the send returned Ok,
+    /// and it sat there for two minutes. Delivery is the only thing that can be PROVEN,
+    /// and this is where the proof is kept.
+    last_heard: std::sync::atomic::AtomicU64,
     /// Entry gateway of the live client, cached at connect (same lock-free reason).
     entry_cached: std::sync::Mutex<Option<String>>,
     /// Guards against stacking multiple background reconnect tasks.
@@ -182,6 +203,7 @@ impl Transport {
         Self {
             client: Mutex::new(None),
             live: std::sync::atomic::AtomicBool::new(false),
+            last_heard: std::sync::atomic::AtomicU64::new(0),
             entry_cached: std::sync::Mutex::new(None),
             reconnecting: std::sync::atomic::AtomicBool::new(false),
             chosen_gateway: Mutex::new(None),
@@ -371,6 +393,7 @@ impl Transport {
                 _ = self.cancel.notified() => break,
             };
             if let Some(batch) = got {
+                self.mark_heard();
                 for m in batch {
                     let Ok(v) = serde_json::from_slice::<Value>(&m.message) else { continue };
                     let Some(id) = v.get("id").and_then(|x| x.as_str()) else { continue };
@@ -466,6 +489,7 @@ impl Transport {
                 _ = self.cancel.notified() => return Err("cancelled — Retry resumes the download".into()),
             };
             if let Some(batch) = got {
+                self.mark_heard();
                 for m in batch {
                     let Ok(v) = serde_json::from_slice::<Value>(&m.message) else { continue };
                     let Some(id) = v.get("id").and_then(|x| x.as_str()) else { continue };
@@ -633,6 +657,10 @@ impl Transport {
         };
         *self.entry_cached.lock().unwrap() = Some(c.nym_address().gateway().to_base58_string());
         self.live.store(true, std::sync::atomic::Ordering::Relaxed);
+        // Registration with the gateway is a completed round trip with it, so a
+        // just-built client is not "silent" — the staleness check below must not fire a
+        // probe at a connection that is seconds old.
+        self.mark_heard();
         *guard = Some(c);
         // The SDK's cover stream starts with the connection; report it as its own step,
         // matching the boot animation's wording.
@@ -645,7 +673,27 @@ impl Transport {
     /// is dropped after a transport failure.
     fn mark_dead(&self) {
         self.live.store(false, std::sync::atomic::Ordering::Relaxed);
+        self.last_heard.store(0, std::sync::atomic::Ordering::Relaxed);
         *self.entry_cached.lock().unwrap() = None;
+    }
+
+    /// Note that something really came back through the mixnet. Any message counts, ours
+    /// or a stray: what is being proven is that the gateway is still carrying, not that a
+    /// particular request was answered.
+    fn mark_heard(&self) {
+        let ms = since_base().elapsed().as_millis() as u64;
+        // 0 is reserved for "never", so a first message inside the first millisecond of
+        // the process still counts as heard.
+        self.last_heard.store(ms.max(1), std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// How long since anything last arrived. `None` = nothing ever has on this connection
+    /// (fresh process, or the client was dropped since).
+    pub fn silent_for(&self) -> Option<Duration> {
+        match self.last_heard.load(std::sync::atomic::Ordering::Relaxed) {
+            0 => None,
+            ms => Some(since_base().elapsed().saturating_sub(Duration::from_millis(ms))),
+        }
     }
 
     /// Claim the single background-rebuild slot (false = one is already running, or the
@@ -842,6 +890,251 @@ impl Transport {
         Box::pin(self.round_trip_notify_inner(server, req, surbs, timeout_ms, on_sent, false, true)).await
     }
 
+    /// A round trip that does not wait in silence.
+    ///
+    /// The plain `round_trip` sends once and listens for the full timeout. That is wrong
+    /// for the one request a person is actually sitting in front of, because `send_message`
+    /// returning `Ok` proves nothing: the SDK has taken the packet into its own channel,
+    /// and a gateway whose socket died quietly never carries it. The app then shows
+    /// "Thinking…" over a question that does not exist anywhere (2026-09-19: no `tender`
+    /// line in the server log for the second question of the session, two minutes of
+    /// nothing on the phone).
+    ///
+    /// So: after `QUIET_WINDOW` of complete silence, ask the ROUTE whether it is still
+    /// there — a `ping`, watched for in this same receive loop, no second lock, no
+    /// recursion. A pong means the route is fine and the model is simply thinking: keep
+    /// waiting, as long as it takes. No pong means the route is gone, and only then is the
+    /// question rebuilt-and-resent, which is safe because it is byte-identical and the
+    /// server replays an identical tender from its cache instead of charging again
+    /// (`chat.rs`: `re_sending_the_same_tender_replays_the_answer_instead_of_burning_again`).
+    ///
+    /// A reply marked `busy` is the server saying these very coins are being spent right
+    /// now — the first copy is still with the provider. That is not an answer and must not
+    /// be shown as one; we keep waiting for the real one.
+    ///
+    /// Delivered server errors come back as `Ok(reply)` (like `round_trip_raw_notify`), so
+    /// the caller can tell a refusal apart from silence.
+    pub async fn round_trip_resilient(
+        &self,
+        server: &str,
+        req: &Value,
+        surbs: u32,
+        timeout_ms: u64,
+        on_sent: impl FnOnce(),
+        on_note: impl Fn(&str),
+    ) -> Result<Value, String> {
+        Box::pin(self.round_trip_resilient_inner(server, req, surbs, timeout_ms, on_sent, on_note)).await
+    }
+
+    async fn round_trip_resilient_inner(
+        &self,
+        server: &str,
+        req: &Value,
+        surbs: u32,
+        timeout_ms: u64,
+        on_sent: impl FnOnce(),
+        on_note: impl Fn(&str),
+    ) -> Result<Value, String> {
+        /// Silence after which the route is asked to prove itself.
+        const QUIET_WINDOW: Duration = Duration::from_secs(15);
+        /// How long the pong has to come back before the route counts as gone.
+        const PROBE_WINDOW: Duration = Duration::from_secs(5);
+        /// How many times the question itself may be put on the wire. Three is one
+        /// original and two rebuilds; past that the wait is not a lost packet.
+        const MAX_SENDS: u32 = 3;
+        /// How many answered pings the question may go unanswered through before it is
+        /// put on the wire once more.
+        ///
+        /// Note: ONCE MORE, on the same client — not a rebuild. The first version of this
+        /// rebuilt, on the theory that a fresh ephemeral client gets a fresh gateway
+        /// allowance. The server log disproved it within the hour: the questions were
+        /// ARRIVING (`#0 ← chat`) and the answers were what went missing, so tearing the
+        /// client down threw away the very reply-SURBs the answer was owed on, seventeen
+        /// times in a row. A rebuild is the cure for a route that cannot carry; it is
+        /// poison for a route that carries one way (2026-09-19).
+        const PATIENCE: u32 = 2;
+
+        let recipient =
+            Recipient::try_from_base58_string(server).map_err(|e| format!("bad server address: {e}"))?;
+        let id = req.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+        let bytes = stamp_app(req)?;
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+        let mut on_sent = Some(on_sent);
+        let mut sends: u32 = 0;
+
+        loop {
+            // The rebuild happens BETWEEN attempts, never inside one, so the client lock
+            // is taken fresh each time round and never held across a reconnect.
+            self.ensure_connected().await?;
+            let mut guard = self.client.lock().await;
+            if guard.is_none() {
+                return Err("mixnet not connected — please retry".into());
+            }
+            if let Err(e) = guard
+                .as_mut()
+                .unwrap()
+                .send_message(recipient, bytes.clone(), IncludedSurbs::new(surbs))
+                .await
+            {
+                *guard = None;
+                self.mark_dead();
+                return Err(format!("mixnet send failed: {e} — reconnecting on the next attempt"));
+            }
+            sends += 1;
+            match on_sent.take() {
+                Some(f) => f(),
+                None => on_note("resent"),
+            }
+
+            // ---- watch this attempt ----
+            let mut next_check = tokio::time::Instant::now() + QUIET_WINDOW;
+            let mut probe: Option<String> = None;
+            // Quiet windows survived on the strength of a pong alone.
+            let mut quiet: u32 = 0;
+            // Set once the server has told us it is holding this very tender. THAT is
+            // proof the question arrived, and it is worth any amount of waiting — a
+            // rebuild then would only take the reply's route away from under it.
+            let mut server_has_it = false;
+            // Did the ROUTE fail, or did only the answer stay away? Only the first is a
+            // reason to throw the client away (see `PATIENCE`).
+            let mut route_dead = true;
+            // How many messages of ANY kind came back while this attempt was waiting.
+            // "The answer never arrived" and "nothing ever arrives" are different faults
+            // with the same symptom, and for a whole evening nothing on the device could
+            // tell them apart (2026-09-19). A count can.
+            let mut heard: u32 = 0;
+            loop {
+                let now = tokio::time::Instant::now();
+                if now >= deadline {
+                    *guard = None;
+                    self.mark_dead();
+                    return Err(TIMEOUT_MSG.into());
+                }
+                let until = next_check.min(deadline);
+                if now < until {
+                    let batch = tokio::select! {
+                        r = tokio::time::timeout(until - now, guard.as_mut().unwrap().wait_for_messages()) => match r {
+                            Ok(b) => b,
+                            Err(_) => continue, // window closed — handled below
+                        },
+                        _ = self.cancel.notified() => return Err(CANCELLED_MSG.into()),
+                    };
+                    let Some(messages) = batch else {
+                        *guard = None;
+                        self.mark_dead();
+                        return Err("mixnet stream ended — reconnecting on the next attempt".into());
+                    };
+                    self.mark_heard();
+                    for m in messages {
+                        heard += 1;
+                        let Ok(v) = serde_json::from_slice::<Value>(&m.message) else {
+                            log::warn!("[mixnet] a reply arrived that is not JSON ({} bytes)", m.message.len());
+                            continue;
+                        };
+                        match v.get("id").and_then(|x| x.as_str()) {
+                            Some(got) if got == id => {
+                                // The coins are on the table twice — the first copy is
+                                // still with the provider. Wait for the real answer.
+                                //
+                                // The flag is the server's word for it; the text is the
+                                // same refusal from a server that predates the flag, and
+                                // has to be read too, or a resend against one of those
+                                // would show a refusal where the answer belongs.
+                                let busy = v.get("busy").and_then(|b| b.as_bool()) == Some(true)
+                                    || v.get("error").and_then(|e| e.as_str())
+                                        .map(|e| e.contains("already paying"))
+                                        .unwrap_or(false);
+                                if busy {
+                                    on_note("busy");
+                                    server_has_it = true;
+                                    quiet = 0;
+                                    next_check = tokio::time::Instant::now() + QUIET_WINDOW;
+                                    probe = None;
+                                    continue;
+                                }
+                                return Ok(v);
+                            }
+                            // The route answered — but only for one small packet. Give
+                            // the model room, then stop believing it (see `PATIENCE`).
+                            Some(got) if Some(got) == probe.as_deref() => {
+                                probe = None;
+                                quiet += 1;
+                                if quiet >= PATIENCE && !server_has_it && sends < MAX_SENDS {
+                                    log::warn!(
+                                        "[mixnet] the route carries pings but no answer ({heard} message(s) heard) — sending the question once more on the same route"
+                                    );
+                                    route_dead = false;
+                                    break;
+                                }
+                                next_check = tokio::time::Instant::now() + QUIET_WINDOW;
+                            }
+                            // Something came back that belongs to nobody waiting — a
+                            // reply to a round trip that already gave up, most likely.
+                            // Worth saying: it means the route DOES carry answers, only
+                            // too late, which is a different problem from silence.
+                            other => log::warn!(
+                                "[mixnet] a stray reply arrived (id {:?}, kind {:?}) while waiting for this one",
+                                other,
+                                v.get("kind").and_then(|k| k.as_str())
+                            ),
+                        }
+                    }
+                    continue;
+                }
+                // Silence long enough to be worth asking about.
+                match probe.take() {
+                    None => {
+                        let pid = format!("rt{:016x}", rand::random::<u64>());
+                        let ping = serde_json::json!({ "v": crate::PROTO, "kind": "ping", "id": pid });
+                        let Ok(pb) = stamp_app(&ping) else { break };
+                        if guard
+                            .as_mut()
+                            .unwrap()
+                            .send_message(recipient, pb, IncludedSurbs::new(3))
+                            .await
+                            .is_err()
+                        {
+                            break; // cannot even send — treat as a dead route
+                        }
+                        on_note("checking");
+                        next_check = tokio::time::Instant::now() + PROBE_WINDOW;
+                        probe = Some(pid);
+                    }
+                    // The route did not answer its own ping either.
+                    Some(_) => break,
+                }
+            }
+
+            drop(guard);
+            if route_dead {
+                // Nothing came back, not even a pong: the client is the problem. Tear it
+                // down so the next attempt builds a fresh one on a fresh registration.
+                if let Some(c) = self.client.lock().await.take() {
+                    c.disconnect().await;
+                }
+                self.mark_dead();
+                log::warn!("[mixnet] no answer and no pong ({heard} message(s) heard) — rebuilding the route and asking again ({sends})");
+            }
+            if sends >= MAX_SENDS || tokio::time::Instant::now() >= deadline {
+                return Err(TIMEOUT_MSG.into());
+            }
+        }
+    }
+
+    /// Like `round_trip_raw_notify`, but a reply that never comes does NOT take the client
+    /// down with it. For round trips where silence is about the REQUEST, not the route —
+    /// settling an old tender, say: that one was already unanswered, and its staying
+    /// unanswered is not evidence against the connection the next question needs.
+    pub async fn round_trip_raw_patient(
+        &self,
+        server: &str,
+        req: &Value,
+        surbs: u32,
+        timeout_ms: u64,
+    ) -> Result<Value, String> {
+        Box::pin(self.round_trip_notify_inner(server, req, surbs, timeout_ms, || {}, false, false)).await
+    }
+
     async fn round_trip_notify_inner(
         &self,
         server: &str,
@@ -880,10 +1173,6 @@ impl Transport {
         }
         on_sent();
 
-        const TIMEOUT_MSG: &str =
-            "no reply from the mixnet in time — reconnecting on the next attempt";
-        const CANCELLED_MSG: &str =
-            "cancelled — the request already left for the mixnet and may still be processed; Retry replays it without a second charge";
         let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
         loop {
             let Some(remaining) = deadline.checked_duration_since(tokio::time::Instant::now())
@@ -908,6 +1197,7 @@ impl Transport {
                 self.mark_dead();
                 return Err("mixnet stream ended — reconnecting on the next attempt".into());
             };
+            self.mark_heard();
             for m in messages {
                 if let Ok(v) = serde_json::from_slice::<Value>(&m.message) {
                     if v.get("id").and_then(|x| x.as_str()) == Some(id.as_str()) {
@@ -937,6 +1227,19 @@ mod tests {
         let all: std::collections::HashSet<String> = (0..500).map(|_| hermes_gateway_excluding(Some("not-a-hermes-gateway"))).collect();
         assert_eq!(all.len(), HERMES_ENTRY_GATEWAYS.len());
         assert!(!hermes_gateway_excluding(None).is_empty());
+    }
+
+    /// The point of `last_heard`: "connected" is a latch, "heard" is a fact. A transport
+    /// that has never received anything must say so, and one whose client was dropped must
+    /// go back to saying so — otherwise the chat's pre-flight trusts a dead socket.
+    #[test]
+    fn silence_is_only_known_after_something_has_been_heard() {
+        let t = Transport::new();
+        assert!(t.silent_for().is_none(), "nothing has arrived yet");
+        t.mark_heard();
+        assert!(t.silent_for().unwrap() < Duration::from_secs(1));
+        t.mark_dead();
+        assert!(t.silent_for().is_none(), "a dropped client proves nothing");
     }
 
     #[test]

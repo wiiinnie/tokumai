@@ -395,12 +395,19 @@ impl QuorumStore {
     ///
     /// This is the coin-paid equivalent of reserving a session balance: it runs on the
     /// dispatch loop before the provider call, `release` runs after it.
+    /// The two refusals `hold` can give are worlds apart and both arrive as a string:
+    /// coins IN FLIGHT belong to a request that is still running — the honest answer is
+    /// "wait" — while SPENT coins will never pay for anything again. Named here so both
+    /// sides can tell them apart without matching on prose.
+    pub const REFUSED_IN_FLIGHT: &'static str =
+        "one of these coins is already paying for another request";
+
     pub fn hold(&mut self, payments: &[&Payment]) -> Result<(), String> {
         let mut keys: Vec<String> = Vec::new();
         for p in payments {
             for key in payment_serials(p) {
                 if self.in_flight.contains(&key) {
-                    return Err("one of these coins is already paying for another request".into());
+                    return Err(Self::REFUSED_IN_FLIGHT.into());
                 }
                 if self.previous_spend(&key).is_some() {
                     return Err("one of these coins has already been spent".into());

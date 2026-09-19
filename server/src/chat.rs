@@ -409,6 +409,16 @@ pub fn reserve(
     let v: Value = serde_json::from_slice(request).unwrap_or(Value::Null);
     let id = v.get("id").cloned().unwrap_or(Value::Null);
     let err = |msg: &str| Reserved::Reply(encode(&json!({ "id": id.clone(), "kind": "error", "error": msg })));
+    // A refusal that is NOT the end of the story: these very coins are on the table right
+    // now, in a request that is still with the provider. A client that re-sent because it
+    // thought the route had died must keep waiting for the real answer instead of showing
+    // this as one (see `round_trip_resilient` in the app's nym.rs). Same error text as
+    // before for anyone who does not know the flag.
+    let busy = |msg: &str| {
+        Reserved::Reply(encode(
+            &json!({ "id": id.clone(), "kind": "error", "error": msg, "busy": true }),
+        ))
+    };
 
     // Reject an oversized request or an absurd message count up front (M-srv-2). The
     // body is already in memory (it arrived as one mixnet reply), but this bounds the
@@ -497,7 +507,15 @@ pub fn reserve(
         }
         let payments: Vec<&scrai_core::coconut::Payment> = tender.notes.iter().map(|n| &n.payment).collect();
         if let Err(e) = quorum.hold(&payments) {
-            return err(&e);
+            // IN FLIGHT means "being spent right now" — by this same tender resent over a
+            // route the client believed was dead, or by somebody trying to spend the coins
+            // twice. That one is worth waiting for, and only that one: coins already SPENT
+            // will never answer, and a client told to wait for them waits forever.
+            return if e == scrai_core::quorum::QuorumStore::REFUSED_IN_FLIGHT {
+                busy(&e)
+            } else {
+                err(&e)
+            };
         }
         // Notes of different denominations sit side by side, so the budget is the sum of
         // what they are worth — never a coin count times one size.
@@ -1405,6 +1423,10 @@ mod tests {
         };
         let r: Value = serde_json::from_slice(&bytes).unwrap();
         assert!(r["error"].as_str().unwrap().contains("already paying"), "{r}");
+        // …and it says so with the flag the app needs to tell "the coins are gone" from
+        // "the first copy of THIS question is still running". Without it a client that
+        // resent over a route it thought had died would show this refusal as the answer.
+        assert_eq!(r["busy"], json!(true), "{r}");
     }
 
     // The unit rename ships server-first, so one reply has to satisfy both: a 0.4.6 app
