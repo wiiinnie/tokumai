@@ -4273,7 +4273,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         if(p==="route"){ updateRouteUI(); return; }                 // queued behind a route rebuild
         // Queued behind a top-up, which holds the same lock while it draws books. Not the
         // mixnet, not the model: our own housekeeping, and it can take half a minute.
-        if(p==="topup"){ setMixPhase(0); mixWord = "Topping up your coins..."; mixShown = ""; mixHint = "your question goes out right after"; return; }
+        if(p==="topup"){ setMixPhase(0); mixWord = info==="settle" ? "Settling an earlier question..." : "Topping up your coins..."; mixShown = ""; mixHint = "your question goes out right after"; return; }
         // The wait talking about itself. A counter that just climbs cannot tell a model
         // that is thinking from a route that is gone — these can.
         if(p==="note"){

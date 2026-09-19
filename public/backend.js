@@ -289,7 +289,7 @@ const tauriBackend = (invoke) => ({
         // A top-up is holding the operation lock: the question has not left the device and
         // will not until that finishes. Its own phase, because "Sending to mixnet…" for a
         // message that is queued behind a withdrawal is simply untrue.
-        unlisten.push(await ev.listen("chat-topup", () => onPhase("topup")));
+        unlisten.push(await ev.listen("chat-topup", (e) => onPhase("topup", e.payload)));
         // The wait itself reporting on the route: "checking" (silence long enough to
         // doubt it), "resent" (it was dead, the question went out again — the server
         // replays an identical tender, so nothing is charged twice), "busy" (the server

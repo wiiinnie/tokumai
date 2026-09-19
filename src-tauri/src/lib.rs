@@ -1692,10 +1692,10 @@ fn coin_request(
 /// already gave or serves it now, and either way tells us which notes it burned, so the
 /// rest come home. Best effort — one attempt each, and a tender that still gets no reply
 /// stays pending for the next try rather than being written off.
-async fn settle_pending_tenders(app: &AppHandle, transport: &Transport, srv: &str, limit: usize) {
+async fn settle_pending_tenders(app: &AppHandle, transport: &Transport, srv: &str, skip: usize, limit: usize) {
     let Ok(dir) = data_dir(app) else { return };
     let pending = wallet::load(&dir).pending_tenders;
-    for pt in pending.into_iter().take(limit) {
+    for pt in pending.into_iter().skip(skip).take(limit) {
         let Some(id) = pt.request.get("id").and_then(|i| i.as_str()).map(|s| s.to_string()) else { continue };
         let notes: Vec<scrai_core::tender::Note> =
             pt.notes.iter().filter_map(|v| serde_json::from_value(v.clone()).ok()).collect();
@@ -3251,6 +3251,10 @@ fn spawn_refill(app: &AppHandle) {
 /// Each is re-sent VERBATIM, which is the only safe way to ask: the server recognises an
 /// identical tender as a replay rather than a second spend. Start-up is the right moment —
 /// the route is fresh and nobody is waiting on a cursor.
+/// Is the operation lock held by the tender sweep (rather than a top-up)? Only so the
+/// status line of a question queued behind it can say what it is actually waiting for.
+static FLUSHING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 fn spawn_tender_flush(app: &AppHandle) {
     use std::sync::atomic::{AtomicBool, Ordering};
     static RUNNING: AtomicBool = AtomicBool::new(false);
@@ -3265,8 +3269,27 @@ fn spawn_tender_flush(app: &AppHandle) {
         if open > 0 {
             log::warn!("[tender] {open} unanswered tender(s) from earlier — clearing them out");
             if let Ok(srv) = data_dir(&app).and_then(|d| server_addr(&wallet::load(&d))) {
-                let _op = t.begin_op().await;
-                settle_pending_tenders(&app, &t, &srv, usize::MAX).await;
+                // The lock is taken PER TENDER, not for the sweep: a question asked while
+                // this runs gets in after at most one of them. Held across all of them it
+                // kept a "test" waiting for minutes behind housekeeping, under a status
+                // line that called it a top-up (2026-09-19).
+                let mut skip = 0usize;
+                for _ in 0..open {
+                    let before = data_dir(&app).map(|d| wallet::load(&d).pending_tenders.len()).unwrap_or(0);
+                    if skip >= before {
+                        break;
+                    }
+                    {
+                        let _op = t.begin_op().await;
+                        FLUSHING.store(true, std::sync::atomic::Ordering::Relaxed);
+                        settle_pending_tenders(&app, &t, &srv, skip, 1).await;
+                        FLUSHING.store(false, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    let after = data_dir(&app).map(|d| wallet::load(&d).pending_tenders.len()).unwrap_or(0);
+                    if after >= before {
+                        skip += 1; // still unanswered — leave it for next time, move on
+                    }
+                }
             }
             let left = data_dir(&app).map(|d| wallet::load(&d).pending_tenders.len()).unwrap_or(0);
             log::warn!("[tender] {} of {open} still open after the sweep", left);
@@ -3404,7 +3427,8 @@ async fn chat_impl(
     // left, for a reason that had nothing to do with the mixnet (2026-09-19, half a day
     // spent chasing gateways and packet loss). Say what is actually happening.
     if transport.op_in_flight() {
-        let _ = app.emit("chat-topup", ());
+        let what = if FLUSHING.load(std::sync::atomic::Ordering::Relaxed) { "settle" } else { "topup" };
+        let _ = app.emit("chat-topup", what);
     }
     let _op = transport.begin_op().await;
     // Route down (app just woke up, or a drop): the send below queues behind the rebuild —
@@ -3480,7 +3504,7 @@ async fn chat_impl(
             // device, which the app showed as "Sending to mixnet…" (2026-09-19). The rest
             // are cleared by `spawn_tender_flush`, off the critical path, where nobody is
             // watching a cursor blink.
-            settle_pending_tenders(&app, &transport, &srv, 1).await;
+            settle_pending_tenders(&app, &transport, &srv, 0, 1).await;
         }
         let (req, notes, resumed) =
             coin_request(&dir, &srv, &model, &messages, maxTokens, live, thinkingBudget, &imageSize, retry.unwrap_or(false))?;
