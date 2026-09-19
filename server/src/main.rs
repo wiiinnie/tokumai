@@ -233,6 +233,14 @@ async fn main() {
     if let Err(e) = std::fs::write(data_dir.join("addresses.txt"), all_addresses.join("\n") + "\n") {
         eprintln!("scrai-server: could not write addresses.txt: {e}");
     }
+    // The index → address map, in the journal. Every identity logs into the SAME journal,
+    // so without this "#2 ← chat" is a number nobody can place — and, worse, "nothing is
+    // arriving" and "nothing is arriving at the address the app ships with" read exactly
+    // alike (2026-09-19: an app silently moved onto a fallback address, and half a day
+    // spent asking whether the primary was dead).
+    for (k, a) in all_addresses.iter().enumerate() {
+        println!("scrai-server: identity #{k} = {a}");
+    }
     if n_clients > 1 {
         let mut g = used_gateways.clone();
         g.sort();
@@ -921,6 +929,12 @@ const ORDER_TICK_MS: u64 = 1000;
                 }
                 // Durability: persist any changed store before acknowledging (same as below).
                 persist_changed(&mut db, &mut quorum, &paywall, &mut saved);
+                // What the answer WEIGHS, next to the identity it leaves through. A reply
+                // travels in the SURBs its request brought along, one Sphinx packet each,
+                // so size is the difference between an answer that arrives and one that
+                // quietly does not — and it is the one number neither side was logging.
+                // The client already prints the request's bytes; this is the other half.
+                println!("scrai-server: #{} → chat {} bytes", done.to.idx, response.len());
                 if let Err(e) = senders[done.to.idx].read().await.send_reply(done.to.tag, response).await {
                     eprintln!("scrai-server: chat reply failed: {e}");
                 }
@@ -1052,6 +1066,12 @@ const ORDER_TICK_MS: u64 = 1000;
             // handled synchronously by the shared core.
             let envelope = serde_json::from_slice::<serde_json::Value>(&m.message).unwrap_or(serde_json::Value::Null);
             let kind = envelope.get("kind").and_then(|k| k.as_str()).map(String::from).unwrap_or_default();
+            // One line per inbound request, naming the identity it arrived on (see the
+            // index → address map at boot). This is the only way to tell "the mixnet is
+            // quiet" from "the mixnet is quiet AT THIS ONE FRONT DOOR", and a `ping` is
+            // included on purpose: a route check that arrives is itself the proof that an
+            // identity is reachable, which is exactly the question that was unanswerable.
+            println!("scrai-server: #{idx} ← {}", if kind.is_empty() { "?" } else { &kind });
             // Release gate (MIN_APP): an outdated app gets nothing but the update
             // notice. `models` answers with a one-entry pseudo catalogue so even a 0.2.x
             // client — which swallows a plain error on its start-up fetch — shows the
@@ -1147,6 +1167,7 @@ const ORDER_TICK_MS: u64 = 1000;
                     // Validation error or an idempotent replay hit — no provider call, and
                     // reserve() never mutates the money state on this path.
                     chat::Reserved::Reply(response) => {
+                        println!("scrai-server: #{} → chat {} bytes (immediate)", to.idx, response.len());
                         if let Err(e) = senders[to.idx].read().await.send_reply(to.tag, response).await {
                             eprintln!("scrai-server: chat reply failed: {e}");
                         }
