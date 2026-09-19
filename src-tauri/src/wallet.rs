@@ -97,7 +97,10 @@ pub struct SupportMsg {
     pub text: String,
 }
 
-#[derive(Default, Serialize, Deserialize)]
+// Clone: the tender packing tries several sizes and each attempt SPENDS spare notes out
+// of the wallet it is given, so every attempt needs its own copy to work from (see
+// `coin_request`). Nothing leaves memory that was not already in it.
+#[derive(Default, Clone, Serialize, Deserialize)]
 pub struct Wallet {
     #[serde(default)]
     pub mnemonic: Option<String>,

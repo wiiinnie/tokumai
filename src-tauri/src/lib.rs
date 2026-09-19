@@ -1345,9 +1345,22 @@ fn build_tender(
     }
     // Spares alone can cover it — then their own values are all the granularity there is,
     // so spend what is left of the budget on the SMALLEST of them.
+    //
+    // A FEW of them. This used to pour in spares up to MAX_NOTES, which made a tender grow
+    // as the wallet filled with the leftovers of unanswered questions: 13 notes, 29 coins,
+    // 54 KB on the wire for an answer that cost one coin (2026-09-19). Worse, it made the
+    // tender grow as the ceiling FELL — a low ceiling is exactly what puts `have` over it —
+    // so trying to make a request lighter made it heavier.
+    //
+    // Granularity finer than one fine coin cannot be spent, so a handful of small spares
+    // buys everything there is to buy here; the rest stay in the wallet for next time.
     if have >= ceiling_toku {
+        const GRANULARITY_SPARES: usize = 4;
         keep.sort_by(|a, b| a.value_toku().cmp(&b.value_toku()));
-        while notes.len() < MAX_NOTES && !keep.is_empty() {
+        for _ in 0..GRANULARITY_SPARES.min(MAX_NOTES.saturating_sub(notes.len())) {
+            if keep.is_empty() {
+                break;
+            }
             notes.push(keep.remove(0));
         }
     }
@@ -1622,7 +1635,17 @@ fn coin_request(
     if keys.is_empty() {
         return Err("the server's issuing keys are not on this device yet — check for credit first".into());
     }
-    let tender = build_tender(&mut w, &keys, tender_ceiling_toku(model, messages, maxTokens, thinkingBudget, imageSize.as_deref()))?;
+    // The tender is kept light by the PACKING (see `build_tender`), not by lowering the
+    // ceiling. Lowering it was tried on 2026-09-19 and did the reverse: a lower ceiling is
+    // exactly what sends the packing down its "spares already cover it" path, and the
+    // request came out at 8 notes and 34 KB where the full ceiling had produced 5 and 19.
+    // The log said "tendering 800 instead, so the answer may come back shortened" while
+    // putting MORE on the table — a lie in the journal, which is worse than the bug.
+    let tender = build_tender(
+        &mut w,
+        &keys,
+        tender_ceiling_toku(model, messages, maxTokens, thinkingBudget, imageSize.as_deref()),
+    )?;
     let mut req = json!({
         "v": PROTO, "kind": "chat", "id": rand_hex(16), "model": model, "messages": messages,
         "stream": false, "chunkedImages": true,
@@ -5869,6 +5892,43 @@ mod tender_tests {
         assert!(t.notes.len() <= MAX_NOTES, "{} notes in one tender", t.notes.len());
         t.well_formed().expect("a tender the server would accept");
         assert!(!w.spare_notes.is_empty(), "unused spares must be kept, not dropped");
+    }
+
+    /// 2026-09-19: every unanswered question left its notes in the wallet, and the wallet
+    /// put them all back on the table for the next one — 13 notes, 29 coins, 54 KB on the
+    /// wire to buy an answer that cost ONE coin. The perverse part: LOWERING the ceiling
+    /// made it worse, because a low ceiling is exactly what puts the spares over it.
+    /// A cheaper question must never weigh more than an expensive one.
+    #[test]
+    fn a_low_ceiling_makes_a_lighter_tender_not_a_heavier_one() {
+        use scrai_core::coconut::COIN_TOKU;
+        let fk = testkit::funded();
+        let keys = both_keys(&fk);
+        let mut base = wallet::Wallet::default();
+        for _ in 0..9 {
+            let mut p = fk.new_purse();
+            let notes = p
+                .spend_tender(&fk.keys(), &scrai_core::tender::plan_coins(4), fk.spend_date())
+                .unwrap();
+            for n in notes {
+                base.spare_notes.push(serde_json::to_value(&n).unwrap());
+            }
+            base.coconut_purses.push(p.persist().unwrap());
+        }
+        let weigh = |ceiling: u64| {
+            let mut w = base.clone();
+            let t = build_tender(&mut w, &keys, ceiling).expect("a wallet with credit can tender");
+            let coins: u64 = t.notes.iter().map(|n| n.coins).sum();
+            let bytes = serde_json::to_vec(&t).unwrap().len();
+            (t.notes.len(), coins, bytes)
+        };
+        let cheap = weigh(TENDER_MIN_TOKU);
+        let dear = weigh(90 * COIN_TOKU);
+        assert!(
+            cheap.2 <= dear.2,
+            "the cheaper question weighed MORE: {cheap:?} against {dear:?}"
+        );
+        assert!(cheap.1 <= 12, "a minimum tender put {} coins on the table", cheap.1);
     }
 
     /// 2026-09-14: the device held 55 coins and could only tender 34, because ten small
