@@ -3354,6 +3354,13 @@ async fn chat_impl(
                 "servedTokens": c.get("servedTokens"),
                 "askedTokens": c.get("askedTokens"),
             }),
+            // …unless this device cannot see what the answer cost. Live search and a
+            // thinking budget both bill OUTPUT TOKENS THE USER NEVER SEES — research steps,
+            // reasoning — and the estimate below counts the characters of the visible reply.
+            // On 2026-09-19 a grounded answer billed 542 output tokens against an estimate
+            // of about 75, and the app accused an honest server of charging seven times too
+            // much. Blind is blind: no estimate, no accusation.
+            None if !cost_is_estimable(live, thinkingBudget) => Value::Null,
             None => match overcharge_warning(&srv, &model, &messages, &resp, smallest_note) {
                 Value::Null => change_warning(&model, &messages, &resp, smallest_note),
                 w => w,
@@ -3369,6 +3376,18 @@ async fn chat_impl(
     // not a way: without it there is simply nothing to pay with.
     Err("this app is set to the old session payment path, which this server no longer \
          serves — switch \"pay with coins\" back on under Developer".into())
+}
+
+/// Can this device judge what an answer should have cost?
+///
+/// Only when every token the provider billed is one we can see. Live search and a thinking
+/// budget both produce OUTPUT TOKENS THE USER NEVER READS — research steps, reasoning — and
+/// the estimate is made from the characters of the visible reply. On 2026-09-19 a grounded
+/// answer billed 542 output tokens against an estimate of about 75, and the app told the
+/// user an honest server had charged seven times too much. Blind is blind: where the
+/// estimate cannot see, it must not accuse.
+fn cost_is_estimable(live: Option<bool>, thinking_budget: Option<u64>) -> bool {
+    live != Some(true) && thinking_budget.unwrap_or(0) == 0
 }
 
 /// The other reason a charge can look wrong: this device had no small change, so the
@@ -5259,6 +5278,18 @@ mod c3_tests {
         // multimodal content (image parts) can't be char-estimated → guard must skip
         let mm = json!([{"role":"user","content":[{"type":"image_url","image_url":{"url":"..."}}]}]);
         assert!(messages_plaintext(&mm).is_none());
+    }
+
+    #[test]
+    fn an_answer_whose_hidden_work_was_billed_is_never_called_an_overcharge() {
+        // Nothing hidden: the estimate can see everything, so the check may run.
+        assert!(cost_is_estimable(None, None));
+        assert!(cost_is_estimable(Some(false), Some(0)));
+        // Live search and a thinking budget each bill output the user never reads — and a
+        // char-count estimate of the visible reply cannot know about either.
+        assert!(!cost_is_estimable(Some(true), None));
+        assert!(!cost_is_estimable(None, Some(1024)));
+        assert!(!cost_is_estimable(Some(true), Some(1024)));
     }
 
     #[test]
