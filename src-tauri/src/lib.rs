@@ -3681,6 +3681,38 @@ async fn mixnet_heartbeat(app: AppHandle, transport: State<'_, Arc<Transport>>) 
 /// with a ping ("Connecting to tokumai server"), and only then report `online`. One at
 /// a time; a failure reports `failed` with the reason. A server that doesn't answer keeps
 /// the fresh route (probe never drops the client) so the poll doesn't rebuild in a loop.
+/// A pinned entry gateway that keeps failing is a dead end: the rebuild picks the same one
+/// and the next request hangs exactly as the last did. So after the SECOND failure in a
+/// row, move to another of the operator's gateways.
+///
+/// Only when the app assigned the pin. A fresh install is pinned by default, which nobody
+/// chose — but somebody who picked a country in the picker meant it, and moving them
+/// silently would break the promise that picker makes. Those are told instead (the overlay
+/// already offers "Pick another gateway").
+///
+/// Returns the new gateway when it rotated, so the caller can say so.
+static ROUTE_FAILS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+fn rotate_entry_gateway(app: &AppHandle, fails: u32) -> Option<String> {
+    if fails < 2 {
+        return None;
+    }
+    let dir = data_dir(app).ok()?;
+    let mut w = wallet::load(&dir);
+    if w.entry_random || w.entry_user_chosen {
+        return None;
+    }
+    let current = w.entry_gateway.clone();
+    let next = nym::hermes_gateway_excluding(current.as_deref());
+    if next.is_empty() || Some(&next) == current.as_ref() {
+        return None;
+    }
+    w.entry_gateway = Some(next.clone());
+    wallet::save(&dir, &w).ok()?;
+    log::warn!("[mixnet] entry gateway failed {fails}x — rotating to another of the operator's gateways");
+    Some(next)
+}
+
 fn spawn_rebuild(app: AppHandle, t: Arc<Transport>) {
     if !t.try_begin_reconnect() {
         return;
@@ -3772,12 +3804,32 @@ async fn run_check(app: AppHandle, t: Arc<Transport>) {
     }
     .await;
     match res {
-        Ok(()) => { let _ = app.emit("mixnet-phase", json!({ "step": "online", "detail": "" })); }
+        Ok(()) => {
+            ROUTE_FAILS.store(0, std::sync::atomic::Ordering::Relaxed);
+            let _ = app.emit("mixnet-phase", json!({ "step": "online", "detail": "" }));
+        }
         // Cancelled = a newer server check took over the overlay — emit nothing, the
         // new check narrates from here; a "failed" now would flash a stale error.
         Err(e) if e.starts_with("cancelled") => { log::info!("[mixnet] check superseded"); }
         Err(e) => {
             log::warn!("[mixnet] rebuild failed: {e}");
+            let fails = ROUTE_FAILS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            // A gateway that ACCEPTS the connection and then carries nothing looks like a
+            // silent server: the route is up, and no address of the server answers through
+            // it. That is the case this rotation exists for, and the old code read it as
+            // "the server is down" and hid the gateway button (2026-09-19 — a phone stuck
+            // for half an hour while the same server answered a laptop in four seconds).
+            if let Some(next) = rotate_entry_gateway(&app, fails) {
+                t.set_entry_gateway(Some(next)).await;
+                t.drop_client().await;
+                let _ = app.emit(
+                    "mixnet-phase",
+                    json!({ "step": "gateway", "detail": "that gateway carried nothing — trying another" }),
+                );
+                t.end_reconnect();
+                spawn_rebuild(app.clone(), t.clone());
+                return;
+            }
             // srv: the route is up, only the server stayed silent — the UI titles
             // this "Server not answering" and offers the official server instead.
             let _ = app.emit("mixnet-phase", json!({ "step": "failed", "detail": e, "srv": t.is_connected() }));
@@ -4114,6 +4166,8 @@ async fn set_entry_gateway(
     // Picking a gateway is a choice to keep it; clearing (null) means random mode.
     w.entry_random = id.is_none();
     w.entry_gateway = id.clone();
+    // A person chose this one. The auto-rotation below leaves it alone from now on.
+    w.entry_user_chosen = id.is_some();
     wallet::save(&dir, &w)?;
     transport.set_entry_gateway(id.clone()).await;
     Ok(json!({ "entry_gateway": id, "entry_random": w.entry_random }))
@@ -4138,6 +4192,8 @@ async fn set_entry_random(app: AppHandle, transport: State<'_, Arc<Transport>>, 
     let mut w = wallet::load(&dir);
     w.entry_random = on;
     w.entry_gateway = if on { None } else { Some(nym::random_hermes_gateway()) };
+    // Turning random OFF assigns one; that is the app's pick, not the user's.
+    w.entry_user_chosen = false;
     wallet::save(&dir, &w)?;
     transport.set_entry_gateway(w.entry_gateway.clone()).await;
     Ok(json!({ "entry_gateway": w.entry_gateway, "entry_random": w.entry_random }))

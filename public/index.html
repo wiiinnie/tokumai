@@ -3404,8 +3404,14 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         const canOfficial = srvFail && KNOWN_SERVERS.length && !sameServer(server, KNOWN_SERVERS[0].address);
         const last = rt.lines[rt.lines.length-1]; if(last) routeFinish(last, false);
         const box=$("routeBox"); if(box){ box.classList.add("bad"); const t=box.querySelector(".t span"); if(t) t.textContent = srvFail ? "Server not answering" : "Mixnet offline"; }
-        const why=$("routeWhy"); if(why) why.textContent = routeFail || "Could not reach an entry gateway. Usually the phone has no internet right now, or the chosen gateway is down.";
-        const btns=$("routeBtns"); if(btns) btns.innerHTML = `<div class="btnrow"><button class="btn primary" data-click="rebuildRoute">Try again</button>${canOfficial?`<button class="btn" data-click="useOfficialServer">Use official server</button>`:``}${srvFail?``:`<button class="btn" data-click="openEntryPicker">Pick another gateway</button>`}<button class="btn" data-click="routeDismiss">Close</button></div><div class="hint" id="routeAuto" style="margin-top:8px"></div>`;
+        const why=$("routeWhy");
+        if(why) why.textContent = routeFail || "Could not reach an entry gateway. Usually the phone has no internet right now, or the chosen gateway is down.";
+        // A gateway that accepts the connection and then carries nothing reads exactly like
+        // a server that is down: the route is up, and nothing gets an answer through it.
+        // So the gateway is named as a suspect here too, and its button is offered — which
+        // it was not, on precisely the failure where it was the cause.
+        if(srvFail && why) why.textContent += " If it keeps happening, the entry gateway may be accepting connections without carrying traffic — try another one.";
+        const btns=$("routeBtns"); if(btns) btns.innerHTML = `<div class="btnrow"><button class="btn primary" data-click="rebuildRoute">Try again</button>${canOfficial?`<button class="btn" data-click="useOfficialServer">Use official server</button>`:``}<button class="btn" data-click="openEntryPicker">Pick another gateway</button><button class="btn" data-click="routeDismiss">Close</button></div><div class="hint" id="routeAuto" style="margin-top:8px"></div>`;
         setMixState("offline");
         scheduleAutoRetry();
         return;

@@ -166,6 +166,15 @@ pub struct Wallet {
     /// itself is the server's number, asked again on every account call.
     #[serde(default)]
     pub plan_seen: Option<serde_json::Value>,
+    /// Did a PERSON pick this entry gateway, or did the app assign one?
+    ///
+    /// A fresh install is pinned to one of the operator's own gateways, which is a
+    /// deliberate default and not a choice anybody made. The difference matters when one of
+    /// them stops carrying traffic: an assigned gateway may be rotated away from, a chosen
+    /// one must not be — somebody who picked a country meant it, and moving them silently
+    /// would break the promise the picker makes.
+    #[serde(default)]
+    pub entry_user_chosen: bool,
     /// Pay chats with the SESSION balance instead of coins — the way back, not the way.
     ///
     /// Stored inverted on purpose. Coins are the payment path (docs/unlinkability.md, block
