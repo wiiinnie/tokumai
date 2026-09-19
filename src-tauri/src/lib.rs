@@ -5018,6 +5018,12 @@ async fn iap_verify_on_server(app: &AppHandle, transport: &Transport, jws: &str)
 async fn iap_verify_value(app: &AppHandle, transport: &Transport, jws: &str) -> Result<Value, String> {
     // A rejection the server calls FINAL is marked in the error text, so the caller can
     // tell "try again later" from "never" — see `iap_restore_impl`.
+    //
+    // Which is why this uses the RAW round trip. The ordinary one turns any reply with
+    // `kind: "error"` into an Err carrying the message and nothing else — so every other
+    // field, `final` among them, is thrown away before this function ever sees the reply.
+    // The server logged "refused as final" five times while the app read no flag at all,
+    // and both were telling the truth (2026-09-19).
     let transport = buy_transport(app, transport).await;
     let w = wallet::load(&data_dir(app)?);
     let srv = server_addr(&w)?;
@@ -5026,12 +5032,13 @@ async fn iap_verify_value(app: &AppHandle, transport: &Transport, jws: &str) -> 
     let nonce = rand_hex(16);
     let sig = a.sign("iap", &nonce);
     let resp = transport
-        .round_trip(
+        .round_trip_raw_notify(
             &srv,
             &json!({"v":PROTO,"kind":"iap.verify","id":rand_hex(16),"jws":jws,
                     "publicKey":a.public_key_pem,"nonce":nonce,"sig":sig}),
             SURBS_SMALL,
             TIMEOUT_MS,
+            || {},
         )
         .await?;
     if let Some(e) = resp.get("error").and_then(|e| e.as_str()) {
