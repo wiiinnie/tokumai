@@ -6536,6 +6536,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         planBusy ? "Subscribing — the App Store first, then our server confirms…"
                  : sel ? `Subscribe — ${esc(String(sel.displayPrice || ""))}` : "Pick a plan above"}</button></div>
       <p class="hint" style="margin:10px 2px 0;text-align:center">Renews until you cancel. Manage or cancel any time in your Apple ID settings; ${esc(planYearly ? "a year" : "a month")} already paid for stays yours.</p>
+      <p class="legalline" style="text-align:center;margin:8px 2px 0">${planLegalLink("terms","Terms of Use")} · ${planLegalLink("privacy","Privacy Policy")}</p>
       ${planMsg ? `<p class="hint" style="margin:10px 0 0">${esc(planMsg)}</p>` : ``}`;
   }
   /// The yearly tab's own label — read off Apple's prices, never asserted.
@@ -6936,6 +6937,15 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     return base
       ? `<a href="${escAttr(base+"/"+page)}" data-click="openLink" data-click-pass="href" data-prevent="1">${esc(label)}</a>`
       : esc(label);
+  }
+  // The plan sheet's own links. A subscription has to show its terms and its privacy policy
+  // WHERE IT IS BOUGHT (App Store guideline 3.1.2) — they were in Settings and on the
+  // one-off consent box, which an iPhone never shows, so the only purchase screen an iPhone
+  // has carried neither. Always a working link: the plan is sold by us through Apple
+  // whichever server the app talks to, so without a site from the server it is our own.
+  function planLegalLink(page, label){
+    const base = (siteUrl ? siteUrl.replace(/\/+$/,"") : "") || "https://tokumai.com";
+    return `<a href="${escAttr(base+"/"+page)}" data-click="openLink" data-click-pass="href" data-prevent="1">${esc(label)}</a>`;
   }
   function startPurchase(){
     if(selectedTier==null) return;
