@@ -79,12 +79,27 @@ pub fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+/// The one-off amounts this server sells, in whole dollars.
+///
+/// **`PURCHASE_TIERS=none` sells no one-off credit at all** — on any rail, in the app or on
+/// the site: `create_invoice` and `begin_web_order` both check against this list, so an
+/// empty one refuses every size. Plans, codes and the testnet's invite invoice are other
+/// paths and are untouched. Same idea as `IAP_TIERS=none` (iap.rs): retiring one-off credit
+/// is a switch on the server, so it needs no build and the way back is just as cheap.
 pub fn purchase_tiers() -> Vec<u32> {
-    crate::cfg("PURCHASE_TIERS")
-        .ok()
-        .map(|s| s.split(',').filter_map(|t| t.trim().parse().ok()).collect())
-        .filter(|v: &Vec<u32>| !v.is_empty())
-        .unwrap_or_else(|| vec![5, 10, 20, 50])
+    parse_tiers(crate::cfg("PURCHASE_TIERS").ok().as_deref())
+}
+
+/// `None`/unparseable → the default tiles; `none` or an empty value → nothing on sale.
+fn parse_tiers(raw: Option<&str>) -> Vec<u32> {
+    match raw.map(str::trim) {
+        Some(s) if s.is_empty() || s.eq_ignore_ascii_case("none") => Vec::new(),
+        Some(s) => {
+            let v: Vec<u32> = s.split(',').filter_map(|t| t.trim().parse().ok()).collect();
+            if v.is_empty() { vec![5, 10, 20, 50] } else { v }
+        }
+        None => vec![5, 10, 20, 50],
+    }
 }
 
 /// Smallest tile a card may buy (`CARD_MIN_USD`, default $10). Card fees carry a
@@ -4084,6 +4099,17 @@ mod card_tests {
     }
 
     // ---- Stripe settlement (audit M2): `paid` alone must never credit -----------------
+
+    /// `none` is a decision, a typo is not: only the first may take every tile off sale.
+    #[test]
+    fn purchase_tiers_none_sells_nothing_and_a_typo_sells_the_default() {
+        assert_eq!(parse_tiers(None), vec![5, 10, 20, 50]);
+        assert_eq!(parse_tiers(Some("10, 20")), vec![10, 20]);
+        assert!(parse_tiers(Some("none")).is_empty());
+        assert!(parse_tiers(Some(" NONE ")).is_empty());
+        assert!(parse_tiers(Some("")).is_empty());
+        assert_eq!(parse_tiers(Some("ten,twenty")), vec![5, 10, 20, 50]);
+    }
 
     /// The cancellation button ends tokumai plans and nothing else: a subscription priced
     /// at anything that is not one of our six price ids is somebody else's business, even

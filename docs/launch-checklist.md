@@ -40,5 +40,9 @@ add to it whenever a text promises something a setting has to deliver.
 
 ## Site and server
 
+- [ ] `PURCHASE_TIERS=none` in `/opt/tokumai/.env`: one-off credit is retired, and until this
+      is set the server still raises a $10 invoice for anyone who asks (an older app build,
+      or `/pay` on the site). The terms no longer describe such a purchase.
+
 - [ ] The deployed site carries the terms and privacy notice of 21 September 2026 (the plan
       sheet in the app links straight to them).
