@@ -108,7 +108,7 @@
   .idf{font:500 17px var(--mono);color:var(--bone);background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:14px 14px;outline:none;letter-spacing:.06em;max-width:460px;width:100%}
   .idf:focus{border-color:var(--acc)} .idf.ok{border-color:var(--acc)}
   .note{font-size:12.5px;color:var(--muted);line-height:1.5} .note b{color:var(--bone)} .note.ok{color:var(--acc)}
-  .prices{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:6px}
+  .prices{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:6px}
   .pr{border:1px solid var(--line);border-radius:12px;background:var(--surface-2);padding:13px 12px;display:flex;flex-direction:column;gap:4px}
   .pr b{font-size:20px;font-weight:700;color:var(--bone)}
   .pr small{font-family:var(--mono);font-size:10.5px;color:var(--muted)}
@@ -259,7 +259,7 @@
   <div class="nav">
     <span class="logo"><div style="width:28px; height:28px; border-radius:6px; box-sizing:border-box; flex-shrink:0; background:radial-gradient(120% 120% at 30% 18%, #1A1816, #141210); border:1px solid #2A2521; display:flex; align-items:center; justify-content:center;"><svg viewBox="0 0 100 100" width="78%" height="78%"><rect x="19" y="28" width="27" height="9" rx="4.5" fill="#ECE6DC"></rect><rect x="49" y="28" width="31" height="9" rx="4.5" fill="#7A5FFF"></rect><rect x="25" y="40" width="17" height="9" rx="4.5" fill="#ECE6DC"></rect><rect x="45" y="40" width="30" height="9" rx="4.5" fill="#7A5FFF"></rect><rect x="19" y="52" width="36" height="9" rx="4.5" fill="#ECE6DC"></rect><rect x="58" y="52" width="20" height="9" rx="4.5" fill="#7A5FFF"></rect><rect x="28" y="64" width="22" height="9" rx="4.5" fill="#ECE6DC"></rect><rect x="54" y="64" width="26" height="9" rx="4.5" fill="#7A5FFF"></rect></svg></div><span>tokum<b>ai</b></span></span>
     <span class="links"><a href="/how-it-works" data-nav="how">How it works</a><a href="/pricing" data-nav="pricing">Pricing</a><a href="/download" data-nav="download">Download</a><a href="/compare" data-nav="compare">Compare</a><a href="/support" data-nav="support">Support</a></span>
-    <a class="btn primary buy" href="/pay">Buy credit</a>
+    <a class="btn primary buy" href="/pricing">Plans</a>
     <div class="sw" role="group" aria-label="Theme"><button type="button" id="bDark" class="on">Dark</button><button type="button" id="bLight">Light</button></div>
   </div>
 
@@ -280,7 +280,7 @@
     <div class="pillars">
       <div class="pillar"><div class="n">01</div><h3>No real-world identity</h3><p>No email, no phone number, no login. Your account is a recovery phrase that only you hold.</p></div>
       <div class="pillar"><div class="n">02</div><h3>Untraceable prompts</h3><p>Every request travels through the Nym mixnet. Our servers never see an IP address.</p></div>
-      <div class="pillar"><div class="n">03</div><h3>Unlinkable payments</h3><p>Top up once, then spend blind-signed coins. Even if you pay by card, nobody can connect the payment to a prompt. Not even us.</p></div>
+      <div class="pillar"><div class="n">03</div><h3>Unlinkable payments</h3><p>A plan fills your account; every answer is then paid with a blind-signed coin. Even though you pay by card, nobody can connect the payment to a prompt. Not even us.</p></div>
       <div class="pillar"><div class="n">04</div><h3>No profile of you</h3><p>Without an identity, an IP or a traceable payment, your questions never add up to a picture of you as a real person.</p></div>
     </div>
   </div>
@@ -295,8 +295,8 @@
 
   <div class="sec">
     <div class="eyebrow">Pricing</div>
-    <h2>No subscription. Credit you <b>buy once</b>.</h2>
-    <p class="lead">Fixed amounts, so a purchase reveals no per-user fingerprint. A text answer costs a fraction of a cent, a picture a few cents. $5 lasts for thousands of questions.</p>
+    <h2>A plan from €10 a month. <b>Cancel</b> whenever you like.</h2>
+    <p class="lead">Three fixed plans, so a payment reveals no per-user fingerprint. A text answer costs a fraction of a cent, a picture a few cents — the €10 plan is good for thousands of questions a month.</p>
     <div class="cta"><a class="btn primary" href="/pricing">See prices</a><a class="btn" href="/download">Get the app</a></div>
   </div>
 <!--@end-->
@@ -323,7 +323,7 @@
     </div>
     <div class="step">
       <div class="txt"><div class="n">03 · PAYMENT</div><h3>A payment can't be matched to a question</h3>
-        <p>You buy credit in fixed amounts — $5, $10, $20 or $50 — with a card, or on iPhone through the App Store. The credit is then withdrawn as <b>blind-signed coins</b>: the server signs them without seeing them, and cannot recognise them when they come back to pay for a prompt.</p>
+        <p>You choose one of three plans — €10, €20 or €50 a month — paid by card, or on iPhone through the App Store. Each month's allowance is then withdrawn as <b>blind-signed coins</b>: the server signs them without seeing them, and cannot recognise them when they come back to pay for a prompt.</p>
         <p>A coin purchase sees a wallet address; a card payment sees a name and a card. Neither sees your account, and neither can be connected to what you ask. Fixed amounts mean a purchase reveals no per-user fingerprint.</p></div>
       <button class="shot " type="button" data-full="/img/how-payment" aria-label="Enlarge: Buy credit: fixed amounts, card via Stripe, a code field"><img class="dk" src="/img/how-payment-dark.jpg" alt="Buy credit: fixed amounts, card via Stripe, a code field" loading="lazy"><img class="lt" src="/img/how-payment-light.jpg" alt="Buy credit: fixed amounts, card via Stripe, a code field" loading="lazy"></button>
     </div>
@@ -345,60 +345,60 @@
 <!--@page:pricing-->
   <p class="crumb"><a href="/">tokumai</a> · Pricing</p>
   <div class="hero one">
-    <h1>Credit that can't be <b>traced</b> to a question</h1>
-    <p>TOKU is prepaid credit, spent as blind-signed coins. Buy it in the app, or buy a code on this site and redeem it in any tokumai app. Neither way asks who you are, and neither way is a subscription.</p>
+    <h1>A monthly allowance that can't be <b>traced</b> to a question</h1>
+    <p>A plan gives you a fresh allowance of TOKU every calendar month, spent as blind-signed coins. It is bought inside the app, where your account key lives — never on this site, which knows no accounts. Nothing asks who you are.</p>
   </div>
   <div class="sec">
     <div class="ways">
-      <a class="way primary" href="/pay">
-        <div class="k">on this site</div>
-        <h3>Buy a code</h3>
-        <p>Pick an amount, pay, and get a code. Redeem it in the app under <b>Buy credit → Have a code?</b> Nothing to sign up for, and the code works in any tokumai app — so you can buy one for somebody else.</p>
-        <span class="go">Buy a code →</span>
-      </a>
-      <a class="way" href="#in-app">
+      <a class="way primary" href="#in-app">
         <div class="k">in the app</div>
-        <h3>Top up in the app</h3>
-        <p>One step shorter: the app raises the invoice itself and the credit lands where you are. On iPhone through the App Store; on Android, Mac, Windows and Linux by card directly.</p>
+        <h3>Choose a plan</h3>
+        <p><b>Buy credit → Choose a plan.</b> On Android, Mac, Windows and Linux the checkout opens on Stripe's page in your browser; on iPhone the plan is an App Store subscription. The month is on your account seconds after the payment.</p>
         <span class="go">How it works →</span>
       </a>
+      <a class="way" href="/cancel">
+        <div class="k">on this site</div>
+        <h3>Cancel a plan</h3>
+        <p>No sign-in and no app needed: the e-mail address from the checkout is enough, and what you have paid for stays yours until the period ends. App Store plans are cancelled in your Apple ID settings.</p>
+        <span class="go">Cancel a plan →</span>
+      </a>
     </div>
-    <!-- Filled by the faucet from the SERVER's own configuration, not written by hand. -->
-    <div class="rlbl">Amounts</div>
+    <!-- Filled by the faucet from the SERVER's own ladder, not written by hand. -->
+    <div class="rlbl">Plans</div>
     {{PRICES}}
     <div class="rlbl" style="margin-top:18px">Available payment options</div>
     {{RAILS}}
-    <p class="note">What the card rail learns: your name, billing address, card and IP, because a card payment cannot happen without them; the App Store sees your Apple ID. None of them sees your account, and none of them sees what you ask.</p>
-    <p class="note">100,000 TOKU = $1, pinned when the invoice is raised. Fixed amounts only, so a purchase reveals no per-user fingerprint.</p>
+    <p class="note">What the card rail learns: your name, billing address, card and IP, because a card payment cannot happen without them; the App Store sees your Apple ID. None of them sees what you ask — an answer is paid with a coin that carries no account.</p>
+    <p class="note">The allowance belongs to the calendar month and does not roll over; a plan that starts mid-month is charged and granted pro rata on the web. Yearly plans cost twelve months less 10 %. Have a code? Redeem it in the app under <b>Buy credit → Have a code?</b></p>
   </div>
   <div class="sec">
     <div class="eyebrow">What a prompt costs</div>
     <h2>Priced per <b>request</b>, shown before you send</h2>
     <div class="tw"><table class="cmp">
-      <thead><tr><th>Request</th><th>Typical cost</th><th>Out of $5</th></tr></thead>
+      <thead><tr><th>Request</th><th>Typical cost</th><th>Out of the €10 plan</th></tr></thead>
       <tbody>
-        <tr><td class="row">A text answer, fast model</td><td><span class="m">~0.2–0.3 ¢</span></td><td>about 2,000 answers</td></tr>
-        <tr><td class="row">A text answer, strongest model</td><td><span class="m">~1.5–2 ¢</span></td><td>about 300 answers</td></tr>
-        <tr><td class="row">A picture</td><td><span class="m">~4–9 ¢</span></td><td>about 80 pictures</td></tr>
-        <tr><td class="row">A 4K picture</td><td><span class="m">~15 ¢</span></td><td>about 30 pictures</td></tr>
+        <tr><td class="row">A text answer, fast model</td><td><span class="m">~0.2–0.3 ¢</span></td><td>about 2,800 answers a month</td></tr>
+        <tr><td class="row">A text answer, strongest model</td><td><span class="m">~1.5–2 ¢</span></td><td>about 400 answers a month</td></tr>
+        <tr><td class="row">A picture</td><td><span class="m">~4–9 ¢</span></td><td>about 110 pictures a month</td></tr>
+        <tr><td class="row">A 4K picture</td><td><span class="m">~15 ¢</span></td><td>about 45 pictures a month</td></tr>
       </tbody>
     </table></div>
     <p class="fine">Costs follow the model providers' prices and are shown per model in the app before you send. Figures as of September 2026.</p>
   </div>
   <div class="sec">
     <div class="inapp" id="in-app">
-      <h3>Topping up in the app</h3>
+      <h3>Choosing a plan in the app</h3>
       <p class="note" style="margin:0">Shown on macOS; it is the same three steps everywhere.</p>
       <div class="steps3">
         <div class="st"><i>1</i><b>Open an account</b><span>Account → Create new account. No email, no phone, no password — a 24-word phrase is generated on your device and is the whole account.</span></div>
-        <div class="st"><i>2</i><b>Buy credit → pick an amount</b><span>The invoice is raised and signed inside the app, where your account key lives. Nothing asks who you are and there is no ID to type in.</span></div>
-        <div class="st"><i>3</i><b>Pay, and it lands</b><span>The checkout opens in your browser; the credit shows up as “held” the moment it is confirmed, and is spent as blind-signed coins.</span></div>
+        <div class="st"><i>2</i><b>Buy credit → Choose a plan</b><span>The checkout is raised and signed inside the app, where your account key lives. Nothing asks who you are and there is no ID to type in.</span></div>
+        <div class="st"><i>3</i><b>Pay, and the month is there</b><span>The checkout opens in your browser; the allowance is on your account seconds after the payment and is spent as blind-signed coins.</span></div>
       </div>
       {{SHOT_MAC_BUY}}
     </div>
     <ul class="pts" style="margin-top:22px">
-      <li><b>Unused codes can be refunded</b> within seven days, back the way you paid. Credit already redeemed cannot: by then it is blind-signed cash.</li>
-      <li><b>Credit lives on your recovery phrase.</b> Lose the phrase and nobody — including tokumai — can restore it. The app makes you confirm three words of it before you can buy.</li>
+      <li><b>Cancel whenever you like</b>, to the end of the period you have paid for — with the button at <a href="/cancel">/cancel</a>, no sign-in. The month already granted stays yours until it ends.</li>
+      <li><b>Your plan lives on your recovery phrase.</b> Lose the phrase and nobody — including tokumai — can restore it. The app makes you confirm three words of it before you can buy.</li>
     </ul>
   </div>
 <!--@end-->
@@ -594,7 +594,6 @@
         <tr><td class="row">No real-world identity needed</td><td class="us"><i class="y">✓</i></td><td><i class="p">◐</i><small>free tier only</small></td><td><i class="p">◐</i><small>account optional, wallet for paid use</small></td><td><i class="n">✗</i><small>e-mail or wallet</small></td><td><i class="n">✗</i><small>Proton account</small></td><td><i class="y">✓</i></td></tr>
         <tr><td class="row">Operator never sees your IP</td><td class="us"><i class="y">✓</i><small>mixnet, by design</small></td><td><i class="n">✗</i><small>relay, by promise</small></td><td><i class="n">✗</i></td><td><i class="n">✗</i></td><td><i class="n">✗</i></td><td><i class="n">✗</i><small>proxy</small></td></tr>
         <tr><td class="row">Payment can't be linked to a prompt</td><td class="us"><i class="y">✓</i><small>blind-signed coins</small></td><td><i class="n">✗</i><small>store account</small></td><td><i class="p">◐</i><small>on-chain, pseudonymous — the wallet is visible</small></td><td><i class="n">✗</i></td><td><i class="n">✗</i></td><td><i class="n">✗</i></td></tr>
-        <tr><td class="row">No subscription</td><td class="us"><i class="y">✓</i><small>prepaid, buy once</small></td><td><i class="p">◐</i><small>free tier, paid plans monthly</small></td><td><i class="n">✗</i></td><td><i class="n">✗</i></td><td><i class="n">✗</i></td><td><i class="n">✗</i></td></tr>
         <tr><td class="row">Leading (frontier) models</td><td class="us"><i class="y">✓</i></td><td><i class="y">✓</i></td><td><i class="y">✓</i></td><td><i class="n">✗</i><small>open-weight only</small></td><td><i class="n">✗</i></td><td><i class="y">✓</i></td></tr>
         <tr><td class="row">Guard for personal data, on device</td><td class="us"><i class="y">✓</i><small>flag + redact</small></td><td><i class="n">✗</i></td><td><i class="n">✗</i></td><td><i class="n">✗</i></td><td><i class="n">✗</i></td><td><i class="n">✗</i></td></tr>
         <tr><td class="row">Attachment metadata stripped</td><td class="us"><i class="y">✓</i></td><td><i class="n">✗</i></td><td><i class="n">✗</i></td><td><i class="n">✗</i></td><td><i class="n">✗</i></td><td><i class="n">✗</i></td></tr>
@@ -638,7 +637,7 @@
         <tr><td class="row">How privacy is guaranteed</td><td class="us">Network design and cryptography</td><td>Company policy</td></tr>
         <tr><td class="row">Account</td><td class="us"><b>None.</b> No e-mail, no phone number, no password. Your account is a recovery phrase only you hold</td><td>Not needed for the free version; the subscription runs through your Apple or Google account</td></tr>
         <tr><td class="row">Payment and prompts linked?</td><td class="us"><b>No.</b> Credit is spent as blind-signed coins, so no payment can be matched to a single question</td><td>Subscription is tied to your store account</td></tr>
-        <tr><td class="row">Pricing</td><td class="us">No subscription. Prepaid credit of <span class="m">$5 · $10 · $20 · $50</span>. A text prompt costs a fraction of a cent, so $5 lasts for thousands of questions</td><td>Free tier; paid plans around <span class="m">$9.99</span> or <span class="m">$19.99</span> a month (bundled with a VPN and other services)</td></tr>
+        <tr><td class="row">Pricing</td><td class="us">Plans of <span class="m">€10 · €20 · €50</span> a month, cancellable to the end of any month. A text prompt costs a fraction of a cent, so the €10 plan lasts for thousands of questions a month</td><td>Free tier; paid plans around <span class="m">$9.99</span> or <span class="m">$19.99</span> a month (bundled with a VPN and other services)</td></tr>
         <tr><td class="row">Models</td><td class="us">GPT and Gemini for text, Imagen for pictures</td><td>Several models from OpenAI, Anthropic and others</td></tr>
         <tr><td class="row">Where chats are stored</td><td class="us">Locally on your device, encrypted with a key kept in your operating system's keystore</td><td>Locally on your device</td></tr>
         <tr><td class="row">Apps</td><td class="us">macOS, Windows, Linux, Android, iPhone</td><td>iPhone, Android, Mac, browser extensions, web</td></tr>
@@ -655,7 +654,7 @@
     <ul class="pts">
       <li><b>No promise required.</b> A relay's privacy depends on the company running it doing what it says, today and in the future. tokumai's privacy doesn't depend on our good behaviour: our servers have no way of learning where a request came from.</li>
       <li><b>No VPN needed.</b> A relay server sees your real IP address unless you hide it yourself. With tokumai, hiding it is built in.</li>
-      <li><b>No subscription, no store account.</b> You buy a small amount of credit once and use it whenever you like. There is no monthly bill and no account that ties your purchase to your questions.</li>
+      <li><b>No account that knows you.</b> A plan is paid by card or through the App Store, and cancelled with a button — but no e-mail, name or login ties it to your questions: every answer is paid with a coin that carries no identity.</li>
       <li><b>What you didn't mean to share stays home.</b> Before a prompt leaves your device, tokumai checks it for personal data — names, addresses, IDs, also inside attached images and documents — and offers to redact it. Attached files lose their metadata on the way out: camera model, GPS position, author name, timestamps. Nothing about that check ever leaves the device.</li>
       <li><b>Your questions never add up to a profile.</b> Without an identity, an IP address or a traceable payment, there is nothing to build a picture of you from. Ask about your health, your finances or your relationship, and it stays a question, not a data point about you.</li>
     </ul>

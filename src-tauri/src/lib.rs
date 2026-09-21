@@ -614,6 +614,102 @@ async fn close_buy_link(app: &AppHandle) {
     }
 }
 
+// ---- plans outside the App Store ----------------------------------------------------
+//
+// On iPhone a plan is an App Store subscription (iap_ios.rs). Everywhere else it is a Stripe
+// subscription, and the server has spoken that protocol since 938a1de: `plan.create` raises
+// a hosted checkout, `plan.status` asks whether it was paid and grants the month. What was
+// missing was anybody to talk to it — the plan sheet said "this build cannot open a
+// checkout for you yet", and with one-off credit retired that left a desktop with nothing
+// to buy at all.
+//
+// Both calls are account-signed and leave through the purchase client, like every other
+// account-side call. The checkout itself happens in the OS browser, on Stripe's page.
+
+/// The plan ladder the server published with its catalog: tier, allowance, price in cents,
+/// yearly price, saving. Prices come from here and nowhere else.
+#[tauri::command]
+fn plan_ladder() -> Value {
+    PLAN_LADDER.lock().unwrap_or_else(|e| e.into_inner()).clone().unwrap_or(Value::Null)
+}
+
+async fn plan_call(app: &AppHandle, main: &Transport, kind: &str, extra: Value) -> Result<Value, String> {
+    let transport = buy_transport(app, main).await;
+    let w = wallet::load(&data_dir(app)?);
+    let srv = server_addr(&w)?;
+    let a = wallet_account(app)?;
+    let nonce = rand_hex(16);
+    let sig = a.sign("plan", &nonce);
+    let mut req = json!({ "v": PROTO, "kind": kind, "id": rand_hex(16),
+                          "publicKey": a.public_key_pem, "nonce": nonce, "sig": sig });
+    if let (Some(o), Some(e)) = (req.as_object_mut(), extra.as_object()) {
+        for (k, v) in e {
+            o.insert(k.clone(), v.clone());
+        }
+    }
+    transport.round_trip(&srv, &req, SURBS_SMALL, TIMEOUT_MS).await
+}
+
+/// Raise a checkout for `tier` (monthly or yearly). Returns the Stripe link to open.
+#[tauri::command]
+async fn plan_checkout(app: AppHandle, transport: State<'_, Arc<Transport>>, tier: u64, yearly: bool) -> Result<Value, String> {
+    Box::pin(plan_checkout_impl(app, transport.inner().clone(), tier, yearly)).await
+}
+async fn plan_checkout_impl(app: AppHandle, main: Arc<Transport>, tier: u64, yearly: bool) -> Result<Value, String> {
+    let resp = plan_call(&app, &main, "plan.create", json!({ "tier": tier, "yearly": yearly })).await?;
+    let session = resp.get("session").and_then(|s| s.as_str()).unwrap_or("").to_string();
+    let checkout = resp
+        .pointer("/options/0/checkout")
+        .and_then(|c| c.as_str())
+        .unwrap_or("")
+        .to_string();
+    if session.is_empty() || checkout.is_empty() {
+        return Err("the server raised no checkout — plans may not be on sale here".into());
+    }
+    let dir = data_dir(&app)?;
+    let mut w = wallet::load(&dir);
+    w.pending_plan_session = Some(session);
+    wallet::save(&dir, &w)?;
+    Ok(json!({ "checkout": checkout, "expiresAt": resp.get("expiresAt") }))
+}
+
+/// Ask about the open checkout. `status`: none | pending | paid (then `account` carries the
+/// plan as the server sees it, and the month is collected in the background).
+#[tauri::command]
+async fn plan_poll(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<Value, String> {
+    Box::pin(plan_poll_impl(app, transport.inner().clone())).await
+}
+async fn plan_poll_impl(app: AppHandle, main: Arc<Transport>) -> Result<Value, String> {
+    let dir = data_dir(&app)?;
+    let Some(session) = wallet::load(&dir).pending_plan_session else {
+        return Ok(json!({ "status": "none" }));
+    };
+    let resp = plan_call(&app, &main, "plan.status", json!({ "session": session })).await?;
+    match resp.get("kind").and_then(|k| k.as_str()) {
+        Some("plan.paid") => {
+            let mut w = wallet::load(&dir);
+            w.pending_plan_session = None;
+            w.plan_seen = resp.get("subscription").cloned();
+            wallet::save(&dir, &w)?;
+            // The month is on the account now; draw the working amount onto the device.
+            spawn_refill_soon(&app);
+            Ok(json!({ "status": "paid", "account": resp }))
+        }
+        _ => Ok(json!({ "status": "pending" })),
+    }
+}
+
+/// Forget an open checkout (the person closed the tab and wants to start over). Nothing is
+/// cancelled at Stripe: an unpaid checkout session simply expires there.
+#[tauri::command]
+fn plan_forget(app: AppHandle) -> Result<Value, String> {
+    let dir = data_dir(&app)?;
+    let mut w = wallet::load(&dir);
+    w.pending_plan_session = None;
+    wallet::save(&dir, &w)?;
+    Ok(json!({ "ok": true }))
+}
+
 #[tauri::command]
 async fn buy_close(app: AppHandle) -> Result<Value, String> {
     close_buy_link(&app).await;
@@ -2302,7 +2398,7 @@ async fn state(app: AppHandle, transport: State<'_, Arc<Transport>>) -> Result<V
             .min(),
         // The smallest amount that can change hands: a coin-paid answer rounds up to it.
         "coinToku": scrai_core::coconut::COIN_TOKU,
-        "tiers": TIERS,
+        "tiers": shown_tiers(),
         "fakePayments": false,
         "gateway": "btcpay",
         "testnet": testnet,
@@ -5226,6 +5322,19 @@ static SERVER_TENDER64: std::sync::atomic::AtomicBool = std::sync::atomic::Atomi
 fn remember_wire_caps(resp: &Value) {
     let yes = resp.get("tender64").and_then(|b| b.as_bool()) == Some(true);
     SERVER_TENDER64.store(yes, std::sync::atomic::Ordering::Relaxed);
+    // What one-off amounts this server sells. An EMPTY list is an answer ("none — plans
+    // only", PURCHASE_TIERS=none); a missing field is an older server, and then the app
+    // keeps the tiles it always had.
+    let tiers = resp.get("purchaseTiers").and_then(|t| t.as_array()).map(|a| {
+        a.iter().filter_map(|x| x.as_u64()).filter(|n| *n > 0 && *n <= 1000).map(|n| n as u32).take(8).collect::<Vec<u32>>()
+    });
+    *SERVER_TIERS.lock().unwrap_or_else(|e| e.into_inner()) = tiers;
+}
+
+/// The one-off tiles to show: the server's list once it has sent one, else the built-in.
+static SERVER_TIERS: std::sync::Mutex<Option<Vec<u32>>> = std::sync::Mutex::new(None);
+fn shown_tiers() -> Vec<u32> {
+    SERVER_TIERS.lock().unwrap_or_else(|e| e.into_inner()).clone().unwrap_or_else(|| TIERS.to_vec())
 }
 
 /// Put a tender into a request under the name this server understands. Roughly half the
@@ -5619,7 +5728,7 @@ pub fn run() {
             state, local_state, set_server, account_new, account_reveal, account_restore, account_delete, account_migrate_qr,
             invoice, invoice_status, invoice_cancel, invite_check, ocr_scan, pdf_text, pdf_ocr, pdf_pages, collect, chat,
             smart_available, smart_detect,
-            mixnet_route, mixnet_ping, cancel_chat, app_resumed, app_hidden, resume_stats, list_entry_gateways, server_identities, set_entry_gateway, set_entry_random, set_mixnet_perf, buy_close, set_coin_chat, coins_return, collect_later, set_fake_old_version, support_send, support_fetch, support_list, support_seen, support_diag, open_external, save_image, save_file, voucher_redeem,
+            plan_ladder, plan_checkout, plan_poll, plan_forget, mixnet_route, mixnet_ping, cancel_chat, app_resumed, app_hidden, resume_stats, list_entry_gateways, server_identities, set_entry_gateway, set_entry_random, set_mixnet_perf, buy_close, set_coin_chat, coins_return, collect_later, set_fake_old_version, support_send, support_fetch, support_list, support_seen, support_diag, open_external, save_image, save_file, voucher_redeem,
             phrase_backup_get, iap_products, iap_purchase, iap_restore,
             phrase_check_start,
             phrase_check_verify,

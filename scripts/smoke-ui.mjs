@@ -109,6 +109,42 @@ for (const [name, fn] of screens) {
   console.log(problems.length > before ? `  ✗ ${name}` : `  ✓ ${name}`);
 }
 
+// The plan sheet outside the App Store (Stripe). It draws from the server's ladder, which
+// the dev bridge does not have — so hand it one, the way the catalog would, and check that
+// the sheet sells what the ladder says: three tiers, two confirmations, a button that stays
+// shut until both are ticked.
+{
+  const before = problems.length;
+  const seen = await page.evaluate(async () => {
+    // Same module instance the app imported (same URL), so this is the app's own object.
+    const { Backend } = await import("/backend.js");
+    Backend.planLadder = async () => [
+      { tier: 0, toku: 700000, cents: 1000, yearlyCents: 10800, savesCents: 0 },
+      { tier: 1, toku: 1500000, cents: 2000, yearlyCents: 21600, savesCents: 142 },
+      { tier: 2, toku: 4000000, cents: 5000, yearlyCents: 54000, savesCents: 714 },
+    ];
+    window.openPlans();
+    await new Promise((r) => setTimeout(r, 300));
+    const body = document.getElementById("planBody");
+    const tiers = body.querySelectorAll(".plantier").length;
+    window.selectPlan("web.plan.20");
+    const shut = !!body.querySelector("button.primary[disabled]");
+    window.togglePlanConsent(1); window.togglePlanConsent(2);
+    const btn = document.getElementById("planBody").querySelector("button.primary");
+    return { tiers, shut, open: !btn.disabled, label: btn.textContent.trim(), links: body.querySelectorAll(".legalline a").length };
+  }).catch((e) => { problems.push(`web plans: ${e.message}`); return null; });
+  if (seen) {
+    if (seen.tiers !== 3) problems.push(`web plans: ${seen.tiers} tiers drawn, the ladder has 3`);
+    if (!seen.shut) problems.push("web plans: Subscribe was open before the confirmations were ticked");
+    if (!seen.open) problems.push("web plans: Subscribe stayed shut with a plan picked and both boxes ticked");
+    if (!/20/.test(seen.label)) problems.push(`web plans: the button does not name the price (“${seen.label}”)`);
+    if (seen.links < 3) problems.push("web plans: terms, withdrawal and privacy must all be linked where the plan is bought");
+  }
+  if (process.env.SMOKE_SHOT) await page.screenshot({ path: process.env.SMOKE_SHOT });
+  await page.evaluate(() => window.closePlans());
+  console.log(problems.length > before ? "  ✗ plans (web checkout)" : "  ✓ plans (web checkout)");
+}
+
 // The account modal's sub-pages: each is a render function of its own.
 const pages = ["server", "phrase", "restore", "giveback", "migrate", "danger"];
 await page.evaluate(() => window.openAccount());

@@ -91,7 +91,7 @@
      that you <b>want the service to begin at once</b>, and that you <b>know you thereby lose
      your right of withdrawal</b> once the service has been provided in full
      (§ 356 (4), (5) BGB / Art. 16 (a), (m) Consumer Rights Directive). Without both
-     confirmations no order can be placed. You receive them back in writing on the receipt.
+     confirmations no order can be placed.
      If you withdraw before that point, you owe a proportionate amount for the allowance
      already used. <b>For a plan bought through the App Store</b>, Apple is the seller of
      record: withdrawal, cancellation and refunds of the payment follow Apple's terms.</p>
@@ -143,6 +143,26 @@
 
   <h2 id="use">7. Acceptable use</h2>
   <p>You may not use the service to break the law, to generate content that infringes the rights of others, or to attack the service or the networks it relies on. The third-party models' own usage policies apply to the content they produce. We may refuse service where required by law.</p>
+
+  <!-- LAWYER CHECK (2026-09-21): age and country limits. Required by the model providers'
+       terms (Gemini API: 18+, only "available regions"; OpenAI: supported countries) and by
+       sanctions law. We cannot see where a user is — the mixnet hides it — so the limits rest
+       on the user's own confirmation plus the sales channels (Stripe, App Store, Google Play
+       configured not to sell into the excluded countries). To be reviewed: whether that counts
+       as a reasonable measure towards the providers and under EU/US sanctions rules. -->
+  <h2 id="eligibility">7a. Who may use tokumai, and from where</h2>
+  <p><b>Age.</b> You must be at least <b>18 years old</b>. The service is not directed at
+     minors, and some of the model providers it relies on do not permit use by anyone under 18.</p>
+  <p><b>Countries.</b> You may use the service only from a country in which the model providers
+     it relies on offer their services, and <b>not from a country or region under comprehensive
+     EU, UN or US sanctions</b> — at present in particular Russia, Belarus, Iran, North Korea,
+     Cuba and the occupied regions of Ukraine. Plans are not sold into these countries: the web
+     checkout and the app stores do not offer them there.</p>
+  <p><b>Your confirmation.</b> The service cannot see where you are — hiding that is what the
+     mixnet is for. By buying a plan or redeeming a code you confirm that you meet this section,
+     and keeping to it while you use the service is your responsibility. If we learn that a plan
+     is used in breach of it, we may end the plan for cause; what was paid for the time after
+     it ends is refunded.</p>
 
   <h2 id="availability">8. Availability and changes</h2>
   <p>The service is provided without warranty of uninterrupted availability: it depends on the Nym mixnet and on third-party model providers. Model prices follow the providers' prices and may change; a change never reduces the number of TOKU you hold. <b>The price of a running plan</b> changes only with notice in text form at least one month ahead and only from the next period; you may cancel before it takes effect. We may change these terms for future periods; the version in force when a period begins applies to it.</p>

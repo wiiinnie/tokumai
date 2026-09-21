@@ -169,6 +169,13 @@ pub struct Wallet {
     /// itself is the server's number, asked again on every account call.
     #[serde(default)]
     pub plan_seen: Option<serde_json::Value>,
+    /// A plan checkout that was opened in the browser and has not been seen paid yet (the
+    /// Stripe session id). Kept here rather than in memory because the person may close the
+    /// app while they pay: the next launch asks the server about it and finds the month.
+    /// Nothing is lost without it either — the server reads what was bought from Stripe —
+    /// but the app would not know to ask.
+    #[serde(default)]
+    pub pending_plan_session: Option<String>,
     /// Did a PERSON pick this entry gateway, or did the app assign one?
     ///
     /// A fresh install is pinned to one of the operator's own gateways, which is a

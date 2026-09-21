@@ -278,33 +278,22 @@ impl Cfg {
 /// The amounts on sale, each with its card price and — when the server discounts coins —
 /// its coin price. From the server's own tiers and percentage, so the page can never say
 /// a price the invoice will not charge.
-/// Can this server take a coin payment at all? Both coin rails, as one question — the
-/// price tiles and the page copy both hinge on it.
-fn coins_sellable() -> bool {
-    scrai_server::nyx::Nyx::from_env().is_some() || scrai_server::pay::coin_rail_ready()
-}
-
 fn prices_html() -> String {
-    let pct = scrai_server::pay::coin_discount_pct();
+    // Plans, from the same ladder the app is sent (`subscription::TIERS`), so the page can
+    // never name a price the checkout will not charge. One-off credit is retired; this used
+    // to list the dollar tiles.
+    let group = |n: u64| {
+        let t = n.to_string();
+        t.as_bytes().rchunks(3).rev().map(|c| std::str::from_utf8(c).unwrap_or("")).collect::<Vec<_>>().join(",")
+    };
+    let euro = |cents: u64| if cents % 100 == 0 { format!("€{}", cents / 100) } else { format!("€{}.{:02}", cents / 100, cents % 100) };
     let mut out = String::from("<div class=\"prices\">");
-    for usd in scrai_server::pay::purchase_tiers() {
-        let toku = (usd as u64 * 100_000).to_string();
-        let toku = toku
-            .as_bytes()
-            .rchunks(3)
-            .rev()
-            .map(|c| std::str::from_utf8(c).unwrap_or(""))
-            .collect::<Vec<_>>()
-            .join(",");
-        // …and only when a coin rail is actually live: the discount priced a way to pay,
-        // and with coins withdrawn the line advertised a price nobody can get.
-        let coin = if pct > 0 && coins_sellable() {
-            let cents = scrai_server::pay::charged_cents(usd, "nyx", false);
-            format!("<small class=\"cr\">${}.{:02} with NYM or Bitcoin</small>", cents / 100, cents % 100)
-        } else {
-            String::new()
-        };
-        out.push_str(&format!("<div class=\"pr\"><b>${usd}</b><small>{toku} TOKU</small>{coin}</div>"));
+    for (toku, cents) in scrai_core::subscription::TIERS {
+        let yearly = scrai_core::subscription::yearly_cents(cents);
+        out.push_str(&format!(
+            "<div class=\"pr\"><b>{} <small style=\"display:inline\">/ month</small></b><small>{} TOKU every month</small><small class=\"cr\">or {} a year</small></div>",
+            euro(cents), group(toku), euro(yearly)
+        ));
     }
     out.push_str("</div>");
     out

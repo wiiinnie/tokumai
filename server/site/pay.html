@@ -163,9 +163,13 @@
 
   var frag = (location.hash || "").replace(/^#/, "");
   if (!frag) {
-    // No invoice in the link: this is somebody buying a code here rather than paying an
-    // invoice the app already raised. Different flow, same page — see docs/vouchers.md.
-    buyFlow("");
+    // No invoice in the link. This used to sell a code for one-off credit; that is
+    // retired (PURCHASE_TIERS=none), and a plan cannot be sold here at all — it belongs to
+    // an account, and this site knows none. So the honest page is a signpost.
+    out.innerHTML = '<div class="card"><h1>Plans are bought in the app</h1>' +
+      '<p>A plan belongs to your account, and your account lives in the app — this site never sees it. ' +
+      'Open tokumai and choose <b>Buy credit \u2192 Choose a plan</b>; the checkout then opens here in your browser.</p>' +
+      '<p><a href="/pricing">Plans and prices</a> \u00b7 <a href="/download">Get the app</a> \u00b7 <a href="/cancel">Cancel a plan</a></p></div>';
     return;
   }
   if (/^order=/.test(frag)) { buyFlow(frag); return; }

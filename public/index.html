@@ -1312,6 +1312,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       <p class="buylink" id="buyLink" hidden></p>
       <div id="iosTopup" style="display:none"></div>
       <div id="iosStore" style="display:none"></div>
+      <div id="webPlans" style="display:none"></div>
       <!-- One field for every kind of code — invites, vouchers, gifts. It names no place to get
      one, deliberately: outside the US and the EU, App Store rule 3.1.1 forbids the app from
      pointing at an outside purchase, and a helpful sentence here would be exactly that.
@@ -6348,7 +6349,11 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     // point at a purchase outside it). What is left on this sheet is the code field, and
     // the App Store purchase once StoreKit is in.
     $("iosTopup").style.display = "none";
-    const legacy = !iosWeb || testnetBuy;
+    // One-off credit is the SERVER's to offer (`purchaseTiers` in the catalog). With none
+    // on sale the amount chooser has nothing to choose from: what is left is the plan row
+    // and the code field, the same shape the iPhone sheet already has.
+    const oneOff = Array.isArray(tiers) && tiers.length > 0;
+    const legacy = (!iosWeb && oneOff) || testnetBuy;
     $("amountLbl").style.display = legacy ? "" : "none";
     $("tierRow").style.display   = legacy ? "" : "none";
     $("chooser").style.display   = legacy ? "" : "none";
@@ -6356,6 +6361,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     syncCardRow();
     // iOS: the App Store tiles take the chooser's place (StoreKit 2, see iap_ios.rs).
     if(iosStoreOn()) loadIap(false); else renderIosStore();
+    renderWebPlans();
   }
 
   // ---------- the month's allowance ----------
@@ -6425,7 +6431,25 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       <small>Does not expire. Used automatically once a month's allowance runs out.</small></span></div>`;
   }
 
-  // ---------- plans (iOS: App Store subscription) ----------
+  // ---------- the plan row on the buy sheet, everywhere but the iPhone ----------
+  /// A plan is what is sold; this row is the way into the sheet that sells it. Shown when
+  /// the server publishes a ladder, hidden in the invite flow (nothing is bought there).
+  function webPlansOn(){ return !isIOSNative() && !testnetBuy && Array.isArray(planLadder) && planLadder.length > 0; }
+  function renderWebPlans(){
+    const box = $("webPlans"); if(!box) return;
+    if(!webPlansOn()){ box.style.display = "none"; box.innerHTML = ""; return; }
+    box.style.display = "";
+    const oneOff = Array.isArray(tiers) && tiers.length > 0;
+    const planOver = !!(plan && !plan.active && Number(plan.toku_per_month) > 0);
+    box.innerHTML = planActive()
+      ? `${allowanceHTML()}${keptCreditHTML()}<div class="setrow" data-click="openPlans"><span><b>Your plan</b><small>${esc(formatToku(Number(plan.toku_per_month) || 0))} TOKU a month · change or cancel</small></span><span class="chev">›</span></div>`
+      : planOver
+      ? `${allowanceHTML()}${keptCreditHTML()}<div class="setrow" data-click="openPlans" style="border-color:var(--rust)"><span><b>Your plan has ended</b><small>Start it again, or pick another.</small></span><span class="chev">›</span></div>`
+      : `<div class="setrow" data-click="openPlans"><span><b>${oneOff ? "Monthly plan" : "Choose a plan"}</b><small>A fresh allowance of TOKU every month${oneOff ? " — more TOKU per euro than the amounts below" : ""}.</small></span><span class="chev">›</span></div>`;
+  }
+
+  // ---------- plans (iOS: App Store subscription · elsewhere: Stripe) ----------
+  let planC1 = false, planC2 = false, planWait = null, planWaitSince = 0;
   let planList = null, planErr = "", planLoading = false, planSel = null, planBusy = false,
       planMsg = "", planYearly = false;
   const planIsYearly = id => /\.year$/.test(String(id || ""));
@@ -6438,12 +6462,33 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     return (planLadder || []).find(p => Number(p.cents) === cents) || null;
   }
   function openPlans(){
-    planMsg = ""; renderPlans(); openScrim("planScrim");
-    if(isIOSNative()) loadPlans(false);
+    planMsg = ""; planC1 = false; planC2 = false; renderPlans(); openScrim("planScrim");
+    loadPlans(false);
   }
   function closePlans(){ $("planScrim").classList.remove("open"); }
+  /// Outside the App Store the "products" are the server's ladder: same shape as StoreKit's
+  /// (id, price, displayPrice), so one sheet draws both. Prices are the server's cents —
+  /// never typed here.
+  function ladderProducts(){
+    const out = [];
+    for(const l of (planLadder || [])){
+      const euro = Math.round((Number(l.cents) || 0) / 100);
+      if(!(euro > 0)) continue;
+      out.push({ id: `web.plan.${euro}`, tier: Number(l.tier) || 0, price: (Number(l.cents) || 0) / 100, displayPrice: euros(l.cents) });
+      if(Number(l.yearlyCents) > 0)
+        out.push({ id: `web.plan.${euro}.year`, tier: Number(l.tier) || 0, price: Number(l.yearlyCents) / 100, displayPrice: euros(l.yearlyCents) });
+    }
+    return out;
+  }
   async function loadPlans(force){
-    if(!isIOSNative()) return;
+    if(!isIOSNative()){
+      try{ const l = await Backend.planLadder(); if(Array.isArray(l) && l.length) planLadder = l; }catch(_){}
+      planList = ladderProducts(); planErr = ""; planLoading = false;
+      if(!planList.length){ planList = null; planErr = "This server sells no plans."; }
+      renderPlans();
+      checkPlanCheckout();      // a checkout opened earlier may have been paid meanwhile
+      return;
+    }
     if(planList && !force){ renderPlans(); return; }
     planLoading = true; planErr = ""; renderPlans();
     try{
@@ -6514,11 +6559,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   }
   function renderPlans(){
     const box = $("planBody"); if(!box) return;
-    if(!isIOSNative()){
-      box.innerHTML = `<p class="hint">Plans are bought on the website, and the app then finds the month on your account. ` +
-        `This build cannot open a checkout for you yet.</p>`;
-      return;
-    }
+    if(!isIOSNative()){ renderWebPlanSheet(box); return; }
     if(planLoading){ box.innerHTML = `<p class="hint">Loading App Store prices…</p>`; return; }
     if(planErr || !planList){
       box.innerHTML = `<div class="setrow" style="cursor:default;border-color:var(--rust)"><span><b style="color:var(--rust)">The App Store is not answering right now.</b><small>${esc(planErr)} Your plan and everything you have already bought are unaffected.</small></span></div>
@@ -6539,6 +6580,79 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       <p class="legalline" style="text-align:center;margin:8px 2px 0">${planLegalLink("terms","Terms of Use")} · ${planLegalLink("privacy","Privacy Policy")}</p>
       ${planMsg ? `<p class="hint" style="margin:10px 0 0">${esc(planMsg)}</p>` : ``}`;
   }
+  /// The plan sheet outside the App Store: the same tiers, our own prices, and a checkout
+  /// that opens on Stripe's page in the browser. Two confirmations first (§ 356 BGB) — the
+  /// service starts at once, and the terms promise that no order goes out without them.
+  function renderWebPlanSheet(box){
+    if(planErr || !planList){
+      box.innerHTML = `<p class="hint">${esc(planErr || "Loading plans…")}</p>`;
+      return;
+    }
+    if(planWait){
+      box.innerHTML = `${allowanceHTML()}
+        <div class="setrow" style="cursor:default"><span><b>Waiting for the checkout in your browser…</b><small>Pay on Stripe's page; this sheet notices by itself, usually within a few seconds of the payment.</small></span></div>
+        <div class="btnrow" style="margin-top:12px"><button class="btn" data-click="reopenPlanCheckout">Open the checkout again</button><button class="btn" data-click="abandonPlanCheckout">Start over</button></div>
+        ${planMsg ? `<p class="hint" style="margin:10px 0 0">${esc(planMsg)}</p>` : ``}`;
+      return;
+    }
+    const shown = planList.filter(p => planIsYearly(p.id) === planYearly);
+    const sel = shown.find(p => p.id === planSel);
+    const ready = !!sel && planC1 && planC2 && !planBusy;
+    box.innerHTML = `${allowanceHTML()}
+      <p class="hint" style="margin:0 0 12px">Every month you get a fresh allowance. It does not roll over — and it does not expire on you mid-month either.</p>
+      <div class="planseg"><span class="${planYearly ? "" : "on"}" data-click="planPeriod" data-args="false">Monthly</span><span class="${planYearly ? "on" : ""}" data-click="planPeriod" data-args="true">Yearly${yearlyPitch()}</span></div>
+      ${shown.map(planTierHTML).join("")}
+      <div class="consent" style="margin-top:12px">
+        <p class="legalline">Sold under our ${planLegalLink("terms","Terms of Use")}. Please read the ${planLegalLink("terms#withdrawal","right of withdrawal")} and the ${planLegalLink("privacy","Privacy Policy")} first.</p>
+        <div class="ck${planC1 ? " on" : ""}" data-click="togglePlanConsent" data-args="1"><span class="box">✓</span><span class="cktx">I ask you to <b>start the plan immediately</b>, before the 14-day withdrawal period ends.</span></div>
+        <div class="ck${planC2 ? " on" : ""}" data-click="togglePlanConsent" data-args="2"><span class="box">✓</span><span class="cktx">I understand that I <b>lose my right of withdrawal</b> once the service has been provided in full, and owe a proportionate amount if I withdraw before.</span></div>
+      </div>
+      <div style="margin-top:12px"><button class="btn primary${planBusy ? " busy" : ""}" style="width:100%${ready ? "" : ";opacity:.5;cursor:not-allowed"}"${ready ? "" : " disabled"} data-click="subscribePlan">${
+        planBusy ? "Raising the checkout…"
+                 : !sel ? "Pick a plan above"
+                 : !(planC1 && planC2) ? "Tick both boxes to continue"
+                 : `Subscribe — ${esc(String(sel.displayPrice || ""))} ${planYearly ? "a year" : "a month"} ↗`}</button></div>
+      <p class="hint" style="margin:10px 2px 0;text-align:center">Card, PayPal, Apple Pay or Google Pay on Stripe's page in your browser. Renews until you cancel — any time, without signing in, at ${planLegalLink("cancel","tokumai.com/cancel")}; ${esc(planYearly ? "a year" : "a month")} already paid for stays yours.</p>
+      ${planMsg ? `<p class="hint" style="margin:10px 0 0">${esc(planMsg)}</p>` : ``}`;
+  }
+  function togglePlanConsent(n){ if(Number(n) === 1) planC1 = !planC1; else planC2 = !planC2; renderPlans(); }
+  let planCheckoutUrl = "";
+  async function subscribeWebPlan(sel){
+    planBusy = true; planMsg = ""; renderPlans();
+    try{
+      const r = await Backend.planCheckout(sel.tier, planIsYearly(sel.id));
+      const url = safeStripeUrl(String((r && r.checkout) || ""));
+      if(!url || url === "#") throw new Error("the server sent no Stripe checkout link");
+      planCheckoutUrl = url; openLink(url);
+      startPlanWait();
+    }catch(e){ planMsg = "Could not open a checkout: " + String((e && e.message) || e); }
+    planBusy = false; renderPlans();
+  }
+  function reopenPlanCheckout(){ if(planCheckoutUrl) openLink(planCheckoutUrl); else { planMsg = "That checkout is from an earlier session — choose “Start over”."; renderPlans(); } }
+  async function abandonPlanCheckout(){ stopPlanWait(); try{ await Backend.planForget(); }catch(_){} planMsg = "Nothing was charged unless you completed the payment on Stripe's page."; renderPlans(); }
+  function startPlanWait(){ stopPlanWait(); planWaitSince = Date.now(); planWait = setInterval(checkPlanCheckout, 5000); }
+  function stopPlanWait(){ if(planWait){ clearInterval(planWait); planWait = null; } }
+  /// Ask the server about an open checkout. Also called when the sheet opens and at start,
+  /// because the person may have paid while the app was closed.
+  let planChecking = false;
+  async function checkPlanCheckout(){
+    if(isIOSNative() || planChecking) return;
+    planChecking = true;
+    try{
+      const r = await Backend.planPoll();
+      const st = String((r && r.status) || "");
+      if(st === "paid"){
+        stopPlanWait(); planSel = null; planCheckoutUrl = "";
+        planMsg = "✓ Your plan is active. The month is on your account — the app is collecting it now.";
+        await refreshState(); renderBal(); renderBuyBal(); renderWebPlans();
+      }
+      else if(st === "none"){ stopPlanWait(); }
+      // A Stripe checkout session lives for a day; stop asking long before that.
+      else if(planWait && Date.now() - planWaitSince > 30 * 60 * 1000){ stopPlanWait(); planMsg = "No payment seen yet. If you did pay, open this sheet again and it will find it."; }
+    }catch(_){ /* the next tick asks again */ }
+    planChecking = false; renderPlans();
+  }
+
   /// The yearly tab's own label — read off Apple's prices, never asserted.
   ///
   /// NOT a percentage. The discount rises with the tier (roughly half a month free at the
@@ -6559,6 +6673,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   async function subscribePlan(){
     const sel = planList && planList.find(p => p.id === planSel);
     if(!sel || planBusy) return;
+    if(!isIOSNative()){ if(planC1 && planC2) await subscribeWebPlan(sel); return; }
     planBusy = true; planMsg = ""; renderPlans();
     try{
       const r = await Backend.iapSubscribe(sel.id);
@@ -7626,6 +7741,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // expose for inline handlers
   Object.assign(window,{ toggleGwRandom, pickServerIdentity, returnCoins, tapVersion, hideDev, selectIap, loadIap, toggleIapConsent, buyIap, restoreIap, codeTyped,
     openPlans, closePlans, loadPlans, selectPlan, planPeriod, subscribePlan,
+    togglePlanConsent, reopenPlanCheckout, abandonPlanCheckout,
     pickModel, copyPhrase, newChat, openSession, deleteSession, exportSession, toggleMenu, selectModelIdx,
     autogrow, onKey, sendMsg, retryMsg, showHandover, downloadHandover, closeHandover, pickImport, importHandover,
     cancelMsg, resendMsg, showDismissed, retrieveMsg, openConnSheet, closeConnSheet, rebuildRoute, rebuildRouteFromSheet, copyResumeLog, routeDismiss, useOfficialServer, iterateImg,
@@ -7857,6 +7973,9 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       }catch(_){ /* the next beat asks again; a heartbeat must never be the thing that breaks */ }
     }
     if(!heartbeatTimer) heartbeatTimer = setInterval(heartbeat, 15_000);
+    // A plan checkout opened in the browser before the app was closed: ask once the route
+    // is up, so a month that was paid for while we were away is simply there.
+    setTimeout(()=>{ try{ checkPlanCheckout(); }catch(_){} }, 12_000);
 
     // Connect progress from Rust (every reconnect after the first): drives the chip + card.
     if(isTauri()){ try{ Backend.onMixnetPhase(onMixnetPhase); }catch(_){} try{ Backend.onBuyPhase(onBuyPhase); }catch(_){}
