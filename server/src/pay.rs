@@ -4036,6 +4036,28 @@ mod card_tests {
     /// one that could mint prices would defeat the point of restricting it. What is proved
     /// is therefore the round trip as production will make it — our request shape against
     /// the real prices, with the real key's real permissions.
+    /// The price half of the sandbox check: can this key read the six prices, and is every
+    /// one of them what its slot says? Run like the test below. Prints what it read, which
+    /// is what the boot log will print on the server.
+    #[test]
+    #[ignore = "network + STRIPE_SECRET_KEY"]
+    fn stripe_sandbox_reads_the_six_plan_prices() {
+        let Ok(key) = std::env::var("STRIPE_SECRET_KEY") else {
+            panic!("set STRIPE_SECRET_KEY to a test key to run this");
+        };
+        assert!(key.contains("_test_"), "refusing to run against a live key");
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let rail = CardRail::Stripe { secret_key: key, redirect_url: "https://tokumai.com/paid".into() };
+        let cents = rt.block_on(rail.plan_prices()).expect("the six prices, each active, EUR and in the right slot");
+        println!("plan prices from Stripe — {cents:?}");
+        assert_eq!(cents.len(), subscription::TIERS.len() * 2);
+        for (i, (_, monthly)) in subscription::TIERS.iter().enumerate() {
+            assert_eq!(cents[i], *monthly, "the monthly price of tier {i} is what the terms print");
+            let yearly = cents[subscription::TIERS.len() + i];
+            assert!(yearly < monthly * 12, "a year must cost less than twelve months (tier {i}: {yearly})");
+        }
+    }
+
     #[test]
     #[ignore = "network + STRIPE_SECRET_KEY"]
     fn stripe_sandbox_opens_a_subscription_anchored_to_the_first() {
