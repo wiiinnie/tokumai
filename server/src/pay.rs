@@ -658,17 +658,60 @@ impl Sub {
 /// The plan ladder as the app should draw it: allowance, price, and what a bigger plan
 /// saves against the entry tier. Derived from `subscription::TIERS` rather than typed on
 /// the client, so a tier can never be advertised at a price this server does not sell.
+/// What the six plans cost AT STRIPE, in cents: the three monthly tiers, then the three
+/// yearly — the order of `STRIPE_PRICES`. Filled by `CardRail::plan_prices` at boot and
+/// hourly; empty until then, and on a server with no card rail for good.
+///
+/// A price lives where it is charged. The ladder used to be computed (month × 12 × 0.9) and
+/// Stripe was set up by hand to match — and the first time somebody rounded the yearly
+/// prices to .99 the app showed €216.00 over a checkout that charged €214.99 (2026-09-21).
+/// The iPhone has always read its prices from the App Store for exactly this reason.
+static PLAN_PRICES: std::sync::Mutex<Vec<u64>> = std::sync::Mutex::new(Vec::new());
+
+/// Take a fresh set of Stripe prices into the ladder. Six or nothing: a partial list would
+/// mix charged prices with computed ones, which is the confusion this exists to end.
+pub fn set_plan_prices(cents: Vec<u64>) -> bool {
+    if cents.len() != subscription::TIERS.len() * 2 || cents.iter().any(|c| *c == 0) {
+        return false;
+    }
+    let mut g = PLAN_PRICES.lock().unwrap_or_else(|e| e.into_inner());
+    let changed = *g != cents;
+    *g = cents;
+    changed
+}
+
+/// (monthly cents, yearly cents) per tier — Stripe's when known, the formula's otherwise.
+pub fn plan_prices() -> Vec<(u64, u64)> {
+    let g = PLAN_PRICES.lock().unwrap_or_else(|e| e.into_inner());
+    let n = subscription::TIERS.len();
+    subscription::TIERS
+        .iter()
+        .enumerate()
+        .map(|(i, (_, cents))| {
+            if g.len() == n * 2 { (g[i], g[n + i]) } else { (*cents, subscription::yearly_cents(*cents)) }
+        })
+        .collect()
+}
+
 pub fn plans_info() -> Value {
+    let prices = plan_prices();
+    let (entry_toku, _) = subscription::TIERS[0];
+    let entry_cents = prices[0].0;
     let v: Vec<Value> = subscription::TIERS
         .iter()
         .enumerate()
-        .map(|(i, (toku, cents))| {
+        .map(|(i, (toku, _))| {
+            let (cents, yearly) = prices[i];
+            // What this tier's allowance would cost at the entry tier's rate, less what it
+            // does cost — from the prices actually charged. Floored: a number that promises
+            // a benefit rounds against us.
+            let saves = (toku * entry_cents / entry_toku).saturating_sub(cents);
             json!({
                 "tier": i,
                 "toku": toku,
                 "cents": cents,
-                "yearlyCents": subscription::yearly_cents(*cents),
-                "savesCents": subscription::saving_cents(i),
+                "yearlyCents": yearly,
+                "savesCents": saves,
             })
         })
         .collect();
@@ -2830,6 +2873,33 @@ impl CardRail {
         Ok((stripe_sub_paid(&v), stripe_period_end_ms(&v)))
     }
 
+    /// What the six configured prices charge, in `STRIPE_PRICES` order. Each must be EUR and
+    /// recurring with the interval its position implies (three monthly, then three yearly)
+    /// — a price id pasted into the wrong slot would otherwise sell a year at a month's
+    /// label, and this is the one place that can notice before a customer does.
+    pub async fn plan_prices(&self) -> Result<Vec<u64>, String> {
+        let CardRail::Stripe { secret_key, .. } = self else {
+            return Err("card payments are not configured on this server".into());
+        };
+        let ids = stripe_price_ids();
+        let n = subscription::TIERS.len();
+        if ids.len() != n * 2 {
+            return Err(format!("STRIPE_PRICES names {} prices, a ladder needs {}", ids.len(), n * 2));
+        }
+        let mut out = Vec::with_capacity(ids.len());
+        for (i, id) in ids.iter().enumerate() {
+            let v = stripe(secret_key, crate::http::client().get(format!("{STRIPE_API}/prices/{id}")))
+                .await
+                .map_err(|e| match e {
+                    CardErr::RateLimited(_) => "rate limited".to_string(),
+                    CardErr::Other(s) => s,
+                })?;
+            let want = if i < n { "month" } else { "year" };
+            out.push(plan_price_cents(&v, want).map_err(|e| format!("price #{} ({id}): {e}", i + 1))?);
+        }
+        Ok(out)
+    }
+
     /// The cancellation button's back end (§ 312k BGB): end every plan of OURS that is paid
     /// with `email`, at the end of the period already paid for. Returns how many were ended.
     ///
@@ -2930,6 +3000,24 @@ impl CardRail {
 /// `past_due` is deliberately NOT among them: the card failed and Stripe is retrying. The
 /// month already granted stays — it was paid for — but no further one is handed out until
 /// a payment actually lands, which `active` then says.
+/// One Stripe price object → its cents, if it is what a plan slot needs: active, EUR, and
+/// recurring once per `interval`.
+fn plan_price_cents(v: &Value, interval: &str) -> Result<u64, String> {
+    if v.get("active").and_then(|a| a.as_bool()) != Some(true) {
+        return Err("is archived — put the new price id into STRIPE_PRICES".into());
+    }
+    let cur = v.get("currency").and_then(|c| c.as_str()).unwrap_or("");
+    if !cur.eq_ignore_ascii_case("eur") {
+        return Err(format!("is in {cur}, plans are sold in EUR"));
+    }
+    let got = v.pointer("/recurring/interval").and_then(|i| i.as_str()).unwrap_or("one-off");
+    let count = v.pointer("/recurring/interval_count").and_then(|c| c.as_u64()).unwrap_or(1);
+    if got != interval || count != 1 {
+        return Err(format!("renews every {count} {got}, this slot is for one {interval}"));
+    }
+    v.get("unit_amount").and_then(|a| a.as_u64()).filter(|a| *a > 0).ok_or_else(|| "has no fixed amount".to_string())
+}
+
 /// The ids in a Stripe list reply (`{data:[{id},…]}`), kept only if they look like what was
 /// asked for — they go straight into a URL.
 fn ids_of(list: &Value, prefix: &str) -> Vec<String> {
@@ -4099,6 +4187,33 @@ mod card_tests {
     }
 
     // ---- Stripe settlement (audit M2): `paid` alone must never credit -----------------
+
+    /// A price id pasted into the wrong slot must be refused, not sold: a yearly price in a
+    /// monthly slot would put "€107.99 a month" on the sheet.
+    #[test]
+    fn a_plan_price_has_to_be_what_its_slot_says() {
+        let p = |cur: &str, iv: &str, amt: u64, active: bool| json!({
+            "active": active, "currency": cur, "unit_amount": amt, "recurring": { "interval": iv, "interval_count": 1 } });
+        assert_eq!(plan_price_cents(&p("eur", "year", 10799, true), "year"), Ok(10799));
+        assert!(plan_price_cents(&p("eur", "year", 10799, true), "month").is_err());
+        assert!(plan_price_cents(&p("usd", "month", 1000, true), "month").is_err());
+        assert!(plan_price_cents(&p("eur", "month", 1000, false), "month").is_err(), "archived");
+        assert!(plan_price_cents(&json!({ "active": true, "currency": "eur", "unit_amount": 1000 }), "month").is_err(), "one-off");
+    }
+
+    /// The ladder shows Stripe's prices once it has them, and the saving follows THOSE.
+    #[test]
+    fn the_ladder_publishes_what_stripe_charges() {
+        assert!(!set_plan_prices(vec![1000, 2000]), "six or nothing");
+        set_plan_prices(vec![1000, 2000, 5000, 10799, 21499, 53999]);
+        let l = plans_info();
+        assert_eq!(l[0]["yearlyCents"], json!(10799));
+        assert_eq!(l[1]["yearlyCents"], json!(21499));
+        assert_eq!(l[2]["cents"], json!(5000));
+        // 1.5M TOKU at the entry rate (€10 per 700k) is €21.42; the plan costs €20.
+        assert_eq!(l[1]["savesCents"], json!(142));
+        *PLAN_PRICES.lock().unwrap() = Vec::new();
+    }
 
     /// `none` is a decision, a typo is not: only the first may take every tile off sale.
     #[test]

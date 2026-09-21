@@ -278,18 +278,38 @@ impl Cfg {
 /// The amounts on sale, each with its card price and — when the server discounts coins —
 /// its coin price. From the server's own tiers and percentage, so the page can never say
 /// a price the invoice will not charge.
+/// The six plan prices the server read from Stripe and left in the kv table (monthly tiers,
+/// then yearly). None when the server has no card rail or has not asked yet.
+fn stripe_plan_prices(state_db: &Path) -> Option<Vec<u64>> {
+    let conn = Connection::open_with_flags(state_db, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX).ok()?;
+    conn.busy_timeout(std::time::Duration::from_secs(5)).ok()?;
+    let raw: String = conn.query_row("SELECT v FROM kv WHERE k = 'plan_prices'", [], |r| r.get(0)).ok()?;
+    let v: Vec<u64> = serde_json::from_str(&raw).ok()?;
+    (v.len() == scrai_core::subscription::TIERS.len() * 2 && v.iter().all(|c| *c > 0)).then_some(v)
+}
+
+/// Where the server's state lives, for the one page helper that needs it. Set once at
+/// start; unset in tests, where the price grid simply falls back to the formula.
+static STATE_DB: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
 fn prices_html() -> String {
-    // Plans, from the same ladder the app is sent (`subscription::TIERS`), so the page can
-    // never name a price the checkout will not charge. One-off credit is retired; this used
-    // to list the dollar tiles.
+    // Plans, at the prices the checkout charges: the server reads them from Stripe and
+    // leaves them in the kv table (this process has no Stripe key). Until it has, the
+    // formula — month × 12 less 10 % — stands in. One-off credit is retired; this used to
+    // list the dollar tiles.
+    let charged = STATE_DB.get().and_then(|p| stripe_plan_prices(p));
+    let n = scrai_core::subscription::TIERS.len();
     let group = |n: u64| {
         let t = n.to_string();
         t.as_bytes().rchunks(3).rev().map(|c| std::str::from_utf8(c).unwrap_or("")).collect::<Vec<_>>().join(",")
     };
     let euro = |cents: u64| if cents % 100 == 0 { format!("€{}", cents / 100) } else { format!("€{}.{:02}", cents / 100, cents % 100) };
     let mut out = String::from("<div class=\"prices\">");
-    for (toku, cents) in scrai_core::subscription::TIERS {
-        let yearly = scrai_core::subscription::yearly_cents(cents);
+    for (i, (toku, cents)) in scrai_core::subscription::TIERS.into_iter().enumerate() {
+        let (cents, yearly) = match &charged {
+            Some(c) => (c[i], c[n + i]),
+            None => (cents, scrai_core::subscription::yearly_cents(cents)),
+        };
         out.push_str(&format!(
             "<div class=\"pr\"><b>{} <small style=\"display:inline\">/ month</small></b><small>{} TOKU every month</small><small class=\"cr\">or {} a year</small></div>",
             euro(cents), group(toku), euro(yearly)
@@ -1696,6 +1716,7 @@ fn cli(cfg: &Cfg, args: &[String]) -> Result<(), String> {
 #[tokio::main]
 async fn main() {
     let cfg = Cfg::load();
+    let _ = STATE_DB.set(cfg.state_db());
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = if args.is_empty() { serve(cfg).await } else { cli(&cfg, &args) };
     if let Err(e) = result {

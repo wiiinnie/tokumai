@@ -15,7 +15,10 @@ add to it whenever a text promises something a setting has to deliver.
       (SCA: a renewal a bank wants re-authenticated is otherwise simply lost); 3D Secure by
       Radar rules ON; all retries failed → cancel the subscription.
 - [ ] **The key can do what the button needs.** `STRIPE_SECRET_KEY` (restricted key):
-      Customers *read*, Subscriptions *read + write*, Checkout Sessions *write*. With a key
+      Customers *read*, Subscriptions *read + write*, Checkout Sessions *write*, **Prices
+      *read*** (the server reads what the six plans charge at boot and hourly, and app and
+      site show exactly that; the boot log prints them — `plan prices from Stripe — …` —
+      or says which price id sits in the wrong slot). With a key
       that cannot list customers the button takes requests and ends nothing — the server
       logs "could not be acted on yet" every two minutes and drops the request after a day.
 - [ ] **The rail is configured at all.** The production boot log of 2026-09-19 says

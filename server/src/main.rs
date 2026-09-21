@@ -550,6 +550,23 @@ async fn main() {
         _guard: Option<inflight::Guard<ReplyTo>>,
     }
     let (pay_tx, mut pay_rx) = tokio::sync::mpsc::channel::<PayDone>(64);
+    // What the plans cost at Stripe — asked at boot and then hourly, off the loop; the answer
+    // is taken into the ladder (pay::set_plan_prices) and written to the kv table, which is
+    // how the SITE learns it: that process has no Stripe key and is not getting one.
+    let (prices_tx, mut prices_rx) = tokio::sync::mpsc::channel::<Vec<u64>>(2);
+    if pay::card_enabled() {
+        tokio::spawn(async move {
+            let mut every = tokio::time::interval(std::time::Duration::from_secs(3600));
+            loop {
+                every.tick().await;
+                match pay::CardRail::from_env().plan_prices().await {
+                    Ok(cents) => { let _ = prices_tx.send(cents).await; }
+                    // Loud, because a wrong id in STRIPE_PRICES is exactly what this catches.
+                    Err(e) => eprintln!("scrai-server: plan prices could not be read from Stripe — the ladder keeps what it had: {e}"),
+                }
+            }
+        });
+    }
     // Cancellation requests from the site's button (§ 312k BGB): the Stripe calls run off
     // the loop, the row is closed back on it — `db` never leaves this task.
     let (cancel_tx, mut cancel_rx) = tokio::sync::mpsc::channel::<(String, Result<usize, String>)>(16);
@@ -1031,6 +1048,16 @@ const ORDER_TICK_MS: u64 = 1000;
                 }
             }
             // A spawned gateway call (invoice / entitlement sweep) returned → apply it here.
+            Some(cents) = prices_rx.recv() => {
+                if pay::set_plan_prices(cents.clone()) {
+                    let euro = |c: &u64| format!("€{}.{:02}", c / 100, c % 100);
+                    println!("scrai-server: plan prices from Stripe — {}", cents.iter().map(euro).collect::<Vec<_>>().join(" · "));
+                }
+                let json = serde_json::to_string(&cents).unwrap_or_default();
+                if db.load("plan_prices").as_deref() != Some(json.as_str()) {
+                    let _ = db.save_many(&[("plan_prices", json.as_str())]);
+                }
+            }
             Some((cancel_id, res)) = cancel_rx.recv() => {
                 match res {
                     // Counted, never named: the log must not become the place where an
