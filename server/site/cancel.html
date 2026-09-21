@@ -64,11 +64,13 @@
   <div class="eyebrow">Cancel a plan · Verträge hier kündigen</div>
   <h1>Cancel a plan</h1>
   <!-- LAWYER CHECK (§ 312k BGB): two steps (this page, then "Cancel now"), no login, and a
-       confirmation the customer can keep. The confirmation IN TEXT FORM is Stripe's own
-       cancellation e-mail to the address of the plan — this page deliberately answers the
-       same way whether or not a plan exists, because "does this address subscribe to
-       tokumai?" is not a question a stranger gets answered here. Whether that split
-       satisfies § 312k (6) is the open question; see docs/subscription.md. -->
+       confirmation the customer can keep. The confirmation IN TEXT FORM is the text this
+       page offers to save — we cannot e-mail a customer (the server mails nobody but its
+       operator, by design) and Stripe has no "subscription cancelled" e-mail to switch on
+       (checked in the Billing settings, 2026-09-21). The page deliberately answers the same
+       way whether or not a plan exists, because "does this address subscribe to tokumai?"
+       is not a question a stranger gets answered here. Whether a saved, conditional
+       confirmation satisfies § 312k (4) is the open question; see docs/launch-checklist.md. -->
   <p>This ends a plan that is paid by card, PayPal, Apple Pay or Google Pay through Stripe. It needs no app and no sign-in — only the e-mail address you gave at the checkout.</p>
   <p><b>Bought on an iPhone?</b> Then Apple holds the subscription and we cannot end it for you: open <i>Settings → your name → Subscriptions</i> on the iPhone and cancel it there.</p>
 
@@ -83,8 +85,8 @@
   <div id="step2" hidden>
     <h2>2. Received</h2>
     <p id="done"></p>
-    <p>Stripe sends the confirmation of the cancellation to that address. Nothing arrives if no tokumai plan is paid with it — this page answers the same way in both cases, so that nobody can use it to find out who subscribes.</p>
-    <p><a id="keep" download="tokumai-cancellation.txt" href="#">Save this confirmation</a></p>
+    <p><b>This is your confirmation — please save it.</b> We do not send e-mail, so nothing further arrives. The page answers the same way whether or not a plan is paid with that address, so that nobody can use it to find out who subscribes; if you want it confirmed for your plan specifically, write to us from that address.</p>
+    <p><a id="keep" class="cbtn" style="text-decoration:none;display:inline-block" download="tokumai-cancellation.txt" href="#">Save this confirmation</a></p>
   </div>
 
   <h2>What happens to the address</h2>

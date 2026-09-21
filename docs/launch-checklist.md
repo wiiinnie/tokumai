@@ -6,13 +6,14 @@ add to it whenever a text promises something a setting has to deliver.
 
 ## Stripe (dashboard and keys)
 
-- [ ] **Cancellation e-mails are ON.** Billing → Settings → customer e-mails: send an e-mail
-      when a subscription is cancelled. The cancellation button (`/cancel`, § 312k BGB)
-      answers the same way whether or not a plan exists — on purpose, so it cannot be used
-      to find out who subscribes — which means **Stripe's e-mail is the confirmation in text
-      form** the law asks for. Without this setting a customer who cancels gets nothing in
-      writing. `server/site/cancel.html`, `server/site/terms.html` § 3a and
-      `server/site/privacy.html` § 4 all say Stripe confirms.
+- [x] ~~Cancellation e-mails ON~~ — **there is no such setting.** Billing → Subscriptions and
+      emails offers trial, renewal, expiring-card and failed-payment mails, nothing for a
+      cancelled subscription (checked 2026-09-21). So the confirmation in text form is the
+      page's own, saved by the customer; `/cancel`, terms § 3a and the privacy notice say so.
+- [ ] Billing → Subscriptions and emails, as decided 2026-09-21: renewal, expiring-card and
+      failed-payment mails ON; "Stripe-hosted link to confirm payments when required" ON
+      (SCA: a renewal a bank wants re-authenticated is otherwise simply lost); 3D Secure by
+      Radar rules ON; all retries failed → cancel the subscription.
 - [ ] **The key can do what the button needs.** `STRIPE_SECRET_KEY` (restricted key):
       Customers *read*, Subscriptions *read + write*, Checkout Sessions *write*. With a key
       that cannot list customers the button takes requests and ends nothing — the server
@@ -27,8 +28,13 @@ add to it whenever a text promises something a setting has to deliver.
 
 ## Lawyer
 
-- [ ] § 312k BGB: is a button on our site that ends the plan at Stripe, with Stripe sending
-      the confirmation, enough? (Comment in `server/site/cancel.html`.)
+- [ ] § 312k BGB (4): the confirmation must reach the customer "in text form". Ours is a
+      page they can save, and it is deliberately CONDITIONAL ("if a plan is paid with this
+      address…") so the button cannot be used to find out who subscribes. Is that enough?
+      If not, the options are (a) drop the neutrality and confirm the concrete plan and end
+      date on the page, (b) send the customer to Stripe's customer portal, whose e-mailed
+      login link proves the address is theirs, (c) an outbound mail service, which the
+      server deliberately does not have. (Comment in `server/site/cancel.html`.)
 - [ ] Terms § 4 (withdrawal for a running digital service) and § 6a (coin validity) — both
       carry a LAWYER CHECK comment in the HTML.
 
