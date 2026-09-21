@@ -207,6 +207,21 @@ impl Store {
         // one's address on screen pays a memo the invoice no longer expects. See
         // `web_orders_pending`.
         add_column(&conn, "ALTER TABLE web_orders ADD COLUMN raising_at INTEGER")?;
+        // The cancellation button (§ 312k BGB, site/cancel.html). Same shape as web_orders
+        // and for the same reason: the site has no Stripe key and must not get one, so it
+        // leaves a request here and the server — which holds the rail — acts on it.
+        // ASK, ACT, FORGET: the address is the only personal datum in this whole table and
+        // it is wiped the moment the request has been acted on (`web_cancel_done`).
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS web_cancels (\
+               id TEXT PRIMARY KEY,\
+               email TEXT,\
+               created_at INTEGER NOT NULL,\
+               claimed_at INTEGER,\
+               done_at INTEGER)",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
         // A buyer's cancel (pay.html "cancel this order", 2026-09-09). The column went into
         // CREATE TABLE only — on a database from before that day it was missing, the
         // server's order query named it and failed quietly, and no web order was raised
@@ -507,6 +522,45 @@ impl Store {
                 params![cutoff],
             )
             .unwrap_or(0)
+    }
+
+    // ---- cancellation requests from the site ------------------------------------------
+
+    /// Requests nobody has acted on yet. Claimed like a web order (`claimed_at`), so the
+    /// one-second tick does not hand the same request to Stripe twice while the first call
+    /// is still in the air; a claim older than two minutes is taken to have died.
+    pub fn web_cancels_pending(&self, max: usize) -> Vec<(String, String)> {
+        let now = crate::pay::now_ms() as i64;
+        let stale = now - 120_000;
+        let mut out: Vec<(String, String)> = Vec::new();
+        if let Ok(mut q) = self.conn.prepare(
+            "SELECT id, email FROM web_cancels WHERE done_at IS NULL AND email IS NOT NULL \
+             AND (claimed_at IS NULL OR claimed_at < ?1) ORDER BY created_at LIMIT ?2",
+        ) {
+            if let Ok(rows) = q.query_map(params![stale, max as i64], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))) {
+                out.extend(rows.flatten());
+            }
+        }
+        for (id, _) in &out {
+            let _ = self.conn.execute("UPDATE web_cancels SET claimed_at = ?2 WHERE id = ?1", params![id, now]);
+        }
+        out
+    }
+
+    /// Acted on — and the address goes with it. What stays is that a request existed and
+    /// when it was answered, so the page that is polling can say "done".
+    pub fn web_cancel_done(&self, id: &str, now: u64) {
+        let _ = self.conn.execute(
+            "UPDATE web_cancels SET done_at = ?2, email = NULL WHERE id = ?1",
+            params![id, now as i64],
+        );
+    }
+
+    /// Rows a day old, answered or not: a request that could not be acted on in a day will
+    /// not be, and its address must not sit here waiting.
+    pub fn web_cancels_forget(&self, now: u64) -> usize {
+        let cutoff = now.saturating_sub(24 * 3600 * 1000) as i64;
+        self.conn.execute("DELETE FROM web_cancels WHERE created_at < ?1", params![cutoff]).unwrap_or(0)
     }
 
     // ---- vouchers ---------------------------------------------------------------------
@@ -1019,6 +1073,32 @@ pub fn void_voucher(db: &std::path::Path, invoice: &str, now: u64) -> Result<Vou
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Ask, act, forget: the address in a cancellation request is the only personal datum
+    /// in the table, and it must be gone the moment the request has been acted on.
+    #[test]
+    fn a_cancellation_request_loses_its_address_when_it_is_done() {
+        let p = std::env::temp_dir().join(format!("scrai-cancel-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let s = Store::open(&p).unwrap();
+        let now = crate::pay::now_ms();
+        s.conn.execute("INSERT INTO web_cancels (id, email, created_at) VALUES ('c1','a@example.com',?1)", params![now as i64]).unwrap();
+
+        assert_eq!(s.web_cancels_pending(3), vec![("c1".to_string(), "a@example.com".to_string())]);
+        assert!(s.web_cancels_pending(3).is_empty(), "claimed — the next tick must not send it to Stripe again");
+
+        s.web_cancel_done("c1", now);
+        let (email, done): (Option<String>, Option<i64>) =
+            s.conn.query_row("SELECT email, done_at FROM web_cancels WHERE id='c1'", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!(email, None, "the address must not outlive the request");
+        assert!(done.is_some());
+        assert!(s.web_cancels_pending(3).is_empty());
+
+        // …and an unanswered one does not sit there for ever either.
+        s.conn.execute("INSERT INTO web_cancels (id, email, created_at) VALUES ('c2','b@example.com',?1)", params![(now - 2 * 24 * 3600 * 1000) as i64]).unwrap();
+        assert_eq!(s.web_cancels_forget(now), 1);
+        let _ = std::fs::remove_file(&p);
+    }
 
     #[test]
     fn an_apple_transaction_credits_once_and_forgets_its_account_like_a_voucher() {

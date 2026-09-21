@@ -53,6 +53,8 @@ const SITE: &str = include_str!("../../site/index.html");
 const PAGE_IMPRINT: &str = include_str!("../../site/imprint.html");
 const PAGE_TERMS: &str = include_str!("../../site/terms.html");
 const PAGE_PRIVACY: &str = include_str!("../../site/privacy.html");
+/// The cancellation button (§ 312k BGB). No login, two steps, a confirmation to keep.
+const PAGE_CANCEL: &str = include_str!("../../site/cancel.html");
 /// Hand-over page for a top-up started in the app (Apple's IAP gate: the purchase is
 /// raised and signed in the app, the payment itself happens here in the browser). The
 /// invoice rides in the URL FRAGMENT, so it never reaches this server — nothing to log,
@@ -403,6 +405,44 @@ fn web_order_new(state_db: &Path, id: &str, usd: u32, method: &str, consent: &st
         .map_err(|e| format!("could not book the order: {e}"))
 }
 
+/// Leave a cancellation request for the server (which holds the Stripe key; this process
+/// does not and must not). The address lives in the row until the server has acted on it.
+fn web_cancel_new(state_db: &Path, id: &str, email: &str) -> Result<(), String> {
+    let now = scrai_server::pay::now_ms() as i64;
+    state_rw(state_db)?
+        .execute(
+            "INSERT INTO web_cancels (id, email, created_at) VALUES (?1,?2,?3)",
+            rusqlite::params![id, email, now],
+        )
+        .map(|_| ())
+        .map_err(|e| format!("could not take the request: {e}"))
+}
+
+/// "done" once the server has acted, "pending" before, "unknown" for an id we never issued.
+fn web_cancel_state(state_db: &Path, id: &str) -> &'static str {
+    let Ok(conn) = Connection::open_with_flags(state_db, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX) else {
+        return "unknown";
+    };
+    let _ = conn.busy_timeout(std::time::Duration::from_secs(5));
+    match conn.query_row("SELECT done_at FROM web_cancels WHERE id = ?1", rusqlite::params![id], |r| r.get::<_, Option<i64>>(0)) {
+        Ok(Some(_)) => "done",
+        Ok(None) => "pending",
+        Err(_) => "unknown",
+    }
+}
+
+/// Shape only — Stripe is the one that knows whether the address exists. Bounded, one @,
+/// no whitespace or control characters: it travels into a database row and a query string.
+fn plausible_email(s: &str) -> bool {
+    let s = s.trim();
+    s.len() >= 6
+        && s.len() <= 254
+        && s.matches('@').count() == 1
+        && !s.starts_with('@')
+        && s.rsplit('@').next().map(|d| d.contains('.') && !d.ends_with('.')).unwrap_or(false)
+        && s.chars().all(|c| !c.is_whitespace() && !c.is_control())
+}
+
 /// (invoice, pay_json, paid, error)
 fn web_order(state_db: &Path, id: &str) -> Option<(Option<String>, Option<String>, bool, Option<String>)> {
     let conn = Connection::open_with_flags(
@@ -591,6 +631,11 @@ const BUCKET_SUPPORT: u64 = 3;
 /// that has no account to throttle and does not go through `admit_invoice`, so the
 /// server-wide invoice brake never saw it either (audit 2026-09-08, M4).
 const ORDERS_PER_HOUR: usize = 8;
+/// Cancellation requests per hour per IP. One person needs one; each accepted request is
+/// three Stripe calls on the server's next tick, and the page answers the same whatever
+/// the address — so the only thing a script could do here is spend our rate limit.
+const BUCKET_CANCEL: u64 = 4;
+const CANCELS_PER_HOUR: usize = 5;
 /// Support reports from one hashed IP per hour. Higher than it needs to be for an honest
 /// reporter and low enough that a script is not a mail flood: the cost of refusing a real
 /// report is worse than the cost of reading a few junk ones.
@@ -954,7 +999,7 @@ fn sitemap_xml() -> String {
     for (_, p, _, _) in PAGES {
         x.push_str(&format!("  <url><loc>https://tokumai.com{p}</loc></url>\n"));
     }
-    for p in ["/pay", "/terms", "/privacy", "/imprint"] {
+    for p in ["/pay", "/terms", "/privacy", "/imprint", "/cancel"] {
         x.push_str(&format!("  <url><loc>https://tokumai.com{p}</loc></url>\n"));
     }
     x.push_str("</urlset>\n");
@@ -1280,6 +1325,37 @@ async fn handle(f: Arc<Faucet>, mut sock: tokio::net::TcpStream, peer: SocketAdd
         ("GET", "/privacy") | ("GET", "/datenschutz") => {
             f.track("view:legal", Some(&req));
             respond(&mut sock, 200, "text/html; charset=utf-8", PAGE_PRIVACY.as_bytes()).await
+        }
+        ("GET", "/cancel") | ("GET", "/kuendigen") => {
+            f.track("view:cancel", Some(&req));
+            respond(&mut sock, 200, "text/html; charset=utf-8", PAGE_CANCEL.as_bytes()).await
+        }
+        ("POST", "/api/cancel") => {
+            if !f.ip_ok_for(BUCKET_CANCEL, &req.ip, CANCELS_PER_HOUR) {
+                respond(&mut sock, 429, "application/json",
+                    &json(&json!({"error": "too many requests from your connection — try again in an hour, or write to us"}))).await;
+                return;
+            }
+            let v: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+            let email = v.get("email").and_then(|e| e.as_str()).unwrap_or("").trim().to_string();
+            if !plausible_email(&email) {
+                respond(&mut sock, 400, "application/json", &json(&json!({"error": "that does not look like an e-mail address"}))).await;
+                return;
+            }
+            let id = format!("{:032x}", rand::random::<u128>());
+            match web_cancel_new(&f.cfg.state_db(), &id, &email) {
+                Ok(()) => {
+                    f.track("cancel", None);
+                    respond(&mut sock, 200, "application/json", &json(&json!({"id": id}))).await
+                }
+                Err(e) => respond(&mut sock, 500, "application/json", &json(&json!({"error": e}))).await,
+            }
+        }
+        ("GET", "/api/cancel") => {
+            let id = query_param(&req.query, "id").unwrap_or_default();
+            let ok_id = id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit());
+            let state = if ok_id { web_cancel_state(&f.cfg.state_db(), &id) } else { "unknown" };
+            respond(&mut sock, 200, "application/json", &json(&json!({"state": state}))).await
         }
         ("GET", "/pay") => {
             f.track("view:pay", Some(&req));
@@ -1642,6 +1718,16 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_email_is_checked_for_shape_before_it_reaches_a_row_or_a_query() {
+        for ok in ["a@b.de", "first.last+tag@sub.example.com"] {
+            assert!(plausible_email(ok), "{ok}");
+        }
+        for bad in ["", "a@b", "@b.de", "a@@b.de", "a b@c.de", "a@b.", "a\n@b.de", &"x".repeat(260)] {
+            assert!(!plausible_email(bad), "{bad:?}");
+        }
+    }
 
     #[test]
     fn an_unfilled_placeholder_is_not_a_publishable_link() {

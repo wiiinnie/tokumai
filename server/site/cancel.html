@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="referrer" content="no-referrer">
-<title>Imprint — tokumai</title>
+<title>Cancel a plan — tokumai</title>
 <style>
   :root{
     --ink:#141210; --surface:#1C1917; --surface-2:#262220; --line:#332E2A; --bone:#ECE6DC; --muted:#9C938A;
@@ -41,23 +41,16 @@
   .box{border:1px solid var(--line);border-radius:14px;background:var(--surface);padding:18px 20px;margin:14px 0}
   .box p{margin:4px 0}
   .ph{color:var(--rust);font-family:var(--mono);font-size:13px}
-  .price{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:14px 0}
+  .price{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:14px 0}
   .price div{border:1px solid var(--line);border-radius:12px;background:var(--surface);padding:12px;text-align:center}
   .price b{display:block;font-family:var(--display);font-size:22px;color:var(--bone)}.price small{font-family:var(--mono);font-size:10.5px;color:var(--muted)}
   .foot{margin-top:60px;padding-top:18px;border-top:1px solid var(--line);font-family:var(--mono);font-size:11.5px;color:var(--muted);display:flex;gap:18px;flex-wrap:wrap}
   .foot a{color:var(--signal);text-decoration:none}
   a{color:var(--signal)}
-  .contact{border:1px solid var(--line);border-radius:14px;background:var(--surface);padding:20px;margin:14px 0;display:flex;flex-direction:column;gap:6px}
-  .contact label{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-top:10px}
-  .contact label:first-child{margin-top:0}
-  .contact .opt{text-transform:none;letter-spacing:0;color:var(--muted)}
-  .contact input,.contact textarea{width:100%;padding:11px 13px;border-radius:10px;border:1px solid var(--line);background:var(--surface-2);color:var(--bone);font:500 14.5px var(--body);outline:none}
-  .contact input:focus,.contact textarea:focus{border-color:var(--signal)}
-  .contact textarea{resize:vertical}
-  .contact .row{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-top:12px}
-  .btn{display:inline-block;padding:11px 18px;border-radius:10px;border:1px solid var(--line);background:var(--surface-2);color:var(--bone);font:600 14px var(--body);cursor:pointer}
-  .btn.primary{background:var(--signal);border-color:var(--signal);color:#1a1408}
-  .hint{font-family:var(--mono);font-size:11.5px;color:var(--muted)}
+  .cbtn{font:inherit;font-weight:600;padding:10px 18px;border-radius:9px;border:1px solid var(--rust,#b0533c);background:var(--rust,#b0533c);color:#fff;cursor:pointer}
+  .cbtn[disabled]{opacity:.5;cursor:default}
+  .cmsg{margin-left:10px;color:var(--muted,#888)}
+  #em{font:inherit;width:100%;max-width:420px;padding:10px 12px;margin-top:6px;border-radius:9px;border:1px solid var(--line,#333);background:transparent;color:inherit}
 </style>
 <script>try{var m=localStorage.getItem('tokumai.mode');document.documentElement.setAttribute('data-pre',m==='light'?'light':'dark');}catch(e){}</script>
 </head>
@@ -65,54 +58,73 @@
 <div class="site">
   <div class="nav">
     <a class="logolink" href="/"><span class="logo"><div class="mark"><svg viewBox="0 0 100 100" width="78%" height="78%"><rect x="19" y="28" width="27" height="9" rx="4.5" fill="var(--bone)"></rect><rect x="49" y="28" width="31" height="9" rx="4.5" fill="var(--acc)"></rect><rect x="25" y="40" width="17" height="9" rx="4.5" fill="var(--bone)"></rect><rect x="45" y="40" width="30" height="9" rx="4.5" fill="var(--acc)"></rect><rect x="19" y="52" width="36" height="9" rx="4.5" fill="var(--bone)"></rect><rect x="58" y="52" width="20" height="9" rx="4.5" fill="var(--acc)"></rect><rect x="28" y="64" width="22" height="9" rx="4.5" fill="var(--bone)"></rect><rect x="54" y="64" width="26" height="9" rx="4.5" fill="var(--acc)"></rect></svg></div><span>tokum<b>ai</b></span></span></a>
-    <span class="links"><a href="/">Home</a><a href="/imprint" class="here">Imprint</a><a href="/terms">Terms</a><a href="/privacy">Privacy</a></span>
+    <span class="links"><a href="/">Home</a><a href="/imprint">Imprint</a><a href="/terms" class="here">Terms</a><a href="/privacy">Privacy</a></span>
     <div class="sw" role="group" aria-label="Theme"><button type="button" id="bDark" class="on">Dark</button><button type="button" id="bLight">Light</button></div>
   </div>
-  <div class="eyebrow">Legal notice · Impressum</div>
-  <h1>Imprint</h1>
-  <p>Information according to § 5 DDG (formerly § 5 TMG) and § 18 MStV.</p>
-  <div class="box">
-    <p><b>Hermes Blockchain Ventures — Matthias Winter (sole proprietorship / Einzelunternehmen)</b></p>
-    <p>Schraudolphstraße 2A<br>80799 München<br>Germany</p>
-    <p>Represented by: <b>Matthias Winter</b></p>
-    <p>Not entered in the commercial register (sole proprietorship). Tax number: 148/204/40065 (Finanzamt München).</p>
-    <p>VAT ID (§ 27a UStG): DE334168661</p>
-    <p>E-mail: <a href="mailto:hermes-stakepool@proton.me">hermes-stakepool@proton.me</a></p>
+  <div class="eyebrow">Cancel a plan · Verträge hier kündigen</div>
+  <h1>Cancel a plan</h1>
+  <!-- LAWYER CHECK (§ 312k BGB): two steps (this page, then "Cancel now"), no login, and a
+       confirmation the customer can keep. The confirmation IN TEXT FORM is Stripe's own
+       cancellation e-mail to the address of the plan — this page deliberately answers the
+       same way whether or not a plan exists, because "does this address subscribe to
+       tokumai?" is not a question a stranger gets answered here. Whether that split
+       satisfies § 312k (6) is the open question; see docs/subscription.md. -->
+  <p>This ends a plan that is paid by card, PayPal, Apple Pay or Google Pay through Stripe. It needs no app and no sign-in — only the e-mail address you gave at the checkout.</p>
+  <p><b>Bought on an iPhone?</b> Then Apple holds the subscription and we cannot end it for you: open <i>Settings → your name → Subscriptions</i> on the iPhone and cancel it there.</p>
+
+  <div id="step1">
+    <h2>1. Whose plan</h2>
+    <p><label for="em">E-mail address used at the checkout</label><br>
+       <input id="em" type="email" autocomplete="email" inputmode="email" maxlength="254" placeholder="you@example.com"></p>
+    <p>The plan ends <b>with the period already paid for</b> — what you have paid for stays yours until then, and nothing further is charged. To end a plan at once for cause, write to us instead: <a href="mailto:hermes-stakepool@proton.me">hermes-stakepool@proton.me</a>.</p>
+    <p><button type="button" id="go" class="cbtn">Cancel now</button> <span id="msg" class="cmsg"></span></p>
   </div>
 
-  <h2>Contact</h2>
-  <p>Write to <a href="mailto:hermes-stakepool@proton.me">hermes-stakepool@proton.me</a>, or use the form — it opens your own e-mail app with the message filled in. Nothing you type is sent to or stored on our server.</p>
-  <form class="contact" id="contact">
-    <label for="cName">Your name <span class="opt">(optional)</span></label>
-    <input id="cName" name="name" maxlength="80" autocomplete="name">
-    <label for="cMail">Your e-mail, so we can answer</label>
-    <input id="cMail" name="email" type="email" maxlength="120" autocomplete="email" required>
-    <label for="cMsg">Message</label>
-    <textarea id="cMsg" name="message" rows="6" maxlength="4000" required></textarea>
-    <div class="row"><button class="btn primary" type="submit">Open in my e-mail app</button><span class="hint" id="cHint"></span></div>
-  </form>
-  <script>
-  (function(){
-    var f=document.getElementById('contact'), h=document.getElementById('cHint');
-    f.addEventListener('submit',function(ev){
-      ev.preventDefault();
-      var name=document.getElementById('cName').value.trim(), mail=document.getElementById('cMail').value.trim(), msg=document.getElementById('cMsg').value.trim();
-      var body=msg+"\n\n— "+(name||"")+(name?" · ":"")+mail;
-      var url="mailto:hermes-stakepool@proton.me?subject="+encodeURIComponent("tokumai · contact")+"&body="+encodeURIComponent(body);
-      window.location.href=url;
-      h.textContent="If nothing opened, copy the address above into your e-mail app.";
-    });
-  })();
-  </script>
+  <div id="step2" hidden>
+    <h2>2. Received</h2>
+    <p id="done"></p>
+    <p>Stripe sends the confirmation of the cancellation to that address. Nothing arrives if no tokumai plan is paid with it — this page answers the same way in both cases, so that nobody can use it to find out who subscribes.</p>
+    <p><a id="keep" download="tokumai-cancellation.txt" href="#">Save this confirmation</a></p>
+  </div>
 
-  <h2>Responsible for content</h2>
-  <p>Matthias Winter, address as above.</p>
-  <h2>Dispute resolution</h2>
-  <p>The European Commission provides a platform for online dispute resolution: <a href="https://ec.europa.eu/consumers/odr/" rel="noopener">ec.europa.eu/consumers/odr</a>. We are neither obliged nor willing to take part in dispute resolution proceedings before a consumer arbitration board.</p>
-  <h2>Payment service provider</h2>
-  <p>Card payments are processed by <b>Stripe Payments Europe, Limited</b>, 1 Grand Canal Street Lower, Grand Canal Dock, Dublin 2, Ireland — a payment institution supervised by the Central Bank of Ireland. Card data is entered on Mollie's checkout page and never reaches our systems.</p>
+  <h2>What happens to the address</h2>
+  <p>It is used once: our server asks Stripe for plans paid with it, sets them to end, and deletes the address in the same step. It is never stored beyond that, and never reaches your tokumai account, which we could not connect to it anyway.</p>
   <div class="foot"><span>© 2026 Hermes Blockchain Ventures</span><a href="/imprint">Imprint</a><a href="/terms">Terms</a><a href="/privacy">Privacy</a><a href="/cancel">Cancel a plan</a><a href="/imprint#contact">Contact</a><a href="/">Downloads</a></div>
 </div>
+<script>
+(function(){
+  var em=document.getElementById("em"), go=document.getElementById("go"), msg=document.getElementById("msg");
+  function looksLikeMail(s){ return /^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{2,}$/.test(s); }
+  function finish(addr, at, acted){
+    document.getElementById("step1").hidden = true;
+    document.getElementById("step2").hidden = false;
+    var line = "Cancellation received " + at + " for plans paid with " + addr + ". " +
+      (acted ? "If a tokumai plan is paid with this address, it now ends with the period already paid for and will not renew."
+             : "It will be acted on within minutes: if a tokumai plan is paid with this address, it ends with the period already paid for and will not renew.");
+    document.getElementById("done").textContent = line;
+    document.getElementById("keep").href = "data:text/plain;charset=utf-8," + encodeURIComponent("tokumai — cancellation\n\n" + line + "\n\nHermes Blockchain Ventures, hermes-stakepool@proton.me\n");
+  }
+  go.onclick = function(){
+    var addr = (em.value || "").trim();
+    if (!looksLikeMail(addr)) { msg.textContent = "That does not look like an e-mail address."; return; }
+    go.disabled = true; msg.textContent = "Sending…";
+    fetch("/api/cancel", { method:"POST", headers:{ "content-type":"application/json" }, body: JSON.stringify({ email: addr }) })
+      .then(function(r){ return r.json().then(function(j){ return { ok:r.ok, j:j }; }); })
+      .then(function(x){
+        if (!x.ok || !x.j.id) { go.disabled = false; msg.textContent = (x.j && x.j.error) || "That did not work — please try again, or write to us."; return; }
+        var at = new Date().toISOString().replace("T"," ").slice(0,16) + " UTC", tries = 0;
+        (function poll(){
+          fetch("/api/cancel?id=" + encodeURIComponent(x.j.id)).then(function(r){ return r.json(); }).then(function(s){
+            if (s.state === "done") return finish(addr, at, true);
+            if (++tries >= 20) return finish(addr, at, false);
+            setTimeout(poll, 3000);
+          }).catch(function(){ if (++tries >= 20) finish(addr, at, false); else setTimeout(poll, 3000); });
+        })();
+      })
+      .catch(function(){ go.disabled = false; msg.textContent = "No connection — please try again, or write to us."; });
+  };
+})();
+</script>
 <script>
 (function(){
   // Same key as the main site, so a light-mode reader who follows a footer link does not

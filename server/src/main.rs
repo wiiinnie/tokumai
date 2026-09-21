@@ -550,6 +550,9 @@ async fn main() {
         _guard: Option<inflight::Guard<ReplyTo>>,
     }
     let (pay_tx, mut pay_rx) = tokio::sync::mpsc::channel::<PayDone>(64);
+    // Cancellation requests from the site's button (§ 312k BGB): the Stripe calls run off
+    // the loop, the row is closed back on it — `db` never leaves this task.
+    let (cancel_tx, mut cancel_rx) = tokio::sync::mpsc::channel::<(String, Result<usize, String>)>(16);
     // Same shape for the two BLS-heavy money ops: a coconut Withdraw issues 500
     // signatures, a redeem verifies O(coins) pairings — ~100 ms to seconds of pure CPU
     // that used to run ON the loop, so 30 buyers in one minute queued behind each other
@@ -779,6 +782,19 @@ const ORDER_TICK_MS: u64 = 1000;
                 if forgotten > 0 {
                     println!("scrai-server: forgot {forgotten} voucher code(s) past the display window");
                 }
+                // The cancellation button. Ask Stripe, act, forget the address — see
+                // `CardRail::cancel_plans_for_email` and `Store::web_cancel_done`.
+                for (cancel_id, email) in db.web_cancels_pending(WEB_ORDERS_PER_TICK) {
+                    let (tx, slots) = (cancel_tx.clone(), gateway_slots.clone());
+                    tokio::spawn(async move {
+                        let res = match tokio::time::timeout(QUEUE_WAIT, slots.acquire_owned()).await {
+                            Ok(Ok(_permit)) => pay::CardRail::from_env().cancel_plans_for_email(&email).await,
+                            _ => Err("busy".to_string()),
+                        };
+                        let _ = tx.send((cancel_id, res)).await;
+                    });
+                }
+                let _ = db.web_cancels_forget(pay::now_ms());
                 for (order_id, usd, method, consent) in db.web_orders_pending(WEB_ORDERS_PER_TICK) {
                     match paywall.begin_web_order(&order_id, usd, &method, &consent) {
                         Err(why) => db.web_order_answer(&order_id, None, None, Some(&why)),
@@ -1015,6 +1031,19 @@ const ORDER_TICK_MS: u64 = 1000;
                 }
             }
             // A spawned gateway call (invoice / entitlement sweep) returned → apply it here.
+            Some((cancel_id, res)) = cancel_rx.recv() => {
+                match res {
+                    // Counted, never named: the log must not become the place where an
+                    // address and "has a plan" meet.
+                    Ok(n) => {
+                        println!("scrai-server: cancellation request acted on — {n} plan(s) set to end with their paid period");
+                        db.web_cancel_done(&cancel_id, pay::now_ms());
+                    }
+                    // Not closed: the claim goes stale in two minutes and the tick asks
+                    // Stripe again. A day later the row is dropped either way.
+                    Err(e) => eprintln!("scrai-server: a cancellation request could not be acted on yet: {e}"),
+                }
+            }
             Some(done) = pay_rx.recv() => {
                 let kind = done.outcome.kind();
                 let ent_before = paywall.total_entitlement();

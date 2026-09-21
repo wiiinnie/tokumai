@@ -2815,6 +2815,53 @@ impl CardRail {
         Ok((stripe_sub_paid(&v), stripe_period_end_ms(&v)))
     }
 
+    /// The cancellation button's back end (§ 312k BGB): end every plan of OURS that is paid
+    /// with `email`, at the end of the period already paid for. Returns how many were ended.
+    ///
+    /// "Ours" is decided by the price, not by the customer: the same Stripe account may one
+    /// day bill something else, and a button on tokumai's site must not reach it.
+    /// `cancel_at_period_end` rather than an immediate cancel — what has been paid for is
+    /// kept, which is what the terms promise — and it is idempotent, so a request that is
+    /// sent twice ends nothing twice.
+    pub async fn cancel_plans_for_email(&self, email: &str) -> Result<usize, String> {
+        let CardRail::Stripe { secret_key, .. } = self else {
+            return Err("card payments are not configured on this server".into());
+        };
+        let say = |e: CardErr| match e {
+            CardErr::RateLimited(_) => "rate limited".to_string(),
+            CardErr::Other(s) => s,
+        };
+        let customers = stripe(
+            secret_key,
+            crate::http::client().get(format!("{STRIPE_API}/customers")).query(&[("email", email), ("limit", "20")]),
+        )
+        .await
+        .map_err(say)?;
+        let mut ended = 0usize;
+        for cus in ids_of(&customers, "cus_") {
+            let subs = stripe(
+                secret_key,
+                crate::http::client()
+                    .get(format!("{STRIPE_API}/subscriptions"))
+                    .query(&[("customer", cus.as_str()), ("status", "active"), ("limit", "20")]),
+            )
+            .await
+            .map_err(say)?;
+            for sub in our_plans_in(&subs, &stripe_price_ids()) {
+                stripe(
+                    secret_key,
+                    crate::http::client()
+                        .post(format!("{STRIPE_API}/subscriptions/{sub}"))
+                        .form(&[("cancel_at_period_end", "true")]),
+                )
+                .await
+                .map_err(say)?;
+                ended += 1;
+            }
+        }
+        Ok(ended)
+    }
+
     /// "paid" | "pending" | "expired". A 429 (rate limit) is "nothing new yet": the next
     /// 10 s poll re-asks, and our volume is nowhere near the limit anyway.
     ///
@@ -2868,6 +2915,43 @@ impl CardRail {
 /// `past_due` is deliberately NOT among them: the card failed and Stripe is retrying. The
 /// month already granted stays — it was paid for — but no further one is handed out until
 /// a payment actually lands, which `active` then says.
+/// The ids in a Stripe list reply (`{data:[{id},…]}`), kept only if they look like what was
+/// asked for — they go straight into a URL.
+fn ids_of(list: &Value, prefix: &str) -> Vec<String> {
+    list.get("data")
+        .and_then(|d| d.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.get("id").and_then(|i| i.as_str()))
+                .filter(|id| id.starts_with(prefix) && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Of the subscriptions in a Stripe list reply, the ones that are tokumai plans: every item
+/// priced at one of OUR price ids. Anything else on the same Stripe account is not ours to end.
+fn our_plans_in(list: &Value, our_prices: &[String]) -> Vec<String> {
+    let Some(subs) = list.get("data").and_then(|d| d.as_array()) else { return Vec::new() };
+    subs.iter()
+        .filter(|s| {
+            s.pointer("/items/data")
+                .and_then(|i| i.as_array())
+                .map(|items| {
+                    !items.is_empty()
+                        && items.iter().all(|it| {
+                            it.pointer("/price/id").and_then(|p| p.as_str()).map(|p| our_prices.iter().any(|o| o == p)).unwrap_or(false)
+                        })
+                })
+                .unwrap_or(false)
+        })
+        .filter_map(|s| s.get("id").and_then(|i| i.as_str()))
+        .filter(|id| id.starts_with("sub_") && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'))
+        .map(str::to_string)
+        .collect()
+}
+
 fn stripe_sub_paid(v: &Value) -> bool {
     matches!(v.get("status").and_then(|s| s.as_str()), Some("active" | "trialing"))
 }
@@ -4000,6 +4084,26 @@ mod card_tests {
     }
 
     // ---- Stripe settlement (audit M2): `paid` alone must never credit -----------------
+
+    /// The cancellation button ends tokumai plans and nothing else: a subscription priced
+    /// at anything that is not one of our six price ids is somebody else's business, even
+    /// on the same Stripe account and under the same e-mail address.
+    #[test]
+    fn the_cancel_button_only_reaches_our_own_plans() {
+        let ours = vec!["price_m10".to_string(), "price_y50".to_string()];
+        let list = json!({ "data": [
+            { "id": "sub_ours",   "items": { "data": [{ "price": { "id": "price_m10" } }] } },
+            { "id": "sub_other",  "items": { "data": [{ "price": { "id": "price_newsletter" } }] } },
+            { "id": "sub_mixed",  "items": { "data": [{ "price": { "id": "price_y50" } }, { "price": { "id": "price_newsletter" } }] } },
+            { "id": "sub_empty",  "items": { "data": [] } },
+            { "id": "../v1/charges", "items": { "data": [{ "price": { "id": "price_m10" } }] } },
+        ]});
+        assert_eq!(our_plans_in(&list, &ours), vec!["sub_ours".to_string()]);
+        assert!(our_plans_in(&json!({ "error": "nope" }), &ours).is_empty());
+        // Customer ids go into a URL too: only what looks like one gets through.
+        let customers = json!({ "data": [{ "id": "cus_A1" }, { "id": "cus_B/../x" }, { "id": "sub_wrong" }] });
+        assert_eq!(ids_of(&customers, "cus_"), vec!["cus_A1".to_string()]);
+    }
 
     fn stripe_paid(order: &str, cents: u64, currency: &str) -> Value {
         json!({
