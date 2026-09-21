@@ -332,6 +332,24 @@ pub fn set_status(conn: &Connection, id: &str, status: &str, now: i64) -> Result
 /// A ticket whose secret does not match is simply absent from the answer. There is no
 /// "wrong secret" error to tell apart from "nothing waiting": one would let somebody probe
 /// for which ids exist, and the app has no use for the distinction.
+/// How long a report is kept after the last thing that happened to it. The privacy notice
+/// promises this number ("at the latest twelve months after the last message"), so it is a
+/// constant and not a setting: a box configured differently would make the notice untrue.
+pub const KEEP_MS: i64 = 365 * 24 * 3600 * 1000;
+
+/// Delete every report — its text, its picture, the whole thread — whose last activity is
+/// older than `KEEP_MS`. Runs on the server's housekeeping beat, so it needs nobody to
+/// remember it, which is the only kind of deletion promise worth printing. Returns how many
+/// reports went.
+pub fn sweep_old(conn: &Connection, now: i64) -> usize {
+    let cutoff = now - KEEP_MS;
+    let _ = conn.execute(
+        "DELETE FROM support_msgs WHERE ticket IN (SELECT id FROM support_tickets WHERE updated_at < ?1)",
+        params![cutoff],
+    );
+    conn.execute("DELETE FROM support_tickets WHERE updated_at < ?1", params![cutoff]).unwrap_or(0)
+}
+
 pub fn collect(conn: &Connection, secrets: &[String], now: i64) -> serde_json::Value {
     let mut tickets = Vec::new();
     for secret in secrets.iter().take(MAX_FETCH) {
@@ -415,6 +433,25 @@ mod tests {
             secret_hash: secret.map(secret_hash),
             image: None,
         }
+    }
+
+    /// The privacy notice says twelve months after the LAST message — so a thread that is
+    /// still being answered must survive however old its first line is.
+    #[test]
+    fn reports_go_twelve_months_after_the_last_word_and_not_before() {
+        let c = db();
+        let day: i64 = 24 * 3600 * 1000;
+        let old = create(&c, &ticket(Via::App, Some("s-old")), 0).unwrap();
+        let live = create(&c, &ticket(Via::App, Some("s-live")), 0).unwrap();
+        reply(&c, &old, "looking into it", 10 * day).unwrap();
+        reply(&c, &live, "still on it", 300 * day).unwrap();
+
+        assert_eq!(sweep_old(&c, 370 * day), 0, "nothing is twelve months silent yet");
+        assert_eq!(sweep_old(&c, 376 * day), 1, "the thread last touched on day 10 goes");
+        assert!(get(&c, &old).is_none());
+        let msgs: i64 = c.query_row("SELECT COUNT(*) FROM support_msgs WHERE ticket = ?1", params![old], |r| r.get(0)).unwrap();
+        assert_eq!(msgs, 0, "and its messages with it");
+        assert!(get(&c, &live).is_some(), "the one answered on day 300 stays");
     }
 
     #[test]

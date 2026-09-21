@@ -830,6 +830,13 @@ const ORDER_TICK_MS: u64 = 1000;
                 // ANSWER lives on this machine, and only so a lost reply can be re-sent
                 // without a second charge; after ten minutes there is nothing to re-send.
                 chat::sweep_replies(&mut chat_replies);
+                // Support reports twelve months after their last word — text, picture and
+                // thread. The privacy notice says so, and a promise kept by a timer is the
+                // only kind that survives the operator being busy.
+                let gone = scrai_server::support::sweep_old(db.support(), pay::now_ms() as i64);
+                if gone > 0 {
+                    println!("scrai-server: deleted {gone} support report(s) past twelve months");
+                }
                 // And the web half of the same purchase: the address and memo an old order
                 // was to be paid at. The row keeps what the order WAS, not how to pay it.
                 let dropped = db.web_orders_forget_pay(pay::now_ms());
