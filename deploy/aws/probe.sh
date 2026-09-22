@@ -74,7 +74,7 @@ UD
     DEBUG=""; [ "$1" = debug ] && DEBUG="--debug-mode"
     remote "set -e
       chmod +x tokumai-egress-host
-      nohup ./tokumai-egress-host vsock:4294967295:8080 egress.allow vsock:4294967295:8081 vsock:4294967295:8082 sealed.json > egress.log 2>&1 &
+      nohup ./tokumai-egress-host vsock:4294967295:8080 egress.allow vsock:4294967295:8081 vsock:4294967295:8082 sealed.json book > egress.log 2>&1 &
       sleep 1
       nitro-cli run-enclave --eif-path tokumai-$TAG.eif --cpu-count $ENCLAVE_CPUS --memory $ENCLAVE_MIB $DEBUG"
     # Its address, once it is on the mixnet, and the image it runs: dev-data/probe.json is
@@ -93,7 +93,7 @@ import json, sys, pathlib
 pathlib.Path("dev-data/probe.json").write_text(json.dumps({"address": sys.argv[1], "pcr0": sys.argv[2]}, indent=2) + "\n")
 PY
     echo "on the mixnet at $ADDRESS"
-    remote "grep -E 'unsealed' egress.log | tail -1" || true
+    remote "grep -E 'unsealed' egress.log | tail -1; ls -l book 2>/dev/null | tail -2" || true
     echo "dev-data/probe.json written — the app and the dev tools now talk to this enclave"
     ;;
   status)

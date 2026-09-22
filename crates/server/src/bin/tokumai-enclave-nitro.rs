@@ -76,6 +76,51 @@ fn write_identity(dir: &std::path::Path, files: &serde_json::Map<String, serde_j
     Ok(())
 }
 
+/// The book, kept on the host and sealed (`enclave::state`). The ledger is ordinary
+/// blocking code, so one thread of its own holds the channel to the host and every call
+/// waits for the host to say the change is on its disk.
+struct HostBook {
+    ask: std::sync::mpsc::Sender<(String, Vec<u8>, std::sync::mpsc::Sender<Result<Vec<u8>, String>>)>,
+}
+
+impl HostBook {
+    fn open() -> HostBook {
+        let (ask, work) = std::sync::mpsc::channel::<(String, Vec<u8>, std::sync::mpsc::Sender<Result<Vec<u8>, String>>)>();
+        std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("a runtime for the book");
+            let host = Endpoint::Vsock(HOST_CID, HOST_SERVICE_PORT);
+            while let Ok((what, body, back)) = work.recv() {
+                let answer = runtime.block_on(tokumai_egress::tell_host(&host, &what, &body));
+                let _ = back.send(answer);
+            }
+        });
+        HostBook { ask }
+    }
+
+    fn call(&self, what: &str, body: &[u8]) -> Result<Vec<u8>, String> {
+        let (back, answer) = std::sync::mpsc::channel();
+        self.ask
+            .send((what.to_string(), body.to_vec(), back))
+            .map_err(|_| "the channel to the host is gone — the book cannot be kept".to_string())?;
+        answer.recv().map_err(|_| "the host never answered about the book".to_string())?
+    }
+}
+
+impl tokumai_enclave::state::Store for HostBook {
+    fn snapshot(&self) -> Result<Vec<u8>, String> {
+        self.call("snapshot", &[])
+    }
+    fn put_snapshot(&self, sealed: &[u8]) -> Result<(), String> {
+        self.call("put-snapshot", sealed).map(|_| ())
+    }
+    fn journal(&self) -> Result<Vec<Vec<u8>>, String> {
+        tokumai_enclave::state::split(&self.call("journal", &[])?)
+    }
+    fn append(&self, record: &[u8]) -> Result<(), String> {
+        self.call("add-record", record).map(|_| ())
+    }
+}
+
 /// `ip link set lo up`, without a shell or iproute2 in the image.
 fn loopback_up() -> std::io::Result<()> {
     unsafe {
@@ -145,13 +190,18 @@ async fn main() {
         attester: Box::new(attester),
         keys,
         providers,
-        db: Db::Memory,
+        // Sealed secrets mean a real enclave: the book is kept on the host, sealed under
+        // the data key. Without them (a probe on the mock model) it stays in memory.
+        db: if sealed.is_some() { Db::Kept(std::sync::Arc::new(HostBook::open())) } else { Db::Memory },
         pricing: PricingTable::parse(PRICING_JSON).expect("pricing.json"),
         dev_mode,
         stripe,
         apple_api,
     })
     .expect("start the enclave");
+    // What the book came back with, over vsock: a production enclave has no console, and
+    // "the book is empty" must not be indistinguishable from "the book was not found".
+    let _ = tokumai_egress::announce(&Endpoint::Vsock(HOST_CID, ANNOUNCE_PORT), &format!("{PROBE} book: {} change(s) replayed", enclave.replayed())).await;
     let enclave: &'static Enclave = Box::leak(Box::new(enclave));
     tokio::spawn(async move {
         loop {

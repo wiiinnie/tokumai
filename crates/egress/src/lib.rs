@@ -122,12 +122,25 @@ pub async fn hear(listen: Endpoint) -> io::Result<()> {
 
 /// What the enclave may ask its host for, on a channel of its own: the instance's
 /// temporary AWS credentials (so it can call KMS itself — they open nothing on their own,
-/// the key's policy demands an attestation as well) and the sealed secrets, which only an
-/// attested enclave can open. Both are answered with one line of JSON.
+/// the key's policy demands an attestation as well), the sealed secrets, which only an
+/// attested enclave can open, and the book the host keeps for it (sealed too: `snapshot`
+/// and `journal`).
 pub async fn ask_host(host: &Endpoint, what: &str) -> Result<Vec<u8>, String> {
+    hand_over(host, what, &[]).await
+}
+
+/// The same channel the other way: what the enclave gives the host to keep (`put-snapshot`,
+/// `add-record`). The answer says it is on the host's disk.
+pub async fn tell_host(host: &Endpoint, what: &str, body: &[u8]) -> Result<Vec<u8>, String> {
+    hand_over(host, what, body).await
+}
+
+async fn hand_over(host: &Endpoint, what: &str, body: &[u8]) -> Result<Vec<u8>, String> {
     let mut s = connect(host).await.map_err(|e| format!("the host does not answer: {e}"))?;
-    s.write_all(what.as_bytes()).await.map_err(|e| e.to_string())?;
-    s.write_all(b"\n").await.map_err(|e| e.to_string())?;
+    s.write_all(format!("{what} {}\n", body.len()).as_bytes()).await.map_err(|e| e.to_string())?;
+    if !body.is_empty() {
+        s.write_all(body).await.map_err(|e| e.to_string())?;
+    }
     s.flush().await.map_err(|e| e.to_string())?;
     // The answer comes with its length first (`<bytes>\n`), so a hundred kilobytes of
     // sealed secrets that end with a reset instead of a clean close is not mistaken for
@@ -145,25 +158,31 @@ pub async fn ask_host(host: &Endpoint, what: &str) -> Result<Vec<u8>, String> {
         return Err(format!("the host had no answer for {what:?}"));
     }
     let len: usize = head.parse().map_err(|_| format!("the host answered {what:?} with {head:?} where a length was expected"))?;
-    if len == 0 || len > (1 << 22) {
+    if len > (1 << 26) {
         return Err(format!("the host answered {what:?} with an impossible length ({len})"));
+    }
+    if len == 0 {
+        return Ok(Vec::new()); // nothing kept yet — a book that has not been written to
     }
     let mut answer = vec![0u8; len];
     s.read_exact(&mut answer).await.map_err(|e| format!("the host's answer to {what:?} broke off: {e}"))?;
     Ok(answer)
 }
 
-/// On the host: answer those two questions, and nothing else. `sealed` is the file with
-/// the secrets as KMS sealed them; the credentials come from the instance's own role.
-pub async fn serve_host<F, Fut>(listen: Endpoint, sealed: std::path::PathBuf, credentials: F) -> io::Result<()>
+/// On the host: answer the enclave's few questions, and nothing else. `sealed` is the file
+/// with the secrets as KMS sealed them, `book` the directory where the enclave's sealed
+/// book is kept (a snapshot and a journal — the host can read neither). The credentials
+/// come from the instance's own role.
+pub async fn serve_host<F, Fut>(listen: Endpoint, sealed: std::path::PathBuf, book: std::path::PathBuf, credentials: F) -> io::Result<()>
 where
     F: Fn() -> Fut + Send + Sync + 'static,
     Fut: std::future::Future<Output = Result<String, String>> + Send + 'static,
 {
     let credentials = Arc::new(credentials);
     let sealed = Arc::new(sealed);
+    let book = Arc::new(book);
     accept_loop(&listen, move |mut s| {
-        let (credentials, sealed) = (credentials.clone(), sealed.clone());
+        let (credentials, sealed, book) = (credentials.clone(), sealed.clone(), book.clone());
         async move {
             let mut line = Vec::new();
             let mut byte = [0u8; 1];
@@ -173,25 +192,70 @@ where
                     _ => break,
                 }
             }
-            let answer = match String::from_utf8_lossy(&line).trim() {
-                "credentials" => credentials().await,
-                "sealed" => std::fs::read(sealed.as_path()).map_err(|e| e.to_string()).and_then(|b| String::from_utf8(b).map_err(|e| e.to_string())),
-                other => Err(format!("the enclave asked for {other:?}, which is not answered here")),
+            let line = String::from_utf8_lossy(&line).trim().to_string();
+            let (what, len) = line.split_once(' ').unwrap_or((line.as_str(), "0"));
+            let len: usize = len.trim().parse().unwrap_or(0);
+            let mut given = vec![0u8; len.min(1 << 26)];
+            let read = if given.is_empty() { Ok(()) } else { s.read_exact(&mut given).await.map(|_| ()) };
+            let answer = match (read, what) {
+                (Err(e), _) => Err(format!("what the enclave handed over broke off: {e}")),
+                (_, "credentials") => credentials().await.map(String::into_bytes),
+                (_, "sealed") => std::fs::read(sealed.as_path()).map_err(|e| e.to_string()),
+                (_, "snapshot") => Ok(read_or_empty(&book.join(SNAPSHOT))),
+                (_, "journal") => Ok(read_or_empty(&book.join(JOURNAL))),
+                (_, "put-snapshot") => put_snapshot(&book, &given).map(|()| b"kept".to_vec()),
+                (_, "add-record") => add_record(&book, &given).map(|()| b"kept".to_vec()),
+                (_, other) => Err(format!("the enclave asked for {other:?}, which is not answered here")),
             };
             match answer {
-                Ok(text) => {
-                    let text = text.trim();
-                    let _ = s.write_all(format!("{}\n", text.len()).as_bytes()).await;
-                    let _ = s.write_all(text.as_bytes()).await;
+                Ok(bytes) => {
+                    let _ = s.write_all(format!("{}\n", bytes.len()).as_bytes()).await;
+                    let _ = s.write_all(&bytes).await;
                     let _ = s.flush().await;
-                    println!("host: answered {}", String::from_utf8_lossy(&line).trim());
+                    // The book is written to all day; saying so every time would drown the log.
+                    if !matches!(what, "add-record" | "put-snapshot" | "snapshot" | "journal") {
+                        println!("host: answered {what}");
+                    }
                 }
-                Err(e) => println!("host: could not answer {}: {e}", String::from_utf8_lossy(&line).trim()),
+                Err(e) => println!("host: could not answer {what}: {e}"),
             }
             let _ = s.shutdown().await;
         }
     })
     .await
+}
+
+/// The two files the host keeps of the enclave's book. Sealed: this side never reads them.
+pub const SNAPSHOT: &str = "book.snapshot";
+pub const JOURNAL: &str = "book.journal";
+
+fn read_or_empty(path: &std::path::Path) -> Vec<u8> {
+    std::fs::read(path).unwrap_or_default()
+}
+
+/// A new snapshot takes the place of the old one and the journal goes with it — in that
+/// order, so a stop in between leaves a snapshot with a journal that still belongs to it.
+fn put_snapshot(dir: &std::path::Path, sealed: &[u8]) -> Result<(), String> {
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let tmp = dir.join("book.snapshot.new");
+    std::fs::write(&tmp, sealed).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, dir.join(SNAPSHOT)).map_err(|e| e.to_string())?;
+    match std::fs::remove_file(dir.join(JOURNAL)) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// One record onto the journal, its length first — and not answered before it is safe on
+/// the disk, because the enclave answers its user once this returns.
+fn add_record(dir: &std::path::Path, record: &[u8]) -> Result<(), String> {
+    use std::io::Write;
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(dir.join(JOURNAL)).map_err(|e| e.to_string())?;
+    f.write_all(&(record.len() as u32).to_be_bytes()).map_err(|e| e.to_string())?;
+    f.write_all(record).map_err(|e| e.to_string())?;
+    f.sync_data().map_err(|e| e.to_string())
 }
 
 /// Which destinations the host connects to: host names by exact name or by suffix
@@ -373,13 +437,26 @@ mod tests {
         let sealed = std::env::temp_dir().join(format!("tokumai-sealed-{}.json", std::process::id()));
         let long = format!("{{\"ct\":\"{}\"}}", "x".repeat(200_000));
         std::fs::write(&sealed, &long).unwrap();
-        tokio::spawn(serve_host(at.clone(), sealed.clone(), || async { Ok("{\"AccessKeyId\":\"AK\"}".to_string()) }));
+        let book = std::env::temp_dir().join(format!("tokumai-book-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&book);
+        tokio::spawn(serve_host(at.clone(), sealed.clone(), book.clone(), || async { Ok("{\"AccessKeyId\":\"AK\"}".to_string()) }));
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
         assert_eq!(ask_host(&at, "sealed").await.unwrap(), long.as_bytes());
         assert_eq!(ask_host(&at, "credentials").await.unwrap(), b"{\"AccessKeyId\":\"AK\"}");
         assert!(ask_host(&at, "the data key").await.is_err());
+
+        // The book: nothing kept yet, then records, then a snapshot that replaces them.
+        assert!(ask_host(&at, "snapshot").await.unwrap().is_empty());
+        assert!(ask_host(&at, "journal").await.unwrap().is_empty());
+        assert_eq!(tell_host(&at, "add-record", b"a held request").await.unwrap(), b"kept");
+        tell_host(&at, "add-record", b"settled").await.unwrap();
+        assert_eq!(ask_host(&at, "journal").await.unwrap().len(), 4 + 14 + 4 + 7);
+        tell_host(&at, "put-snapshot", b"the whole book").await.unwrap();
+        assert_eq!(ask_host(&at, "snapshot").await.unwrap(), b"the whole book");
+        assert!(ask_host(&at, "journal").await.unwrap().is_empty());
         let _ = std::fs::remove_file(&sealed);
+        let _ = std::fs::remove_dir_all(&book);
     }
 
 }

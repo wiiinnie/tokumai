@@ -12,9 +12,77 @@
 //! Accounts are stored under a keyed hash of their id (see `seal`): the database alone does
 //! not say which accounts exist.
 
-use rusqlite::{params, Connection, OptionalExtension};
+use crate::state::{Sealing, Store};
+use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
 use std::path::Path;
+use std::sync::{Arc, Mutex};
+
+/// How many changes are written down before the whole book is written out again. Small
+/// enough that a restart replays in an instant, large enough that a chat does not rewrite
+/// the book (see `state`).
+const CHANGES_PER_SNAPSHOT: usize = 2_000;
+
+/// The tables of the book, with the columns a snapshot carries. Everything the enclave
+/// keeps is here: a table missing from this list would not survive a restart.
+const TABLES: &[(&str, &[&str])] = &[
+    ("allowance", &["acct", "period", "ends_ms", "granted", "left"]),
+    ("lots", &["id", "acct", "left", "expires_ms", "bought_ms"]),
+    ("holds", &["id", "acct", "parts"]),
+    ("nonces", &["nonce", "ts_ms"]),
+    ("plans", &["acct", "json"]),
+    ("rails", &["rail", "acct"]),
+    ("payments", &["ref", "at_ms"]),
+];
+
+/// A value as it travels in a journal record. The book writes nothing else.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
+pub(crate) enum Val {
+    I(i64),
+    S(String),
+}
+
+impl rusqlite::ToSql for Val {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        match self {
+            Val::I(i) => i.to_sql(),
+            Val::S(s) => s.to_sql(),
+        }
+    }
+}
+
+impl rusqlite::types::FromSql for Val {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Val> {
+        match value {
+            rusqlite::types::ValueRef::Integer(i) => Ok(Val::I(i)),
+            rusqlite::types::ValueRef::Text(t) => Ok(Val::S(String::from_utf8_lossy(t).into_owned())),
+            other => Err(rusqlite::types::FromSqlError::InvalidType).map_err(|e| {
+                let _ = other;
+                e
+            }),
+        }
+    }
+}
+
+/// One change, as it is written down and replayed.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct Change {
+    sql: String,
+    p: Vec<Val>,
+}
+
+/// What the book is kept in when the enclave has no disk: the host's sealed snapshot and
+/// journal (`state`), and where we are in them.
+struct Kept {
+    store: Arc<dyn Store>,
+    sealing: Sealing,
+    generation: u64,
+    /// The number the next record gets after the snapshot.
+    next: u64,
+    /// How many records there are since the snapshot.
+    since: usize,
+}
 
 /// How long a prepaid lot is valid: three years from purchase, by the calendar.
 pub const PREPAID_MONTHS: u32 = 36;
@@ -22,6 +90,9 @@ pub const PREPAID_MONTHS: u32 = 36;
 pub struct Ledger {
     conn: Connection,
     data_key: [u8; 32],
+    /// Where the book outlives the process, when it is not simply a file (see `state`).
+    kept: Option<Mutex<Kept>>,
+    replayed: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -74,7 +145,120 @@ impl Ledger {
              CREATE TABLE IF NOT EXISTS payments (ref TEXT PRIMARY KEY, at_ms INTEGER NOT NULL);",
         )
         .map_err(|e| e.to_string())?;
-        Ok(Ledger { conn, data_key })
+        Ok(Ledger { conn, data_key, kept: None, replayed: 0 })
+    }
+
+    /// The book kept on the host, sealed: the snapshot is read back, the journal replayed,
+    /// and from then on every change is written down before the request is answered.
+    pub fn open_sealed(store: Arc<dyn Store>, data_key: [u8; 32]) -> Result<Ledger, String> {
+        let mut ledger = Self::with(Connection::open_in_memory().map_err(|e| e.to_string())?, data_key)?;
+        let sealing = Sealing::new(&data_key);
+        let snapshot = store.snapshot()?;
+        let mut generation = 1;
+        if !snapshot.is_empty() {
+            let plain = sealing.open(0, 0, &snapshot)?;
+            let book: serde_json::Value = serde_json::from_slice(&plain).map_err(|e| format!("the book's snapshot is unreadable: {e}"))?;
+            generation = book["generation"].as_u64().ok_or("the book's snapshot has no generation")?;
+            ledger.restore(&book["rows"])?;
+        }
+        let journal = store.journal()?;
+        for (i, record) in journal.iter().enumerate() {
+            let plain = sealing.open(generation, i as u64 + 1, record)?;
+            let change: Change = serde_json::from_slice(&plain).map_err(|e| format!("a record of the book is unreadable: {e}"))?;
+            ledger
+                .conn
+                .execute(&change.sql, params_from_iter(change.p.iter()))
+                .map_err(|e| format!("the book's record {} does not apply: {e}", i + 1))?;
+        }
+        ledger.replayed = journal.len();
+        ledger.kept = Some(Mutex::new(Kept { store, sealing, generation, next: journal.len() as u64 + 1, since: journal.len() }));
+        if snapshot.is_empty() {
+            // A book that starts from nothing gets its first snapshot at once, so that its
+            // generation is on the host's disk before anything is written down.
+            ledger.write_out()?;
+        }
+        Ok(ledger)
+    }
+
+    /// How many changes were replayed at the last start — what the enclave says out loud,
+    /// since nobody can look inside it.
+    pub fn replayed(&self) -> usize {
+        self.replayed
+    }
+
+    /// Do one change and write it down. The book in memory and the journal on the host say
+    /// the same thing, or the change did not happen.
+    fn change(&self, sql: &str, p: Vec<Val>) -> Result<usize, String> {
+        let n = self.conn.execute(sql, params_from_iter(p.iter())).map_err(|e| e.to_string())?;
+        self.write_down(vec![Change { sql: sql.to_string(), p }])?;
+        Ok(n)
+    }
+
+    /// Write changes down, in order, each sealed to its place in the line. Answered only
+    /// once the host says they are on its disk.
+    fn write_down(&self, changes: Vec<Change>) -> Result<(), String> {
+        let Some(kept) = &self.kept else { return Ok(()) };
+        let mut full = false;
+        {
+            let mut kept = kept.lock().map_err(|_| "the book's journal is in an unknown state".to_string())?;
+            for change in changes {
+                let record = serde_json::to_vec(&change).map_err(|e| e.to_string())?;
+                let sealed = kept.sealing.seal(kept.generation, kept.next, &record)?;
+                kept.store.append(&sealed)?;
+                kept.next += 1;
+                kept.since += 1;
+            }
+            full = full || kept.since >= CHANGES_PER_SNAPSHOT;
+        }
+        if full {
+            self.write_out()?;
+        }
+        Ok(())
+    }
+
+    /// Write the whole book out as one snapshot and start a new generation, so the journal
+    /// stays short and a restart is quick.
+    fn write_out(&self) -> Result<(), String> {
+        let Some(kept) = &self.kept else { return Ok(()) };
+        let rows = self.rows()?;
+        let mut kept = kept.lock().map_err(|_| "the book's journal is in an unknown state".to_string())?;
+        let generation = kept.generation + 1;
+        let book = serde_json::json!({ "generation": generation, "rows": rows });
+        let sealed = kept.sealing.seal(0, 0, &serde_json::to_vec(&book).map_err(|e| e.to_string())?)?;
+        kept.store.put_snapshot(&sealed)?;
+        kept.generation = generation;
+        kept.next = 1;
+        kept.since = 0;
+        Ok(())
+    }
+
+    /// Every row of the book, table by table.
+    fn rows(&self) -> Result<serde_json::Value, String> {
+        let mut all = serde_json::Map::new();
+        for (table, columns) in TABLES {
+            let mut st = self.conn.prepare(&format!("SELECT {} FROM {table}", columns.join(", "))).map_err(|e| e.to_string())?;
+            let rows = st
+                .query_map([], |r| (0..columns.len()).map(|i| r.get::<_, Val>(i)).collect::<rusqlite::Result<Vec<Val>>>())
+                .map_err(|e| e.to_string())?;
+            let rows: Vec<Vec<Val>> = rows.collect::<rusqlite::Result<_>>().map_err(|e| e.to_string())?;
+            all.insert((*table).to_string(), serde_json::to_value(rows).map_err(|e| e.to_string())?);
+        }
+        Ok(serde_json::Value::Object(all))
+    }
+
+    /// Put the rows of a snapshot back, in place of whatever is there.
+    fn restore(&self, rows: &serde_json::Value) -> Result<(), String> {
+        for (table, columns) in TABLES {
+            self.conn.execute(&format!("DELETE FROM {table}"), []).map_err(|e| e.to_string())?;
+            let Some(list) = rows.get(table).and_then(|v| v.as_array()) else { continue };
+            let places: Vec<String> = (1..=columns.len()).map(|i| format!("?{i}")).collect();
+            let sql = format!("INSERT INTO {table} ({}) VALUES ({})", columns.join(", "), places.join(", "));
+            for row in list {
+                let values: Vec<Val> = serde_json::from_value(row.clone()).map_err(|e| format!("a row of {table} is unreadable: {e}"))?;
+                self.conn.execute(&sql, params_from_iter(values.iter())).map_err(|e| format!("a row of {table} does not go back in: {e}"))?;
+            }
+        }
+        Ok(())
     }
 
     fn key(&self, account_id: &str) -> String {
@@ -105,10 +289,7 @@ impl Ledger {
     /// A one-off payment (an App Store consumable) is credited once: false if this reference
     /// was seen before. Stored as a keyed hash, like every payment reference.
     pub fn first_payment(&self, reference: &str, now_ms: u64) -> Result<bool, String> {
-        let n = self
-            .conn
-            .execute("INSERT OR IGNORE INTO payments (ref, at_ms) VALUES (?1, ?2)", params![self.rail_key(reference), now_ms as i64])
-            .map_err(|e| e.to_string())?;
+        let n = self.change("INSERT OR IGNORE INTO payments (ref, at_ms) VALUES (?1, ?2)", vec![Val::S(self.rail_key(reference)), Val::I(now_ms as i64)])?;
         Ok(n == 1)
     }
 
@@ -125,14 +306,12 @@ impl Ledger {
 
     pub(crate) fn plan_put(&self, key: &str, plan: &crate::plans::Plan) -> Result<(), String> {
         let json = serde_json::to_string(plan).map_err(|e| e.to_string())?;
-        self.conn
-            .execute("INSERT INTO plans (acct, json) VALUES (?1, ?2) ON CONFLICT(acct) DO UPDATE SET json = excluded.json", params![key, json])
+        self.change("INSERT INTO plans (acct, json) VALUES (?1, ?2) ON CONFLICT(acct) DO UPDATE SET json = excluded.json", vec![Val::S(key.into()), Val::S(json)])
             .map(|_| ())
-            .map_err(|e| e.to_string())
     }
 
     pub(crate) fn plan_delete(&self, key: &str) -> Result<(), String> {
-        self.conn.execute("DELETE FROM plans WHERE acct = ?1", params![key]).map(|_| ()).map_err(|e| e.to_string())
+        self.change("DELETE FROM plans WHERE acct = ?1", vec![Val::S(key.into())]).map(|_| ())
     }
 
     pub(crate) fn plan_keys(&self) -> Result<Vec<String>, String> {
@@ -152,10 +331,11 @@ impl Ledger {
     }
 
     pub(crate) fn rail_bind(&self, rail: &str, key: &str) -> Result<(), String> {
-        self.conn
-            .execute("INSERT INTO rails (rail, acct) VALUES (?1, ?2) ON CONFLICT(rail) DO UPDATE SET acct = excluded.acct", params![self.rail_key(rail), key])
-            .map(|_| ())
-            .map_err(|e| e.to_string())
+        self.change(
+            "INSERT INTO rails (rail, acct) VALUES (?1, ?2) ON CONFLICT(rail) DO UPDATE SET acct = excluded.acct",
+            vec![Val::S(self.rail_key(rail)), Val::S(key.into())],
+        )
+        .map(|_| ())
     }
 
     #[cfg(test)]
@@ -176,48 +356,43 @@ impl Ledger {
     }
 
     pub(crate) fn allowance_set(&self, key: &str, start_ms: u64, ends_ms: u64, toku: u64) -> Result<(), String> {
-        self.conn
-            .execute(
-                "INSERT INTO allowance (acct, period, ends_ms, granted, left) VALUES (?1, ?2, ?3, ?4, ?4)
+        self.change(
+            "INSERT INTO allowance (acct, period, ends_ms, granted, left) VALUES (?1, ?2, ?3, ?4, ?4)
                  ON CONFLICT(acct) DO UPDATE SET period = excluded.period, ends_ms = excluded.ends_ms,
                      granted = excluded.granted, left = excluded.left",
-                params![key, (start_ms / 1000) as i64, ends_ms as i64, toku as i64],
-            )
-            .map(|_| ())
-            .map_err(|e| e.to_string())
+            vec![Val::S(key.into()), Val::I((start_ms / 1000) as i64), Val::I(ends_ms as i64), Val::I(toku as i64)],
+        )
+        .map(|_| ())
     }
 
     pub(crate) fn allowance_add(&self, key: &str, extra: u64) -> Result<(), String> {
-        self.conn
-            .execute("UPDATE allowance SET granted = granted + ?2, left = left + ?2 WHERE acct = ?1", params![key, extra as i64])
+        self.change("UPDATE allowance SET granted = granted + ?2, left = left + ?2 WHERE acct = ?1", vec![Val::S(key.into()), Val::I(extra as i64)])
             .map(|_| ())
-            .map_err(|e| e.to_string())
     }
 
     pub(crate) fn allowance_take(&self, key: &str, amount: u64) -> Result<(), String> {
-        self.conn
-            .execute("UPDATE allowance SET left = MAX(0, left - ?2) WHERE acct = ?1", params![key, amount as i64])
+        self.change("UPDATE allowance SET left = MAX(0, left - ?2) WHERE acct = ?1", vec![Val::S(key.into()), Val::I(amount as i64)])
             .map(|_| ())
-            .map_err(|e| e.to_string())
     }
 
     pub(crate) fn allowance_lapse(&self, key: &str) -> Result<(), String> {
-        self.conn
-            .execute("UPDATE allowance SET granted = 0, left = 0 WHERE acct = ?1", params![key])
-            .map(|_| ())
-            .map_err(|e| e.to_string())
+        self.change("UPDATE allowance SET granted = 0, left = 0 WHERE acct = ?1", vec![Val::S(key.into())]).map(|_| ())
     }
 
     /// A prepaid purchase: a new lot, valid three years from `now_ms`.
     pub fn credit_prepaid(&self, account_id: &str, toku: u64, now_ms: u64) -> Result<(), String> {
         let expires = tokumai_core::subscription::add_months_ms(now_ms, PREPAID_MONTHS);
+        let key = self.key(account_id);
         self.conn
-            .execute(
-                "INSERT INTO lots (acct, left, expires_ms, bought_ms) VALUES (?1, ?2, ?3, ?4)",
-                params![self.key(account_id), toku as i64, expires as i64, now_ms as i64],
-            )
-            .map(|_| ())
-            .map_err(|e| e.to_string())
+            .execute("INSERT INTO lots (acct, left, expires_ms, bought_ms) VALUES (?1, ?2, ?3, ?4)", params![key, toku as i64, expires as i64, now_ms as i64])
+            .map_err(|e| e.to_string())?;
+        // Written down with the id it was given: later records name that lot, and a replay
+        // must find the same one.
+        let id = self.conn.last_insert_rowid();
+        self.write_down(vec![Change {
+            sql: "INSERT INTO lots (id, acct, left, expires_ms, bought_ms) VALUES (?1, ?2, ?3, ?4, ?5)".into(),
+            p: vec![Val::I(id), Val::S(key), Val::I(toku as i64), Val::I(expires as i64), Val::I(now_ms as i64)],
+        }])
     }
 
     /// A plan period begins: its allowance is SET, never added to.
@@ -253,6 +428,8 @@ impl Ledger {
     /// period), then the prepaid lots that expire soonest. All or nothing.
     pub fn hold(&mut self, account_id: &str, amount: u64, now_ms: u64) -> Result<Hold, String> {
         let k = self.key(account_id);
+        // What this hold does to the book, to be written down once it holds (see `state`).
+        let mut written: Vec<Change> = Vec::new();
         let tx = self.conn.transaction().map_err(|e| e.to_string())?;
         let mut parts: Vec<(Pocket, u64)> = Vec::new();
         let mut need = amount;
@@ -265,6 +442,7 @@ impl Ledger {
             if take > 0 {
                 tx.execute("UPDATE allowance SET left = left - ?2 WHERE acct = ?1", params![k, take as i64])
                     .map_err(|e| e.to_string())?;
+                written.push(Change { sql: "UPDATE allowance SET left = left - ?2 WHERE acct = ?1".into(), p: vec![Val::S(k.clone()), Val::I(take as i64)] });
                 parts.push((Pocket::Allowance, take));
                 need -= take;
             }
@@ -285,6 +463,7 @@ impl Ledger {
                 }
                 let take = need.min(left as u64);
                 tx.execute("UPDATE lots SET left = left - ?2 WHERE id = ?1", params![id, take as i64]).map_err(|e| e.to_string())?;
+                written.push(Change { sql: "UPDATE lots SET left = left - ?2 WHERE id = ?1".into(), p: vec![Val::I(id), Val::I(take as i64)] });
                 parts.push((Pocket::Lot(id), take));
                 need -= take;
             }
@@ -296,7 +475,11 @@ impl Ledger {
         let json = serde_json::to_string(&parts).map_err(|e| e.to_string())?;
         tx.execute("INSERT INTO holds (acct, parts) VALUES (?1, ?2)", params![k, json]).map_err(|e| e.to_string())?;
         let id = tx.last_insert_rowid();
+        written.push(Change { sql: "INSERT INTO holds (id, acct, parts) VALUES (?1, ?2, ?3)".into(), p: vec![Val::I(id), Val::S(k), Val::S(json)] });
         tx.commit().map_err(|e| e.to_string())?;
+        // If the host cannot take it, the request does not go ahead; what the hold took is
+        // given back at the next start, as any hold left open is.
+        self.write_down(written)?;
         Ok(Hold { id, account: account_id.to_string(), amount, parts })
     }
 
@@ -306,27 +489,34 @@ impl Ledger {
         let kept = cost.min(hold.amount);
         let mut refund = hold.amount - kept;
         let acct = self.key(&hold.account);
+        let mut written: Vec<Change> = Vec::new();
         let tx = self.conn.transaction().map_err(|e| e.to_string())?;
         for (pocket, took) in hold.parts.iter().rev() {
             if refund == 0 {
                 break;
             }
             let back = refund.min(*took);
-            Self::give_back(&tx, &acct, *pocket, back)?;
+            written.push(Self::give_back(&tx, &acct, *pocket, back)?);
             refund -= back;
         }
         tx.execute("DELETE FROM holds WHERE id = ?1", params![hold.id]).map_err(|e| e.to_string())?;
+        written.push(Change { sql: "DELETE FROM holds WHERE id = ?1".into(), p: vec![Val::I(hold.id)] });
         tx.commit().map_err(|e| e.to_string())?;
+        self.write_down(written)?;
         Ok(kept)
     }
 
-    fn give_back(tx: &rusqlite::Transaction, acct: &str, pocket: Pocket, amount: u64) -> Result<(), String> {
-        match pocket {
-            Pocket::Allowance => tx.execute("UPDATE allowance SET left = left + ?2 WHERE acct = ?1", params![acct, amount as i64]),
-            Pocket::Lot(id) => tx.execute("UPDATE lots SET left = left + ?2 WHERE id = ?1", params![id, amount as i64]),
-        }
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+    /// Put `amount` back where it came from, and say what was done so it can be written down.
+    fn give_back(tx: &rusqlite::Transaction, acct: &str, pocket: Pocket, amount: u64) -> Result<Change, String> {
+        let change = match pocket {
+            Pocket::Allowance => Change {
+                sql: "UPDATE allowance SET left = left + ?2 WHERE acct = ?1".into(),
+                p: vec![Val::S(acct.to_string()), Val::I(amount as i64)],
+            },
+            Pocket::Lot(id) => Change { sql: "UPDATE lots SET left = left + ?2 WHERE id = ?1".into(), p: vec![Val::I(id), Val::I(amount as i64)] },
+        };
+        tx.execute(&change.sql, params_from_iter(change.p.iter())).map_err(|e| e.to_string())?;
+        Ok(change)
     }
 
     /// At start: holds left by requests that died with the last process go back in full.
@@ -337,26 +527,24 @@ impl Ledger {
             let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).map_err(|e| e.to_string())?;
             rows.flatten().collect()
         };
+        let mut written: Vec<Change> = Vec::new();
         for (id, acct, parts) in &open {
             let parts: Vec<(Pocket, u64)> = serde_json::from_str(parts).map_err(|e| e.to_string())?;
             for (pocket, took) in parts {
-                Self::give_back(&tx, acct, pocket, took)?;
+                written.push(Self::give_back(&tx, acct, pocket, took)?);
             }
             tx.execute("DELETE FROM holds WHERE id = ?1", params![id]).map_err(|e| e.to_string())?;
+            written.push(Change { sql: "DELETE FROM holds WHERE id = ?1".into(), p: vec![Val::I(*id)] });
         }
         tx.commit().map_err(|e| e.to_string())?;
+        self.write_down(written)?;
         Ok(open.len())
     }
 
     /// Record a request nonce. False if it was seen before (a replay, or a resend).
     pub fn first_sight(&self, nonce: &str, now_ms: u64) -> Result<bool, String> {
-        self.conn
-            .execute("DELETE FROM nonces WHERE ts_ms < ?1", params![now_ms.saturating_sub(NONCE_KEEP_MS) as i64])
-            .map_err(|e| e.to_string())?;
-        let n = self
-            .conn
-            .execute("INSERT OR IGNORE INTO nonces (nonce, ts_ms) VALUES (?1, ?2)", params![nonce, now_ms as i64])
-            .map_err(|e| e.to_string())?;
+        self.change("DELETE FROM nonces WHERE ts_ms < ?1", vec![Val::I(now_ms.saturating_sub(NONCE_KEEP_MS) as i64)])?;
+        let n = self.change("INSERT OR IGNORE INTO nonces (nonce, ts_ms) VALUES (?1, ?2)", vec![Val::S(nonce.into()), Val::I(now_ms as i64)])?;
         Ok(n == 1)
     }
 }
@@ -455,4 +643,76 @@ mod tests {
         assert!(l.first_sight("n1", 1_000).unwrap());
         assert!(!l.first_sight("n1", 2_000).unwrap());
     }
+
+    /// The book lives in memory inside the enclave; what the host keeps of it must bring it
+    /// back exactly — balances, the plan, the payments already credited.
+    #[test]
+    fn what_the_host_keeps_brings_the_book_back() {
+        let dir = std::env::temp_dir().join(format!("tokumai-book-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Arc::new(crate::state::FileStore::new(&dir).unwrap());
+        let now = 1_790_000_000_000;
+
+        let mut first = Ledger::open_sealed(store.clone(), [4u8; 32]).unwrap();
+        first.grant_allowance("acct", now, now + 30 * DAY, 700_000).unwrap();
+        first.credit_prepaid("acct", 50_000, now).unwrap();
+        assert!(first.first_payment("stripe-sub-1", now).unwrap());
+        let hold = first.hold("acct", 20_000, now).unwrap();
+        assert_eq!(first.settle(hold, 12_000).unwrap(), 12_000);
+        // One that is still open when the enclave goes away.
+        let _open = first.hold("acct", 5_000, now).unwrap();
+        let before = first.balance("acct", now).unwrap();
+        drop(first);
+
+        // A new enclave, the same host: the snapshot and the journal are all it has.
+        let mut again = Ledger::open_sealed(store.clone(), [4u8; 32]).unwrap();
+        assert!(again.replayed() > 0, "the journal should have carried the changes");
+        assert_eq!(again.balance("acct", now).unwrap(), before);
+        // The payment is still known, so a second delivery of it credits nothing twice.
+        assert!(!again.first_payment("stripe-sub-1", now).unwrap());
+        // And the hold nobody settled comes back to the account.
+        assert_eq!(again.release_open_holds().unwrap(), 1);
+        assert_eq!(again.balance("acct", now).unwrap().total, before.total + 5_000);
+
+        // A third time, to be sure the replay of a replay is the same.
+        let total = again.balance("acct", now).unwrap().total;
+        drop(again);
+        let third = Ledger::open_sealed(store.clone(), [4u8; 32]).unwrap();
+        assert_eq!(third.balance("acct", now).unwrap().total, total);
+
+        // Another key does not open it, and a bent record is not quietly skipped.
+        drop(third);
+        assert!(Ledger::open_sealed(store.clone(), [5u8; 32]).is_err());
+        let journal = dir.join("book.journal");
+        let mut bytes = std::fs::read(&journal).unwrap();
+        let last = bytes.len() - 1;
+        bytes[last] ^= 1;
+        std::fs::write(&journal, &bytes).unwrap();
+        assert!(Ledger::open_sealed(store, [4u8; 32]).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// When the journal grows past its mark the whole book is written out again, and what
+    /// it says stays the same.
+    #[test]
+    fn a_long_journal_is_folded_into_a_snapshot() {
+        let dir = std::env::temp_dir().join(format!("tokumai-fold-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Arc::new(crate::state::FileStore::new(&dir).unwrap());
+        let now = 1_790_000_000_000;
+        let book = Ledger::open_sealed(store.clone(), [6u8; 32]).unwrap();
+        book.grant_allowance("acct", now, now + 30 * DAY, 1_000).unwrap();
+        for i in 0..CHANGES_PER_SNAPSHOT {
+            assert!(book.first_sight(&format!("nonce-{i}"), now).unwrap());
+        }
+        assert!(store.journal().unwrap().len() < CHANGES_PER_SNAPSHOT, "the journal should have been folded in");
+        drop(book);
+
+        let again = Ledger::open_sealed(store, [6u8; 32]).unwrap();
+        assert_eq!(again.balance("acct", now).unwrap().allowance, 1_000);
+        // A request seen before the snapshot is still a request seen before.
+        assert!(!again.first_sight("nonce-7", now).unwrap());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
 }

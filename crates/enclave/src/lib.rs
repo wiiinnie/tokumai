@@ -24,12 +24,14 @@ pub mod kms;
 pub mod ledger;
 pub mod openai;
 pub mod plans;
+pub mod picture;
 pub mod policy;
 pub mod provider;
 pub mod seal;
 pub mod secrets;
 pub mod secrets_sealed;
 pub mod service;
+pub mod state;
 pub mod stripe;
 pub mod subscriptions;
 

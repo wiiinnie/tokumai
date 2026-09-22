@@ -36,6 +36,9 @@ const REPLY_KEEP_MAX: usize = 20_000;
 pub enum Db {
     File(PathBuf),
     Memory,
+    /// The book kept on the host, sealed and replayed at every start — what an enclave
+    /// with no disk of its own does (`state`).
+    Kept(std::sync::Arc<dyn crate::state::Store>),
 }
 
 /// Everything that differs between a laptop and a real enclave.
@@ -56,6 +59,9 @@ pub struct Platform {
 }
 
 pub struct Enclave {
+    /// How many changes the book replayed at this start (`state`) — said out loud, since
+    /// nobody can look inside a running enclave.
+    replayed: usize,
     keys: EnclaveKeys,
     attester: Box<dyn Attester>,
     providers: Providers,
@@ -91,17 +97,27 @@ pub(crate) fn error(msg: &str) -> Value {
 }
 
 impl Enclave {
+    pub fn replayed(&self) -> usize {
+        self.replayed
+    }
+
     pub fn start(p: Platform) -> Result<Enclave, String> {
         let key = p.keys.data_key()?;
         let mut ledger = match p.db {
             Db::File(path) => Ledger::open(&path, key)?,
             Db::Memory => Ledger::in_memory(key)?,
+            Db::Kept(store) => Ledger::open_sealed(store, key)?,
         };
+        let replayed = ledger.replayed();
+        if replayed > 0 {
+            eprintln!("tokumai-enclave: the book came back with {replayed} change(s) replayed");
+        }
         let released = ledger.release_open_holds()?;
         if released > 0 {
             eprintln!("tokumai-enclave: gave back {released} hold(s) of requests cut off by the last stop");
         }
         Ok(Enclave {
+            replayed,
             keys: EnclaveKeys::generate(),
             attester: p.attester,
             providers: p.providers,
@@ -406,8 +422,11 @@ impl Enclave {
         match result {
             Ok(c) => {
                 let total = self.ledger.lock().ok().and_then(|l| l.balance(account, now).ok()).map(|b| b.total).unwrap_or(0);
+                // Packed here, where the picture still is: megabytes do not cross the
+                // mixnet well, and what is charged was decided above, on what the model did.
+                let images = c.images.map(|i| crate::picture::pack_all(i, req.lossless));
                 json!({
-                    "kind": "chat", "text": c.text, "images": c.images, "cost": charged, "balance": total,
+                    "kind": "chat", "text": c.text, "images": images, "cost": charged, "balance": total,
                     // Shortened only if the answer actually ran into the lowered limit.
                     "capped": capped && c.usage.output + 8 >= req.answer_tokens(),
                     "estimated": c.usage.estimated,

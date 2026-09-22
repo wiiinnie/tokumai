@@ -1,6 +1,6 @@
 //! The host side of the enclave's way out: a CONNECT proxy for the allowed destinations.
 //!
-//!     tokumai-egress-host <listen> <allowlist file> [announcements] [host service] [sealed file]
+//!     tokumai-egress-host <listen> <allowlist file> [announcements] [host service] [sealed file] [book dir]
 //!     tokumai-egress-host vsock:4294967295:8080 /etc/tokumai/egress.allow vsock:4294967295:8081   (on the EC2 host)
 //!     tokumai-egress-host tcp:127.0.0.1:8080 deploy/egress.allow            (on a laptop)
 //!
@@ -60,8 +60,10 @@ async fn main() {
     if let (Some(svc), Some(sealed)) = (args.get(3), args.get(4)) {
         let svc = Endpoint::parse(svc).unwrap_or_else(|e| panic!("{e}"));
         let sealed = std::path::PathBuf::from(sealed);
-        println!("tokumai-egress-host answers the enclave on {svc:?} (sealed secrets: {})", sealed.display());
-        tokio::spawn(async move { tokumai_egress::serve_host(svc, sealed, instance_credentials).await.expect("host service") });
+        // Where the enclave's book is kept, sealed — this side stores bytes it cannot read.
+        let book = std::path::PathBuf::from(args.get(5).map(String::as_str).unwrap_or("book"));
+        println!("tokumai-egress-host answers the enclave on {svc:?} (sealed secrets: {}, book: {})", sealed.display(), book.display());
+        tokio::spawn(async move { tokumai_egress::serve_host(svc, sealed, book, instance_credentials).await.expect("host service") });
     }
     println!("tokumai-egress-host on {listen:?}");
     serve(listen, allow, report).await.expect("egress proxy");
