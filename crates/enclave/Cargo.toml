@@ -23,6 +23,12 @@ tokio.workspace = true
 reqwest.workspace = true
 x509-parser.workspace = true
 ring.workspace = true
+# KMS from inside the enclave: the request is signed here (hmac), the answer comes as CMS
+# (the content key to our RSA key, the content under AES-CBC).
+hmac = "0.12"
+rsa = "0.9"
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }
 
 [features]
 # Accept App Store sandbox purchases in a release image (testnet). See policy::APPLE_SANDBOX.

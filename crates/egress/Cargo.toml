@@ -6,6 +6,8 @@ description = "The way out of a Nitro enclave: an HTTP CONNECT tunnel over vsock
 
 [dependencies]
 tokio.workspace = true
+# The host asks the instance metadata service for the role's credentials.
+reqwest.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 tokio-vsock = "0.7.2"

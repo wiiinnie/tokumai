@@ -10,6 +10,9 @@
 api.openai.com 443
 generativelanguage.googleapis.com 443
 
+# AWS KMS: where the enclave has its sealed secrets opened — for its own image only.
+kms.eu-central-1.amazonaws.com 443
+
 # Payments
 api.stripe.com 443
 api.storekit.itunes.apple.com 443

@@ -123,6 +123,9 @@ async fn main() {
         ("dev.credit", json!({ "toku": 100_000 })),
         ("chat", json!({ "model": model, "messages": [{ "role": "user", "content": question }], "maxTokens": 512, "imageSize": image_size })),
         ("balance", json!({})),
+        // Also a sign of what the enclave was given: plans need the Stripe keys, which
+        // only a sealed enclave has.
+        ("plans", json!({})),
     ];
     for (op, body) in asks {
         let t = std::time::Instant::now();

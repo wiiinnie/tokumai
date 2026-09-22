@@ -1,6 +1,6 @@
 //! The host side of the enclave's way out: a CONNECT proxy for the allowed destinations.
 //!
-//!     tokumai-egress-host <listen> <allowlist file> [announcements]
+//!     tokumai-egress-host <listen> <allowlist file> [announcements] [host service] [sealed file]
 //!     tokumai-egress-host vsock:4294967295:8080 /etc/tokumai/egress.allow vsock:4294967295:8081   (on the EC2 host)
 //!     tokumai-egress-host tcp:127.0.0.1:8080 deploy/egress.allow            (on a laptop)
 //!
@@ -8,6 +8,31 @@
 
 use std::sync::Arc;
 use tokumai_egress::{serve, Allowlist, Endpoint, Report};
+
+/// The instance role's temporary credentials, from the metadata service (IMDSv2).
+async fn instance_credentials() -> Result<String, String> {
+    const IMDS: &str = "http://169.254.169.254/latest";
+    let http = reqwest::Client::builder().timeout(std::time::Duration::from_secs(5)).build().map_err(|e| e.to_string())?;
+    let token = http
+        .put(format!("{IMDS}/api/token"))
+        .header("x-aws-ec2-metadata-token-ttl-seconds", "60")
+        .send()
+        .await
+        .map_err(|e| format!("no metadata token: {e}"))?
+        .text()
+        .await
+        .map_err(|e| e.to_string())?;
+    let get = |path: String| {
+        let (http, token) = (http.clone(), token.clone());
+        async move { http.get(path).header("x-aws-ec2-metadata-token", token).send().await.map_err(|e| e.to_string())?.text().await.map_err(|e| e.to_string()) }
+    };
+    let role = get(format!("{IMDS}/meta-data/iam/security-credentials/")).await?;
+    let role = role.lines().next().unwrap_or("").trim().to_string();
+    if role.is_empty() {
+        return Err("this instance has no role — start it with tokumai-enclave-host".into());
+    }
+    get(format!("{IMDS}/meta-data/iam/security-credentials/{role}")).await
+}
 
 #[tokio::main]
 async fn main() {
@@ -28,6 +53,15 @@ async fn main() {
         let a = Endpoint::parse(a).unwrap_or_else(|e| panic!("{e}"));
         println!("tokumai-egress-host hears the enclave on {a:?}");
         tokio::spawn(async move { tokumai_egress::hear(a).await.expect("announcements") });
+    }
+    // The enclave's own questions: its instance credentials and the sealed secrets. The
+    // credentials are fetched here, from the instance metadata service the enclave cannot
+    // reach; they open nothing by themselves, since the key's policy wants an attestation.
+    if let (Some(svc), Some(sealed)) = (args.get(3), args.get(4)) {
+        let svc = Endpoint::parse(svc).unwrap_or_else(|e| panic!("{e}"));
+        let sealed = std::path::PathBuf::from(sealed);
+        println!("tokumai-egress-host answers the enclave on {svc:?} (sealed secrets: {})", sealed.display());
+        tokio::spawn(async move { tokumai_egress::serve_host(svc, sealed, instance_credentials).await.expect("host service") });
     }
     println!("tokumai-egress-host on {listen:?}");
     serve(listen, allow, report).await.expect("egress proxy");

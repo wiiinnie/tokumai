@@ -8,11 +8,15 @@
 //! 3. its own Nym client connects, through the tunnel, to the pinned gateway; the address it
 //!    got is announced to the host (vsock port 8081), and every attestation names it.
 //!
-//! PROBE 1 (phase 0): the data key is drawn at random and the ledger lives in memory, so a
-//! restart forgets everything; no provider keys reach it yet, so it offers the mock model
-//! and test credit (dev mode). Probe 2 brings the data key and the secrets from KMS, released
-//! only to this image's PCR0. The image says which it is: `PROBE` below is part of what is
-//! measured.
+//! Its secrets come from AWS KMS and nowhere else: the host hands over a sealed file and
+//! the instance's credentials, the enclave asks KMS to open the file for THIS image, and
+//! KMS answers with a copy encrypted to a key that exists only in here (`enclave::kms`).
+//! Inside are the provider keys, the Stripe keys, the data key everything at rest is keyed
+//! with, and the enclave's Nym identity — so its address survives a restart.
+//!
+//! Without sealed secrets it still starts, with a random data key and the mock model, which
+//! is what the first probe did. The ledger lives in memory either way for now; giving it a
+//! home on the host, sealed, is the next step.
 
 use std::path::PathBuf;
 use tokumai_attest::nitro::NitroAttester;
@@ -23,12 +27,54 @@ use tokumai_enclave::provider::Providers;
 use tokumai_enclave::seal::FixedKeyProvider;
 use tokumai_enclave::service::{Db, Enclave, Platform};
 
-const PROBE: &str = "probe-1";
+const PROBE: &str = "probe-2";
 /// The parent instance, as an enclave sees it.
 const HOST_CID: u32 = 3;
 const EGRESS_PORT: u32 = 8080;
 const ANNOUNCE_PORT: u32 = 8081;
+/// Where the host answers "credentials" and "sealed".
+const HOST_SERVICE_PORT: u32 = 8082;
+const REGION: &str = "eu-central-1";
 const LOOPBACK_PROXY: &str = "127.0.0.1:1080";
+
+/// Ask the host for the sealed secrets and the instance's credentials, and have KMS open
+/// them for this image. The credentials alone open nothing: the key's policy wants an
+/// attestation of a published image, which only this enclave can produce.
+async fn unseal(attester: &NitroAttester) -> Result<tokumai_enclave::secrets_sealed::Sealed, String> {
+    let host = Endpoint::Vsock(HOST_CID, HOST_SERVICE_PORT);
+    let envelope = tokumai_enclave::secrets_sealed::Envelope::parse(&tokumai_egress::ask_host(&host, "sealed").await?)?;
+    let wrapped = base64_decode(envelope.kms_key.as_bytes())?;
+    let credentials = tokumai_egress::ask_host(&host, "credentials").await?;
+    let credentials: tokumai_enclave::kms::Credentials = serde_json::from_slice(&credentials).map_err(|e| format!("the host's credentials are unreadable: {e}"))?;
+    // A key for this one request; its public half goes into the attestation, so KMS can
+    // encrypt its answer to an enclave running exactly this image.
+    let (private, public) = tokumai_enclave::kms::request_key()?;
+    let document = attester.attest_for_kms(&public)?;
+    let key = tokumai_enclave::kms::decrypt_to_enclave(&credentials, REGION, &wrapped, &document, &private, tokumai_proto::now_ms()).await?;
+    envelope.open(&key)
+}
+
+/// base64, as the sealed pieces travel.
+fn base64_decode(text: &[u8]) -> Result<Vec<u8>, String> {
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+    B64.decode(String::from_utf8_lossy(text).trim()).map_err(|e| format!("the sealed file is not base64: {e}"))
+}
+
+/// Lay the sealed Nym identity out as files, where its client expects them.
+fn write_identity(dir: &std::path::Path, files: &serde_json::Map<String, serde_json::Value>) -> std::io::Result<()> {
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+    std::fs::create_dir_all(dir)?;
+    for (name, content) in files {
+        // Names come from the sealed file, which only we write — still, no paths.
+        let name = name.rsplit('/').next().unwrap_or_default();
+        if name.is_empty() || name.starts_with('.') {
+            continue;
+        }
+        let Some(bytes) = content.as_str().and_then(|c| B64.decode(c).ok()) else { continue };
+        std::fs::write(dir.join(name), bytes)?;
+    }
+    Ok(())
+}
 
 /// `ip link set lo up`, without a shell or iproute2 in the image.
 fn loopback_up() -> std::io::Result<()> {
@@ -68,15 +114,42 @@ async fn main() {
     });
 
     let attester = NitroAttester::open().expect("the Nitro Secure Module");
+    // What the host keeps for us, sealed: only an enclave running a published image can
+    // have KMS open it. A probe without sealed secrets still runs, on the mock model.
+    let sealed = match unseal(&attester).await {
+        Ok(s) => Some(s),
+        Err(e) => {
+            // Said out loud on the host's side too: a production enclave has no console, and
+            // "it runs on the mock model" is otherwise indistinguishable from a working one.
+            let pcr0 = attester.pcr0().unwrap_or_else(|e| e);
+            eprintln!("tokumai enclave: no sealed secrets ({e}) — the mock model only");
+            let _ = tokumai_egress::announce(&Endpoint::Vsock(HOST_CID, ANNOUNCE_PORT), &format!("{PROBE} unsealed-not: {e} (this image measures PCR0 {pcr0})")).await;
+            None
+        }
+    };
+    if sealed.is_some() {
+        let _ = tokumai_egress::announce(&Endpoint::Vsock(HOST_CID, ANNOUNCE_PORT), &format!("{PROBE} unsealed its secrets")).await;
+    }
+    let (keys, providers, stripe, apple_api, dev_mode) = match &sealed {
+        Some(s) => (
+            Box::new(FixedKeyProvider(s.data_key().expect("the sealed data key"))) as Box<dyn tokumai_enclave::seal::KeyProvider>,
+            Providers::from_secrets(s),
+            tokumai_enclave::stripe::Stripe::from_secrets(s),
+            tokumai_enclave::apple::AppleApi::from_secrets(s),
+            false,
+        ),
+        // Nothing sealed: a random key for the run, the mock model, test credit.
+        None => (Box::new(FixedKeyProvider(rand::random())) as Box<dyn tokumai_enclave::seal::KeyProvider>, Providers::mock(), None, None, true),
+    };
     let enclave = Enclave::start(Platform {
         attester: Box::new(attester),
-        keys: Box::new(FixedKeyProvider(rand::random())),
-        providers: Providers::mock(),
+        keys,
+        providers,
         db: Db::Memory,
         pricing: PricingTable::parse(PRICING_JSON).expect("pricing.json"),
-        dev_mode: true,
-        stripe: None,
-        apple_api: None,
+        dev_mode,
+        stripe,
+        apple_api,
     })
     .expect("start the enclave");
     let enclave: &'static Enclave = Box::leak(Box::new(enclave));
@@ -87,9 +160,15 @@ async fn main() {
         }
     });
 
-    // Its own Nym identity, in the enclave's memory: a new address on every start. (Probe 2:
-    // the identity sealed with the data key, so the address stays.)
+    // Its own Nym identity. Sealed with the secrets, it is written into the enclave's own
+    // (memory-backed) filesystem at every start, so the address stays the same; without
+    // one, the client makes a fresh identity and the address changes with each restart.
     let nym = PathBuf::from("/tmp/nym");
+    if let Some(files) = sealed.as_ref().and_then(|s| s.nym_identity()) {
+        if let Err(e) = write_identity(&nym, files) {
+            eprintln!("tokumai enclave: could not lay out the sealed Nym identity: {e}");
+        }
+    }
     let gateway = std::env::var("TOKUMAI_GATEWAY").ok().filter(|g| !g.trim().is_empty());
     let client = tokumai_server::mix::connect_at_boot(&nym, gateway.as_deref()).await.expect("connect to the mixnet");
     let address = client.nym_address().to_string();

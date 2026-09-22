@@ -11021,6 +11021,7 @@ dependencies = [
 name = "tokumai-egress"
 version = "0.1.0"
 dependencies = [
+ "reqwest 0.12.28",
  "tokio",
  "tokio-vsock",
 ]
@@ -11029,14 +11030,18 @@ dependencies = [
 name = "tokumai-enclave"
 version = "0.1.0"
 dependencies = [
+ "aes 0.8.4",
  "base64 0.22.1",
+ "cbc",
  "chacha20poly1305",
  "ed25519-dalek",
  "hex",
  "hkdf",
+ "hmac",
  "rand 0.8.8",
  "reqwest 0.12.28",
  "ring",
+ "rsa",
  "rusqlite",
  "serde",
  "serde_json",
@@ -11072,6 +11077,7 @@ version = "0.1.0"
 dependencies = [
  "aes-gcm 0.10.3",
  "base64 0.22.1",
+ "chacha20poly1305",
  "hex",
  "libc",
  "nym-sdk",

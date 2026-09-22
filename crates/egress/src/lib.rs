@@ -120,6 +120,80 @@ pub async fn hear(listen: Endpoint) -> io::Result<()> {
     .await
 }
 
+/// What the enclave may ask its host for, on a channel of its own: the instance's
+/// temporary AWS credentials (so it can call KMS itself — they open nothing on their own,
+/// the key's policy demands an attestation as well) and the sealed secrets, which only an
+/// attested enclave can open. Both are answered with one line of JSON.
+pub async fn ask_host(host: &Endpoint, what: &str) -> Result<Vec<u8>, String> {
+    let mut s = connect(host).await.map_err(|e| format!("the host does not answer: {e}"))?;
+    s.write_all(what.as_bytes()).await.map_err(|e| e.to_string())?;
+    s.write_all(b"\n").await.map_err(|e| e.to_string())?;
+    s.flush().await.map_err(|e| e.to_string())?;
+    // The answer comes with its length first (`<bytes>\n`), so a hundred kilobytes of
+    // sealed secrets that end with a reset instead of a clean close is not mistaken for
+    // the whole of them.
+    let mut head = Vec::new();
+    let mut byte = [0u8; 1];
+    while !head.ends_with(b"\n") && head.len() < 24 {
+        match s.read(&mut byte).await {
+            Ok(1) => head.push(byte[0]),
+            _ => break,
+        }
+    }
+    let head = String::from_utf8_lossy(&head).trim().to_string();
+    if head.is_empty() {
+        return Err(format!("the host had no answer for {what:?}"));
+    }
+    let len: usize = head.parse().map_err(|_| format!("the host answered {what:?} with {head:?} where a length was expected"))?;
+    if len == 0 || len > (1 << 22) {
+        return Err(format!("the host answered {what:?} with an impossible length ({len})"));
+    }
+    let mut answer = vec![0u8; len];
+    s.read_exact(&mut answer).await.map_err(|e| format!("the host's answer to {what:?} broke off: {e}"))?;
+    Ok(answer)
+}
+
+/// On the host: answer those two questions, and nothing else. `sealed` is the file with
+/// the secrets as KMS sealed them; the credentials come from the instance's own role.
+pub async fn serve_host<F, Fut>(listen: Endpoint, sealed: std::path::PathBuf, credentials: F) -> io::Result<()>
+where
+    F: Fn() -> Fut + Send + Sync + 'static,
+    Fut: std::future::Future<Output = Result<String, String>> + Send + 'static,
+{
+    let credentials = Arc::new(credentials);
+    let sealed = Arc::new(sealed);
+    accept_loop(&listen, move |mut s| {
+        let (credentials, sealed) = (credentials.clone(), sealed.clone());
+        async move {
+            let mut line = Vec::new();
+            let mut byte = [0u8; 1];
+            while !line.ends_with(b"\n") && line.len() < 64 {
+                match s.read(&mut byte).await {
+                    Ok(1) => line.push(byte[0]),
+                    _ => break,
+                }
+            }
+            let answer = match String::from_utf8_lossy(&line).trim() {
+                "credentials" => credentials().await,
+                "sealed" => std::fs::read(sealed.as_path()).map_err(|e| e.to_string()).and_then(|b| String::from_utf8(b).map_err(|e| e.to_string())),
+                other => Err(format!("the enclave asked for {other:?}, which is not answered here")),
+            };
+            match answer {
+                Ok(text) => {
+                    let text = text.trim();
+                    let _ = s.write_all(format!("{}\n", text.len()).as_bytes()).await;
+                    let _ = s.write_all(text.as_bytes()).await;
+                    let _ = s.flush().await;
+                    println!("host: answered {}", String::from_utf8_lossy(&line).trim());
+                }
+                Err(e) => println!("host: could not answer {}: {e}", String::from_utf8_lossy(&line).trim()),
+            }
+            let _ = s.shutdown().await;
+        }
+    })
+    .await
+}
+
 /// Which destinations the host connects to: host names by exact name or by suffix
 /// (`.nymtech.net` covers every subdomain), each with the ports allowed.
 #[derive(Debug, Clone, Default)]
@@ -288,4 +362,24 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         assert!(seen.lock().unwrap().iter().any(|l| l == "example.com:443 false"));
     }
+
+    /// What the enclave asks its host for comes back whole, however large — the sealed
+    /// secrets are a hundred kilobytes, and an answer cut short would look like secrets
+    /// that do not open.
+    #[tokio::test]
+    async fn the_host_answers_in_full() {
+        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let at = Endpoint::Tcp(format!("127.0.0.1:{port}"));
+        let sealed = std::env::temp_dir().join(format!("tokumai-sealed-{}.json", std::process::id()));
+        let long = format!("{{\"ct\":\"{}\"}}", "x".repeat(200_000));
+        std::fs::write(&sealed, &long).unwrap();
+        tokio::spawn(serve_host(at.clone(), sealed.clone(), || async { Ok("{\"AccessKeyId\":\"AK\"}".to_string()) }));
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        assert_eq!(ask_host(&at, "sealed").await.unwrap(), long.as_bytes());
+        assert_eq!(ask_host(&at, "credentials").await.unwrap(), b"{\"AccessKeyId\":\"AK\"}");
+        assert!(ask_host(&at, "the data key").await.is_err());
+        let _ = std::fs::remove_file(&sealed);
+    }
+
 }

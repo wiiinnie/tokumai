@@ -66,11 +66,15 @@ UD
     remote 'test -f /var/tmp/tokumai-host-ready' || { echo "the host is not ready yet (user data still running)"; exit 1; }
     # Stop first: a running proxy binary cannot be overwritten ("text file busy").
     remote "sudo nitro-cli terminate-enclave --all >/dev/null 2>&1 || true; pkill -f '[t]okumai-egress-host' || true; sleep 1" || true
-    scp -i "$KEY" -q dev-data/eif/tokumai-$TAG.eif dev-data/linux-release/tokumai-egress-host deploy/egress.allow ec2-user@"$(public_ip)":/home/ec2-user/
+    # The sealed secrets travel with it: the host cannot read them, and without them the
+    # enclave would run on the mock model (deploy/aws/kms.sh secrets writes the file).
+    SEALED=dev-data/sealed/sealed.json
+    [ -f "$SEALED" ] || { echo "no $SEALED — 'deploy/aws/kms.sh secrets <secrets.json>' first"; exit 1; }
+    scp -i "$KEY" -q dev-data/eif/tokumai-$TAG.eif dev-data/linux-release/tokumai-egress-host deploy/egress.allow "$SEALED" ec2-user@"$(public_ip)":/home/ec2-user/
     DEBUG=""; [ "$1" = debug ] && DEBUG="--debug-mode"
     remote "set -e
       chmod +x tokumai-egress-host
-      nohup ./tokumai-egress-host vsock:4294967295:8080 egress.allow vsock:4294967295:8081 > egress.log 2>&1 &
+      nohup ./tokumai-egress-host vsock:4294967295:8080 egress.allow vsock:4294967295:8081 vsock:4294967295:8082 sealed.json > egress.log 2>&1 &
       sleep 1
       nitro-cli run-enclave --eif-path tokumai-$TAG.eif --cpu-count $ENCLAVE_CPUS --memory $ENCLAVE_MIB $DEBUG"
     # Its address, once it is on the mixnet, and the image it runs: dev-data/probe.json is
@@ -89,6 +93,7 @@ import json, sys, pathlib
 pathlib.Path("dev-data/probe.json").write_text(json.dumps({"address": sys.argv[1], "pcr0": sys.argv[2]}, indent=2) + "\n")
 PY
     echo "on the mixnet at $ADDRESS"
+    remote "grep -E 'unsealed' egress.log | tail -1" || true
     echo "dev-data/probe.json written — the app and the dev tools now talk to this enclave"
     ;;
   status)

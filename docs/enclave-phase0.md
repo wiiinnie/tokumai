@@ -74,6 +74,45 @@ Noted on the way:
 - The Nym client panics in `packet_router` when a process exits — on the app's side, at
   the very end. To be looked at before a release.
 
+## The second probe, 2026-09-22: the secrets
+
+The enclave now runs on real keys, released by AWS KMS to this image and nothing else.
+
+- **The key** (`deploy/aws/kms.sh`): its policy allows `kms:Decrypt` only for a request
+  carrying a Nitro attestation whose PCR0 is the published image, and only for the
+  instance role. The operator keeps managing the key and `kms:Encrypt` (to seal new
+  secrets), not opening them. Honest about the limit: whoever can change the policy could
+  grant themselves decryption later — the way out is signed images (PCR8) instead of a
+  list of PCR0s, still on the list for before launch.
+- **What is sealed** (`kms.sh secrets`): the data key, the OpenAI and Gemini keys, the
+  Stripe keys, and the enclave's Nym identity — about 78 KB, so they travel under a fresh
+  ChaCha20-Poly1305 key of their own and only that key goes to KMS (which encrypts at most
+  4 KiB). The host keeps the sealed file and cannot read a byte of it.
+- **How it gets in**: the host answers two questions on a vsock channel of its own
+  (`ask_host`): the sealed file, and the instance's temporary credentials — which open
+  nothing on their own. The enclave asks KMS itself, over the egress proxy, with a signed
+  request it builds by hand (`enclave::kms`: no AWS SDK, which would bring its own network
+  stack). KMS answers not with the key but with a copy encrypted to a public key inside
+  the attestation, whose private half exists only in that enclave, for that one request.
+- **Its address survives.** The sealed Nym identity is laid out at every start, so the
+  enclave comes back as `nbnWr8Cu…` after a restart instead of as a stranger.
+- Verified from the Mac over the mixnet: attested `AwsNitro image 5ef2c8c4…`, real
+  provider keys, Stripe plans on offer (`byCard: true`), and `dev.credit` refused — a
+  sealed enclave hands out no test credit.
+
+Three things had to be fixed, none of them visible from outside, which is why the enclave
+now says over vsock whether it unsealed and what it measures:
+
+1. the key had been sealed as its hex **text**, so the enclave got 64 bytes where it
+   wanted 32 (`kms.sh secrets` now does the whole thing in one step);
+2. the host's answer, a hundred kilobytes, could end in a reset that read as a clean close
+   — the answer now carries its length;
+3. KMS replies in BER with lengths left open, which a DER reader refuses; the envelope is
+   read by hand now (`cms_parts`, tested against both forms and against content in pieces).
+
+Still in memory: the ledger. Giving it a home on the host, sealed under the data key, is
+the next step.
+
 ## Next
 
 1. **Docker** on this Mac: the enclave image is built in a Linux container, reproducibly
@@ -86,9 +125,9 @@ Noted on the way:
 4. ~~**The probe**~~ — done, see above. (An `m6i.xlarge` with enclaves enabled; the image started; the dev client
    and the app attest it over the mixnet; 24 h under light load — Nym stable through the
    proxy? latency?)
-5. **KMS**: a key whose policy releases it only to our PCR0; the data key, API keys and Nym
-   keys sealed with it; a restart and an update of the image (a new PCR0 means a key policy
-   update — the upgrade path).
+5. ~~**KMS**~~ — done, see above.
+6. **The ledger**: sealed storage on the host under the data key, so accounts and balances
+   survive a restart.
 
 ## Account and cost
 

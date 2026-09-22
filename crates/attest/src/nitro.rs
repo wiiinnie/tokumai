@@ -253,6 +253,32 @@ impl Drop for NitroAttester {
 }
 
 #[cfg(all(target_os = "linux", feature = "nsm"))]
+impl NitroAttester {
+    /// A document over `public_key` — for AWS KMS, which encrypts its answer to that key
+    /// and refuses unless the document shows an image its key policy allows. Not the
+    /// app's binding: KMS wants the key in the document's own `public_key` field.
+    /// What the module says this image measures — the same PCR0 a key policy names. Only
+    /// for saying so out loud when something is refused; nothing trusts it.
+    pub fn pcr0(&self) -> Result<String, String> {
+        use aws_nitro_enclaves_nsm_api::api::{Request, Response};
+        match aws_nitro_enclaves_nsm_api::driver::nsm_process_request(self.fd, Request::DescribePCR { index: 0 }) {
+            Response::DescribePCR { data, .. } => Ok(hex::encode(data)),
+            other => Err(format!("the Nitro Secure Module would not say: {other:?}")),
+        }
+    }
+
+    pub fn attest_for_kms(&self, public_key: &[u8]) -> Result<Vec<u8>, String> {
+        use aws_nitro_enclaves_nsm_api::api::{Request, Response};
+        let request = Request::Attestation { user_data: None, nonce: None, public_key: Some(serde_bytes::ByteBuf::from(public_key.to_vec())) };
+        match aws_nitro_enclaves_nsm_api::driver::nsm_process_request(self.fd, request) {
+            Response::Attestation { document } => Ok(document),
+            Response::Error(e) => Err(format!("the Nitro Secure Module refused: {e:?}")),
+            _ => Err("unexpected answer from the Nitro Secure Module".into()),
+        }
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "nsm"))]
 impl crate::Attester for NitroAttester {
     fn platform(&self) -> crate::Platform {
         crate::Platform::AwsNitro
