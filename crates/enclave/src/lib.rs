@@ -26,6 +26,7 @@ pub mod provider;
 pub mod seal;
 pub mod secrets;
 pub mod service;
+pub mod stripe;
 pub mod wire;
 
 pub use service::{Enclave, Platform};
