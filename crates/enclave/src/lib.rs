@@ -20,6 +20,7 @@ pub mod http;
 pub mod keys;
 pub mod ledger;
 pub mod openai;
+pub mod plans;
 pub mod policy;
 pub mod provider;
 pub mod seal;

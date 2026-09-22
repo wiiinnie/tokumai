@@ -68,7 +68,9 @@ impl Ledger {
              CREATE INDEX IF NOT EXISTS lots_acct ON lots (acct, expires_ms);
              CREATE TABLE IF NOT EXISTS holds (id INTEGER PRIMARY KEY AUTOINCREMENT, acct TEXT NOT NULL,
                  parts TEXT NOT NULL);
-             CREATE TABLE IF NOT EXISTS nonces (nonce TEXT PRIMARY KEY, ts_ms INTEGER NOT NULL);",
+             CREATE TABLE IF NOT EXISTS nonces (nonce TEXT PRIMARY KEY, ts_ms INTEGER NOT NULL);
+             CREATE TABLE IF NOT EXISTS plans (acct TEXT PRIMARY KEY, json TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS rails (rail TEXT PRIMARY KEY, acct TEXT NOT NULL);",
         )
         .map_err(|e| e.to_string())?;
         Ok(Ledger { conn, data_key })
@@ -80,6 +82,119 @@ impl Ledger {
         h.update(self.data_key);
         h.update(account_id.as_bytes());
         hex::encode(h.finalize())
+    }
+
+    /// The name an account is stored under. The plan logic works in these names, so that
+    /// even code walking every plan (the renewal check) never holds an account id.
+    pub(crate) fn acct_key(&self, account_id: &str) -> String {
+        self.key(account_id)
+    }
+
+    /// A payment reference (Stripe subscription, Apple transaction) as stored in the lookup
+    /// table: a keyed hash, so the table alone connects no payment to anything (audit
+    /// 2026-09-21, M13: the first server kept Apple's raw number, and kept it for good).
+    fn rail_key(&self, rail: &str) -> String {
+        let mut h = Sha256::new();
+        h.update(b"tokumai/ledger/rail/v1");
+        h.update(self.data_key);
+        h.update(rail.as_bytes());
+        hex::encode(h.finalize())
+    }
+
+    // ---- plans (see `plans`) ------------------------------------------------------
+
+    pub(crate) fn plan_get(&self, key: &str) -> Result<Option<crate::plans::Plan>, String> {
+        let json: Option<String> = self
+            .conn
+            .query_row("SELECT json FROM plans WHERE acct = ?1", params![key], |r| r.get(0))
+            .optional()
+            .map_err(|e| e.to_string())?;
+        json.map(|j| serde_json::from_str(&j).map_err(|e| e.to_string())).transpose()
+    }
+
+    pub(crate) fn plan_put(&self, key: &str, plan: &crate::plans::Plan) -> Result<(), String> {
+        let json = serde_json::to_string(plan).map_err(|e| e.to_string())?;
+        self.conn
+            .execute("INSERT INTO plans (acct, json) VALUES (?1, ?2) ON CONFLICT(acct) DO UPDATE SET json = excluded.json", params![key, json])
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    pub(crate) fn plan_delete(&self, key: &str) -> Result<(), String> {
+        self.conn.execute("DELETE FROM plans WHERE acct = ?1", params![key]).map(|_| ()).map_err(|e| e.to_string())
+    }
+
+    pub(crate) fn plan_keys(&self) -> Result<Vec<String>, String> {
+        let mut st = self.conn.prepare("SELECT acct FROM plans").map_err(|e| e.to_string())?;
+        let rows = st.query_map([], |r| r.get(0)).map_err(|e| e.to_string())?;
+        Ok(rows.flatten().collect())
+    }
+
+    /// Which account (stored name) a payment reference belongs to. Kept for every reference
+    /// ever attached, not only the current one: a replaced subscription must not be carried
+    /// to a fresh account for another month (audit H3).
+    pub(crate) fn rail_owner(&self, rail: &str) -> Result<Option<String>, String> {
+        self.conn
+            .query_row("SELECT acct FROM rails WHERE rail = ?1", params![self.rail_key(rail)], |r| r.get(0))
+            .optional()
+            .map_err(|e| e.to_string())
+    }
+
+    pub(crate) fn rail_bind(&self, rail: &str, key: &str) -> Result<(), String> {
+        self.conn
+            .execute("INSERT INTO rails (rail, acct) VALUES (?1, ?2) ON CONFLICT(rail) DO UPDATE SET acct = excluded.acct", params![self.rail_key(rail), key])
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn debug_dump_rails(&self) -> Vec<String> {
+        let mut st = self.conn.prepare("SELECT rail || ' ' || acct FROM rails").unwrap();
+        let rows = st.query_map([], |r| r.get(0)).unwrap();
+        rows.flatten().collect()
+    }
+
+    /// (period start in seconds, ends at, granted, left) of an account's allowance.
+    pub(crate) fn allowance_of(&self, key: &str) -> Result<Option<(u32, u64, u64, u64)>, String> {
+        self.conn
+            .query_row("SELECT period, ends_ms, granted, left FROM allowance WHERE acct = ?1", params![key], |r| {
+                Ok((r.get::<_, i64>(0)? as u32, r.get::<_, i64>(1)? as u64, r.get::<_, i64>(2)? as u64, r.get::<_, i64>(3)? as u64))
+            })
+            .optional()
+            .map_err(|e| e.to_string())
+    }
+
+    pub(crate) fn allowance_set(&self, key: &str, start_ms: u64, ends_ms: u64, toku: u64) -> Result<(), String> {
+        self.conn
+            .execute(
+                "INSERT INTO allowance (acct, period, ends_ms, granted, left) VALUES (?1, ?2, ?3, ?4, ?4)
+                 ON CONFLICT(acct) DO UPDATE SET period = excluded.period, ends_ms = excluded.ends_ms,
+                     granted = excluded.granted, left = excluded.left",
+                params![key, (start_ms / 1000) as i64, ends_ms as i64, toku as i64],
+            )
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    pub(crate) fn allowance_add(&self, key: &str, extra: u64) -> Result<(), String> {
+        self.conn
+            .execute("UPDATE allowance SET granted = granted + ?2, left = left + ?2 WHERE acct = ?1", params![key, extra as i64])
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    pub(crate) fn allowance_take(&self, key: &str, amount: u64) -> Result<(), String> {
+        self.conn
+            .execute("UPDATE allowance SET left = MAX(0, left - ?2) WHERE acct = ?1", params![key, amount as i64])
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    pub(crate) fn allowance_lapse(&self, key: &str) -> Result<(), String> {
+        self.conn
+            .execute("UPDATE allowance SET granted = 0, left = 0 WHERE acct = ?1", params![key])
+            .map(|_| ())
+            .map_err(|e| e.to_string())
     }
 
     /// A prepaid purchase: a new lot, valid three years from `now_ms`.
@@ -96,15 +211,7 @@ impl Ledger {
 
     /// A plan period begins: its allowance is SET, never added to.
     pub fn grant_allowance(&self, account_id: &str, start_ms: u64, ends_ms: u64, toku: u64) -> Result<(), String> {
-        self.conn
-            .execute(
-                "INSERT INTO allowance (acct, period, ends_ms, granted, left) VALUES (?1, ?2, ?3, ?4, ?4)
-                 ON CONFLICT(acct) DO UPDATE SET period = excluded.period, ends_ms = excluded.ends_ms,
-                     granted = excluded.granted, left = excluded.left",
-                params![self.key(account_id), (start_ms / 1000) as i64, ends_ms as i64, toku as i64],
-            )
-            .map(|_| ())
-            .map_err(|e| e.to_string())
+        self.allowance_set(&self.key(account_id), start_ms, ends_ms, toku)
     }
 
     pub fn balance(&self, account_id: &str, now_ms: u64) -> Result<Balance, String> {
