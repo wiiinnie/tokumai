@@ -6,7 +6,9 @@
 //!
 //! A debug build talks to the simulated enclave on this machine (`tokumai-enclave-dev
 //! --mix`): its address and simulator key are read from the repo's `dev-data/` (or
-//! `TOKUMAI_DEV_DATA`); `TOKUMAI_ENCLAVE` overrides the address.
+//! `TOKUMAI_DEV_DATA`); `TOKUMAI_ENCLAVE` overrides the address. With `TOKUMAI_PCR0` set
+//! it talks to a REAL Nitro enclave instead (the phase-0 probe): the proof is then checked
+//! against the AWS root and that one image, exactly as a release build would.
 
 use std::path::PathBuf;
 use tokumai_attest::Policy;
@@ -32,6 +34,10 @@ pub fn enclave_address() -> Result<String, String> {
 }
 
 pub fn policy() -> Result<Policy, String> {
+    // A real enclave, named by its image: no simulator accepted.
+    if let Some(pcr0) = std::env::var("TOKUMAI_PCR0").ok().filter(|p| !p.trim().is_empty()) {
+        return Ok(Policy { measurements: vec![pcr0.trim().to_lowercase()], simulated_root: None, simulated_any_measurement: false });
+    }
     if cfg!(debug_assertions) {
         let root: [u8; 32] = std::fs::read(dev_data().join("sim-root.key"))
             .ok()

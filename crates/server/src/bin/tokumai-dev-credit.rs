@@ -4,6 +4,9 @@
 //! other.
 //!
 //!     cargo run -p tokumai-server --bin tokumai-dev-credit -- [toku]    (default 100000)
+//!
+//! Against a real probe enclave over the mixnet: TOKUMAI_ENCLAVE=<its Nym address>
+//! TOKUMAI_PCR0=<its image>.
 
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
@@ -47,15 +50,30 @@ async fn roundtrip(
 async fn main() {
     let toku: u64 = std::env::args().nth(1).and_then(|a| a.parse().ok()).unwrap_or(100_000);
     let account = tokumai_core::account::from_mnemonic(&app_phrase().unwrap_or_else(|e| panic!("{e}"))).expect("phrase");
-    let root: [u8; 32] = std::fs::read("dev-data/sim-root.key").expect("start tokumai-enclave-dev first").try_into().expect("32 bytes");
-    let policy = Policy { measurements: vec![], simulated_root: Some(sim::root_public(&root)), simulated_any_measurement: true };
-    let sock = TcpStream::connect("127.0.0.1:7707").await.expect("connect to the simulated enclave");
-    let (r, mut w) = sock.into_split();
-    let mut lines = BufReader::new(r).lines();
-    let nonce: [u8; 32] = rand::random();
-    let reply = roundtrip(&mut w, &mut lines, attest_request(&nonce)).await;
-    let session = Session::from_attestation(&reply, &nonce, &policy, None).expect("attestation");
-    let (p, bytes) = session.request(&account, "dev.credit", &json!({ "toku": toku }), tokumai_proto::now_ms());
-    let answer = p.open(&roundtrip(&mut w, &mut lines, bytes).await).expect("answer");
+    let policy = match std::env::var("TOKUMAI_PCR0").ok().filter(|p| !p.trim().is_empty()) {
+        Some(pcr0) => Policy { measurements: vec![pcr0.trim().to_lowercase()], simulated_root: None, simulated_any_measurement: false },
+        None => {
+            let root: [u8; 32] = std::fs::read("dev-data/sim-root.key").expect("start tokumai-enclave-dev first").try_into().expect("32 bytes");
+            Policy { measurements: vec![], simulated_root: Some(sim::root_public(&root)), simulated_any_measurement: true }
+        }
+    };
+    let answer = match std::env::var("TOKUMAI_ENCLAVE").ok().filter(|a| !a.trim().is_empty()) {
+        // A real enclave, over the mixnet (rule A1 picks the entry gateway).
+        Some(address) => {
+            let connector = tokumai_client::app::MixConnector::new(&address, tokumai_client::gateways::EntryChoice::Random);
+            let mut conn = tokumai_client::app::Connection::new(Box::new(connector), policy);
+            conn.call(&account, "dev.credit", &json!({ "toku": toku })).await.expect("credit")
+        }
+        None => {
+            let sock = TcpStream::connect("127.0.0.1:7707").await.expect("connect to the simulated enclave");
+            let (r, mut w) = sock.into_split();
+            let mut lines = BufReader::new(r).lines();
+            let nonce: [u8; 32] = rand::random();
+            let reply = roundtrip(&mut w, &mut lines, attest_request(&nonce)).await;
+            let session = Session::from_attestation(&reply, &nonce, &policy, None).expect("attestation");
+            let (p, bytes) = session.request(&account, "dev.credit", &json!({ "toku": toku }), tokumai_proto::now_ms());
+            p.open(&roundtrip(&mut w, &mut lines, bytes).await).expect("answer")
+        }
+    };
     println!("account {}…: {}", &account.account_id[..16], answer["balance"]["total"]);
 }
