@@ -82,7 +82,8 @@ async fn main() {
     let image_size = args.get(2).cloned();
     // A real Nitro enclave: TOKUMAI_PCR0 (its published image) and TOKUMAI_ENCLAVE (its Nym
     // address, as it announced it). The policy then pins the image and accepts no simulator.
-    let nitro_pcr0 = std::env::var("TOKUMAI_PCR0").ok().filter(|p| !p.trim().is_empty());
+    let (probe_address, probe_pcr0) = tokumai_server::probe_target();
+    let nitro_pcr0 = std::env::var("TOKUMAI_PCR0").ok().filter(|p| !p.trim().is_empty()).or(probe_pcr0);
     let policy = match &nitro_pcr0 {
         Some(pcr0) => Policy { measurements: vec![pcr0.trim().to_lowercase()], simulated_root: None, simulated_any_measurement: false },
         None => {
@@ -100,8 +101,10 @@ async fn main() {
     let started = std::time::Instant::now();
     let connector: Box<dyn Connector> = if mix {
         let address = std::env::var("TOKUMAI_ENCLAVE")
-            .or_else(|_| std::fs::read_to_string("dev-data/nym-address"))
-            .expect("start tokumai-enclave-dev --mix first, or set TOKUMAI_ENCLAVE");
+            .ok()
+            .or(probe_address)
+            .or_else(|| std::fs::read_to_string("dev-data/nym-address").ok())
+            .expect("start tokumai-enclave-dev --mix, or a probe with deploy/aws/probe.sh");
         // Rule A1: a random entry gateway, never one of ours, never the enclave's own.
         Box::new(Logged(std::sync::Arc::new(MixConnector::new(&address, EntryChoice::Random))))
     } else {

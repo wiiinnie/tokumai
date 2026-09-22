@@ -224,6 +224,16 @@ impl Enclave {
             "balance" => self.balance(account, now),
             "chat" => self.chat(account, body, now).await,
             "models" => json!({ "kind": "models", "models": crate::catalog::models(&self.pricing, &self.providers, self.dev_mode), "pricingVersion": self.pricing.version() }),
+            // Everything an app wants at start, in one round trip: over the mixnet each one
+            // costs about three seconds, and three of them in a row are what the person
+            // waits through before the first screen (measured 2026-09-22).
+            "start" => json!({
+                "kind": "start",
+                "balance": self.balance(account, now),
+                "models": crate::catalog::models(&self.pricing, &self.providers, self.dev_mode),
+                "pricingVersion": self.pricing.version(),
+                "plans": self.plans_op(account, now),
+            }),
             "plans" => self.plans_op(account, now),
             "plan.create" => self.plan_create(account, body, now).await,
             "plan.status" => self.plan_status(account, body, now).await,

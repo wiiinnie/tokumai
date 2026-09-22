@@ -104,9 +104,12 @@ impl Connection {
     /// Connect and attest now (the app does this at start, so the first question is quick).
     pub async fn ready(&mut self) -> Result<(), String> {
         if self.transport.is_none() {
+            let t0 = Instant::now();
             self.transport = Some(self.connector.connect().await?);
+            log::info!("[enclave] connected in {} ms", t0.elapsed().as_millis());
         }
         if self.session.is_none() {
+            let t0 = Instant::now();
             let nonce: [u8; 32] = rand::random();
             let t = self.transport.as_mut().ok_or("no transport")?;
             let reply = match t.roundtrip(&attest_request(&nonce)).await {
@@ -118,6 +121,7 @@ impl Connection {
             };
             let reached = t.reached_at();
             self.session = Some(Session::from_attestation(&reply, &nonce, &self.policy, reached.as_deref())?);
+            log::info!("[enclave] attested in {} ms", t0.elapsed().as_millis());
         }
         Ok(())
     }
@@ -128,6 +132,7 @@ impl Connection {
     }
 
     async fn call_inner(&mut self, account: &Account, op: &str, body: &Value) -> Result<Value, String> {
+        let started = Instant::now();
         for _ in 0..2 {
             self.ready().await?;
             let session = self.session.as_ref().ok_or("not attested")?;
@@ -138,7 +143,10 @@ impl Connection {
                     self.session = None;
                     continue;
                 }
-                answer => return answer,
+                answer => {
+                    log::info!("[enclave] {op} took {} ms", started.elapsed().as_millis());
+                    return answer;
+                }
             }
         }
         Err("the enclave keeps changing — try again in a moment".into())

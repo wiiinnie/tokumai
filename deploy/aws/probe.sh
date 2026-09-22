@@ -8,6 +8,7 @@
 #     deploy/aws/probe.sh debug     # the same, but the enclave in debug mode: console visible,
 #                                   # PCRs all zeros — the app refuses it, by design
 #     deploy/aws/probe.sh status    # the instance, the enclave, the proxy's recent lines
+#     deploy/aws/probe.sh forget    # back to the simulated enclave on this machine
 #     deploy/aws/probe.sh ssh
 #     deploy/aws/probe.sh down      # terminate and delete everything
 #
@@ -63,16 +64,32 @@ UD
     ;;
   deploy|debug)
     remote 'test -f /var/tmp/tokumai-host-ready' || { echo "the host is not ready yet (user data still running)"; exit 1; }
+    # Stop first: a running proxy binary cannot be overwritten ("text file busy").
+    remote "sudo nitro-cli terminate-enclave --all >/dev/null 2>&1 || true; pkill -f '[t]okumai-egress-host' || true; sleep 1" || true
     scp -i "$KEY" -q dev-data/eif/tokumai-$TAG.eif dev-data/linux-release/tokumai-egress-host deploy/egress.allow ec2-user@"$(public_ip)":/home/ec2-user/
     DEBUG=""; [ "$1" = debug ] && DEBUG="--debug-mode"
     remote "set -e
-      sudo nitro-cli terminate-enclave --all >/dev/null 2>&1 || true
-      pkill -f '[t]okumai-egress-host' || true
       chmod +x tokumai-egress-host
       nohup ./tokumai-egress-host vsock:4294967295:8080 egress.allow vsock:4294967295:8081 > egress.log 2>&1 &
       sleep 1
       nitro-cli run-enclave --eif-path tokumai-$TAG.eif --cpu-count $ENCLAVE_CPUS --memory $ENCLAVE_MIB $DEBUG"
-    echo "started. The enclave announces its Nym address in the proxy log: deploy/aws/probe.sh status"
+    # Its address, once it is on the mixnet, and the image it runs: dev-data/probe.json is
+    # what the app and the dev tools read, so nobody has to remember two environment
+    # variables (and talk to the wrong enclave when they forget one).
+    echo "waiting for the enclave to come onto the mixnet…"
+    for _ in $(seq 1 40); do
+      ADDRESS=$(remote "grep -o 'nym-address .*' egress.log | tail -1 | cut -d' ' -f2" 2>/dev/null | tr -d '\r')
+      [ -n "$ADDRESS" ] && break
+      sleep 5
+    done
+    if [ -z "$ADDRESS" ]; then echo "it has not announced itself yet — 'status' shows the proxy log"; exit 1; fi
+    PCR0=$(python3 -c "import json,sys; print(json.load(open('dev-data/eif/tokumai-$TAG.pcrs.json'))['Measurements']['PCR0'])")
+    python3 - "$ADDRESS" "$PCR0" <<'PY'
+import json, sys, pathlib
+pathlib.Path("dev-data/probe.json").write_text(json.dumps({"address": sys.argv[1], "pcr0": sys.argv[2]}, indent=2) + "\n")
+PY
+    echo "on the mixnet at $ADDRESS"
+    echo "dev-data/probe.json written — the app and the dev tools now talk to this enclave"
     ;;
   status)
     ID=$(instance_id); [ -z "$ID" ] && { echo "no probe instance"; exit 0; }
@@ -80,12 +97,16 @@ UD
     remote 'test -f /var/tmp/tokumai-host-ready && echo "host ready" || echo "host still preparing"; nitro-cli describe-enclaves 2>/dev/null | grep -E "EnclaveID|State|Flags" || true; tail -n 20 egress.log 2>/dev/null || true'
     ;;
   ssh) exec ssh -i "$KEY" ec2-user@"$(public_ip)" ;;
+  forget)
+    rm -f dev-data/probe.json
+    echo "dev-data/probe.json removed — the app talks to the simulated enclave again"
+    ;;
   down)
     ID=$(instance_id)
     if [ -n "$ID" ]; then aws ec2 terminate-instances --instance-ids "$ID" >/dev/null; aws ec2 wait instance-terminated --instance-ids "$ID"; fi
     SG=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=$NAME" --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null || true)
     [ -n "$SG" ] && [ "$SG" != "None" ] && aws ec2 delete-security-group --group-id "$SG" || true
-    aws ec2 delete-key-pair --key-name $NAME >/dev/null 2>&1 || true; rm -f "$KEY"
+    aws ec2 delete-key-pair --key-name $NAME >/dev/null 2>&1 || true; rm -f "$KEY" dev-data/probe.json
     echo "everything of the probe is gone"
     ;;
   *) sed -n 2,16p "$0"; exit 2 ;;

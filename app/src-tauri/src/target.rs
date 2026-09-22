@@ -6,9 +6,12 @@
 //!
 //! A debug build talks to the simulated enclave on this machine (`tokumai-enclave-dev
 //! --mix`): its address and simulator key are read from the repo's `dev-data/` (or
-//! `TOKUMAI_DEV_DATA`); `TOKUMAI_ENCLAVE` overrides the address. With `TOKUMAI_PCR0` set
-//! it talks to a REAL Nitro enclave instead (the phase-0 probe): the proof is then checked
-//! against the AWS root and that one image, exactly as a release build would.
+//! `TOKUMAI_DEV_DATA`).
+//!
+//! If `dev-data/probe.json` exists (written by `deploy/aws/probe.sh deploy`), it talks to
+//! that REAL Nitro enclave instead: the proof is then checked against the AWS root and the
+//! image named there, exactly as a release build would. `TOKUMAI_ENCLAVE` and
+//! `TOKUMAI_PCR0` override both.
 
 use std::path::PathBuf;
 use tokumai_attest::Policy;
@@ -21,14 +24,26 @@ fn dev_data() -> PathBuf {
     std::env::var_os("TOKUMAI_DEV_DATA").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../dev-data")))
 }
 
+/// What `deploy/aws/probe.sh` writes about a running probe: {"address": …, "pcr0": …}.
+fn probe() -> Option<(String, String)> {
+    let raw = std::fs::read_to_string(dev_data().join("probe.json")).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let address = v["address"].as_str()?.trim().to_string();
+    let pcr0 = v["pcr0"].as_str()?.trim().to_lowercase();
+    (!address.is_empty() && pcr0.len() == 96).then_some((address, pcr0))
+}
+
 pub fn enclave_address() -> Result<String, String> {
     if cfg!(debug_assertions) {
         if let Ok(a) = std::env::var("TOKUMAI_ENCLAVE") {
             return Ok(a.trim().to_string());
         }
+        if let Some((address, _)) = probe() {
+            return Ok(address);
+        }
         return std::fs::read_to_string(dev_data().join("nym-address"))
             .map(|a| a.trim().to_string())
-            .map_err(|_| "no simulated enclave on the mixnet — start `tokumai-enclave-dev --mix` first".to_string());
+            .map_err(|_| "no enclave to talk to — start `tokumai-enclave-dev --mix`, or a probe with `deploy/aws/probe.sh`".to_string());
     }
     RELEASE_ENCLAVE.map(str::to_string).ok_or_else(|| "no tokumai enclave has been published for this version yet".into())
 }
@@ -39,6 +54,9 @@ pub fn policy() -> Result<Policy, String> {
         return Ok(Policy { measurements: vec![pcr0.trim().to_lowercase()], simulated_root: None, simulated_any_measurement: false });
     }
     if cfg!(debug_assertions) {
+        if let Some((_, pcr0)) = probe() {
+            return Ok(Policy { measurements: vec![pcr0], simulated_root: None, simulated_any_measurement: false });
+        }
         let root: [u8; 32] = std::fs::read(dev_data().join("sim-root.key"))
             .ok()
             .and_then(|b| b.try_into().ok())

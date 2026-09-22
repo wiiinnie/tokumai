@@ -8,3 +8,15 @@
 //! development stand-ins for the enclave and the app are the binaries here.
 
 pub mod mix;
+
+/// A running phase-0 probe, as `deploy/aws/probe.sh deploy` recorded it in
+/// `dev-data/probe.json`: (its Nym address, its PCR0). The development tools then talk to
+/// it without anyone having to remember two environment variables — and, more to the
+/// point, without talking to the wrong enclave when one of them is forgotten.
+pub fn probe_target() -> (Option<String>, Option<String>) {
+    let Ok(raw) = std::fs::read_to_string("dev-data/probe.json") else { return (None, None) };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else { return (None, None) };
+    let address = v["address"].as_str().map(|a| a.trim().to_string()).filter(|a| !a.is_empty());
+    let pcr0 = v["pcr0"].as_str().map(|p| p.trim().to_lowercase()).filter(|p| p.len() == 96);
+    (address, pcr0)
+}

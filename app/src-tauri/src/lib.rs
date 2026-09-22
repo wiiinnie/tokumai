@@ -256,26 +256,25 @@ async fn state(app: AppHandle) -> Result<Value, String> {
         }
         return Ok(out);
     }
-    match call(&app, "balance", json!({})).await {
-        Ok(b) => {
+    // One round trip for balance, catalogue and plans: over the mixnet each costs about
+    // three seconds, and the app used to make three of them before its first screen.
+    match call(&app, "start", json!({})).await {
+        Ok(r) => {
+            let b = &r["balance"];
             let bal = &b["balance"];
             out["balance"] = bal["total"].clone();
             out["allowance"] = json!({ "left": bal["allowance"], "endsMs": bal["allowance_ends_ms"] });
             let prepaid: u64 = bal["prepaid"].as_array().map(|l| l.iter().filter_map(|x| x[0].as_u64()).sum()).unwrap_or(0);
             out["prepaid"] = json!(prepaid);
             out["plan"] = ui_plan(&b["plan"]);
+            if r["models"].as_array().is_some_and(|m| !m.is_empty()) {
+                *st.models.lock().await = Some(r["models"].clone());
+            }
+            if r["plans"].is_object() {
+                *st.ladder.lock().await = Some(r["plans"].clone());
+            }
         }
         Err(e) => out["error"] = json!(e),
-    }
-    if st.models.lock().await.is_none() {
-        if let Ok(m) = call(&app, "models", json!({})).await {
-            *st.models.lock().await = Some(m["models"].clone());
-        }
-    }
-    if st.ladder.lock().await.is_none() {
-        if let Ok(l) = call(&app, "plans", json!({})).await {
-            *st.ladder.lock().await = Some(l);
-        }
     }
     out["models"] = st.models.lock().await.clone().unwrap_or(json!([]));
     let ladder = st.ladder.lock().await.clone().unwrap_or(Value::Null);

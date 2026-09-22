@@ -50,14 +50,15 @@ async fn roundtrip(
 async fn main() {
     let toku: u64 = std::env::args().nth(1).and_then(|a| a.parse().ok()).unwrap_or(100_000);
     let account = tokumai_core::account::from_mnemonic(&app_phrase().unwrap_or_else(|e| panic!("{e}"))).expect("phrase");
-    let policy = match std::env::var("TOKUMAI_PCR0").ok().filter(|p| !p.trim().is_empty()) {
+    let (probe_address, probe_pcr0) = tokumai_server::probe_target();
+    let policy = match std::env::var("TOKUMAI_PCR0").ok().filter(|p| !p.trim().is_empty()).or(probe_pcr0) {
         Some(pcr0) => Policy { measurements: vec![pcr0.trim().to_lowercase()], simulated_root: None, simulated_any_measurement: false },
         None => {
             let root: [u8; 32] = std::fs::read("dev-data/sim-root.key").expect("start tokumai-enclave-dev first").try_into().expect("32 bytes");
             Policy { measurements: vec![], simulated_root: Some(sim::root_public(&root)), simulated_any_measurement: true }
         }
     };
-    let answer = match std::env::var("TOKUMAI_ENCLAVE").ok().filter(|a| !a.trim().is_empty()) {
+    let answer = match std::env::var("TOKUMAI_ENCLAVE").ok().filter(|a| !a.trim().is_empty()).or(probe_address) {
         // A real enclave, over the mixnet (rule A1 picks the entry gateway).
         Some(address) => {
             let connector = tokumai_client::app::MixConnector::new(&address, tokumai_client::gateways::EntryChoice::Random);

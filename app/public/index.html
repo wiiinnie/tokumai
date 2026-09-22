@@ -2842,8 +2842,11 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     stopConnType(); const my=++connState.seq;
     const host=document.getElementById("connCons"); if(!host) return;
     host.innerHTML=""; connState.lastLine=null; connState.lastCur=null;
-    // steps 1-4 are paced slower so we're not left waiting on step 5 (the real gate)
-    const lines=CONN_STEPS.map(s=>s+"…"), lastIdx=lines.length-1, charD=30, pause=800;
+    // Paced for reading while the connection is still being made — and hurried along the
+    // moment it is up, so nobody watches an animation of something that already happened
+    // (the enclave answers in about five seconds; the leisurely pace took eight).
+    const lines=CONN_STEPS.map(s=>s+"…"), lastIdx=lines.length-1;
+    const charD=()=>mixConnected?6:30, pause=()=>mixConnected?90:800;
     let i=0;
     function nextLine(){
       if(my!==connState.seq || i>=lines.length) return;
@@ -2854,7 +2857,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       let c=0;
       (function type(){
         if(my!==connState.seq) return;
-        if(c<text.length){ tx.textContent+=text[c++]; connState.timers.push(setTimeout(type,charD)); return; }
+        if(c<text.length){ tx.textContent+=text[c++]; connState.timers.push(setTimeout(type,charD())); return; }
         connState.timers.push(setTimeout(()=>{ if(my!==connState.seq) return;
           if(idx===lastIdx){
             connState.lastLine=ln; connState.lastCur=cur; connState.awaiting=true;
@@ -2862,9 +2865,9 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
           } else {
             cur.remove(); const ok=document.createElement("span"); ok.className="ok"; ok.textContent="✓";
             ln.appendChild(ok); ln.classList.add("done");
-            connState.timers.push(setTimeout(nextLine,pause));
+            connState.timers.push(setTimeout(nextLine,pause()));
           }
-        },260));
+        },mixConnected?60:260));
       })();
     }
     connState.timers.push(setTimeout(nextLine,320));
@@ -2878,7 +2881,8 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     if(cur) cur.remove();
     const ok=document.createElement("span"); ok.className="ok"; ok.textContent="✓"; ln.appendChild(ok); ln.classList.add("done");
     const mk=document.createElement("div"); mk.innerHTML=DONE_MARK_SVG; host.appendChild(mk.firstElementChild);
-    setTimeout(()=>{ if(document.getElementById("connCons")) scrambleToLogo(); }, 1300);
+    // Long enough to see the tick, short enough not to be a wait of its own.
+    setTimeout(()=>{ if(document.getElementById("connCons")) scrambleToLogo(); }, 700);
   }
 
   // Connected → show the static tokumai logo. No scramble/churn — straight to the mark.

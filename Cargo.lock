@@ -10992,6 +10992,7 @@ dependencies = [
 name = "tokumai-client"
 version = "0.1.0"
 dependencies = [
+ "log",
  "nym-sdk",
  "rand 0.8.8",
  "reqwest 0.12.28",

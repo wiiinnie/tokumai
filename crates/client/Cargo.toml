@@ -12,6 +12,7 @@ serde_json.workspace = true
 rand.workspace = true
 tokio.workspace = true
 reqwest.workspace = true
+log = "0.4"
 nym-sdk = "1.21"
 
 [dev-dependencies]
