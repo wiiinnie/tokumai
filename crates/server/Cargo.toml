@@ -17,3 +17,5 @@ tokio.workspace = true
 # The mixnet client, inside the enclave: the operator's host only relays Sphinx packets.
 tokumai-client = { path = "../client" }
 nym-sdk = "1.21"
+# tokumai-dev-credit opens the dev app's profile.
+aes-gcm = "0.10"
