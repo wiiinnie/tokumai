@@ -1,0 +1,13 @@
+[package]
+name = "tokumai-attest"
+edition.workspace = true
+version.workspace = true
+description = "Attestation for the tokumai enclave: produce evidence inside, verify it in the app. Simulated today; AWS Nitro and Google Confidential Space plug in behind the same interface."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+base64.workspace = true
+ed25519-dalek.workspace = true

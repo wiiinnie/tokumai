@@ -1,0 +1,29 @@
+//! The tokumai enclave: everything that must not be visible to whoever runs the machine.
+//!
+//! What the operator's host sees is ciphertext in and ciphertext out, plus the fact that a
+//! request went to a model provider. Inside, and only inside, an account is matched with its
+//! balance and its question.
+//!
+//! The pieces that differ between a developer's laptop and a real enclave are traits, chosen
+//! once in [`Platform`]:
+//! - [`tokumai_attest::Attester`] — who vouches for the code (simulator, AWS Nitro, Google);
+//! - [`seal::KeyProvider`] — where the data key comes from (a local file, or a KMS that
+//!   releases it only to attested code);
+//! - [`provider::Provider`] — the model provider (a mock, or OpenAI / Gemini).
+//!
+//! Everything else — the wire format, the ledger, the billing — is the same in both.
+
+pub mod client;
+pub mod keys;
+pub mod ledger;
+pub mod provider;
+pub mod seal;
+pub mod service;
+pub mod wire;
+
+pub use service::{Enclave, Platform};
+
+/// Milliseconds since the epoch. The one clock the enclave reads.
+pub fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}

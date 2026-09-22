@@ -1,0 +1,21 @@
+[package]
+name = "tokumai-enclave"
+edition.workspace = true
+version.workspace = true
+description = "The tokumai server core. Runs inside an attested enclave: accounts, balances, billing and the relay to the model providers, none of it visible to the operator."
+
+[dependencies]
+tokumai-core = { path = "../core" }
+tokumai-attest = { path = "../attest" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+base64.workspace = true
+ed25519-dalek.workspace = true
+x25519-dalek.workspace = true
+chacha20poly1305.workspace = true
+hkdf.workspace = true
+rand.workspace = true
+rusqlite.workspace = true
+tokio.workspace = true
