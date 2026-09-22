@@ -33,11 +33,11 @@ The real service with stand-ins for the parts only a real enclave has:
 | who vouches for the code | `attest::sim` (a local key in `dev-data/sim-root.key`) | AWS Nitro / Google Confidential Space |
 | data key | `dev-data/data.key` | released by a KMS only to attested code |
 | model | the mock, plus OpenAI / Gemini if `OPENAI_API_KEY` / `GEMINI_API_KEY` are set | OpenAI, Gemini, keys sealed |
-| transport | TCP on 127.0.0.1:7707, one JSON message per line | the Nym mixnet |
+| transport | TCP on 127.0.0.1:7707, one JSON message per line; with `--mix` also the Nym mixnet | the Nym mixnet, the client inside the enclave, its address attested |
 
 ```sh
-cargo run -p tokumai-enclave --bin tokumai-enclave-dev      # the enclave, simulated
-cargo run -p tokumai-enclave --bin tokumai-dev-client -- "a question" [model]
+cargo run -p tokumai-server --bin tokumai-enclave-dev [-- --mix]   # the enclave, simulated
+cargo run -p tokumai-server --bin tokumai-dev-client -- [--mix] "a question" [model]
 cargo test                                                   # everything
 ```
 

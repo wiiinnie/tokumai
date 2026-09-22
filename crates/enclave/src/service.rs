@@ -66,6 +66,7 @@ pub struct Enclave {
     pub(crate) apple_api: Option<crate::apple::AppleApi>,
     /// What the six plans cost at Stripe (cents), and when that was last read.
     pub(crate) plan_prices: Mutex<(Vec<u64>, u64)>,
+    address: Mutex<String>,
     replies: Mutex<HashMap<String, (Instant, Vec<u8>)>>,
     /// Secret behind the per-account pseudonyms sent to providers; derived from the data
     /// key, so it survives restarts and is known only inside.
@@ -113,7 +114,20 @@ impl Enclave {
             stripe: p.stripe,
             apple_api: p.apple_api,
             plan_prices: Mutex::new((Vec::new(), 0)),
+            address: Mutex::new(String::new()),
         })
+    }
+
+    /// The address the enclave's own transport listens at, once it is up (its Nym address).
+    /// It goes into every attestation, so it must be the address of a client running in here.
+    pub fn set_address(&self, address: &str) {
+        if let Ok(mut a) = self.address.lock() {
+            *a = address.to_string();
+        }
+    }
+
+    fn address(&self) -> String {
+        self.address.lock().map(|a| a.clone()).unwrap_or_default()
     }
 
     pub fn identity_hex(&self) -> String {
@@ -136,12 +150,14 @@ impl Enclave {
             Some(n) if (16..=64).contains(&n.len()) => n,
             _ => return error("an attestation request needs a nonce of 16 to 64 bytes, hex"),
         };
-        let binding = tokumai_attest::binding(&self.keys.identity_pub(), &self.keys.kx_pub(), &nonce);
+        let address = self.address();
+        let binding = tokumai_attest::binding(&self.keys.identity_pub(), &self.keys.kx_pub(), &address, &nonce);
         match self.attester.attest(&binding) {
             Ok(evidence) => json!({
                 "kind": "attest.ok",
                 "identity": hex::encode(self.keys.identity_pub()),
                 "kx": hex::encode(self.keys.kx_pub()),
+                "address": address,
                 "evidence": evidence,
             }),
             Err(e) => error(&format!("attestation failed: {e}")),

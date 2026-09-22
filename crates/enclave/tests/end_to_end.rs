@@ -54,7 +54,7 @@ fn dev_policy() -> Policy {
 async fn session(e: &Enclave, policy: &Policy) -> Result<Session, String> {
     let nonce: [u8; 32] = rand::random();
     let reply = e.handle(&attest_request(&nonce)).await;
-    Session::from_attestation(&reply, &nonce, policy)
+    Session::from_attestation(&reply, &nonce, policy, None)
 }
 
 async fn call(e: &Enclave, s: &Session, a: &Account, op: &str, body: Value) -> Value {
@@ -179,4 +179,22 @@ async fn an_app_store_transaction_that_does_not_verify_is_final_and_credits_noth
     assert!(reply["error"].is_string());
     assert_eq!(reply["final"], true, "the app finishes it instead of re-sending forever");
     assert_eq!(call(&e, &s, &a, "balance", json!({})).await["balance"]["total"], 0);
+}
+
+#[tokio::test]
+async fn the_proof_names_the_address_the_enclave_listens_at() {
+    let e = enclave(true);
+    e.set_address("enclave.nym");
+    let nonce: [u8; 32] = rand::random();
+    let reply = e.handle(&attest_request(&nonce)).await;
+    let s = Session::from_attestation(&reply, &nonce, &dev_policy(), Some("enclave.nym")).unwrap();
+    assert_eq!(s.address, "enclave.nym");
+    // Reached through some other address: whatever forwards there is not the enclave's client.
+    let relayed = Session::from_attestation(&reply, &nonce, &dev_policy(), Some("relay.nym")).err().expect("refused");
+    assert!(relayed.contains("in between"), "{relayed}");
+    // An answer whose address was swapped does not match its proof.
+    let mut v: Value = serde_json::from_slice(&reply).unwrap();
+    v["address"] = json!("relay.nym");
+    let forged = Session::from_attestation(&serde_json::to_vec(&v).unwrap(), &nonce, &dev_policy(), Some("relay.nym")).err().expect("refused");
+    assert!(forged.contains("other keys"), "{forged}");
 }

@@ -4,8 +4,9 @@
 //! One interface, several platforms. [`Attester`] runs inside the enclave and produces
 //! [`Evidence`] over 32 bytes of `user_data`; [`verify`] runs in the app, checks the evidence
 //! against a [`Policy`] and returns the attested [`Claims`]. The `user_data` is always
-//! [`binding`] — a hash of the enclave's public keys and the app's nonce — so a valid proof
-//! cannot be replayed, and cannot vouch for keys the attested code does not hold.
+//! [`binding`] — a hash of the enclave's public keys, the address it is reached at, and the
+//! app's nonce — so a valid proof cannot be replayed, and cannot vouch for keys or an address
+//! the attested code does not hold.
 //!
 //! - [`sim`]: a stand-in for development. It signs with a local key, so it proves nothing
 //!   about the machine, and only a policy that names that key accepts it — which no release
@@ -62,13 +63,18 @@ pub trait Attester: Send + Sync {
     fn attest(&self, user_data: &[u8; 32]) -> Result<Evidence, String>;
 }
 
-/// The 32 bytes every proof must carry: the enclave's signing key, its key-exchange key, and
-/// the app's fresh nonce, hashed under a fixed label.
-pub fn binding(identity_pub: &[u8; 32], kx_pub: &[u8; 32], nonce: &[u8]) -> [u8; 32] {
+/// The 32 bytes every proof must carry: the enclave's signing key, its key-exchange key, the
+/// address the enclave itself listens at (its Nym address; empty where there is none), and
+/// the app's fresh nonce, hashed under a fixed label. With the address in it, the app knows
+/// the mixnet endpoint it talks to is the enclave's own client, not a relay in front of it
+/// run by the operator — which would see when each request comes and goes.
+pub fn binding(identity_pub: &[u8; 32], kx_pub: &[u8; 32], address: &str, nonce: &[u8]) -> [u8; 32] {
     let mut h = Sha256::new();
     h.update(b"tokumai/attest/v1");
     h.update(identity_pub);
     h.update(kx_pub);
+    h.update((address.len() as u32).to_be_bytes());
+    h.update(address.as_bytes());
     h.update(nonce);
     h.finalize().into()
 }

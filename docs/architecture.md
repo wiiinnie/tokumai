@@ -16,8 +16,8 @@ follows.
 ## The path of a question
 
 1. The app attests the enclave. It sends a fresh nonce; the enclave answers with its keys
-   and a platform proof over `binding(identity, kx, nonce)`. The app accepts only a
-   published measurement.
+   and a platform proof over `binding(identity, kx, address, nonce)`. The app accepts only a
+   published measurement, and only if `address` is the Nym address it sent the question to.
 2. The app signs the request with the account key over
    `nonce:ts:<enclave identity>:<sha256 body>` and seals it to the enclave's X25519 key.
 3. The enclave opens it, checks the signature, the clock and the nonce, **holds** the worst
@@ -39,6 +39,22 @@ follows.
   once (and a chargeback also stops the card subscription). Which account a Stripe
   subscription or App Store transaction belongs to is stored only under a keyed hash
   (`enclave::subscriptions`).
+
+## The transport
+
+The enclave runs its own Nym client (`server::mix`); the host relays Sphinx packets to a
+gateway and sees nothing else. Its address is part of every attestation, so an operator
+who put a client of their own in front, to watch when requests come and go, is caught by
+the app. The app uses a fresh, ephemeral Nym client per start.
+
+Messages travel as frames (`enclave::frames`): up to 64 KB whole, bigger ones in
+acknowledged parts, and big replies (pictures) kept in the enclave and fetched chunk by
+chunk. Every frame is retryable, and a question still being answered is never answered
+twice.
+
+Open for phase 0: in production the Nym identity keys must not lie on the host's disk
+(whoever holds them can take over the address). They belong under the sealed data key,
+like the ledger.
 
 ## What the operator can still do
 

@@ -77,19 +77,19 @@ mod tests {
     fn a_simulated_proof_verifies_only_for_its_keys_and_nonce() {
         let seed = [7u8; 32];
         let a = sim::SimAttester::new(seed, "abc123");
-        let ud = binding(&[1; 32], &[2; 32], b"nonce-1");
+        let ud = binding(&[1; 32], &[2; 32], "", b"nonce-1");
         let e = a.attest(&ud).unwrap();
         assert_eq!(verify(&e, &policy(seed), &ud).unwrap().measurement, "abc123");
-        let other = binding(&[1; 32], &[2; 32], b"nonce-2");
+        let other = binding(&[1; 32], &[2; 32], "", b"nonce-2");
         assert!(verify(&e, &policy(seed), &other).is_err(), "a proof for another nonce is refused");
-        let swapped = binding(&[9; 32], &[2; 32], b"nonce-1");
+        let swapped = binding(&[9; 32], &[2; 32], "", b"nonce-1");
         assert!(verify(&e, &policy(seed), &swapped).is_err(), "a proof for other keys is refused");
     }
 
     #[test]
     fn a_release_policy_refuses_the_simulator_whatever_it_says() {
         let seed = [7u8; 32];
-        let ud = binding(&[1; 32], &[2; 32], b"n");
+        let ud = binding(&[1; 32], &[2; 32], "", b"n");
         let e = sim::SimAttester::new(seed, "abc123").attest(&ud).unwrap();
         let release = Policy { measurements: vec!["abc123".into()], ..Default::default() };
         assert!(verify(&e, &release, &ud).unwrap_err().contains("not accepted"));
@@ -98,7 +98,7 @@ mod tests {
     #[test]
     fn an_unknown_image_or_a_foreign_root_is_refused() {
         let seed = [7u8; 32];
-        let ud = binding(&[1; 32], &[2; 32], b"n");
+        let ud = binding(&[1; 32], &[2; 32], "", b"n");
         let e = sim::SimAttester::new(seed, "evil").attest(&ud).unwrap();
         assert!(verify(&e, &policy(seed), &ud).unwrap_err().contains("does not know"));
         let foreign = sim::SimAttester::new([8u8; 32], "abc123").attest(&ud).unwrap();

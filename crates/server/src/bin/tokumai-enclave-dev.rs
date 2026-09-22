@@ -1,8 +1,11 @@
 //! The enclave, simulated on this machine: the real service with a stand-in attester and a
 //! local key file. Models: the mock, plus OpenAI and Gemini when OPENAI_API_KEY / GEMINI_API_KEY
-//! are set in the environment (in a real enclave they arrive sealed). Listens on 127.0.0.1:7707, one JSON message per line.
+//! are set in the environment (in a real enclave they arrive sealed). Listens on 127.0.0.1:7707,
+//! one JSON message per line; with `--mix` also on the Nym mixnet, as the real one will, with
+//! a persistent identity in ./dev-data/nym (its address in ./dev-data/nym-address; pin its
+//! gateway with TOKUMAI_GATEWAY).
 //!
-//!     cargo run -p tokumai-enclave --bin tokumai-enclave-dev
+//!     cargo run -p tokumai-server --bin tokumai-enclave-dev [-- --mix]
 //!
 //! State lives in ./dev-data. `sim-root.key` stands in for the platform's attestation key; a
 //! development client pins its public half, as the app will pin AWS's or Google's root.
@@ -57,6 +60,15 @@ async fn main() {
     })
     .expect("start the enclave");
     let enclave: &'static Enclave = Box::leak(Box::new(enclave));
+    if std::env::args().any(|a| a == "--mix") {
+        let nym = dir.join("nym");
+        let gateway = std::env::var("TOKUMAI_GATEWAY").ok().filter(|g| !g.trim().is_empty());
+        let client = tokumai_server::mix::connect_at_boot(&nym, gateway.as_deref()).await.expect("connect to the mixnet");
+        let address = client.nym_address().to_string();
+        std::fs::write(dir.join("nym-address"), &address).expect("write nym-address");
+        println!("tokumai enclave (SIMULATED) on the mixnet at {address}");
+        tokio::spawn(tokumai_server::mix::serve(enclave, client, nym));
+    }
     let addr = "127.0.0.1:7707";
     let listener = TcpListener::bind(addr).await.expect("bind 127.0.0.1:7707");
     println!("tokumai enclave (SIMULATED) on {addr}");

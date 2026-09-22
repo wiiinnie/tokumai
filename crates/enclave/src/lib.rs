@@ -16,6 +16,7 @@
 
 pub mod apple;
 pub mod client;
+pub mod frames;
 pub mod gemini;
 pub mod http;
 pub mod keys;

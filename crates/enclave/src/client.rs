@@ -20,6 +20,8 @@ pub struct Session {
     identity: [u8; 32],
     kx: [u8; 32],
     pub claims: Claims,
+    /// The transport address the enclave attested (its Nym address; empty over TCP).
+    pub address: String,
 }
 
 fn key32(v: &Value, field: &str) -> Result<[u8; 32], String> {
@@ -32,8 +34,9 @@ fn key32(v: &Value, field: &str) -> Result<[u8; 32], String> {
 
 impl Session {
     /// Accept the enclave only if its proof passes `policy` and vouches for exactly the keys
-    /// it presented, for exactly this nonce.
-    pub fn from_attestation(reply: &[u8], nonce: &[u8; 32], policy: &Policy) -> Result<Session, String> {
+    /// it presented, for exactly this nonce — and, when `reached_at` is given, that the
+    /// address the question was sent to is the one the enclave's own client listens at.
+    pub fn from_attestation(reply: &[u8], nonce: &[u8; 32], policy: &Policy, reached_at: Option<&str>) -> Result<Session, String> {
         let v: Value = serde_json::from_slice(reply).map_err(|_| "unreadable attestation answer")?;
         if let Some(e) = v.get("error").and_then(|e| e.as_str()) {
             return Err(e.to_string());
@@ -42,8 +45,14 @@ impl Session {
         let kx = key32(&v, "kx")?;
         let evidence: Evidence = serde_json::from_value(v.get("evidence").cloned().unwrap_or(Value::Null))
             .map_err(|_| "the enclave sent no proof")?;
-        let claims = tokumai_attest::verify(&evidence, policy, &tokumai_attest::binding(&identity, &kx, nonce))?;
-        Ok(Session { identity, kx, claims })
+        let address = v.get("address").and_then(|a| a.as_str()).unwrap_or("").to_string();
+        let claims = tokumai_attest::verify(&evidence, policy, &tokumai_attest::binding(&identity, &kx, &address, nonce))?;
+        if let Some(sent_to) = reached_at {
+            if sent_to != address {
+                return Err("the enclave does not listen at the address this app reached — something sits in between".into());
+            }
+        }
+        Ok(Session { identity, kx, claims, address })
     }
 
     /// Sign `body` as `account` for operation `op`, and seal it to the enclave.
