@@ -55,6 +55,11 @@ the first run:
 - the enclave boots, draws its randomness from the Nitro module, comes onto the mixnet
   through the pinned gateway and announces its address to the host over vsock (a
   production enclave has no console);
+- its gateway is one of the operator's own (DE01), as the first server had it — its own
+  front door should be a machine we keep running. The app's entry gateway is the
+  opposite: never one of ours (rule A1). The gateway is part of what is measured, so
+  moving it means a new image; its siblings AT01, CH01 and DE02 are on the allowlist
+  already. PCR0 with DE01: `7543861de5e98486b05276e4a5a4909eda4abb5d7998a04c15149ffe300e4b2202d6017aaac24c4edbae2c132ff7c2ca`.
 - everything it reaches goes through the proxy: `validator.nymtech.net` and its gateway,
   and nothing else;
 - from the Mac, over the mixnet: **attested as `AwsNitro image 6872f9b7…`**, test credit,

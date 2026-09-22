@@ -22,7 +22,10 @@ RUN cargo build --release --locked -p tokumai-server --bin tokumai-enclave-nitro
 
 FROM gcr.io/distroless/cc-debian12@sha256:e5d81ddde149641e2a9ba55be4545bc125c67de07508b03ba4c22e6eb0ded5aa
 COPY --from=build /src/target/release/tokumai-enclave-nitro /tokumai-enclave-nitro
-# The gateway the enclave's Nym client registers with — part of what is measured, and on
-# the host's egress allowlist (deploy/egress.allow).
-ENV TOKUMAI_GATEWAY=7MiSywqj6NksUTQCMnyQr9pcKzuthhk444kCGm8cUUT4
+# The gateway the enclave's Nym client registers with: one of the operator's own, as the
+# first server had it — the enclave's own front door should be a machine we keep running.
+# (The APP's entry gateway is the opposite: never one of ours, rule A1.) Part of what is
+# measured, so a change means a new image; alternates are on the host's allowlist already.
+# DE01 nym-exit-de01.hermes-stakepool.de · AT01 98FmUv… · CH01 6KZ96s…
+ENV TOKUMAI_GATEWAY=38zcSsvjXsAX7C28ko2H3Lt55X4TYxfZYkPADxKXZHUj
 ENTRYPOINT ["/tokumai-enclave-nitro"]

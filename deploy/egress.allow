@@ -15,7 +15,13 @@ api.stripe.com 443
 api.storekit.itunes.apple.com 443
 api.storekit-sandbox.itunes.apple.com 443
 
-# The enclave's own gateway — the one its Nym address sits behind (dev: Finland). Changes
-# only when the enclave is moved to another gateway (TOKUMAI_GATEWAY).
-185.100.86.108 9000,9001
-exit-node.finland-3.nym.cat 9000,9001
+# The enclave's own gateway — one of the operator's own (TOKUMAI_GATEWAY in the image),
+# with its siblings, so moving the enclave to another of them needs no new allowlist.
+nym-exit-de01.hermes-stakepool.de 9000,9001   # DE01, the one pinned in the image
+nym-exit-at01.hermes-stakepool.de 9000,9001   # AT01
+nym-exit-ch01.hermes-stakepool.de 9000,9001   # CH01
+nym-exit-de02.hermes-stakepool.de 9000,9001   # DE02
+152.53.135.191 9000,9001
+152.53.92.255 9000,9001
+141.227.148.103 9000,9001
+152.53.137.91 9000,9001
