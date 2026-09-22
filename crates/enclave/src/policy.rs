@@ -20,6 +20,9 @@ pub const MAX_OUTPUT_TOKENS: u64 = 131_072;
 /// Thinking budget when the app names none, and the cap (reached by OpenAI's "high").
 pub const DEFAULT_THINKING: u64 = 2048;
 pub const MAX_THINKING: u64 = 16_384;
+/// The shortest answer worth giving when the balance does not cover the longest one: below
+/// this the question is refused rather than answered with a stub.
+pub const MIN_ANSWER_TOKENS: u64 = 256;
 
 /// Bounds on one chat request: bytes (inline images are base64) and messages.
 pub const MAX_REQUEST_BYTES: usize = 48 * 1024 * 1024;

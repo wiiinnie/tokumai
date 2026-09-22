@@ -284,7 +284,7 @@ impl Enclave {
         if body.len() > policy::MAX_REQUEST_BYTES {
             return error("this request is too large");
         }
-        let Ok(req) = serde_json::from_str::<ChatRequest>(body) else { return error("malformed chat request") };
+        let Ok(mut req) = serde_json::from_str::<ChatRequest>(body) else { return error("malformed chat request") };
         let Some(messages) = req.messages.as_array() else { return error("malformed chat request") };
         if messages.is_empty() || messages.len() > policy::MAX_MESSAGES {
             return error("a chat request needs between 1 and 2,000 messages");
@@ -326,16 +326,40 @@ impl Enclave {
             }
             (ceil_toku(queries as f64 * search_usd * TOKU_PER_USD as f64) * policy::MARGIN).ceil() as u64
         };
-        let ceiling = ceiling_toku(
-            &price,
-            policy::MARGIN,
-            &Ceiling {
-                in_tokens,
-                out_tokens: req.answer_tokens() + req.thinking_tokens(),
-                image_tokens: crate::gemini::image_tokens(&req.model, image_size),
-            },
-        ) + per_image_toku(&price, policy::MARGIN)
-            + if req.live { search_charge(policy::MAX_SEARCH_QUERIES) } else { 0 };
+        let ceiling_for = |out_tokens: u64| {
+            ceiling_toku(&price, policy::MARGIN, &Ceiling { in_tokens, out_tokens, image_tokens: crate::gemini::image_tokens(&req.model, image_size) })
+                + per_image_toku(&price, policy::MARGIN)
+                + if req.live { search_charge(policy::MAX_SEARCH_QUERIES) } else { 0 }
+        };
+        let mut ceiling = ceiling_for(req.answer_tokens() + req.thinking_tokens());
+        // Less on the account than the worst case: shorten the answer to what it covers
+        // rather than refuse — a question that would cost 12 TOKU must not be turned away
+        // because the longest possible answer would cost thousands. Refused only when not
+        // even a short answer fits, or for a picture (which cannot be shortened).
+        let available = match self.ledger.lock().map_err(|_| "ledger unavailable".to_string()).and_then(|l| l.balance(account, now)) {
+            Ok(b) => b.total,
+            Err(e) => return error(&e),
+        };
+        let mut capped = false;
+        if ceiling > available {
+            let fixed = ceiling_for(0);
+            let per_token = ceiling_for(1_000_000).saturating_sub(fixed) as f64 / 1_000_000.0;
+            let fits = if available > fixed && per_token > 0.0 { ((available - fixed) as f64 / per_token).floor() as u64 } else { 0 };
+            if crate::gemini::is_image_model(&req.model) || fits < policy::MIN_ANSWER_TOKENS {
+                let msg = if available == 0 {
+                    "Your balance is 0 TOKU — get credit to keep chatting.".to_string()
+                } else {
+                    format!("Not enough credit for this: it can cost up to {ceiling} TOKU, and your balance is {available} TOKU.")
+                };
+                return json!({ "kind": "error", "error": msg, "noCredit": true, "balance": available });
+            }
+            // Keep a third for thinking at most, the rest for the answer itself.
+            let thinking = req.thinking_tokens().min(fits / 3);
+            req.thinking = Some(thinking);
+            req.max_tokens = Some(req.answer_tokens().min(fits - thinking).max(1));
+            ceiling = ceiling_for(req.answer_tokens() + req.thinking_tokens()).min(available);
+            capped = true;
+        }
         let hold = match self.ledger.lock().map_err(|_| "ledger unavailable".to_string()).and_then(|mut l| l.hold(account, ceiling.max(1), now)) {
             Ok(h) => h,
             Err(e) => return error(&e),
@@ -373,7 +397,7 @@ impl Enclave {
             Ok(c) => {
                 let total = self.ledger.lock().ok().and_then(|l| l.balance(account, now).ok()).map(|b| b.total).unwrap_or(0);
                 json!({
-                    "kind": "chat", "text": c.text, "images": c.images, "cost": charged, "balance": total,
+                    "kind": "chat", "text": c.text, "images": c.images, "cost": charged, "balance": total, "capped": capped,
                     "estimated": c.usage.estimated,
                     "usage": { "input": c.usage.input, "cachedInput": c.usage.cached_input, "output": c.usage.output,
                                "image": c.usage.output_image, "searches": c.usage.grounding_queries,

@@ -198,3 +198,26 @@ async fn the_proof_names_the_address_the_enclave_listens_at() {
     let forged = Session::from_attestation(&serde_json::to_vec(&v).unwrap(), &nonce, &dev_policy(), Some("relay.nym")).err().expect("refused");
     assert!(forged.contains("other keys"), "{forged}");
 }
+
+#[tokio::test]
+async fn a_small_balance_shortens_the_answer_and_an_empty_one_says_so_plainly() {
+    let e = enclave(true);
+    let s = session(&e, &dev_policy()).await.unwrap();
+    let a = from_mnemonic(PHRASE).unwrap();
+    let ask = json!({ "model": "mock", "messages": [{ "role": "user", "content": "hello" }], "maxTokens": 4096 });
+    let empty = call(&e, &s, &a, "chat", ask.clone()).await;
+    assert_eq!(empty["noCredit"], true);
+    assert!(empty["error"].as_str().unwrap().contains("balance is 0 TOKU"), "{empty}");
+    // Far less than the worst case of 4096 answer tokens, enough for a short answer.
+    call(&e, &s, &a, "dev.credit", json!({ "toku": 2_000 })).await;
+    let answer = call(&e, &s, &a, "chat", ask.clone()).await;
+    assert_eq!(answer["kind"], "chat", "{answer}");
+    assert_eq!(answer["capped"], true);
+    assert!(answer["cost"].as_u64().unwrap() <= 2_000);
+    // Too little for even a short answer: refused, with the numbers.
+    let e2 = enclave(true);
+    let s2 = session(&e2, &dev_policy()).await.unwrap();
+    call(&e2, &s2, &a, "dev.credit", json!({ "toku": 3 })).await;
+    let tiny = call(&e2, &s2, &a, "chat", ask).await;
+    assert_eq!(tiny["noCredit"], true, "{tiny}");
+}

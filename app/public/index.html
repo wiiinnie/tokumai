@@ -2395,7 +2395,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     t.innerHTML=`<div class="wrap">`+messages.map((m,mi)=>`
       <div class="msg ${m.role}">
         <div class="who">${m.role==='you'?'you':(m.role==='err'?'error':'tokumai')}${m.role==='ai'&&m.model?`<span class="viamodel">${esc(m.model)}</span>`:''}</div>
-        <div class="body">${bodyHtml(m,mi)}${(m.role==='you'&&m.editRef)?`<div class="editref">✎ edits the selected picture</div>`:''}${(m.role==='ai'&&m.note)?`<div class="sizenote${m.noteKind?' '+m.noteKind:''}">${esc(m.note)}</div>`:''}${(devCost&&m.role==='ai'&&m.audit)?auditDiv(m.audit):''}${(devCost&&m.role==='ai'&&m.dlStats)?dlStatsDiv(m.dlStats):''}${(devCost&&m.role==='you'&&m.xfer)?xferDiv(m.xfer):''}${(m.role==='err'&&m.retry)?`<button class="retrybtn" data-click="retryMsg" data-args="${mi}">↻ Retry</button>`:''}${(m.role==='ai'&&m.streaming&&!m.dismissed)?`<div class="msgacts"><button class="msgact rust" data-click="cancelMsg" data-args="${mi}">✕ Dismiss</button>${m.img?'<span class="billhint">billing has started — this only stops the wait</span>':''}</div>`:''}${(m.role==='ai'&&!m.streaming&&m.canResend)?`<div class="msgacts"><button class="msgact" data-click="resendMsg" data-args="${mi}" title="Send the same question again with the currently selected model">↻ Resend</button></div>`:''}</div>
+        <div class="body">${bodyHtml(m,mi)}${(m.role==='you'&&m.editRef)?`<div class="editref">✎ edits the selected picture</div>`:''}${(m.role==='ai'&&m.note)?`<div class="sizenote${m.noteKind?' '+m.noteKind:''}">${esc(m.note)}</div>`:''}${(devCost&&m.role==='ai'&&m.audit)?auditDiv(m.audit):''}${(devCost&&m.role==='ai'&&m.dlStats)?dlStatsDiv(m.dlStats):''}${(devCost&&m.role==='you'&&m.xfer)?xferDiv(m.xfer):''}${(m.role==='err'&&m.noCredit)?`<button class="retrybtn" data-click="openBuy">+ Get credit</button>`:(m.role==='err'&&m.retry)?`<button class="retrybtn" data-click="retryMsg" data-args="${mi}">↻ Retry</button>`:''}${(m.role==='ai'&&m.streaming&&!m.dismissed)?`<div class="msgacts"><button class="msgact rust" data-click="cancelMsg" data-args="${mi}">✕ Dismiss</button>${m.img?'<span class="billhint">billing has started — this only stops the wait</span>':''}</div>`:''}${(m.role==='ai'&&!m.streaming&&m.canResend)?`<div class="msgacts"><button class="msgact" data-click="resendMsg" data-args="${mi}" title="Send the same question again with the currently selected model">↻ Resend</button></div>`:''}</div>
       </div>`).join("")+`</div>`;
     if(pinQuestion){ pinLastQuestion(t); }
     else { t.style.paddingBottom=""; setTop(t, followStream ? t.scrollHeight : prevTop); }
@@ -4032,6 +4032,12 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         // Server clamps an unsupported size to the model's largest (Lite: 1K) instead of
         // failing — say so, and that the bill is for the size actually drawn.
         if(drawn && (ai.images&&ai.images.length) && drawn!==reqSize) ai.note = `Drawn at ${drawn} — ${reqSize} isn't supported by ${reqLabel}. Billed at ${drawn}.`;
+        // The balance covered only part of the longest answer, so the enclave shortened it
+        // rather than refusing — say so, or it reads like a model that stopped mid-thought.
+        if(!ai.note && evt.capped === true){
+          ai.note = "Shortened to fit your balance. Get credit, and the next answers run to full length.";
+          ai.noteKind = "rust";
+        }
         renderThread();
         setPrice(evt.usage);
         await persist(text);
@@ -4053,7 +4059,11 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
           err=`“${dead}” is no longer available from the provider — removed it and switched to ${alt?alt.model:'no model'}. Please resend.`;
         }
         if(ai.dismissed){ ai.dismissFailed=true; renderThread(); await persist(text); updateSendEnabled(); return; }
-        messages[messages.length-1]={role:"err",text:err,retry:{text}};
+        // No credit is not a failure to retry: it is a reason to get some. The enclave says
+        // so with its own words, marked NO_CREDIT by the app's Rust side.
+        const noCredit = /^NO_CREDIT:\s*/.test(String(err||""));
+        if(noCredit) err = String(err).replace(/^NO_CREDIT:\s*/, "");
+        messages[messages.length-1]= noCredit ? {role:"err",text:err,retry:{text},noCredit:true} : {role:"err",text:err,retry:{text}};
         renderThread(); setStatus("error"); await persist(text);
         updateSendEnabled();
         // Transport-level failure → the Rust core dropped its mixnet client.

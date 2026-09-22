@@ -154,7 +154,9 @@ async fn call(app: &AppHandle, op: &str, body: Value) -> Result<Value, String> {
     let conn = guard.as_mut().ok_or("no connection")?;
     let answer = conn.call(&account, op, &body).await?;
     if answer.get("kind").and_then(|k| k.as_str()) == Some("error") {
-        return Err(answer.get("error").and_then(|e| e.as_str()).unwrap_or("the enclave refused").to_string());
+        let msg = answer.get("error").and_then(|e| e.as_str()).unwrap_or("the enclave refused").to_string();
+        // Marked, so the interface offers credit rather than a retry.
+        return Err(if answer["noCredit"] == true { format!("NO_CREDIT: {msg}") } else { msg });
     }
     Ok(answer)
 }
