@@ -2237,7 +2237,8 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     flashSaved._t=setTimeout(()=>{ s.style.opacity="0"; },1400);
   }
   function renderBal(){
-    $("bal").innerHTML = formatToku(balance + accountToku())+'<small> TOKU</small>';
+    // Everything is on the account (allowance + credit bought outright): one number.
+    $("bal").innerHTML = formatToku(balance)+'<small> TOKU</small>';
     // A subscriber's bar is the MONTH running down, with the day it refills — the same
     // meter as on the account page, so the two never disagree. Without a plan there is no
     // budget to run down, and the bar keeps its old scale.
