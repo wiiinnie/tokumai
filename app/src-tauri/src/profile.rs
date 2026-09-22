@@ -1,0 +1,72 @@
+//! What the app remembers between starts, in `<data dir>/profile.json`, encrypted under a
+//! keychain key (`keystore`). Small on purpose: there is no money on the device any more —
+//! the balance is on the account, in the enclave — so the phrase is the only secret here.
+
+use crate::keystore::{self, EncEnvelope};
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
+
+const KEYCHAIN_ACCOUNT: &str = "profile-encryption-key";
+const FILE: &str = "profile.json";
+
+#[derive(Serialize, Deserialize, Default, Clone, Debug)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Profile {
+    /// The recovery phrase. The account, and so the balance, is derived from it.
+    pub mnemonic: Option<String>,
+    /// The three-word check passed (or the phrase was typed in, which is the same proof).
+    pub phrase_verified: bool,
+    /// An entry gateway the user picked; `None` = a random allowed one on each connect.
+    pub entry_gateway: Option<String>,
+    /// A card checkout that was opened and not yet seen paid.
+    pub pending_plan_session: Option<String>,
+}
+
+fn path(dir: &Path) -> PathBuf {
+    dir.join(FILE)
+}
+
+fn key() -> Result<Option<[u8; 32]>, String> {
+    if keystore::use_keychain() {
+        keystore::keychain_key(KEYCHAIN_ACCOUNT, "profile").map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
+/// The profile, or an empty one on a first start. A file that exists but cannot be read is
+/// moved aside, never overwritten: it holds the phrase.
+pub fn load(dir: &Path) -> Profile {
+    let p = path(dir);
+    let Ok(raw) = std::fs::read_to_string(&p) else { return Profile::default() };
+    match read(&raw) {
+        Ok(profile) => profile,
+        Err(e) => {
+            let stamp = tokumai_proto::now_ms();
+            let aside = dir.join(format!("profile.unreadable.{stamp}.json"));
+            let _ = std::fs::rename(&p, &aside);
+            log::error!("[profile] {} could not be read ({e}); kept as {}", p.display(), aside.display());
+            Profile::default()
+        }
+    }
+}
+
+fn read(raw: &str) -> Result<Profile, String> {
+    let v: serde_json::Value = serde_json::from_str(raw).map_err(|e| e.to_string())?;
+    if EncEnvelope::looks_like(&v) {
+        let env: EncEnvelope = serde_json::from_value(v).map_err(|e| e.to_string())?;
+        let key = key()?.ok_or("an encrypted profile, and no keychain to open it")?;
+        serde_json::from_str(&keystore::decrypt(&key, &env)?).map_err(|e| e.to_string())
+    } else {
+        serde_json::from_value(v).map_err(|e| e.to_string())
+    }
+}
+
+pub fn save(dir: &Path, profile: &Profile) -> Result<(), String> {
+    let plain = serde_json::to_string(profile).map_err(|e| e.to_string())?;
+    let text = match key()? {
+        Some(k) => keystore::encrypt(&k, &plain)?,
+        None => plain,
+    };
+    keystore::write_atomic(&path(dir), &text)
+}

@@ -5,3 +5,5 @@
 /dev-data/
 .env
 .DS_Store
+/app/node_modules/
+/app/src-tauri/gen/schemas/

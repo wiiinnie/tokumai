@@ -91,6 +91,15 @@ impl Connection {
         }
     }
 
+    /// Replace the mixnet client before the next call (the person asked for a fresh route).
+    pub fn drop_transport(&mut self) {
+        self.transport = None;
+    }
+
+    pub fn has_transport(&self) -> bool {
+        self.transport.is_some()
+    }
+
     /// Connect and attest now (the app does this at start, so the first question is quick).
     pub async fn ready(&mut self) -> Result<(), String> {
         if self.transport.is_none() {

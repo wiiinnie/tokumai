@@ -1,0 +1,56 @@
+[package]
+name = "tokumai-app"
+edition.workspace = true
+version.workspace = true
+description = "tokumai, the app (desktop)"
+
+[lib]
+name = "app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+# Production builds, and whenever there is no devUrl: the bundled frontend. DO NOT REMOVE.
+custom-protocol = ["tauri/custom-protocol"]
+# The semantic privacy guard (GLiNER on ONNX Runtime) — heavy, off by default.
+smart-guard = ["dep:gline-rs", "dep:orp"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+tokumai-core = { path = "../../crates/core" }
+tokumai-attest = { path = "../../crates/attest" }
+tokumai-proto = { path = "../../crates/proto" }
+tokumai-client = { path = "../../crates/client" }
+tauri = { version = "2.11.3", features = [] }
+tauri-plugin-log = "2"
+tauri-plugin-opener = "2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json.workspace = true
+log = "0.4"
+tokio.workspace = true
+rand.workspace = true
+hex.workspace = true
+base64.workspace = true
+qrcode = "0.14"
+# The profile and the chat vault at rest: AES-256-GCM, key in the OS keychain.
+aes-gcm = "0.10"
+keyring = { version = "3", features = ["apple-native", "windows-native", "linux-native"] }
+# The privacy guard reads a PDF's text layer on the device.
+pdf-extract = "0.9"
+gline-rs = { version = "1", optional = true }
+orp = { version = "1", optional = true }
+
+[target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
+rfd = "0.15"
+
+# On-device OCR for the privacy guard (Apple Vision); elsewhere the page falls back to the
+# bundled Tesseract.
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSData", "NSString", "NSArray", "NSDictionary", "NSURL", "NSDate", "NSValue"] }
+objc2-vision = { version = "0.3", features = ["VNRequest", "VNRecognizeTextRequest", "VNRequestHandler", "VNObservation", "VNTypes", "VNError", "alloc", "std", "objc2-image-io"] }
+objc2-image-io = { version = "0.3", features = ["CGImageProperties"] }
+objc2-core-graphics = { version = "0.3", features = ["CGDataProvider", "CGPDFDocument", "CGPDFPage", "CGContext", "CGColorSpace", "CGImage", "CGBitmapContext"] }
+objc2-core-foundation = { version = "0.3", features = ["CFCGTypes", "CFData"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
