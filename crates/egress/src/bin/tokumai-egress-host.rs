@@ -19,7 +19,8 @@ async fn main() {
     let listen = Endpoint::parse(listen).unwrap_or_else(|e| panic!("{e}"));
     let allow = Allowlist::parse(&std::fs::read_to_string(file).expect("read the allowlist")).unwrap_or_else(|e| panic!("{e}"));
     let report: Report = Arc::new(|host, port, r| match r {
-        Ok((up, down)) => println!("egress {host}:{port} up {up} down {down}"),
+        Ok((0, 0)) => println!("egress {host}:{port} open"),
+        Ok((up, down)) => println!("egress {host}:{port} closed, up {up} down {down}"),
         Err(e) => println!("egress {host}:{port} refused: {e}"),
     });
     println!("tokumai-egress-host on {listen:?}");

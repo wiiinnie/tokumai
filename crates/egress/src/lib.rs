@@ -162,7 +162,8 @@ async fn read_connect(s: &mut Box<dyn Stream>) -> Result<(String, u16), &'static
 }
 
 /// What the host proxy reports about each tunnel (destination, bytes up, bytes down), for
-/// the operator's log: nothing it would not see on the wire anyway.
+/// the operator's log: nothing it would not see on the wire anyway. Called when a tunnel
+/// opens (with 0, 0) and again when it closes.
 pub type Report = Arc<dyn Fn(&str, u16, Result<(u64, u64), String>) + Send + Sync>;
 
 /// On the host: the CONNECT proxy, for destinations on the `allow` list only.
@@ -189,6 +190,8 @@ pub async fn serve(listen: Endpoint, allow: Allowlist, report: Report) -> io::Re
                     if s.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n").await.is_err() {
                         return;
                     }
+                    // Said at once too: a kept-alive connection may stay open for hours.
+                    report(&host, port, Ok((0, 0)));
                     let r = tokio::io::copy_bidirectional(&mut s, &mut out).await.map_err(|e| e.to_string());
                     report(&host, port, r);
                 }
