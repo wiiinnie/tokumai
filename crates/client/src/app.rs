@@ -33,20 +33,21 @@ pub trait Connector: Send + Sync {
 pub struct MixConnector {
     pub enclave_address: String,
     pub entry: EntryChoice,
+    pub traffic: Option<crate::mix::Traffic>,
     /// The entry gateway of the last connect (for the route display).
     pub last_entry: std::sync::Mutex<Option<String>>,
 }
 
 impl MixConnector {
     pub fn new(enclave_address: &str, entry: EntryChoice) -> MixConnector {
-        MixConnector { enclave_address: enclave_address.trim().to_string(), entry, last_entry: Default::default() }
+        MixConnector { enclave_address: enclave_address.trim().to_string(), entry, traffic: None, last_entry: Default::default() }
     }
 }
 
 impl Connector for MixConnector {
     fn connect(&self) -> BoxFuture<'_, Result<Box<dyn Transport>, String>> {
         Box::pin(async move {
-            let t = MixTransport::connect(&self.enclave_address, &self.entry).await?;
+            let t = MixTransport::connect(&self.enclave_address, &self.entry, self.traffic).await?;
             if let Ok(mut e) = self.last_entry.lock() {
                 *e = Some(t.entry_gateway.clone());
             }

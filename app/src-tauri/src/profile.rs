@@ -20,6 +20,9 @@ pub struct Profile {
     pub entry_gateway: Option<String>,
     /// A card checkout that was opened and not yet seen paid.
     pub pending_plan_session: Option<String>,
+    /// The mixnet speed/anonymity trade-off from the settings: [cover, mix, send] ms and
+    /// whether cover traffic runs while idle. `None` = Nym's defaults.
+    pub traffic: Option<(u64, u64, u64, bool)>,
 }
 
 fn path(dir: &Path) -> PathBuf {

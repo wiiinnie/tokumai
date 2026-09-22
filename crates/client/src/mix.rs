@@ -24,6 +24,32 @@ const SURBS_ACK: u32 = 3;
 /// minutes when that API is degraded. Healthy connects take seconds.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(180);
 
+/// The person's trade-off between speed and anonymity, as the settings page sets it. `None`
+/// keeps Nym's own defaults (200 ms cover, 15 ms mixing, 20 ms sending, cover always on),
+/// which are the most private.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Traffic {
+    /// Average gap between cover packets (battery).
+    pub cover_ms: u64,
+    /// Average hold at every mix hop (latency; this reshuffling is the anonymity).
+    pub mix_ms: u64,
+    /// Average gap between real packets (throughput).
+    pub send_ms: u64,
+    /// Keep the cover stream running while idle.
+    pub continuous: bool,
+}
+
+impl Traffic {
+    fn debug_config(&self) -> nym_sdk::DebugConfig {
+        let mut d = nym_sdk::DebugConfig::default();
+        d.traffic.average_packet_delay = Duration::from_millis(self.mix_ms.max(1));
+        d.traffic.message_sending_average_delay = Duration::from_millis(self.send_ms.max(1));
+        d.cover_traffic.loop_cover_traffic_average_delay = Duration::from_millis(self.cover_ms.max(1));
+        d.cover_traffic.disable_loop_cover_traffic_stream = !self.continuous;
+        d
+    }
+}
+
 pub struct MixTransport {
     client: MixnetClient,
     to: Recipient,
@@ -35,7 +61,7 @@ pub struct MixTransport {
 
 impl MixTransport {
     /// Connect through an allowed entry gateway and aim at the enclave's address.
-    pub async fn connect(enclave_address: &str, choice: &EntryChoice) -> Result<MixTransport, String> {
+    pub async fn connect(enclave_address: &str, choice: &EntryChoice, traffic: Option<Traffic>) -> Result<MixTransport, String> {
         let enclave_address = enclave_address.trim();
         let to = Recipient::try_from_base58_string(enclave_address).map_err(|e| format!("not a Nym address: {e}"))?;
         // The directory and the operator's family, also for a gateway the user chose (it
@@ -60,9 +86,11 @@ impl MixTransport {
         let mut found = None;
         for entry in tries {
             let connect = async {
-                MixnetClientBuilder::new_ephemeral()
-                    .request_gateway(entry.clone())
-                    .build()
+                let mut b = MixnetClientBuilder::new_ephemeral().request_gateway(entry.clone());
+                if let Some(t) = traffic {
+                    b = b.debug_config(t.debug_config());
+                }
+                b.build()
                     .map_err(|e| format!("mixnet: {e}"))?
                     .connect_to_mixnet()
                     .await

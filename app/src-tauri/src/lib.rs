@@ -123,7 +123,9 @@ fn entry_choice(p: &profile::Profile) -> EntryChoice {
 
 fn new_connection(app: &AppHandle, p: &profile::Profile) -> Result<Connection, String> {
     let address = target::enclave_address()?;
-    let connector = Reporting { inner: MixConnector::new(&address, entry_choice(p)), app: app.clone() };
+    let mut inner = MixConnector::new(&address, entry_choice(p));
+    inner.traffic = p.traffic.map(|(cover_ms, mix_ms, send_ms, continuous)| tokumai_client::mix::Traffic { cover_ms, mix_ms, send_ms, continuous });
+    let connector = Reporting { inner, app: app.clone() };
     Ok(Connection::new(Box::new(connector), target::policy()?))
 }
 
@@ -161,6 +163,41 @@ async fn reset_connection(app: &AppHandle) {
 }
 
 // ---- state ----------------------------------------------------------------------------
+
+/// The enclave's plan ladder in the shape the plan sheet draws: one row per tier with its
+/// monthly and yearly price in cents and what it saves against the entry tier. Empty when
+/// plans are not sold by card here — the sheet then offers none.
+fn ui_ladder(l: &Value) -> Value {
+    if l["byCard"] != true {
+        return json!([]);
+    }
+    let rows: Vec<Value> = l["tiers"]
+        .as_array()
+        .map(|tiers| {
+            tiers
+                .iter()
+                .map(|t| {
+                    let tier = t["tier"].as_u64().unwrap_or(0);
+                    let cents = t["web"]["month"].as_u64().unwrap_or_else(|| t["cents"].as_u64().unwrap_or(0));
+                    let yearly = t["web"]["year"].as_u64().unwrap_or_else(|| tokumai_core::subscription::yearly_cents(cents));
+                    json!({ "tier": tier, "toku": t["toku"], "cents": cents, "yearlyCents": yearly,
+                            "savesCents": tokumai_core::subscription::saving_cents(tier as usize) })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    json!(rows)
+}
+
+/// The plan as the sheet reads it (`toku_per_month` is its older name for the allowance).
+fn ui_plan(p: &Value) -> Value {
+    if !p.is_object() {
+        return Value::Null;
+    }
+    let mut p = p.clone();
+    p["toku_per_month"] = p["tokuPerMonth"].clone();
+    p
+}
 
 fn account_json(p: &profile::Profile) -> Value {
     match p.mnemonic.as_deref().map(account::from_mnemonic) {
@@ -201,7 +238,7 @@ async fn state(app: AppHandle) -> Result<Value, String> {
             out["allowance"] = json!({ "left": bal["allowance"], "endsMs": bal["allowance_ends_ms"] });
             let prepaid: u64 = bal["prepaid"].as_array().map(|l| l.iter().filter_map(|x| x[0].as_u64()).sum()).unwrap_or(0);
             out["prepaid"] = json!(prepaid);
-            out["plan"] = b["plan"].clone();
+            out["plan"] = ui_plan(&b["plan"]);
         }
         Err(e) => out["error"] = json!(e),
     }
@@ -216,7 +253,9 @@ async fn state(app: AppHandle) -> Result<Value, String> {
         }
     }
     out["models"] = st.models.lock().await.clone().unwrap_or(json!([]));
-    out["plans"] = st.ladder.lock().await.clone().unwrap_or(Value::Null);
+    let ladder = st.ladder.lock().await.clone().unwrap_or(Value::Null);
+    out["plans"] = ui_ladder(&ladder);
+    out["consentVersion"] = ladder["consentVersion"].clone();
     if let Some(conn) = st.conn.lock().await.as_ref() {
         if let Some(s) = conn.session() {
             out["attested"] = json!({ "platform": s.claims.platform, "measurement": s.claims.measurement });
@@ -356,10 +395,17 @@ async fn chat(
     });
     let _ = app.emit("chat-sent", ());
     let st = app.state::<AppState>();
-    let answer = tokio::select! {
+    let mut answer = tokio::select! {
         a = Box::pin(call(&app, "chat", body)) => a?,
         _ = st.cancel.notified() => return Err("stopped".into()),
     };
+    // The footer's words for what the answer took and what it cost.
+    let u = answer["usage"].clone();
+    answer["usage"] = json!({
+        "inputTokens": u["input"], "outputTokens": u["output"], "cachedInputTokens": u["cachedInput"],
+        "imageSize": u["imageSize"], "searches": u["searches"],
+        "billing": { "priceToku": answer["cost"], "estimated": answer["estimated"], "model": model, "pricingVersion": "the enclave's own" },
+    });
     Ok(answer)
 }
 
@@ -370,12 +416,13 @@ fn cancel_chat(state: State<'_, AppState>) {
 
 // ---- plans ----------------------------------------------------------------------------
 
-/// The ladder: tiers, allowances, card prices (from Stripe, read by the enclave).
+/// The ladder: tiers, allowances, card prices (from Stripe, read by the enclave), in the
+/// sheet's shape.
 #[tauri::command]
 async fn plan_ladder(app: AppHandle) -> Result<Value, String> {
     let l = call(&app, "plans", json!({})).await?;
     *app.state::<AppState>().ladder.lock().await = Some(l.clone());
-    Ok(l)
+    Ok(ui_ladder(&l))
 }
 
 /// Order a plan by card. `consent` carries the two confirmations and the version of the
@@ -405,14 +452,16 @@ async fn plan_poll(app: AppHandle) -> Result<Value, String> {
         let mut p = profile::load(&dir);
         p.pending_plan_session = None;
         profile::save(&dir, &p)?;
-        return Ok(json!({ "status": "paid", "plan": r["plan"] }));
+        return Ok(json!({ "status": "paid", "plan": ui_plan(&r["plan"]) }));
     }
     Ok(json!({ "status": "pending" }))
 }
 
 #[tauri::command]
 async fn plan_change(app: AppHandle, tier: u64, yearly: bool) -> Result<Value, String> {
-    call(&app, "plan.change", json!({ "tier": tier, "yearly": yearly })).await
+    let mut r = call(&app, "plan.change", json!({ "tier": tier, "yearly": yearly })).await?;
+    r["plan"] = ui_plan(&r["plan"]);
+    Ok(r)
 }
 
 /// Forget an open checkout. Nothing is cancelled: an unpaid Stripe checkout expires.
@@ -500,6 +549,31 @@ async fn set_entry_random(app: AppHandle, on: bool) -> Result<Value, String> {
     // Random off without a pick: keep whatever gateway the live connection uses.
     let entry = app.state::<AppState>().route.lock().map_err(|_| "unavailable")?.entry.clone();
     set_entry_gateway(app, entry).await
+}
+
+/// The speed/anonymity trade-off from Settings → Network & privacy. Takes effect with the
+/// next connection, which is made at once.
+#[tauri::command]
+async fn set_mixnet_perf(app: AppHandle, cover_ms: u64, mix_ms: u64, send_ms: u64, continuous: bool) -> Result<(), String> {
+    let t = (cover_ms.clamp(1, 60_000), mix_ms.min(1_000), send_ms.clamp(1, 1_000), continuous);
+    let dir = data_dir(&app)?;
+    let mut p = profile::load(&dir);
+    if p.traffic == Some(t) {
+        return Ok(());
+    }
+    p.traffic = Some(t);
+    profile::save(&dir, &p)?;
+    reset_connection(&app).await;
+    Ok(())
+}
+
+/// A round trip that costs nothing (the balance): the mixnet's own latency, for the
+/// developer page.
+#[tauri::command]
+async fn mixnet_ping(app: AppHandle) -> Result<Value, String> {
+    let t0 = std::time::Instant::now();
+    call(&app, "balance", json!({})).await?;
+    Ok(json!({ "ms": t0.elapsed().as_millis() as u64 }))
 }
 
 // ---- sleep and wake -------------------------------------------------------------------
@@ -730,7 +804,7 @@ pub fn run() {
             phrase_check_start, phrase_check_verify, phrase_backup_get,
             chat, cancel_chat,
             plan_ladder, plan_checkout, plan_poll, plan_change, plan_forget,
-            mixnet_route, list_entry_gateways, set_entry_gateway, set_entry_random,
+            mixnet_route, list_entry_gateways, set_entry_gateway, set_entry_random, set_mixnet_perf, mixnet_ping,
             app_hidden, app_resumed, mixnet_heartbeat,
             support_send, support_list, support_diag,
             vault_list, vault_load, vault_save, vault_remove, vault_purge_webdata,

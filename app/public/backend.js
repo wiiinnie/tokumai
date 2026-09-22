@@ -62,6 +62,11 @@ export const Backend = {
   // Rust emits mixnet-phase {step, detail} during every connect:
   // directory · keys · gateway · cover · ready · failed.
   onMixnetPhase: (cb) => listen("mixnet-phase", cb),
+  // Settings → Network & privacy: the speed/anonymity trade-off (Nym's defaults otherwise).
+  setMixnetPerf: (coverMs, mixMs, sendMs, continuous) => invoke("set_mixnet_perf", { coverMs, mixMs, sendMs, continuous: !!continuous }),
+  mixnetPing: () => invoke("mixnet_ping"),
+  // The local resume log of the first app; the desktop keeps none.
+  resumeStats: () => Promise.resolve({ count: 0, alive: 0, dead: 0, rebuilt: 0, longest_alive_ms: 0, shortest_dead_ms: null, log: "", path: "" }),
   appHidden: () => invoke("app_hidden"),
   appResumed: (hiddenMs, force) => invoke("app_resumed", { hiddenMs: Math.max(0, Math.round(hiddenMs || 0)), force: !!force }),
   mixnetHeartbeat: () => invoke("mixnet_heartbeat"),
@@ -70,6 +75,8 @@ export const Backend = {
   supportSend: () => invoke("support_send"),
   supportList: () => invoke("support_list"),
   supportDiag: (lastError) => invoke("support_diag", { lastError: lastError || null }),
+  supportFetch: () => Promise.resolve({ threads: [] }),
+  supportSeen: () => Promise.resolve(),
 
   // ---- the chat vault (files in Rust, key in the OS keychain)
   vaultList: () => invoke("vault_list"),
@@ -82,6 +89,9 @@ export const Backend = {
   saveImage: (dataB64, filename) => invoke("save_image", { data: dataB64, filename }),
   saveFile: (dataB64, filename) => invoke("save_file", { data: dataB64, filename }),
   openExternal: (url) => invoke("open_external", { url }),
+  // The phone apps' native picker and share sheet come with the phone apps.
+  pickImage: () => Promise.reject(new Error("the native picker is part of the phone app")),
+  shareText: () => Promise.reject(new Error("the share sheet is part of the phone app")),
 
   // ---- the privacy guard's readers, on the device
   ocr: (image) => invoke("ocr_scan", { image }),
