@@ -30,24 +30,35 @@ pub trait Connector: Send + Sync {
 }
 
 /// The mixnet, to the enclave's address, through an entry gateway allowed by rule A1.
+/// What an interface is told while a connection is being made, as each step starts:
+/// "directory", "gateway", "cover" (the mixnet client), then "proof" and "ready" (the
+/// attestation). Real moments, so nothing has to be guessed with a timer.
+pub type Steps = std::sync::Arc<dyn Fn(&str) + Send + Sync>;
+
 pub struct MixConnector {
     pub enclave_address: String,
     pub entry: EntryChoice,
     pub traffic: Option<crate::mix::Traffic>,
+    pub steps: Option<Steps>,
     /// The entry gateway of the last connect (for the route display).
     pub last_entry: std::sync::Mutex<Option<String>>,
 }
 
 impl MixConnector {
     pub fn new(enclave_address: &str, entry: EntryChoice) -> MixConnector {
-        MixConnector { enclave_address: enclave_address.trim().to_string(), entry, traffic: None, last_entry: Default::default() }
+        MixConnector { enclave_address: enclave_address.trim().to_string(), entry, traffic: None, steps: None, last_entry: Default::default() }
     }
 }
 
 impl Connector for MixConnector {
     fn connect(&self) -> BoxFuture<'_, Result<Box<dyn Transport>, String>> {
         Box::pin(async move {
-            let t = MixTransport::connect(&self.enclave_address, &self.entry, self.traffic).await?;
+            let say = |step: &str| {
+                if let Some(s) = &self.steps {
+                    s(step);
+                }
+            };
+            let t = MixTransport::connect(&self.enclave_address, &self.entry, self.traffic, &say).await?;
             if let Ok(mut e) = self.last_entry.lock() {
                 *e = Some(t.entry_gateway.clone());
             }
@@ -67,11 +78,23 @@ pub struct Connection {
     transport: Option<Box<dyn Transport>>,
     session: Option<Session>,
     paused_at: Option<Instant>,
+    steps: Option<Steps>,
 }
 
 impl Connection {
     pub fn new(connector: Box<dyn Connector>, policy: Policy) -> Connection {
-        Connection { connector, policy, transport: None, session: None, paused_at: None }
+        Connection { connector, policy, transport: None, session: None, paused_at: None, steps: None }
+    }
+
+    /// Follow the steps of a connection as they happen (see [`Steps`]).
+    pub fn on_step(&mut self, steps: Steps) {
+        self.steps = Some(steps);
+    }
+
+    fn step(&self, step: &str) {
+        if let Some(s) = &self.steps {
+            s(step);
+        }
     }
 
     /// The attested enclave, once there is one.
@@ -110,6 +133,7 @@ impl Connection {
         }
         if self.session.is_none() {
             let t0 = Instant::now();
+            self.step("proof");
             let nonce: [u8; 32] = rand::random();
             let t = self.transport.as_mut().ok_or("no transport")?;
             let reply = match t.roundtrip(&attest_request(&nonce)).await {
@@ -122,6 +146,7 @@ impl Connection {
             let reached = t.reached_at();
             self.session = Some(Session::from_attestation(&reply, &nonce, &self.policy, reached.as_deref())?);
             log::info!("[enclave] attested in {} ms", t0.elapsed().as_millis());
+            self.step("ready");
         }
         Ok(())
     }

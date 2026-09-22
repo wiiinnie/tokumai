@@ -60,12 +60,15 @@ pub struct MixTransport {
 }
 
 impl MixTransport {
-    /// Connect through an allowed entry gateway and aim at the enclave's address.
-    pub async fn connect(enclave_address: &str, choice: &EntryChoice, traffic: Option<Traffic>) -> Result<MixTransport, String> {
+    /// Connect through an allowed entry gateway and aim at the enclave's address. `step` is
+    /// told what is happening as it happens ("directory", "gateway", "cover"), so an
+    /// interface can follow the real progress instead of a timer.
+    pub async fn connect(enclave_address: &str, choice: &EntryChoice, traffic: Option<Traffic>, step: &(dyn Fn(&str) + Send + Sync)) -> Result<MixTransport, String> {
         let enclave_address = enclave_address.trim();
         let to = Recipient::try_from_base58_string(enclave_address).map_err(|e| format!("not a Nym address: {e}"))?;
         // The directory and the operator's family, also for a gateway the user chose (it
         // must not be one of ours either).
+        step("directory");
         let directory = gateways::fetch().await?;
         // A random allowed gateway; the directory also lists nodes the SDK will not use
         // as an entry right now ("no gateway with id"), so a few are tried in turn.
@@ -84,6 +87,7 @@ impl MixTransport {
         };
         let mut last = String::new();
         let mut found = None;
+        step("gateway");
         for entry in tries {
             let connect = async {
                 let mut b = MixnetClientBuilder::new_ephemeral().request_gateway(entry.clone());
@@ -106,6 +110,7 @@ impl MixTransport {
             }
         }
         let Some((client, entry)) = found else { return Err(format!("{last} — try again")) };
+        step("cover");
         Ok(MixTransport { client, to, to_text: enclave_address.to_string(), entry_gateway: entry, timeout: Duration::from_secs(300) })
     }
 

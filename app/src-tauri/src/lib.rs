@@ -92,12 +92,6 @@ struct Reporting {
 impl Connector for Reporting {
     fn connect(&self) -> BoxFuture<'_, Result<Box<dyn Transport>, String>> {
         Box::pin(async move {
-            let phase = |step: &str, detail: &str| {
-                let _ = self.app.emit("mixnet-phase", json!({ "step": step, "detail": detail }));
-            };
-            phase("directory", "");
-            phase("keys", "");
-            phase("gateway", "");
             let st = self.app.state::<AppState>();
             match self.inner.connect().await {
                 Ok(t) => {
@@ -105,15 +99,13 @@ impl Connector for Reporting {
                     if let Ok(mut r) = st.route.lock() {
                         *r = Route { entry: entry.clone(), live: true };
                     }
-                    phase("cover", "");
-                    phase("ready", entry.as_deref().unwrap_or(""));
                     Ok(t)
                 }
                 Err(e) => {
                     if let Ok(mut r) = st.route.lock() {
                         r.live = false;
                     }
-                    phase("failed", &e);
+                    let _ = self.app.emit("mixnet-phase", json!({ "step": "failed", "detail": e }));
                     Err(e)
                 }
             }
@@ -132,8 +124,18 @@ fn new_connection(app: &AppHandle, p: &profile::Profile) -> Result<Connection, S
     let address = target::enclave_address()?;
     let mut inner = MixConnector::new(&address, entry_choice(p));
     inner.traffic = p.traffic.map(|(cover_ms, mix_ms, send_ms, continuous)| tokumai_client::mix::Traffic { cover_ms, mix_ms, send_ms, continuous });
+    // Each step as it starts, so the interface follows the real connection instead of a
+    // timer: directory · gateway · cover · proof · ready.
+    let steps = |app: AppHandle| -> tokumai_client::app::Steps {
+        std::sync::Arc::new(move |step: &str| {
+            let _ = app.emit("mixnet-phase", json!({ "step": step, "detail": "" }));
+        })
+    };
+    inner.steps = Some(steps(app.clone()));
     let connector = Reporting { inner, app: app.clone() };
-    Ok(Connection::new(Box::new(connector), target::policy()?))
+    let mut conn = Connection::new(Box::new(connector), target::policy()?);
+    conn.on_step(steps(app.clone()));
+    Ok(conn)
 }
 
 fn current_account(app: &AppHandle) -> Result<Account, String> {

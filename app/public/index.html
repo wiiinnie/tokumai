@@ -2830,59 +2830,96 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   function emptyConnectingHTML(){
     return `<div class="empty connecting"><div class="cons" id="connCons"></div></div>`;
   }
-  // The connect sequence — the milestones nym-client-core really runs, in order.
-  const CONN_STEPS = ["Generating encryption keys","Starting Nym client","Connecting to entry gateway","Activating cover traffic","Checking the enclave's proof"];
+  // The connect sequence. Each line belongs to a step the Rust side reports WHEN IT
+  // STARTS (directory · gateway · cover · proof), so the animation follows the real
+  // connection: a line types while its step runs and is ticked when the next one begins.
+  // It used to run on a timer and was either ahead of the truth or behind it.
+  // Set true to show the directory line as well (four lines instead of three). The
+  // directory fetch is real, but it is the least interesting of the four and the whole
+  // connect is only about five seconds.
+  const CONN_SHOW_DIRECTORY = false;
+  const CONN_STEPS = (CONN_SHOW_DIRECTORY ? ["Fetching the gateway directory"] : [])
+    .concat(["Generating session keys","Activating cover traffic","Verifying tokumai enclave"]);
+  // Which real step opens which line. Without the directory line, the keys line opens at
+  // the very start and stands through the directory fetch and the gateway connection —
+  // the part that actually takes seconds.
+  const CONN_OF_STEP = CONN_SHOW_DIRECTORY
+    ? { directory:0, gateway:1, cover:2, proof:3 }
+    : { directory:0, gateway:0, cover:1, proof:2 };
+  // A line stays at least this long before the next one may tick it: two of these steps
+  // are instant, and a line nobody can read is worse than none.
+  const CONN_MIN_MS = 1300;
+  // How long the tick at the end stays before the logo takes over.
+  const CONN_DONE_MS = 1500;
   const DONE_MARK_SVG = '<svg class="donemark" viewBox="0 0 52 52"><circle cx="26" cy="26" r="23"/><path d="M15 27 L23 35 L37 18"/></svg>';
-  let connState = { timers:[], seq:0, awaiting:false, lastLine:null, lastCur:null };
-  function stopConnType(){ connState.timers.forEach(clearTimeout); connState.timers=[]; connState.seq++; connState.awaiting=false; }
+  let connState = { timers:[], seq:0, lines:[], at:-1, want:-1, advancing:false, done:false };
+  function stopConnType(){ connState.timers.forEach(clearTimeout); connState.timers=[]; connState.seq++; connState.lines=[]; connState.at=-1; connState.want=-1; connState.advancing=false; connState.done=false; }
   // Type each step, ✓ as it lands. The final step (server reachable) keeps its cursor
   // until the mixnet is ACTUALLY up (mixConnected) — so the last ✓ + success mark is
   // gated on the real connection, not a timer. Paced for readability either way.
   function startConnType(){
-    stopConnType(); const my=++connState.seq;
+    stopConnType(); connState.seq++;
     const host=document.getElementById("connCons"); if(!host) return;
-    host.innerHTML=""; connState.lastLine=null; connState.lastCur=null;
-    // Paced for reading while the connection is still being made — and hurried along the
-    // moment it is up, so nobody watches an animation of something that already happened
-    // (the enclave answers in about five seconds; the leisurely pace took eight).
-    const lines=CONN_STEPS.map(s=>s+"…"), lastIdx=lines.length-1;
-    const charD=()=>mixConnected?6:30, pause=()=>mixConnected?90:800;
-    let i=0;
-    function nextLine(){
-      if(my!==connState.seq || i>=lines.length) return;
-      const idx=i, text=lines[i++];
-      const ln=document.createElement("div"); ln.className="ln";
-      const tx=document.createElement("span"); const cur=document.createElement("span"); cur.className="cur";
-      ln.appendChild(tx); ln.appendChild(cur); host.appendChild(ln);
-      let c=0;
-      (function type(){
-        if(my!==connState.seq) return;
-        if(c<text.length){ tx.textContent+=text[c++]; connState.timers.push(setTimeout(type,charD())); return; }
-        connState.timers.push(setTimeout(()=>{ if(my!==connState.seq) return;
-          if(idx===lastIdx){
-            connState.lastLine=ln; connState.lastCur=cur; connState.awaiting=true;
-            if(mixConnected) connFinish();          // already up → finish now
-          } else {
-            cur.remove(); const ok=document.createElement("span"); ok.className="ok"; ok.textContent="✓";
-            ln.appendChild(ok); ln.classList.add("done");
-            connState.timers.push(setTimeout(nextLine,pause()));
-          }
-        },mixConnected?60:260));
-      })();
-    }
-    connState.timers.push(setTimeout(nextLine,320));
+    host.innerHTML=""; connState.lines=[]; connState.at=-1; connState.want=-1; connState.advancing=false; connState.done=false;
+    connStep(0);                      // the first step is under way before Rust says so
   }
-  // Called when the mixnet is genuinely up while the last step is waiting: stamp its ✓
-  // and draw the success mark, then settle into the logo.
+  /// A real step started: show its line as soon as the one before it has had its time.
+  function connStep(n){
+    if(!document.getElementById("connCons") || n>=CONN_STEPS.length) return;
+    connState.want = Math.max(connState.want, n);
+    connAdvance();
+  }
+  function connAdvance(){
+    if(connState.advancing || connState.at>=connState.want) return;
+    const my=connState.seq, next=connState.at+1, cur=connState.lines[connState.at];
+    const wait = cur ? Math.max(0, CONN_MIN_MS - (Date.now()-cur.at)) : 0;
+    connState.advancing = true;
+    connState.timers.push(setTimeout(()=>{
+      if(my!==connState.seq) return;
+      connState.advancing = false;
+      connFinishLine(connState.at);
+      connOpenLine(next);
+      connState.at = next;
+      connAdvance();
+      if(connState.done) connFinish();
+    }, wait));
+  }
+  function connOpenLine(i){
+    const host=document.getElementById("connCons"); if(!host || connState.lines[i]) return;
+    const ln=document.createElement("div"); ln.className="ln";
+    const tx=document.createElement("span"), cur=document.createElement("span"); cur.className="cur";
+    ln.appendChild(tx); ln.appendChild(cur); host.appendChild(ln);
+    const l={ ln, tx, cur, text:CONN_STEPS[i]+"…", c:0, at:Date.now() };
+    connState.lines[i]=l;
+    const my=connState.seq;
+    (function type(){
+      if(my!==connState.seq || connState.lines[i]!==l) return;
+      if(l.c<l.text.length){ l.tx.textContent+=l.text[l.c++]; connState.timers.push(setTimeout(type,22)); }
+    })();
+  }
+  /// A finished step: the rest of its text at once, then the tick.
+  function connFinishLine(i){
+    const l=connState.lines[i]; if(!l || l.ticked) return;
+    l.ticked=true; l.tx.textContent=l.text;
+    if(l.cur) l.cur.remove();
+    const ok=document.createElement("span"); ok.className="ok"; ok.textContent="✓";
+    l.ln.appendChild(ok); l.ln.classList.add("done");
+  }
+  /// Everything is up. Show whatever is left, let the last line have its time, then the
+  /// success mark and the logo.
   function connFinish(){
-    if(!connState.awaiting) return; connState.awaiting=false;
-    const ln=connState.lastLine, cur=connState.lastCur, host=document.getElementById("connCons");
-    if(!ln||!host){ scrambleToLogo(); return; }
-    if(cur) cur.remove();
-    const ok=document.createElement("span"); ok.className="ok"; ok.textContent="✓"; ln.appendChild(ok); ln.classList.add("done");
-    const mk=document.createElement("div"); mk.innerHTML=DONE_MARK_SVG; host.appendChild(mk.firstElementChild);
-    // Long enough to see the tick, short enough not to be a wait of its own.
-    setTimeout(()=>{ if(document.getElementById("connCons")) scrambleToLogo(); }, 700);
+    const host=document.getElementById("connCons"); if(!host){ scrambleToLogo(); return; }
+    connState.done = true;
+    connStep(CONN_STEPS.length-1);
+    if(connState.at < CONN_STEPS.length-1 || connState.advancing) return;   // connAdvance calls back
+    const last=connState.lines[connState.at], my=connState.seq;
+    const wait = last ? Math.max(0, CONN_MIN_MS - (Date.now()-last.at)) : 0;
+    connState.timers.push(setTimeout(()=>{
+      if(my!==connState.seq) return;
+      connFinishLine(CONN_STEPS.length-1);
+      if(!host.querySelector(".donemark")){ const mk=document.createElement("div"); mk.innerHTML=DONE_MARK_SVG; host.appendChild(mk.firstElementChild); }
+      connState.timers.push(setTimeout(()=>{ if(my===connState.seq && document.getElementById("connCons")) scrambleToLogo(); }, CONN_DONE_MS));
+    }, wait));
   }
 
   // Connected → show the static tokumai logo. No scramble/churn — straight to the mark.
@@ -2906,11 +2943,9 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     // A restored thread shows no connect animation, so gate terms on the raw connect event.
     if(messages.length!==0){ if(mixConnected && !wasConnected) armTermsGate(); return; }
     if(mixConnected && !wasConnected){
-      // Connected for real. If the console's last step is waiting, stamp its ✓ and draw
-      // the success mark; if it's still typing, let it reach the last step (which now
-      // auto-finishes since mixConnected is true); if no console is up, go to the logo.
-      if(connState.awaiting) connFinish();
-      else if(!document.getElementById("connCons")) scrambleToLogo();
+      // Connected for real: finish the console (it stamps the last tick and draws the
+      // success mark), or go straight to the logo when there is no console.
+      if(document.getElementById("connCons")) connFinish(); else scrambleToLogo();
     }
     else if(!mixConnected && wasConnected){ renderThread(); }     // dropped → connecting
   }
@@ -3060,7 +3095,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // "server" reads as a liveness check here (the boot animation keeps "Connecting to
   // tokumai server"): the step sends a tiny ping through the mixnet and waits for
   // the answer — "reuse" narrates the fast path where the live route is kept as-is.
-  const PHASE_LABEL = { directory:"Fetching the gateway directory", keys:CONN_STEPS[0], client:CONN_STEPS[1], gateway:CONN_STEPS[2], cover:CONN_STEPS[3], server:"Checking the enclave's proof", reuse:"Route is up — reusing it" };
+  const PHASE_LABEL = { directory:CONN_STEPS[0], gateway:"Connecting to entry gateway", cover:CONN_STEPS[2], proof:CONN_STEPS[3], check:"Checking the route", reuse:"Route is up — reusing it" };
   let routeTitle = "";                          // "" → default "Reconnecting to the mixnet"
   let rt = { lines:[], timers:[], seq:0 };     // overlay console state: lines = [{el, tx, cur, text, typed, closed}]
   function routeSecs(){ return routeStart ? Math.max(0, Math.round((Date.now()-routeStart)/1000)) : 0; }
@@ -3153,15 +3188,21 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // Progress events from Rust — each one is a step that is REALLY starting now:
   // directory (cold cache only) · keys · client · gateway · cover · server · online | failed.
   function onMixnetPhase(p){
-    if(!p || !everConnected) return;               // the boot animation owns the first connect
+    if(!p) return;
+    // The first connect belongs to the boot animation: its lines follow these same steps.
+    if(!everConnected){
+      if(p.step==="ready") connFinish();
+      else if(p.step in CONN_OF_STEP) connStep(CONN_OF_STEP[p.step]);
+      return;
+    }
     switch(p.step){
       case "check": setMixState("checking"); return;
-      case "directory": case "keys": case "client": case "gateway": case "cover": case "server": case "reuse":
+      case "directory": case "gateway": case "cover": case "proof": case "reuse":
         if(mixState!=="reconnecting") setMixState("reconnecting");
-        // "keys" is the first step of every attempt. A second attempt while the overlay is
-        // already open used to append its steps under the first one's, so the sheet showed
-        // the whole sequence twice and read as if two reconnects were racing.
-        if(p.step==="keys" && rt.lines.length) routeRestart();
+        // "directory" is the first step of every attempt. A second attempt while the
+        // overlay is open used to append its steps under the first one's, so the sheet
+        // showed the sequence twice and read as if two reconnects were racing.
+        if(p.step==="directory" && rt.lines.length) routeRestart();
         routeLine(PHASE_LABEL[p.step] + (p.detail ? " · " + p.detail : ""));
         return;
       case "ready":
