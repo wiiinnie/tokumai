@@ -38,6 +38,7 @@ The real service with stand-ins for the parts only a real enclave has:
 ```sh
 cargo run -p tokumai-server --bin tokumai-enclave-dev [-- --mix]   # the enclave, simulated
 cargo run -p tokumai-server --bin tokumai-dev-client -- [--mix] "a question" [model]
+cd app && npm install && npm run dev                         # the app (first run installs the Tauri CLI)
 cargo test                                                   # everything
 ```
 
