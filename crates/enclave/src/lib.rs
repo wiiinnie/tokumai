@@ -9,15 +9,21 @@
 //! - [`tokumai_attest::Attester`] — who vouches for the code (simulator, AWS Nitro, Google);
 //! - [`seal::KeyProvider`] — where the data key comes from (a local file, or a KMS that
 //!   releases it only to attested code);
-//! - [`provider::Provider`] — the model provider (a mock, or OpenAI / Gemini).
+//! - [`provider::Providers`] — the model providers (a mock, or OpenAI and Gemini), with
+//!   their keys from a [`secrets::SecretSource`] (the environment, or sealed secrets).
 //!
 //! Everything else — the wire format, the ledger, the billing — is the same in both.
 
 pub mod client;
+pub mod gemini;
+pub mod http;
 pub mod keys;
 pub mod ledger;
+pub mod openai;
+pub mod policy;
 pub mod provider;
 pub mod seal;
+pub mod secrets;
 pub mod service;
 pub mod wire;
 

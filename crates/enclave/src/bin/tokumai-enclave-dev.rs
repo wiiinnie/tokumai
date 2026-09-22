@@ -1,5 +1,6 @@
-//! The enclave, simulated on this machine: the real service with a stand-in attester, a local
-//! key file and a mock model. Listens on 127.0.0.1:7707, one JSON message per line.
+//! The enclave, simulated on this machine: the real service with a stand-in attester and a
+//! local key file. Models: the mock, plus OpenAI and Gemini when OPENAI_API_KEY / GEMINI_API_KEY
+//! are set in the environment (in a real enclave they arrive sealed). Listens on 127.0.0.1:7707, one JSON message per line.
 //!
 //!     cargo run -p tokumai-enclave --bin tokumai-enclave-dev
 //!
@@ -10,8 +11,11 @@ use std::path::PathBuf;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 use tokumai_attest::sim;
-use tokumai_enclave::provider::MockProvider;
+use tokumai_core::pricing::PricingTable;
+use tokumai_enclave::policy::PRICING_JSON;
+use tokumai_enclave::provider::Providers;
 use tokumai_enclave::seal::FileKeyProvider;
+use tokumai_enclave::secrets::EnvSecrets;
 use tokumai_enclave::service::{Db, Enclave, Platform};
 
 fn sim_root(dir: &std::path::Path) -> [u8; 32] {
@@ -42,9 +46,11 @@ async fn main() {
     let enclave = Enclave::start(Platform {
         attester: Box::new(sim::SimAttester::new(root, m.clone())),
         keys: Box::new(FileKeyProvider { path: dir.join("data.key") }),
-        provider: Box::new(MockProvider),
+        // Real providers for whichever keys are in the environment (OPENAI_API_KEY,
+        // GEMINI_API_KEY), and the mock beside them.
+        providers: Providers::from_secrets(&EnvSecrets).with_mock(),
         db: Db::File(dir.join("ledger.db")),
-        prices: [("mock".to_string(), (100, 400))].into_iter().collect(),
+        pricing: PricingTable::parse(PRICING_JSON).expect("pricing.json"),
         dev_mode: true,
     })
     .expect("start the enclave");

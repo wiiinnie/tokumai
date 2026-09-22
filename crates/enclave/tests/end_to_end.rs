@@ -6,23 +6,43 @@ use serde_json::{json, Value};
 use tokumai_attest::{sim, Policy};
 use tokumai_core::account::{from_mnemonic, Account};
 use tokumai_enclave::client::{attest_request, Session};
-use tokumai_enclave::provider::MockProvider;
+use tokumai_core::pricing::PricingTable;
+use tokumai_enclave::policy::PRICING_JSON;
+use tokumai_enclave::provider::{BoxFuture, Call, Completion, Provider, Providers};
 use tokumai_enclave::seal::FixedKeyProvider;
 use tokumai_enclave::service::{Db, Enclave, Platform};
 
 const ROOT: [u8; 32] = [5; 32];
 const PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art";
 
-fn enclave(dev: bool) -> Enclave {
+/// A stand-in for a provider that declines everything, the way OpenAI or Google do.
+struct Refuser;
+impl Provider for Refuser {
+    fn name(&self) -> &'static str {
+        "refuser"
+    }
+    fn serves(&self, model: &str) -> bool {
+        model == "gemini-3.5-flash-lite"
+    }
+    fn complete<'a>(&'a self, _call: &'a Call<'a>) -> BoxFuture<'a, Result<Completion, String>> {
+        Box::pin(async { Err("Declined by Google (SAFETY): no".to_string()) })
+    }
+}
+
+fn with_providers(dev: bool, providers: Providers) -> Enclave {
     Enclave::start(Platform {
         attester: Box::new(sim::SimAttester::new(ROOT, "image-1")),
         keys: Box::new(FixedKeyProvider([9; 32])),
-        provider: Box::new(MockProvider),
+        providers,
         db: Db::Memory,
-        prices: [("mock".to_string(), (100, 400))].into_iter().collect(),
+        pricing: PricingTable::parse(PRICING_JSON).unwrap(),
         dev_mode: dev,
     })
     .unwrap()
+}
+
+fn enclave(dev: bool) -> Enclave {
+    with_providers(dev, Providers::mock())
 }
 
 fn dev_policy() -> Policy {
@@ -49,13 +69,13 @@ async fn an_account_pays_for_a_question_exactly_once_and_only_what_it_cost() {
     let credited = call(&e, &s, &a, "dev.credit", json!({ "toku": 100_000 })).await;
     assert_eq!(credited["balance"]["total"], 100_000);
 
-    let body = json!({ "model": "mock", "messages": [{ "role": "user", "content": "hello there" }], "max_tokens": 200 });
+    let body = json!({ "model": "mock", "messages": [{ "role": "user", "content": "hello there" }], "maxTokens": 200 });
     let (pending, bytes) = s.request(&a, "chat", &body, tokumai_enclave::now_ms());
     let first = e.handle(&bytes).await;
     let answer = pending.open(&first).unwrap();
     assert!(answer["text"].as_str().unwrap().contains("hello there"));
     let cost = answer["cost"].as_u64().unwrap();
-    assert!(cost > 0 && cost < 100, "charged what the answer cost, not the ceiling: {cost}");
+    assert!(cost > 0 && cost < 20, "charged what the answer cost, not the ceiling: {cost}");
     assert_eq!(answer["balance"].as_u64().unwrap(), 100_000 - cost);
 
     // The answer was lost; the app sends the same bytes again: same answer, no second charge.
@@ -95,6 +115,36 @@ async fn nothing_is_credited_out_of_thin_air_outside_development() {
     let a = from_mnemonic(PHRASE).unwrap();
     let r = call(&e, &s, &a, "dev.credit", json!({ "toku": 1 })).await;
     assert_eq!(r["error"], "not available on this enclave");
+    // The mock has no price of its own in pricing.json, and outside development a model
+    // without a published price is not offered at all (fail closed).
     let r = call(&e, &s, &a, "chat", json!({ "model": "mock", "messages": [{ "role": "user", "content": "hi" }] })).await;
-    assert!(r["error"].as_str().unwrap().contains("not enough credit"));
+    assert_eq!(r["error"], "that model is not offered");
+}
+
+#[tokio::test]
+async fn attachments_the_providers_cannot_read_are_refused_before_anything_is_sent() {
+    let e = enclave(true);
+    let s = session(&e, &dev_policy()).await.unwrap();
+    let a = from_mnemonic(PHRASE).unwrap();
+    call(&e, &s, &a, "dev.credit", json!({ "toku": 100_000 })).await;
+    let r = call(&e, &s, &a, "chat", json!({ "model": "mock", "messages": [{ "role": "user", "content": "listen",
+        "attachments": [{ "mimeType": "audio/ogg", "data": "AAAA" }] }] })).await;
+    assert!(r["error"].as_str().unwrap().contains("not supported"), "{r}");
+    assert_eq!(call(&e, &s, &a, "balance", json!({})).await["balance"]["total"], 100_000, "and nothing was held");
+}
+
+#[tokio::test]
+async fn declines_cost_nothing_and_three_a_day_pause_that_provider() {
+    let e = with_providers(true, Providers::with(vec![Box::new(Refuser)]));
+    let s = session(&e, &dev_policy()).await.unwrap();
+    let a = from_mnemonic(PHRASE).unwrap();
+    call(&e, &s, &a, "dev.credit", json!({ "toku": 100_000 })).await;
+    let ask = json!({ "model": "gemini-3.5-flash-lite", "messages": [{ "role": "user", "content": "x" }] });
+    for _ in 0..3 {
+        let r = call(&e, &s, &a, "chat", ask.clone()).await;
+        assert!(r["error"].as_str().unwrap().starts_with("Declined by"), "{r}");
+    }
+    let r = call(&e, &s, &a, "chat", ask).await;
+    assert!(r["error"].as_str().unwrap().contains("tomorrow"), "{r}");
+    assert_eq!(call(&e, &s, &a, "balance", json!({})).await["balance"]["total"], 100_000, "no decline was charged");
 }

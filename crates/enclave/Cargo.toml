@@ -19,3 +19,4 @@ hkdf.workspace = true
 rand.workspace = true
 rusqlite.workspace = true
 tokio.workspace = true
+reqwest.workspace = true

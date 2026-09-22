@@ -32,12 +32,12 @@ The real service with stand-ins for the parts only a real enclave has:
 |---|---|---|
 | who vouches for the code | `attest::sim` (a local key in `dev-data/sim-root.key`) | AWS Nitro / Google Confidential Space |
 | data key | `dev-data/data.key` | released by a KMS only to attested code |
-| model | `MockProvider` (echoes) | OpenAI, Gemini |
+| model | the mock, plus OpenAI / Gemini if `OPENAI_API_KEY` / `GEMINI_API_KEY` are set | OpenAI, Gemini, keys sealed |
 | transport | TCP on 127.0.0.1:7707, one JSON message per line | the Nym mixnet |
 
 ```sh
 cargo run -p tokumai-enclave --bin tokumai-enclave-dev      # the enclave, simulated
-cargo run -p tokumai-enclave --bin tokumai-dev-client -- "a question"
+cargo run -p tokumai-enclave --bin tokumai-dev-client -- "a question" [model]
 cargo test                                                   # everything
 ```
 
@@ -46,11 +46,20 @@ root (`attest::Policy::simulated_root`).
 
 ## Status
 
-Early. Built so far: the wire format (X25519 + ChaCha20-Poly1305, sealed to the attested
-key), attestation binding and the simulator, the ledger (monthly allowance, prepaid valid
-three years from purchase, hold and settle per request), and billing per question. Next: the
-real providers, plans (Stripe, App Store), the Nym transport, the app, and the two platform
-probes (`docs/enclave-phase0.md`).
+Early. Built so far:
+- the wire format: X25519 + ChaCha20-Poly1305, sealed to the attested key;
+- attestation binding and the simulator;
+- the ledger: a monthly allowance, prepaid valid three years from purchase, hold and settle
+  per request;
+- the providers, OpenAI (Responses API) and Gemini (text, pictures, search grounding), with
+  OpenAI's moderation check in front of both, a per-account daily pseudonym for OpenAI, and
+  three declines a day per provider before it pauses for that account.
+
+Prices (`pricing.json`), margin and limits (`crates/enclave/src/policy.rs`) are compiled
+into the image, so the attestation covers them.
+
+Next: plans (Stripe, App Store), the Nym transport, the app, and the two platform probes
+(`docs/enclave-phase0.md`).
 
 ## License
 

@@ -2,4 +2,6 @@
 //! recovery phrase, what an account signs, and how a plan's periods are cut.
 
 pub mod account;
+pub mod billing;
+pub mod pricing;
 pub mod subscription;

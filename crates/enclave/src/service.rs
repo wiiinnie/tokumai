@@ -12,7 +12,8 @@
 
 use crate::keys::EnclaveKeys;
 use crate::ledger::Ledger;
-use crate::provider::{estimate_tokens, ChatRequest, Provider};
+use crate::policy;
+use crate::provider::{Call, ChatRequest, Providers};
 use crate::seal::KeyProvider;
 use crate::wire::ServerExchange;
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
@@ -23,15 +24,14 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tokumai_attest::Attester;
+use tokumai_core::billing::{ceil_toku, ceiling_toku, compute_billing, per_image_toku, Ceiling, TOKU_PER_USD};
+use tokumai_core::pricing::PricingTable;
 
 /// How far a request's timestamp may be from the enclave's clock.
 pub const CLOCK_SKEW_MS: u64 = 5 * 60 * 1000;
 /// How long an answer is kept for a resend.
 pub const REPLY_KEEP: Duration = Duration::from_secs(30 * 60);
 const REPLY_KEEP_MAX: usize = 20_000;
-
-/// TOKU per 1,000 tokens (input, output), per model.
-pub type Prices = HashMap<String, (u64, u64)>;
 
 pub enum Db {
     File(PathBuf),
@@ -42,9 +42,10 @@ pub enum Db {
 pub struct Platform {
     pub attester: Box<dyn Attester>,
     pub keys: Box<dyn KeyProvider>,
-    pub provider: Box<dyn Provider>,
+    pub providers: Providers,
     pub db: Db,
-    pub prices: Prices,
+    /// Normally `PricingTable::parse(policy::PRICING_JSON)` — the list published with the image.
+    pub pricing: PricingTable,
     /// Development only: allows `dev.*` operations that create credit out of nothing.
     pub dev_mode: bool,
 }
@@ -52,11 +53,17 @@ pub struct Platform {
 pub struct Enclave {
     keys: EnclaveKeys,
     attester: Box<dyn Attester>,
-    provider: Box<dyn Provider>,
+    providers: Providers,
     ledger: Mutex<Ledger>,
-    prices: Prices,
+    pricing: PricingTable,
     dev_mode: bool,
     replies: Mutex<HashMap<String, (Instant, Vec<u8>)>>,
+    /// Secret behind the per-account pseudonyms sent to providers; derived from the data
+    /// key, so it survives restarts and is known only inside.
+    safety_salt: [u8; 32],
+    /// Declines per (account, UTC day, provider). In memory: a restart forgives, which is
+    /// the lenient side.
+    strikes: Mutex<HashMap<(String, u64, &'static str), u32>>,
 }
 
 #[derive(Deserialize)]
@@ -87,11 +94,13 @@ impl Enclave {
         Ok(Enclave {
             keys: EnclaveKeys::generate(),
             attester: p.attester,
-            provider: p.provider,
+            providers: p.providers,
             ledger: Mutex::new(ledger),
-            prices: p.prices,
+            pricing: p.pricing,
             dev_mode: p.dev_mode,
             replies: Mutex::new(HashMap::new()),
+            safety_salt: tokumai_core::account::sha256(&[b"tokumai/safety/v1", &key]),
+            strikes: Mutex::new(HashMap::new()),
         })
     }
 
@@ -219,33 +228,125 @@ impl Enclave {
         }
     }
 
+    /// A per-account pseudonym for today: lets OpenAI act on one user's abuse instead of
+    /// the whole key, without ever learning the account, and different tomorrow.
+    fn safety_id(&self, account: &str, day: u64) -> String {
+        hex::encode(tokumai_core::account::sha256(&[&self.safety_salt, day.to_string().as_bytes(), account.as_bytes()]))[..24].to_string()
+    }
+
+    fn strike_count(&self, key: &(String, u64, &'static str)) -> u32 {
+        self.strikes.lock().ok().and_then(|s| s.get(key).copied()).unwrap_or(0)
+    }
+
+    fn strike(&self, key: (String, u64, &'static str)) {
+        if let Ok(mut s) = self.strikes.lock() {
+            let day = key.1;
+            s.retain(|k, _| k.1 >= day);
+            *s.entry(key).or_insert(0) += 1;
+        }
+    }
+
     async fn chat(&self, account: &str, body: &str, now: u64) -> Value {
+        if body.len() > policy::MAX_REQUEST_BYTES {
+            return error("this request is too large");
+        }
         let Ok(req) = serde_json::from_str::<ChatRequest>(body) else { return error("malformed chat request") };
-        let Some(&(per_in, per_out)) = self.prices.get(&req.model) else { return error("that model is not offered") };
-        let price = |tin: u64, tout: u64| (tin * per_in + tout * per_out).div_ceil(1000);
-        // The worst case is held first; the answer is charged at what it cost.
-        let input_estimate: u64 = req.messages.iter().map(|m| estimate_tokens(&m.content)).sum();
-        let ceiling = price(input_estimate * 2, req.max_tokens as u64);
-        let hold = match self.ledger.lock().map_err(|_| "ledger unavailable".to_string()).and_then(|mut l| l.hold(account, ceiling, now)) {
+        let Some(messages) = req.messages.as_array() else { return error("malformed chat request") };
+        if messages.is_empty() || messages.len() > policy::MAX_MESSAGES {
+            return error("a chat request needs between 1 and 2,000 messages");
+        }
+        // Worst-case input: bytes of text (a token is at least a byte) plus what each
+        // attachment can cost. Only types the providers read are passed on.
+        let mut in_tokens: u64 = 0;
+        for m in messages {
+            in_tokens += m.get("content").and_then(|c| c.as_str()).map(|c| c.len() as u64).unwrap_or(0);
+            for att in m.get("attachments").and_then(|a| a.as_array()).map(Vec::as_slice).unwrap_or(&[]) {
+                let mime = att.get("mimeType").and_then(|x| x.as_str()).unwrap_or("");
+                let b64 = att.get("data").and_then(|x| x.as_str()).unwrap_or("");
+                if !policy::ATTACHMENT_TYPES.contains(&mime) {
+                    return error(&format!("attachments of type {mime:?} are not supported — pictures and PDFs are"));
+                }
+                let bytes = b64.len() / 4 * 3;
+                if bytes > policy::MAX_ATTACHMENT_BYTES {
+                    return error("an attachment is larger than 10 MB");
+                }
+                // A PDF is read page by page; reserve as if every 40 bytes were a token.
+                in_tokens += if mime == "application/pdf" { (bytes as u64 / 40).max(4096) } else { policy::IMAGE_INPUT_TOKENS };
+            }
+        }
+        let Some(provider) = self.providers.find(&req.model) else { return error("that model is not offered") };
+        let price = self.pricing.price(&req.model);
+        if price.fallback && !self.dev_mode {
+            return error("that model is not offered");
+        }
+        let day = now / 86_400_000;
+        let strike_key = (account.to_string(), day, provider.name());
+        if self.strike_count(&strike_key) >= policy::STRIKES_PER_DAY {
+            return error("this account has had too many requests declined by this provider today — it can be used again tomorrow");
+        }
+        let image_size = crate::gemini::effective_image_size(&req.model, req.image_size.as_deref());
+        let search_usd = if crate::openai::is_openai_model(&req.model) { policy::OPENAI_USD_PER_QUERY } else { policy::GEMINI_USD_PER_QUERY };
+        let search_charge = |queries: u64| -> u64 {
+            if queries == 0 {
+                return 0;
+            }
+            (ceil_toku(queries as f64 * search_usd * TOKU_PER_USD as f64) * policy::MARGIN).ceil() as u64
+        };
+        let ceiling = ceiling_toku(
+            &price,
+            policy::MARGIN,
+            &Ceiling {
+                in_tokens,
+                out_tokens: req.answer_tokens() + req.thinking_tokens(),
+                image_tokens: crate::gemini::image_tokens(&req.model, image_size),
+            },
+        ) + per_image_toku(&price, policy::MARGIN)
+            + if req.live { search_charge(policy::MAX_SEARCH_QUERIES) } else { 0 };
+        let hold = match self.ledger.lock().map_err(|_| "ledger unavailable".to_string()).and_then(|mut l| l.hold(account, ceiling.max(1), now)) {
             Ok(h) => h,
             Err(e) => return error(&e),
         };
-        let result = self.provider.complete(&req).await;
+        // The moderation check runs before the model is asked; a flagged turn costs nothing.
+        let flagged = self.providers.moderate(&req.messages).await;
+        let result = match flagged {
+            Ok(Some(cats)) => Err(format!("Declined by the moderation check ({cats})")),
+            _ => {
+                let call = Call { req: &req, safety_id: Some(self.safety_id(account, day)), image_size };
+                provider.complete(&call).await
+            }
+        };
         let cost = match &result {
-            Ok(c) => price(c.input_tokens, c.output_tokens),
-            Err(_) => 0, // a failed answer costs nothing
+            Ok(c) => {
+                let images = c.images.as_ref().and_then(|i| i.as_array()).map(|a| a.len() as u64).unwrap_or(0);
+                compute_billing(&price, &c.usage, policy::MARGIN, policy::MIN_CHARGE_TOKU, c.usage.estimated).price_toku
+                    + images * per_image_toku(&price, policy::MARGIN)
+                    + search_charge(c.usage.grounding_queries)
+            }
+            Err(_) => 0, // a refused or failed answer costs nothing
         };
         let charged = match self.ledger.lock().map_err(|_| "ledger unavailable".to_string()).and_then(|mut l| l.settle(hold, cost)) {
             Ok(k) => k,
             Err(e) => return error(&e),
         };
+        let declined = match &result {
+            Ok(c) => c.text.starts_with("Declined by"),
+            Err(e) => e.starts_with("Declined by"),
+        };
+        if declined {
+            self.strike(strike_key);
+        }
         match result {
             Ok(c) => {
                 let total = self.ledger.lock().ok().and_then(|l| l.balance(account, now).ok()).map(|b| b.total).unwrap_or(0);
-                json!({ "kind": "chat", "text": c.text, "cost": charged, "balance": total,
-                        "usage": { "input": c.input_tokens, "output": c.output_tokens } })
+                json!({
+                    "kind": "chat", "text": c.text, "images": c.images, "cost": charged, "balance": total,
+                    "estimated": c.usage.estimated,
+                    "usage": { "input": c.usage.input, "cachedInput": c.usage.cached_input, "output": c.usage.output,
+                               "image": c.usage.output_image, "searches": c.usage.grounding_queries,
+                               "imageSize": crate::gemini::is_image_model(&req.model).then_some(image_size) },
+                })
             }
-            Err(e) => error(&format!("the model did not answer: {e}")),
+            Err(e) => error(&e),
         }
     }
 }

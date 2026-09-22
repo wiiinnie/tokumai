@@ -1,7 +1,7 @@
 //! A stand-in for the app against the simulated enclave: attest, pin the simulator root from
 //! ./dev-data, then credit, ask and read the balance — each request signed and sealed.
 //!
-//!     cargo run -p tokumai-enclave --bin tokumai-dev-client -- "a question"
+//!     cargo run -p tokumai-enclave --bin tokumai-dev-client -- "a question" [model]
 
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -18,6 +18,8 @@ async fn roundtrip(lines: &mut tokio::io::Lines<BufReader<tokio::net::tcp::Owned
 #[tokio::main]
 async fn main() {
     let question = std::env::args().nth(1).unwrap_or_else(|| "hello from the dev client".into());
+    // Second argument: the model (default the mock; e.g. gemini-3.5-flash-lite with a key set).
+    let model = std::env::args().nth(2).unwrap_or_else(|| "mock".into());
     let root: [u8; 32] = std::fs::read("dev-data/sim-root.key").expect("start tokumai-enclave-dev first").try_into().expect("32 bytes");
     let policy = Policy { measurements: vec![], simulated_root: Some(sim::root_public(&root)), simulated_any_measurement: true };
     let phrase = std::fs::read_to_string("dev-data/dev.phrase").unwrap_or_else(|_| {
@@ -43,7 +45,7 @@ async fn main() {
     };
     for (p, bytes, op) in [
         ask("dev.credit", json!({ "toku": 100_000 })),
-        ask("chat", json!({ "model": "mock", "messages": [{ "role": "user", "content": question }], "max_tokens": 256 })),
+        ask("chat", json!({ "model": model, "messages": [{ "role": "user", "content": question }], "maxTokens": 512 })),
         ask("balance", json!({})),
     ] {
         let answer = p.open(&roundtrip(&mut lines, &mut w, &bytes).await).expect("answer");
