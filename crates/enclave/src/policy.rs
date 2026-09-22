@@ -57,3 +57,22 @@ pub const APPLE_CREDIT_TILES: &[u32] = &[10, 20, 50];
 /// built with the `apple-sandbox` feature — which has its own, published measurement. A
 /// production image can never be talked into accepting them.
 pub const APPLE_SANDBOX: bool = cfg!(any(debug_assertions, feature = "apple-sandbox"));
+
+/// The models offered, in the order the app shows them. Anything else is refused, priced
+/// or not (a floating alias like `gemini-flash-latest` is priced but not offered: Google
+/// repoints it without notice). Each must also be priced in `pricing.json`.
+pub const OFFERED_MODELS: &[&str] = &[
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+    "gpt-5.6-luna",
+    "gpt-5.6-terra",
+    "gemini-3.1-flash-image",
+    "gemini-3.1-flash-lite-image",
+    "gemini-2.5-flash-image",
+];
+
+/// How long OpenAI keeps API inputs for abuse monitoring (its standard terms; 0 would need
+/// Zero Data Retention). Shown to the user next to the model.
+pub const OPENAI_RETENTION_DAYS: u32 = 30;

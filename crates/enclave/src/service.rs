@@ -223,6 +223,7 @@ impl Enclave {
         match op {
             "balance" => self.balance(account, now),
             "chat" => self.chat(account, body, now).await,
+            "models" => json!({ "kind": "models", "models": crate::catalog::models(&self.pricing, &self.providers, self.dev_mode), "pricingVersion": self.pricing.version() }),
             "plans" => self.plans_op(account, now),
             "plan.create" => self.plan_create(account, body, now).await,
             "plan.status" => self.plan_status(account, body, now).await,
@@ -307,11 +308,11 @@ impl Enclave {
                 in_tokens += if mime == "application/pdf" { (bytes as u64 / 40).max(4096) } else { policy::IMAGE_INPUT_TOKENS };
             }
         }
-        let Some(provider) = self.providers.find(&req.model) else { return error("that model is not offered") };
-        let price = self.pricing.price(&req.model);
-        if price.fallback && !self.dev_mode {
+        if !crate::catalog::offered(&req.model, &self.pricing, self.dev_mode) {
             return error("that model is not offered");
         }
+        let Some(provider) = self.providers.find(&req.model) else { return error("that model is not offered") };
+        let price = self.pricing.price(&req.model);
         let day = now / 86_400_000;
         let strike_key = (account.to_string(), day, provider.name());
         if self.strike_count(&strike_key) >= policy::STRIKES_PER_DAY {

@@ -16,6 +16,7 @@
 //! with the app) — is the same in both.
 
 pub mod apple;
+pub mod catalog;
 pub mod gemini;
 pub mod http;
 pub mod keys;
