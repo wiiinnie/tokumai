@@ -414,10 +414,11 @@ async fn chat(
     live: Option<bool>,
     thinking_budget: Option<u64>,
     image_size: Option<String>,
+    lossless: Option<bool>,
 ) -> Result<Value, String> {
     let body = json!({
         "model": model, "messages": messages, "maxTokens": max_tokens, "live": live.unwrap_or(false),
-        "thinkingBudget": thinking_budget, "imageSize": image_size,
+        "thinkingBudget": thinking_budget, "imageSize": image_size, "lossless": lossless.unwrap_or(false),
     });
     let _ = app.emit("chat-sent", ());
     let st = app.state::<AppState>();

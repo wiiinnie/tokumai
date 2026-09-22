@@ -1453,6 +1453,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         <input type="range" id="imgSize" min="0" max="1" step="1" class="mpslider flat">
         <div class="mpticks" id="imgSizeTicks"><span>1K</span><span>2K · ×1.5</span></div>
       </div>
+      <label class="setrow"><input type="checkbox" id="imgExact"><span><b>Keep pictures pixel-exact</b><small>A drawn picture is packed as WebP inside the enclave before it crosses the mixnet — a few megabytes become a few hundred kilobytes, which is the difference between seconds and minutes of waiting. Tick this to get every pixel as the model drew it instead: lossless, several times the size, several times the wait.</small></span></label>
       <label class="setrow"><input type="checkbox" id="prTopic"><span><b>Topic-shift trimming</b><small>Drop earlier turns that are unrelated to your new question (e.g. weather → football). Terse follow-ups keep their context. Never drops the recent exchanges above.</small></span></label>
       <label class="setrow"><input type="checkbox" id="prWhite"><span><b>Whitespace normalisation</b><small>Collapse redundant spaces and blank lines. Lossless — wording is never changed.</small></span></label>
       <label class="setrow"><input type="checkbox" id="prReq"><span><b>Request de-fluffing</b><small>Strip leading/trailing filler (“could you please…”, “thanks!”) from your prompt. Meaning is preserved.</small></span></label>
@@ -3095,7 +3096,9 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // "server" reads as a liveness check here (the boot animation keeps "Connecting to
   // tokumai server"): the step sends a tiny ping through the mixnet and waits for
   // the answer — "reuse" narrates the fast path where the live route is kept as-is.
-  const PHASE_LABEL = { directory:CONN_STEPS[0], gateway:"Connecting to entry gateway", cover:CONN_STEPS[2], proof:CONN_STEPS[3], check:"Checking the route", reuse:"Route is up — reusing it" };
+  // Named outright, not by their place in CONN_STEPS: that list is three lines or four
+  // depending on CONN_SHOW_DIRECTORY, and an index past its end showed "undefined…".
+  const PHASE_LABEL = { directory:"Fetching the gateway directory", gateway:"Connecting to entry gateway", cover:"Activating cover traffic", proof:"Verifying tokumai enclave", check:"Checking the route", reuse:"Route is up — reusing it" };
   let routeTitle = "";                          // "" → default "Reconnecting to the mixnet"
   let rt = { lines:[], timers:[], seq:0 };     // overlay console state: lines = [{el, tx, cur, text, typed, closed}]
   function routeSecs(){ return routeStart ? Math.max(0, Math.round((Date.now()-routeStart)/1000)) : 0; }
@@ -3997,7 +4000,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     // downgrade (2K on Lite → 1K) is told to the user, not silently swallowed.
     const reqSize = imageSize(), reqLabel = $("mName").textContent || currentModel;
     dlProg=null;
-    Backend.chat({ model: currentModel, messages: sendMessages, maxTokens: 4096, live: useLive, thinkingBudget: thinkingBudget(), bigReply: modelKind === "image", retry: replay, imageSize: reqSize }, {
+    Backend.chat({ model: currentModel, messages: sendMessages, maxTokens: 4096, live: useLive, thinkingBudget: thinkingBudget(), bigReply: modelKind === "image", retry: replay, imageSize: reqSize, lossless: imageLossless() }, {
       // Real lifecycle signals drive the status line: request fully sent →
       // "Thinking…", which holds until the answer itself takes over.
       onPhase:(p,info)=>{
@@ -4360,6 +4363,11 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       markTicks("imgSize", +$("imgSize").value);
       $("setStatus").textContent = "image size: "+s+(s==="1K"?" (default)":"");
     };
+    $("imgExact").checked = imageLossless();
+    $("imgExact").onchange = ()=>{
+      try{ localStorage.setItem("tokumai.imageLossless", $("imgExact").checked ? "1" : "0"); }catch(_){}
+      $("setStatus").textContent = $("imgExact").checked ? "pictures are kept pixel-exact — expect a longer wait" : "pictures are packed for delivery (default)";
+    };
     const o = getPruneOpts();
     $("prCtx").value     = String(Math.max(0, CTX_STEPS.indexOf(o.ctxPairs ?? 4)));
     markTicks("prCtx", +$("prCtx").value);
@@ -4709,6 +4717,11 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // 4K went because a few megabytes through the mixnet is minutes, not seconds, and the
   // wait is the whole experience; 512 went because it is not worth a step of its own.
   const IMAGE_SIZES = ["1K","2K"];
+  // Whether a drawn picture crosses the mixnet exactly as the model made it. Off by
+  // default: the packed one looks the same on a screen and arrives in a fraction of the time.
+  function imageLossless(){
+    try{ return localStorage.getItem("tokumai.imageLossless") === "1"; }catch(_){ return false; }
+  }
   function imageSize(){
     try{ const v=localStorage.getItem("scrai.imageSize"); return IMAGE_SIZES.includes(v)?v:"1K"; }catch(_){ return "1K"; }
   }

@@ -25,6 +25,10 @@ pub struct ChatRequest {
     pub live: bool,
     #[serde(default, rename = "imageSize")]
     pub image_size: Option<String>,
+    /// Keep a generated picture pixel for pixel (see `picture`): slower, several times
+    /// the bytes over the mixnet. Off by default.
+    #[serde(default)]
+    pub lossless: bool,
 }
 
 impl ChatRequest {

@@ -29,6 +29,8 @@ hmac = "0.12"
 rsa = "0.9"
 aes = "0.8"
 cbc = { version = "0.1", features = ["alloc"] }
+webp = { version = "0.3.1", default-features = false, features = ["img"] }
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
 
 [features]
 # Accept App Store sandbox purchases in a release image (testnet). See policy::APPLE_SANDBOX.

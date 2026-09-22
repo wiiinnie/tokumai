@@ -31,6 +31,10 @@ use std::time::{Duration, Instant};
 /// Payload bytes per frame. ~64 KB is ~32 Sphinx packets: small enough that one lost
 /// packet costs little, big enough that a question fits in one frame.
 pub const CHUNK: usize = 64 * 1024;
+/// How many pieces are asked for at once. Everything in flight is in the mixnet at the
+/// same time, and a burst too large is not delivered faster — it is delivered late, its
+/// acknowledgements come late with it, and the sender begins repeating itself.
+const WINDOW: usize = 4;
 /// Largest message accepted in parts (a request with attachments), and so the most parts.
 /// The enclave's own limit on a request (`policy::MAX_REQUEST_BYTES`) must not exceed it.
 pub const MAX_MESSAGE: usize = 48 * 1024 * 1024;
@@ -369,7 +373,7 @@ mod tests {
             seed % 100 < loss_pct
         };
         for _ in 0..10_000 {
-            for f in ex.due(8) {
+            for f in ex.due(WINDOW) {
                 if lost() {
                     continue;
                 }

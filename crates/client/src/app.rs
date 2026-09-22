@@ -158,7 +158,7 @@ impl Connection {
 
     async fn call_inner(&mut self, account: &Account, op: &str, body: &Value) -> Result<Value, String> {
         let started = Instant::now();
-        for _ in 0..2 {
+        for attempt in 0..2 {
             self.ready().await?;
             let session = self.session.as_ref().ok_or("not attested")?;
             let (pending, bytes) = session.request(account, op, body, tokumai_proto::now_ms());
@@ -166,6 +166,13 @@ impl Connection {
             match pending.open(&reply) {
                 Err(e) if e.contains("attest again") => {
                     self.session = None;
+                    continue;
+                }
+                // A request held up in the mixnet arrives stale, and the same signed bytes
+                // never become fresh again. The enclave turned it away without carrying it
+                // out, so signing it again costs nothing and is charged nothing.
+                Err(e) if e.contains("clock is too far") && attempt == 0 => {
+                    log::info!("[enclave] {op} arrived too late to be accepted — signing it again");
                     continue;
                 }
                 answer => {

@@ -114,6 +114,7 @@ export const Backend = {
         model: body.model, messages: body.messages, maxTokens: body.maxTokens, live: !!body.live,
         thinkingBudget: (typeof body.thinkingBudget === "number" ? body.thinkingBudget : null),
         imageSize: (typeof body.imageSize === "string" ? body.imageSize : null),
+        lossless: !!body.lossless,
       });
       if (onPhase) onPhase("receiving");
       if (r && r.text) {
