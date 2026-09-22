@@ -1,0 +1,20 @@
+[package]
+name = "tokumai-proto"
+edition.workspace = true
+version.workspace = true
+description = "What the tokumai app and enclave share: wire format, session, mixnet framing."
+
+[dependencies]
+tokumai-core = { path = "../core" }
+tokumai-attest = { path = "../attest" }
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+base64.workspace = true
+x25519-dalek.workspace = true
+chacha20poly1305.workspace = true
+hkdf.workspace = true
+rand.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

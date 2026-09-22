@@ -1,4 +1,4 @@
-//! The Nym mixnet, both ends. Lessons carried over from the first server (tokumai 0.x):
+//! The enclave's end of the Nym mixnet (the app's is `tokumai_client::mix`). Lessons carried over from the first server (tokumai 0.x):
 //!
 //! - The server's own sending is not padded (no Poisson stream, no loop cover). Padding it
 //!   would not protect a user: whoever runs the host sees the enclave's side anyway, and to
@@ -10,17 +10,12 @@
 //! - Every exchange has its own id, and a question still being answered is not answered
 //!   twice (`frames`), so a resend never gets someone else's answer, or a stale one.
 
-use crate::Transport;
-use nym_sdk::mixnet::{
-    AnonymousSenderTag, IncludedSurbs, MixnetClient, MixnetClientBuilder, MixnetClientSender, MixnetMessageSender, Recipient, StoragePaths,
-};
-use std::future::Future;
+use nym_sdk::mixnet::{AnonymousSenderTag, MixnetClient, MixnetClientBuilder, MixnetClientSender, MixnetMessageSender, StoragePaths};
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
-use tokumai_enclave::frames::{Exchange, Frames, Step};
+use tokumai_proto::frames::Frames;
 use tokumai_enclave::service::Enclave;
 
 /// The server's traffic shape (see the module notes).
@@ -108,81 +103,5 @@ async fn reconnect(dir: &Path, gateway: &str) -> MixnetClient {
             Ok(c) => return c,
             Err(e) => eprintln!("tokumai-server: reconnect attempt {attempt} failed: {e}"),
         }
-    }
-}
-
-/// How long the app waits in silence before it sends what is still missing again. A
-/// question being answered stays silent until the model is done; the resend is then
-/// answered with nothing, and costs a few SURBs.
-const QUIET: Duration = Duration::from_secs(20);
-/// Frames in flight at once.
-const WINDOW: usize = 8;
-/// Reply SURBs sent with a frame whose answer can be a whole chunk, and with one whose
-/// answer is an acknowledgement.
-const SURBS_CHUNK: u32 = 40;
-const SURBS_ACK: u32 = 3;
-
-/// The app's side: an ephemeral Nym client (fresh keys every start, so nothing links one
-/// session of the app to the next) sending to the enclave's address.
-pub struct MixTransport {
-    client: MixnetClient,
-    to: Recipient,
-    /// Overall limit for one exchange.
-    pub timeout: Duration,
-}
-
-impl MixTransport {
-    pub async fn connect(enclave_address: &str) -> Result<MixTransport, String> {
-        let to = Recipient::try_from_base58_string(enclave_address.trim()).map_err(|e| format!("not a Nym address: {e}"))?;
-        let client = MixnetClient::connect_new().await.map_err(|e| format!("connect to the mixnet: {e}"))?;
-        Ok(MixTransport { client, to, timeout: Duration::from_secs(300) })
-    }
-
-    pub fn own_address(&self) -> String {
-        self.client.nym_address().to_string()
-    }
-
-    async fn exchange(&mut self, message: &[u8]) -> Result<Vec<u8>, String> {
-        let mut ex = Exchange::new(message.to_vec());
-        let deadline = tokio::time::Instant::now() + self.timeout;
-        loop {
-            for f in ex.due(WINDOW) {
-                let surbs = if f[0] == 2 { SURBS_ACK } else { SURBS_CHUNK };
-                self.client.send_message(self.to, f, IncludedSurbs::new(surbs)).await.map_err(|e| format!("send: {e}"))?;
-            }
-            // Listen until the answers stop coming for a while, then send what is missing.
-            loop {
-                let now = tokio::time::Instant::now();
-                if now >= deadline {
-                    return Err("no answer from the enclave in time".into());
-                }
-                let wait = QUIET.min(deadline - now);
-                let Ok(batch) = tokio::time::timeout(wait, self.client.wait_for_messages()).await else { break };
-                let Some(batch) = batch else { return Err("the mixnet client stopped".into()) };
-                let mut moved = false;
-                for m in batch {
-                    if !ex.owns(&m.message) {
-                        continue; // a late answer to an earlier exchange
-                    }
-                    match ex.accept(&m.message)? {
-                        Step::Done(reply) => return Ok(reply),
-                        Step::Going => moved = true,
-                    }
-                }
-                // Progress (an acknowledgement, a chunk): send the next frames right away.
-                if moved {
-                    break;
-                }
-            }
-        }
-    }
-}
-
-impl Transport for MixTransport {
-    fn roundtrip<'a>(&'a mut self, message: &'a [u8]) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, String>> + Send + 'a>> {
-        Box::pin(self.exchange(message))
-    }
-    fn reached_at(&self) -> Option<String> {
-        Some(self.to.to_string())
     }
 }

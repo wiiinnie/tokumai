@@ -32,7 +32,8 @@ use std::time::{Duration, Instant};
 /// packet costs little, big enough that a question fits in one frame.
 pub const CHUNK: usize = 64 * 1024;
 /// Largest message accepted in parts (a request with attachments), and so the most parts.
-pub const MAX_MESSAGE: usize = crate::policy::MAX_REQUEST_BYTES;
+/// The enclave's own limit on a request (`policy::MAX_REQUEST_BYTES`) must not exceed it.
+pub const MAX_MESSAGE: usize = 48 * 1024 * 1024;
 /// How long a half-sent message, or a reply not yet fetched, is kept.
 const KEEP: Duration = Duration::from_secs(30 * 60);
 /// Bytes kept across all exchanges; beyond it the oldest go first.

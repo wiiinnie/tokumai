@@ -5,7 +5,7 @@
 use serde_json::{json, Value};
 use tokumai_attest::{sim, Policy};
 use tokumai_core::account::{from_mnemonic, Account};
-use tokumai_enclave::client::{attest_request, Session};
+use tokumai_proto::session::{attest_request, Session};
 use tokumai_core::pricing::PricingTable;
 use tokumai_enclave::policy::PRICING_JSON;
 use tokumai_enclave::provider::{BoxFuture, Call, Completion, Provider, Providers};

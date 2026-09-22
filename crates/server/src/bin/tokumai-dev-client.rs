@@ -4,7 +4,8 @@
 //!     cargo run -p tokumai-server --bin tokumai-dev-client -- [--mix] "a question" [model] [imageSize]
 //!
 //! With `--mix` the requests go over the Nym mixnet to the address in ./dev-data/nym-address,
-//! and the attestation must name that address.
+//! through a random entry gateway that is not ours (rule A1), and the attestation must name
+//! that address. Everything goes through `tokumai_client::app::Connection`, as in the app.
 
 use serde_json::{json, Value};
 use std::future::Future;
@@ -13,13 +14,41 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
 use tokumai_attest::{sim, Policy};
-use tokumai_enclave::client::{attest_request, Session};
-use tokumai_server::Transport;
+use tokumai_client::app::{BoxFuture, Connection, Connector, MixConnector};
+use tokumai_client::gateways::EntryChoice;
+use tokumai_client::Transport;
 
 /// JSON lines over TCP to the simulator on this machine.
 struct Tcp {
     lines: Lines<BufReader<OwnedReadHalf>>,
     w: OwnedWriteHalf,
+}
+
+/// The mixnet connector, saying which entry gateway it drew.
+struct Logged(std::sync::Arc<MixConnector>);
+
+impl Connector for Logged {
+    fn connect(&self) -> BoxFuture<'_, Result<Box<dyn Transport>, String>> {
+        Box::pin(async move {
+            let t = self.0.connect().await?;
+            let entry = self.0.last_entry.lock().ok().and_then(|e| e.clone()).unwrap_or_default();
+            let ours = tokumai_client::gateways::OPERATOR_GATEWAYS.contains(&entry.as_str());
+            println!("entry:    {entry} (one of ours: {ours})");
+            Ok(t)
+        })
+    }
+}
+
+struct TcpConnector;
+
+impl Connector for TcpConnector {
+    fn connect(&self) -> BoxFuture<'_, Result<Box<dyn Transport>, String>> {
+        Box::pin(async {
+            let sock = TcpStream::connect("127.0.0.1:7707").await.map_err(|e| format!("connect to the simulated enclave: {e}"))?;
+            let (r, w) = sock.into_split();
+            Ok(Box::new(Tcp { lines: BufReader::new(r).lines(), w }) as Box<dyn Transport>)
+        })
+    }
 }
 
 impl Transport for Tcp {
@@ -58,23 +87,17 @@ async fn main() {
     let account = tokumai_core::account::from_mnemonic(&phrase).expect("dev phrase");
 
     let started = std::time::Instant::now();
-    let mut transport: Box<dyn Transport> = if mix {
+    let connector: Box<dyn Connector> = if mix {
         let address = std::fs::read_to_string("dev-data/nym-address").expect("start tokumai-enclave-dev --mix first");
-        let t = tokumai_server::mix::MixTransport::connect(&address).await.expect("mixnet");
-        println!("on the mixnet as {} ({} ms)", &t.own_address()[..16], started.elapsed().as_millis());
-        Box::new(t)
+        // Rule A1: a random entry gateway, never one of ours, never the enclave's own.
+        Box::new(Logged(std::sync::Arc::new(MixConnector::new(&address, EntryChoice::Random))))
     } else {
-        let sock = TcpStream::connect("127.0.0.1:7707").await.expect("connect to the simulated enclave");
-        let (r, w) = sock.into_split();
-        Box::new(Tcp { lines: BufReader::new(r).lines(), w })
+        Box::new(TcpConnector)
     };
-
-    let t0 = std::time::Instant::now();
-    let nonce: [u8; 32] = rand::random();
-    let reply = transport.roundtrip(&attest_request(&nonce)).await.expect("attestation answer");
-    let reached = transport.reached_at();
-    let session = Session::from_attestation(&reply, &nonce, &policy, reached.as_deref()).expect("attestation");
-    println!("attested: {:?} image {} ({} ms)", session.claims.platform, &session.claims.measurement[..16], t0.elapsed().as_millis());
+    let mut conn = Connection::new(connector, policy);
+    conn.ready().await.expect("connect and attest");
+    let session = conn.session().expect("attested");
+    println!("attested: {:?} image {} ({} ms, connect included)", session.claims.platform, &session.claims.measurement[..16], started.elapsed().as_millis());
     if !session.address.is_empty() {
         println!("address:  the enclave's own client, {}…", &session.address[..16]);
     }
@@ -87,8 +110,7 @@ async fn main() {
     ];
     for (op, body) in asks {
         let t = std::time::Instant::now();
-        let (p, bytes) = session.request(&account, op, &body, tokumai_enclave::now_ms());
-        let mut answer = p.open(&transport.roundtrip(&bytes).await.expect("answer")).expect("answer");
+        let mut answer = conn.call(&account, op, &body).await.expect("answer");
         show_images(&mut answer);
         println!("{op:>10}: {answer} ({} ms)", t.elapsed().as_millis());
     }

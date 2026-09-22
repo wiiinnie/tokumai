@@ -53,12 +53,22 @@ Early. Built so far:
   per request;
 - the providers, OpenAI (Responses API) and Gemini (text, pictures, search grounding), with
   OpenAI's moderation check in front of both, a per-account daily pseudonym for OpenAI, and
-  three declines a day per provider before it pauses for that account.
+  three declines a day per provider before it pauses for that account;
+- plans by card (Stripe) and App Store, with the renewal, refund and chargeback check run
+  from inside the enclave;
+- the Nym transport: the enclave's own client, its address attested, messages in
+  acknowledged frames (`crates/proto`);
+- the app core (`crates/client`): connect, attest, re-attest after a restart, reconnect
+  after sleep, and never enter the mixnet through a gateway of ours (rule A1).
+
+Crates: `core` (account, billing, plans' calendar), `attest`, `proto` (what app and
+enclave share), `enclave` (the attested core), `client` (the app core), `server` (the
+enclave's mixnet end and the development binaries).
 
 Prices (`pricing.json`), margin and limits (`crates/enclave/src/policy.rs`) are compiled
 into the image, so the attestation covers them.
 
-Next: plans (Stripe, App Store), the Nym transport, the app, and the two platform probes
+Next: the app itself (Tauri, the existing interface), and the two platform probes
 (`docs/enclave-phase0.md`).
 
 ## License

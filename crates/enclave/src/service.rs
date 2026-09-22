@@ -15,7 +15,7 @@ use crate::ledger::Ledger;
 use crate::policy;
 use crate::provider::{Call, ChatRequest, Providers};
 use crate::seal::KeyProvider;
-use crate::wire::ServerExchange;
+use tokumai_proto::wire::ServerExchange;
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use serde::Deserialize;
 use serde_json::{json, Value};

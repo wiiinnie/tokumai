@@ -23,6 +23,7 @@ pub const MAX_THINKING: u64 = 16_384;
 
 /// Bounds on one chat request: bytes (inline images are base64) and messages.
 pub const MAX_REQUEST_BYTES: usize = 48 * 1024 * 1024;
+const _: () = assert!(MAX_REQUEST_BYTES <= tokumai_proto::frames::MAX_MESSAGE);
 pub const MAX_MESSAGES: usize = 2_000;
 /// Attachments the providers actually read; anything else is refused before it is sent.
 /// (Audit 2026-09-21, M4: Gemini forwarded any type inline, audio and video included, and

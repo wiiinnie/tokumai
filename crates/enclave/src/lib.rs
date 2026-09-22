@@ -12,11 +12,10 @@
 //! - [`provider::Providers`] — the model providers (a mock, or OpenAI and Gemini), with
 //!   their keys from a [`secrets::SecretSource`] (the environment, or sealed secrets).
 //!
-//! Everything else — the wire format, the ledger, the billing — is the same in both.
+//! Everything else — the ledger, the billing, and the wire format (`tokumai-proto`, shared
+//! with the app) — is the same in both.
 
 pub mod apple;
-pub mod client;
-pub mod frames;
 pub mod gemini;
 pub mod http;
 pub mod keys;
@@ -30,7 +29,6 @@ pub mod secrets;
 pub mod service;
 pub mod stripe;
 pub mod subscriptions;
-pub mod wire;
 
 pub use service::{Enclave, Platform};
 

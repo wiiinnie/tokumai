@@ -7,6 +7,7 @@ description = "What runs the enclave core: its own Nym client (the address the a
 [dependencies]
 tokumai-core = { path = "../core" }
 tokumai-attest = { path = "../attest" }
+tokumai-proto = { path = "../proto" }
 tokumai-enclave = { path = "../enclave" }
 serde_json.workspace = true
 hex.workspace = true
@@ -14,4 +15,5 @@ base64.workspace = true
 rand.workspace = true
 tokio.workspace = true
 # The mixnet client, inside the enclave: the operator's host only relays Sphinx packets.
+tokumai-client = { path = "../client" }
 nym-sdk = "1.21"
