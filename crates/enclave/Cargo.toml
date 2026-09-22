@@ -20,3 +20,9 @@ rand.workspace = true
 rusqlite.workspace = true
 tokio.workspace = true
 reqwest.workspace = true
+x509-parser.workspace = true
+ring.workspace = true
+
+[features]
+# Accept App Store sandbox purchases in a release image (testnet). See policy::APPLE_SANDBOX.
+apple-sandbox = []

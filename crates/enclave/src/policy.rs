@@ -42,3 +42,17 @@ pub const OPENAI_USD_PER_QUERY: f64 = 0.01;
 /// Declines (moderation or the provider's own policy) an account may collect per UTC day at
 /// one provider before that provider refuses it until tomorrow.
 pub const STRIKES_PER_DAY: u32 = 3;
+
+/// The App Store: the app's bundle id and product ids. Compiled in, like everything that
+/// decides what a purchase is.
+pub const APPLE_BUNDLE_ID: &str = "com.tokumai.app";
+/// Plans: `<prefix><euro>`, `.year` appended for the yearly version.
+pub const APPLE_PLAN_PREFIX: &str = "com.tokumai.app.plan.";
+/// Prepaid credit: `<prefix><amount>`.
+pub const APPLE_CREDIT_PREFIX: &str = "com.tokumai.app.credit.";
+/// Prepaid tiles on the App Store. Amounts to be settled with the prepaid prices (3 years).
+pub const APPLE_CREDIT_TILES: &[u32] = &[10, 20, 50];
+/// Sandbox purchases (TestFlight, Xcode) count only in a development build, or an image
+/// built with the `apple-sandbox` feature — which has its own, published measurement. A
+/// production image can never be talked into accepting them.
+pub const APPLE_SANDBOX: bool = cfg!(any(debug_assertions, feature = "apple-sandbox"));

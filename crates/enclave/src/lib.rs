@@ -14,6 +14,7 @@
 //!
 //! Everything else — the wire format, the ledger, the billing — is the same in both.
 
+pub mod apple;
 pub mod client;
 pub mod gemini;
 pub mod http;
