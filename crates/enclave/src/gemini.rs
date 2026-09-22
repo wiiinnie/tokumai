@@ -26,10 +26,12 @@ pub fn model_takes_image_size(model: &str) -> bool {
     is_image_model(model) && !model.starts_with("gemini-2.5")
 }
 
-/// Lite is a 512/1K model; the full one goes to 4K (a 2K request to Lite is a 400).
+/// Lite draws 1K only: 512 and 2K are both a 400 from Google ("Image size 512 is not
+/// supported for this model", seen live 2026-09-22 — the first server believed 512 worked).
+/// The full model goes from 512 to 4K.
 pub fn supported_image_sizes(model: &str) -> &'static [&'static str] {
     if model.contains("lite") {
-        &["512", "1K"]
+        &["1K"]
     } else {
         &["512", "1K", "2K", "4K"]
     }
@@ -268,7 +270,8 @@ mod tests {
 
     #[test]
     fn image_sizes_degrade_to_what_the_model_can_draw() {
-        assert_eq!(effective_image_size("gemini-3.1-flash-image-lite", Some("2K")), "1K");
+        assert_eq!(effective_image_size("gemini-3.1-flash-lite-image", Some("2K")), "1K");
+        assert_eq!(effective_image_size("gemini-3.1-flash-lite-image", Some("512")), "1K", "Lite has nothing smaller");
         assert_eq!(effective_image_size("gemini-3.1-flash-image", Some("4k")), "4K");
         assert_eq!(effective_image_size("gemini-3.1-flash-image", None), "1K");
         assert_eq!(image_tokens("gemini-2.5-flash-image", "4K"), 1290);

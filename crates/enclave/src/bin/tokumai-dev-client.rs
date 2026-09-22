@@ -55,6 +55,14 @@ async fn main() {
         if let Some(imgs) = answer.get_mut("images").and_then(|i| i.as_array_mut()) {
             for img in imgs.iter_mut() {
                 let len = img.get("data").and_then(|d| d.as_str()).map(|d| d.len()).unwrap_or(0);
+                // Keep the picture itself where it can be looked at.
+                if let (Some(data), Some(mime)) = (img.get("data").and_then(|d| d.as_str()), img.get("mimeType").and_then(|m| m.as_str())) {
+                    use base64::Engine as _;
+                    if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(data) {
+                        let ext = mime.rsplit('/').next().unwrap_or("bin");
+                        let _ = std::fs::write(format!("dev-data/last-image.{ext}"), bytes);
+                    }
+                }
                 img["data"] = json!(format!("<{} KB base64>", len / 1024));
             }
         }
