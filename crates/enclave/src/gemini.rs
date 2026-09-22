@@ -111,10 +111,12 @@ pub fn to_gemini(messages: &Value, answer_tokens: u64, thinking: u64, live: bool
             json!({ "role": if role_of(m) == "assistant" { "model" } else { "user" }, "parts": parts })
         })
         .collect();
-    let mut body = json!({
-        "contents": contents,
-        "generationConfig": { "maxOutputTokens": answer_tokens + thinking, "thinkingConfig": { "thinkingBudget": thinking } },
-    });
+    let mut body = json!({ "contents": contents, "generationConfig": { "maxOutputTokens": answer_tokens + thinking } });
+    // A budget of 0 is refused by Gemini 3 models ("invalid argument", seen 2026-09-22):
+    // leave the thinking settings out and let the output cap bound it instead.
+    if thinking > 0 {
+        body["generationConfig"]["thinkingConfig"] = json!({ "thinkingBudget": thinking });
+    }
     if !system.is_empty() {
         body["systemInstruction"] = json!({ "parts": [{ "text": system }] });
     }
@@ -288,5 +290,12 @@ mod tests {
         assert_eq!(b["contents"].as_array().unwrap().len(), 1);
         assert_eq!(b["generationConfig"]["maxOutputTokens"], 150);
         assert!(b["tools"][0].get("google_search").is_some());
+    }
+
+    #[test]
+    fn no_thinking_budget_means_no_thinking_settings_at_all() {
+        let b = to_gemini(&json!([{ "role": "user", "content": "hi" }]), 100, 0, false);
+        assert!(b["generationConfig"].get("thinkingConfig").is_none());
+        assert_eq!(b["generationConfig"]["maxOutputTokens"], 100);
     }
 }
