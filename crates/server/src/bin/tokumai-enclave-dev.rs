@@ -42,7 +42,10 @@ fn measurement() -> String {
 
 #[tokio::main]
 async fn main() {
-    let dir = PathBuf::from("dev-data");
+    // TOKUMAI_DEV_DATA keeps a second enclave out of the first one's way: the identity in
+    // dev-data/nym is the one sealed for the probe, and two clients cannot hold the same
+    // gateway session ("there is already an open connection to this client").
+    let dir = PathBuf::from(std::env::var("TOKUMAI_DEV_DATA").unwrap_or_else(|_| "dev-data".into()));
     std::fs::create_dir_all(&dir).expect("create dev-data");
     let root = sim_root(&dir);
     let m = measurement();

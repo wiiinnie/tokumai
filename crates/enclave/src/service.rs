@@ -255,7 +255,13 @@ impl Enclave {
             "plan.status" => self.plan_status(account, body, now).await,
             "plan.change" => self.plan_change(account, body, now).await,
             "iap.verify" => self.iap_verify(account, body, now),
-            "dev.credit" | "dev.allowance" if !self.dev_mode => error("not available on this enclave"),
+            "dev.credit" | "dev.allowance" | "dev.bytes" if !self.dev_mode => error("not available on this enclave"),
+            // A reply of a given size, to measure what the mixnet does with a big answer
+            // without paying a model for a picture. Never on a sealed enclave.
+            "dev.bytes" => {
+                let n = serde_json::from_str::<Value>(body).ok().and_then(|b| b.get("bytes").and_then(|t| t.as_u64())).unwrap_or(0);
+                json!({ "kind": "bytes", "data": "x".repeat(n.min(32 * 1024 * 1024) as usize) })
+            }
             "dev.credit" => {
                 let toku = serde_json::from_str::<Value>(body).ok().and_then(|b| b.get("toku").and_then(|t| t.as_u64())).unwrap_or(0);
                 match self.ledger.lock().map_err(|_| "ledger unavailable".to_string()).and_then(|l| l.credit_prepaid(account, toku, now)) {

@@ -87,13 +87,13 @@ async fn main() {
     let policy = match &nitro_pcr0 {
         Some(pcr0) => Policy { measurements: vec![pcr0.trim().to_lowercase()], simulated_root: None, simulated_any_measurement: false },
         None => {
-            let root: [u8; 32] = std::fs::read("dev-data/sim-root.key").expect("start tokumai-enclave-dev first").try_into().expect("32 bytes");
+            let root: [u8; 32] = std::fs::read(tokumai_server::dev_data().join("sim-root.key")).expect("start tokumai-enclave-dev first").try_into().expect("32 bytes");
             Policy { measurements: vec![], simulated_root: Some(sim::root_public(&root)), simulated_any_measurement: true }
         }
     };
-    let phrase = std::fs::read_to_string("dev-data/dev.phrase").unwrap_or_else(|_| {
+    let phrase = std::fs::read_to_string(tokumai_server::dev_data().join("dev.phrase")).unwrap_or_else(|_| {
         let a = tokumai_core::account::create_account();
-        std::fs::write("dev-data/dev.phrase", &a.mnemonic).expect("write dev.phrase");
+        std::fs::write(tokumai_server::dev_data().join("dev.phrase"), &a.mnemonic).expect("write dev.phrase");
         a.mnemonic
     });
     let account = tokumai_core::account::from_mnemonic(&phrase).expect("dev phrase");
@@ -103,7 +103,7 @@ async fn main() {
         let address = std::env::var("TOKUMAI_ENCLAVE")
             .ok()
             .or(probe_address)
-            .or_else(|| std::fs::read_to_string("dev-data/nym-address").ok())
+            .or_else(|| std::fs::read_to_string(tokumai_server::dev_data().join("nym-address")).ok())
             .expect("start tokumai-enclave-dev --mix, or a probe with deploy/aws/probe.sh");
         // Rule A1: a random entry gateway, never one of ours, never the enclave's own.
         Box::new(Logged(std::sync::Arc::new(MixConnector::new(&address, EntryChoice::Random))))
@@ -119,6 +119,19 @@ async fn main() {
     }
     println!("account:  {}", &account.account_id[..16]);
 
+    // Measuring the mixnet with a big answer, without paying a model for a picture:
+    //     TOKUMAI_BYTES=2000000 … --mix
+    if let Some(bytes) = std::env::var("TOKUMAI_BYTES").ok().and_then(|v| v.parse::<u64>().ok()) {
+        let t = std::time::Instant::now();
+        let answer = conn.call(&account, "dev.bytes", &json!({ "bytes": bytes })).await.expect("answer");
+        let got = answer["data"].as_str().map(str::len).unwrap_or(0);
+        if got == 0 {
+            println!("dev.bytes: nothing came back — {}", serde_json::to_string(&answer).unwrap_or_default().chars().take(300).collect::<String>());
+        }
+        let secs = t.elapsed().as_secs_f64();
+        println!("dev.bytes: {got} bytes in {:.1} s = {:.0} KB/s", secs, got as f64 / 1024.0 / secs);
+        return;
+    }
     let asks = [
         ("dev.credit", json!({ "toku": 100_000 })),
         ("chat", json!({ "model": model, "messages": [{ "role": "user", "content": question }], "maxTokens": 512, "imageSize": image_size })),

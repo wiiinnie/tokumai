@@ -114,7 +114,10 @@ export const Backend = {
       // show that under the phase name "image"; this is where the pieces are counted.
       if (onPhase) {
         unlisten.push(await listen("reply-progress", (e) => {
-          const p = (e && e.payload) || {};
+          // The payload arrives as an object, but a string-shaped one would silently read
+          // as zeros — which is what "0/0 chunks" looked like.
+          let p = (e && e.payload) || {};
+          if (typeof p === "string") { try { p = JSON.parse(p); } catch (_) { p = {}; } }
           onPhase("image", { done: p.have || 0, total: p.of || 0 });
         }));
       }

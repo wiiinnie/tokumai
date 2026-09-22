@@ -34,7 +34,17 @@ pub const CHUNK: usize = 64 * 1024;
 /// How many pieces are asked for at once. Everything in flight is in the mixnet at the
 /// same time, and a burst too large is not delivered faster — it is delivered late, its
 /// acknowledgements come late with it, and the sender begins repeating itself.
-const WINDOW: usize = 4;
+/// Pieces on their way at once. Measured against the live mixnet (2026-09-23, a 2 MB
+/// reply): 8, 16 and 24 all land between 86 and 108 KB/s, so the number matters far less
+/// than not asking twice for what is already on its way. Twelve sits in the middle and
+/// keeps the reply-SURB budget of one round modest.
+const WINDOW_DEFAULT: usize = 12;
+
+/// The window, with a way to try other values against the real mixnet
+/// (`TOKUMAI_CHUNK_WINDOW`) rather than guess at them.
+pub fn window() -> usize {
+    std::env::var("TOKUMAI_CHUNK_WINDOW").ok().and_then(|v| v.parse().ok()).filter(|n| (1..=64).contains(n)).unwrap_or(WINDOW_DEFAULT)
+}
 /// Largest message accepted in parts (a request with attachments), and so the most parts.
 /// The enclave's own limit on a request (`policy::MAX_REQUEST_BYTES`) must not exceed it.
 pub const MAX_MESSAGE: usize = 48 * 1024 * 1024;
@@ -238,7 +248,13 @@ fn kept_frame(id: &Id, n: usize, bytes: usize) -> Vec<u8> {
 
 /// The app's side of one exchange: which frames still need sending, and the reply once it
 /// is complete. The transport sends [`Exchange::due`], feeds every answer to
-/// [`Exchange::accept`], and on a quiet spell sends `due` again — only what is still missing.
+/// [`Exchange::accept`], and calls `due` again whenever something arrives — it hands back
+/// only what is still missing AND is not already on its way.
+///
+/// That last part is the whole of the flow control. Asking again for a piece that is
+/// already in the mixnet does not make it come sooner; it doubles the traffic, delays the
+/// acknowledgements, and makes the sender repeat itself in turn. A piece is asked for
+/// again only once [`RETRY`] has passed without it.
 pub struct Exchange {
     pub id: Id,
     message: Vec<u8>,
@@ -247,8 +263,14 @@ pub struct Exchange {
     parts: usize,
     /// The kept reply's chunks, once the enclave said how many.
     chunks: Option<Vec<Option<Vec<u8>>>>,
+    /// When each piece was last asked for, so one in flight is not asked for again.
+    asked: Vec<Option<Instant>>,
     total: usize,
 }
+
+/// How long a piece may be in flight before it is asked for again. Long enough that a
+/// mixnet doing its work is not mistaken for a mixnet that lost something.
+const RETRY: Duration = Duration::from_secs(25);
 
 /// Where an exchange stands after one answer.
 #[derive(Debug, PartialEq, Eq)]
@@ -262,19 +284,24 @@ pub enum Step {
 impl Exchange {
     pub fn new(message: Vec<u8>) -> Exchange {
         let parts = if message.len() <= CHUNK { 1 } else { message.len().div_ceil(CHUNK) };
-        Exchange { id: rand::random(), unacked: (0..parts).collect(), parts, message, chunks: None, total: 0 }
+        Exchange { id: rand::random(), unacked: (0..parts).collect(), parts, message, chunks: None, asked: vec![None; parts], total: 0 }
     }
 
-    /// The frames to send now: at most `window` of them.
-    pub fn due(&self, window: usize) -> Vec<Vec<u8>> {
-        if let Some(chunks) = &self.chunks {
-            return (0..chunks.len())
-                .filter(|&i| chunks[i].is_none())
-                .take(window)
-                .map(|i| frame(FETCH, &self.id, &[&(i as u16).to_be_bytes()]))
-                .collect();
+    /// The frames to send now: enough to keep `window` of them on their way, and nothing
+    /// that is already on its way (see the note on the struct).
+    pub fn due(&mut self, window: usize) -> Vec<Vec<u8>> {
+        self.due_at(window, Instant::now())
+    }
+
+    /// `due`, with the clock given — so the flow control can be tested without waiting.
+    pub fn due_at(&mut self, window: usize, now: Instant) -> Vec<Vec<u8>> {
+        if self.chunks.is_some() {
+            let missing: Vec<usize> = (0..self.chunks.as_ref().expect("checked").len()).filter(|&i| self.chunks.as_ref().expect("checked")[i].is_none()).collect();
+            let wanted = self.to_send(&missing, window, now);
+            return wanted.into_iter().map(|i| frame(FETCH, &self.id, &[&(i as u16).to_be_bytes()])).collect();
         }
         if self.parts == 1 {
+            self.asked[0] = Some(now);
             return vec![frame(WHOLE, &self.id, &[&self.message])];
         }
         let mut seqs: Vec<usize> = self.unacked.iter().copied().collect();
@@ -284,13 +311,33 @@ impl Exchange {
         if seqs.is_empty() {
             seqs.push(self.parts - 1);
         }
-        seqs.into_iter()
-            .take(window)
+        self.to_send(&seqs, window, now)
+            .into_iter()
             .map(|i| {
                 let end = ((i + 1) * CHUNK).min(self.message.len());
                 frame(PART, &self.id, &[&(i as u16).to_be_bytes(), &(self.parts as u16).to_be_bytes(), &self.message[i * CHUNK..end]])
             })
             .collect()
+    }
+
+    /// Which of `missing` to put on their way now: those never asked for, or asked for
+    /// long enough ago to count as lost, up to a `window` in flight altogether.
+    fn to_send(&mut self, missing: &[usize], window: usize, now: Instant) -> Vec<usize> {
+        if self.asked.len() < missing.iter().copied().max().map(|m| m + 1).unwrap_or(0) {
+            self.asked.resize(missing.iter().copied().max().unwrap_or(0) + 1, None);
+        }
+        let in_flight = missing.iter().filter(|&&i| self.asked[i].is_some_and(|t| now.duration_since(t) < RETRY)).count();
+        let room = window.saturating_sub(in_flight);
+        let send: Vec<usize> = missing
+            .iter()
+            .copied()
+            .filter(|&i| self.asked[i].is_none_or(|t| now.duration_since(t) >= RETRY))
+            .take(room)
+            .collect();
+        for &i in &send {
+            self.asked[i] = Some(now);
+        }
+        send
     }
 
     /// Whether this answer is about this exchange.
@@ -319,6 +366,9 @@ impl Exchange {
                 self.unacked.clear();
                 if self.chunks.is_none() {
                     self.chunks = Some(vec![None; n as usize]);
+                    // Nothing of the reply has been asked for yet; the numbers from here
+                    // on count its pieces, not the request's.
+                    self.asked = vec![None; n as usize];
                     self.total = bytes as usize;
                 }
                 Ok(Step::Going)
@@ -372,8 +422,12 @@ mod tests {
             seed ^= seed << 17;
             seed % 100 < loss_pct
         };
-        for _ in 0..10_000 {
-            for f in ex.due(WINDOW) {
+        // A clock of its own: the retry is measured in seconds, and a test must not wait
+        // them out. Each turn of the loop is a second.
+        let start = Instant::now();
+        for turn in 0..10_000 {
+            let now = start + Duration::from_secs(turn);
+            for f in ex.due_at(window(), now) {
                 if lost() {
                     continue;
                 }
@@ -405,7 +459,7 @@ mod tests {
     async fn a_resent_frame_gets_the_same_answer_and_the_question_is_asked_once() {
         let frames = Frames::default();
         let asked = std::sync::atomic::AtomicUsize::new(0);
-        let ex = Exchange::new(b"once".to_vec());
+        let mut ex = Exchange::new(b"once".to_vec());
         let f = ex.due(1).remove(0);
         let count = |m: Vec<u8>| {
             asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -420,7 +474,7 @@ mod tests {
     #[tokio::test]
     async fn a_question_still_being_answered_gets_no_second_answer() {
         let frames = Frames::default();
-        let ex = Exchange::new(b"slow".to_vec());
+        let mut ex = Exchange::new(b"slow".to_vec());
         let f = ex.due(1).remove(0);
         assert!(frames.claim(&ex.id));
         assert!(frames.handle(&f, echo).await.is_none(), "the resend waits for the first answer");
@@ -437,4 +491,33 @@ mod tests {
         assert_eq!(frames.handle(&fetch, echo).await.unwrap()[0], R_FAIL);
         assert!(frames.handle(b"", echo).await.is_none());
     }
+
+    /// The heart of it: a piece already on its way is not asked for again, however often
+    /// the transport asks what to send — until it is old enough to count as lost.
+    #[tokio::test]
+    async fn a_piece_already_on_its_way_is_not_asked_for_twice() {
+        let frames = Frames::default();
+        // A reply of eight pieces, so there is something to fetch.
+        let mut ex = Exchange::new(b"give me a long answer".to_vec());
+        let f = ex.due(4).remove(0);
+        let long = |_m: Vec<u8>| async { vec![7u8; CHUNK * 8] };
+        let kept = frames.handle(&f, long).await.unwrap();
+        assert_eq!(ex.accept(&kept).unwrap(), Step::Going);
+
+        let now = Instant::now();
+        let first = ex.due_at(4, now);
+        assert_eq!(first.len(), 4, "four on their way");
+        // Asked again straight away: nothing, they are all still in flight.
+        assert!(ex.due_at(4, now).is_empty(), "nothing is asked for twice");
+        assert!(ex.due_at(4, now + Duration::from_secs(5)).is_empty());
+
+        // One arrives: room for exactly one more.
+        let answer = frames.handle(&first[0], long).await.unwrap();
+        assert_eq!(ex.accept(&answer).unwrap(), Step::Going);
+        assert_eq!(ex.due_at(4, now + Duration::from_secs(6)).len(), 1);
+
+        // The ones that never came back are asked for again once they are old enough.
+        assert_eq!(ex.due_at(4, now + RETRY + Duration::from_secs(1)).len(), 3);
+    }
+
 }

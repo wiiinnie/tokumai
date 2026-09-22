@@ -15,11 +15,14 @@ use tokumai_proto::frames::{Exchange, Step};
 /// question being answered stays silent until the model is done; the resend is then
 /// answered with nothing, and costs a few SURBs.
 const QUIET: Duration = Duration::from_secs(20);
-/// Frames in flight at once.
-const WINDOW: usize = 8;
-/// Reply SURBs sent with a frame whose answer can be a whole chunk, and with one whose
-/// answer is an acknowledgement.
-const SURBS_CHUNK: u32 = 40;
+/// Reply budget for one 64 KB chunk: about 33 packets of payload, so this is headroom of
+/// roughly two. Too thin and the enclave has to stop and ask for more, which costs a round
+/// trip through the mixnet for every chunk. (v1 gave 64 for a 96 KB chunk.)
+const SURBS_CHUNK_DEFAULT: u32 = 64;
+
+fn surbs_chunk() -> u32 {
+    std::env::var("TOKUMAI_CHUNK_SURBS").ok().and_then(|v| v.parse().ok()).filter(|n| (4..=256).contains(n)).unwrap_or(SURBS_CHUNK_DEFAULT)
+}
 const SURBS_ACK: u32 = 3;
 /// Generous: a connect includes the topology fetch from the Nym API, which was seen taking
 /// minutes when that API is degraded. Healthy connects take seconds.
@@ -130,8 +133,8 @@ impl MixTransport {
         let mut ex = Exchange::new(message.to_vec());
         let deadline = tokio::time::Instant::now() + self.timeout;
         loop {
-            for f in ex.due(WINDOW) {
-                let surbs = if f[0] == 2 { SURBS_ACK } else { SURBS_CHUNK };
+            for f in ex.due(tokumai_proto::frames::window()) {
+                let surbs = if f[0] == 2 { SURBS_ACK } else { surbs_chunk() };
                 self.client.send_message(self.to, f, IncludedSurbs::new(surbs)).await.map_err(|e| format!("send: {e}"))?;
             }
             // Listen until the answers stop coming for a while, then send what is missing.
@@ -152,8 +155,11 @@ impl MixTransport {
                         Step::Done(reply) => return Ok(reply),
                         Step::Going => moved = true,
                     }
-                    if let (Some(say), Some((have, of))) = (&self.on_progress, ex.progress()) {
-                        say(have, of);
+                    if let Some((have, of)) = ex.progress() {
+                        log::info!("[enclave] reply {have}/{of} pieces");
+                        if let Some(say) = &self.on_progress {
+                            say(have, of);
+                        }
                     }
                 }
                 // Progress (an acknowledgement, a chunk): send the next frames right away.
