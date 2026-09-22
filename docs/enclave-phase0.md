@@ -36,6 +36,17 @@ A Nitro enclave has no network and no disk of its own. Both have to be built:
   usual address, was attested and answered a chat from the Mac; everything it reached went
   through the proxy (Nym API, its gateway, Stripe), and what is not on the list was refused.
 
+- **The image** (`deploy/enclave/`): `tokumai-enclave-nitro` in a distroless runtime, the
+  EIF built with nitro-cli 1.5.0 in a pinned Amazon Linux container (no EC2 host needed).
+  **Reproducible:** two builds, one without any cache, give the same PCR0. The binary was
+  bit-identical from the start; the image's file dates made PCR2 differ until every
+  timestamp was set to `SOURCE_DATE_EPOCH` (an OCI archive with rewritten timestamps,
+  loaded — the docker exporter cannot rewrite while it unpacks).
+  Probe 1: PCR0 `6872f9b709fd3b5b7639a3e3535600c3cf7d41810c742f0657fb7a9fecf82aacd597512551b25d378f7e981893558d51`.
+- **The host side** (`deploy/aws/probe.sh`): one `c7g.xlarge` (Graviton, enclaves
+  enabled, the role `tokumai-enclave-host`), SSH from the operator's IP only; the egress
+  proxy (a static binary) and the enclave started on it; `down` removes everything.
+
 ## Next
 
 1. **Docker** on this Mac: the enclave image is built in a Linux container, reproducibly

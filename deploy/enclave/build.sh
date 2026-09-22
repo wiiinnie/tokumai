@@ -19,9 +19,11 @@ mkdir -p dev-data/eif
 # moment: the binary is bit-identical between builds, and the file dates were what made
 # PCR2 differ.
 EPOCH=$(grep -m1 -o 'SOURCE_DATE_EPOCH=[0-9]*' deploy/enclave/Dockerfile | cut -d= -f2)
+# (The docker exporter cannot rewrite timestamps while it unpacks, so: an OCI archive, loaded.)
 docker buildx build ${NO_CACHE:+--no-cache} --build-arg SOURCE_DATE_EPOCH=$EPOCH \
-  --output type=docker,name=tokumai-enclave:$TAG,rewrite-timestamp=true \
+  --output type=oci,name=tokumai-enclave:$TAG,dest=dev-data/eif/tokumai-$TAG.oci.tar,rewrite-timestamp=true \
   -f deploy/enclave/Dockerfile .
+docker load -i dev-data/eif/tokumai-$TAG.oci.tar
 docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD/dev-data/eif":/out $AMAZON_LINUX sh -c "
   dnf install -y -q aws-nitro-enclaves-cli-$NITRO_CLI aws-nitro-enclaves-cli-devel-$NITRO_CLI >/dev/null 2>&1 &&
   nitro-cli build-enclave --docker-uri tokumai-enclave:$TAG --output-file /out/tokumai-$TAG.eif" | tee dev-data/eif/tokumai-$TAG.pcrs.json
