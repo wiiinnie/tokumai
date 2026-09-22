@@ -11,3 +11,14 @@ sha2.workspace = true
 hex.workspace = true
 base64.workspace = true
 ed25519-dalek.workspace = true
+# Nitro: the attestation document is CBOR/COSE, signed with ECDSA P-384 by a chain to the
+# pinned AWS root.
+ciborium = "0.2"
+ring.workspace = true
+x509-parser.workspace = true
+# Inside a Nitro enclave only: the Nitro Secure Module (/dev/nsm) issues the documents.
+aws-nitro-enclaves-nsm-api = { version = "0.5.2", optional = true }
+serde_bytes = { version = "0.11", optional = true }
+
+[features]
+nsm = ["dep:aws-nitro-enclaves-nsm-api", "dep:serde_bytes"]
