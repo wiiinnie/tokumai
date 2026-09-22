@@ -212,7 +212,8 @@ async fn a_small_balance_shortens_the_answer_and_an_empty_one_says_so_plainly() 
     call(&e, &s, &a, "dev.credit", json!({ "toku": 2_000 })).await;
     let answer = call(&e, &s, &a, "chat", ask.clone()).await;
     assert_eq!(answer["kind"], "chat", "{answer}");
-    assert_eq!(answer["capped"], true);
+    // The mock's answer is short: it did not run into the lowered limit, so no note.
+    assert_eq!(answer["capped"], false);
     assert!(answer["cost"].as_u64().unwrap() <= 2_000);
     // Too little for even a short answer: refused, with the numbers.
     let e2 = enclave(true);

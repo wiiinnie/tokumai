@@ -397,7 +397,9 @@ impl Enclave {
             Ok(c) => {
                 let total = self.ledger.lock().ok().and_then(|l| l.balance(account, now).ok()).map(|b| b.total).unwrap_or(0);
                 json!({
-                    "kind": "chat", "text": c.text, "images": c.images, "cost": charged, "balance": total, "capped": capped,
+                    "kind": "chat", "text": c.text, "images": c.images, "cost": charged, "balance": total,
+                    // Shortened only if the answer actually ran into the lowered limit.
+                    "capped": capped && c.usage.output + 8 >= req.answer_tokens(),
                     "estimated": c.usage.estimated,
                     "usage": { "input": c.usage.input, "cachedInput": c.usage.cached_input, "output": c.usage.output,
                                "image": c.usage.output_image, "searches": c.usage.grounding_queries,
