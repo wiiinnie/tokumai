@@ -47,7 +47,7 @@ async fn main() {
     };
     for (p, bytes, op) in [
         ask("dev.credit", json!({ "toku": 100_000 })),
-        ask("chat", json!({ "model": model, "messages": [{ "role": "user", "content": question }], "maxTokens": 512, "thinkingBudget": 0, "imageSize": image_size })),
+        ask("chat", json!({ "model": model, "messages": [{ "role": "user", "content": question }], "maxTokens": 512, "imageSize": image_size })),
         ask("balance", json!({})),
     ] {
         let mut answer = p.open(&roundtrip(&mut lines, &mut w, &bytes).await).expect("answer");
