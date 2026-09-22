@@ -100,6 +100,26 @@ pub async fn forward(listen: Endpoint, host: Endpoint) -> io::Result<()> {
     .await
 }
 
+/// Inside the enclave: one line to the host (its Nym address, at start). A Nitro enclave
+/// has no console in production, so this is how the operator learns where it listens —
+/// something the address itself tells anyone who is sent it, and the attestation proves.
+pub async fn announce(host: &Endpoint, line: &str) -> io::Result<()> {
+    let mut s = connect(host).await?;
+    s.write_all(line.as_bytes()).await?;
+    s.write_all(b"\n").await?;
+    s.shutdown().await
+}
+
+/// On the host: print what the enclave announces, one line per connection (at most 4 KiB).
+pub async fn hear(listen: Endpoint) -> io::Result<()> {
+    accept_loop(&listen, |mut s| async move {
+        let mut buf = Vec::new();
+        let _ = (&mut s).take(4096).read_to_end(&mut buf).await;
+        println!("enclave: {}", String::from_utf8_lossy(&buf).trim());
+    })
+    .await
+}
+
 /// Which destinations the host connects to: host names by exact name or by suffix
 /// (`.nymtech.net` covers every subdomain), each with the ports allowed.
 #[derive(Debug, Clone, Default)]

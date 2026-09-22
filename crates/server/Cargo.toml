@@ -19,3 +19,15 @@ tokumai-client = { path = "../client" }
 nym-sdk = "1.21"
 # tokumai-dev-credit opens the dev app's profile.
 aes-gcm = "0.10"
+tokumai-egress = { path = "../egress" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
+[features]
+# The Nitro enclave binary: the Nitro Secure Module as attester (Linux only).
+nitro = ["tokumai-attest/nsm"]
+
+[[bin]]
+name = "tokumai-enclave-nitro"
+required-features = ["nitro"]

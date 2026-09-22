@@ -11072,6 +11072,7 @@ dependencies = [
  "aes-gcm 0.10.3",
  "base64 0.22.1",
  "hex",
+ "libc",
  "nym-sdk",
  "rand 0.8.8",
  "serde_json",
@@ -11079,6 +11080,7 @@ dependencies = [
  "tokumai-attest",
  "tokumai-client",
  "tokumai-core",
+ "tokumai-egress",
  "tokumai-enclave",
  "tokumai-proto",
 ]

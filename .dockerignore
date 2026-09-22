@@ -1,0 +1,13 @@
+# Never in an image: secrets, local state, build output.
+.env
+.env.*
+dev-data
+target
+.git
+**/node_modules
+# The app is a workspace member, so cargo needs its manifest; only its Rust part comes in,
+# and it is not built. (Only the enclave binary reaches the final image.)
+app/public
+app/scripts
+app/src-tauri/icons
+app/src-tauri/gen

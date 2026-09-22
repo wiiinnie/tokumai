@@ -1,7 +1,7 @@
 //! The host side of the enclave's way out: a CONNECT proxy for the allowed destinations.
 //!
-//!     tokumai-egress-host <listen> <allowlist file>
-//!     tokumai-egress-host vsock:4294967295:8080 /etc/tokumai/egress.allow   (on the EC2 host)
+//!     tokumai-egress-host <listen> <allowlist file> [announcements]
+//!     tokumai-egress-host vsock:4294967295:8080 /etc/tokumai/egress.allow vsock:4294967295:8081   (on the EC2 host)
 //!     tokumai-egress-host tcp:127.0.0.1:8080 deploy/egress.allow            (on a laptop)
 //!
 //! One log line per tunnel: destination, bytes each way, or why it was refused.
@@ -23,6 +23,12 @@ async fn main() {
         Ok((up, down)) => println!("egress {host}:{port} closed, up {up} down {down}"),
         Err(e) => println!("egress {host}:{port} refused: {e}"),
     });
+    // What the enclave says about itself (its Nym address), on a port of its own.
+    if let Some(a) = args.get(2) {
+        let a = Endpoint::parse(a).unwrap_or_else(|e| panic!("{e}"));
+        println!("tokumai-egress-host hears the enclave on {a:?}");
+        tokio::spawn(async move { tokumai_egress::hear(a).await.expect("announcements") });
+    }
     println!("tokumai-egress-host on {listen:?}");
     serve(listen, allow, report).await.expect("egress proxy");
 }
