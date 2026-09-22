@@ -47,6 +47,28 @@ A Nitro enclave has no network and no disk of its own. Both have to be built:
   enabled, the role `tokumai-enclave-host`), SSH from the operator's IP only; the egress
   proxy (a static binary) and the enclave started on it; `down` removes everything.
 
+## The first probe, 2026-09-22
+
+Instance `c7g.xlarge` in eu-central-1, the enclave with 2 vCPUs and 3 GiB. It worked on
+the first run:
+
+- the enclave boots, draws its randomness from the Nitro module, comes onto the mixnet
+  through the pinned gateway and announces its address to the host over vsock (a
+  production enclave has no console);
+- everything it reaches goes through the proxy: `validator.nymtech.net` and its gateway,
+  and nothing else;
+- from the Mac, over the mixnet: **attested as `AwsNitro image 6872f9b7…`**, test credit,
+  a chat and the balance. Connect and attest together 5.6–5.8 s, a chat 1.5 s, the
+  balance 1.1–3.5 s;
+- a PCR0 that differs by one character is refused, naming the image actually found;
+- the desktop app talks to it the same way (`TOKUMAI_ENCLAVE`, `TOKUMAI_PCR0`).
+
+Noted on the way:
+- `nitro-cli run-enclave` needs the egress proxy already running, or the enclave waits
+  (it retries; `connect_at_boot` gives it five minutes).
+- The Nym client panics in `packet_router` when a process exits — on the app's side, at
+  the very end. To be looked at before a release.
+
 ## Next
 
 1. **Docker** on this Mac: the enclave image is built in a Linux container, reproducibly
@@ -56,9 +78,9 @@ A Nitro enclave has no network and no disk of its own. Both have to be built:
    the egress allowlist.
 3. **An AWS account** (Paid plan; see below), a budget alarm, an IAM user with EC2 + KMS in
    eu-central-1, the `aws` CLI configured locally.
-4. **The probe**: an `m6i.xlarge` with enclaves enabled; the image started; the dev client
-   and the app attest it over the mixnet; 24 h under light load (Nym stable through the
-   proxy? latency?).
+4. ~~**The probe**~~ — done, see above. (An `m6i.xlarge` with enclaves enabled; the image started; the dev client
+   and the app attest it over the mixnet; 24 h under light load — Nym stable through the
+   proxy? latency?)
 5. **KMS**: a key whose policy releases it only to our PCR0; the data key, API keys and Nym
    keys sealed with it; a restart and an update of the image (a new PCR0 means a key policy
    update — the upgrade path).

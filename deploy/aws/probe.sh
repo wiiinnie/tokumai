@@ -67,7 +67,7 @@ UD
     DEBUG=""; [ "$1" = debug ] && DEBUG="--debug-mode"
     remote "set -e
       sudo nitro-cli terminate-enclave --all >/dev/null 2>&1 || true
-      pkill -f tokumai-egress-host || true
+      pkill -f '[t]okumai-egress-host' || true
       chmod +x tokumai-egress-host
       nohup ./tokumai-egress-host vsock:4294967295:8080 egress.allow vsock:4294967295:8081 > egress.log 2>&1 &
       sleep 1
