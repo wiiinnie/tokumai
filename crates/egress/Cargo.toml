@@ -1,0 +1,11 @@
+[package]
+name = "tokumai-egress"
+edition.workspace = true
+version.workspace = true
+description = "The way out of a Nitro enclave: an HTTP CONNECT tunnel over vsock to the host, which connects only to allowed destinations. TCP instead of vsock for testing on a laptop."
+
+[dependencies]
+tokio.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+tokio-vsock = "0.7.2"

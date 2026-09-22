@@ -1,0 +1,21 @@
+# Where the tokumai enclave may connect, through tokumai-egress-host. One rule per line:
+# a host name (or .suffix for it and every subdomain) and its ports.
+
+# Nym: the API (topology, the node directory) and the gateways (WebSocket, 9000 plain / 9001 TLS)
+.nymtech.net 443
+.nymtech.cc 443
+.nym.com 443
+
+# Model providers
+api.openai.com 443
+generativelanguage.googleapis.com 443
+
+# Payments
+api.stripe.com 443
+api.storekit.itunes.apple.com 443
+api.storekit-sandbox.itunes.apple.com 443
+
+# The enclave's own gateway — the one its Nym address sits behind (dev: Finland). Changes
+# only when the enclave is moved to another gateway (TOKUMAI_GATEWAY).
+185.100.86.108 9000,9001
+exit-node.finland-3.nym.cat 9000,9001

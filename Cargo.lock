@@ -5399,6 +5399,7 @@ dependencies = [
  "cfg-if",
  "cfg_aliases",
  "libc",
+ "memoffset",
 ]
 
 [[package]]
@@ -6078,8 +6079,6 @@ dependencies = [
 [[package]]
 name = "nym-gateway-client"
 version = "1.22.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "49226558811b437e50a172187d6ec498d31978ab4575510a3b415f16fa7bd996"
 dependencies = [
  "futures",
  "getrandom 0.2.17",
@@ -10901,6 +10900,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-vsock"
+version = "0.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b319ef9394889dab2e1b4f0085b45ba11d0c79dc9d1a9d1afc057d009d0f1c7"
+dependencies = [
+ "bytes",
+ "futures",
+ "libc",
+ "tokio",
+ "vsock",
+]
+
+[[package]]
 name = "tokio_with_wasm"
 version = "0.8.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11002,6 +11014,14 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+]
+
+[[package]]
+name = "tokumai-egress"
+version = "0.1.0"
+dependencies = [
+ "tokio",
+ "tokio-vsock",
 ]
 
 [[package]]
@@ -11724,6 +11744,16 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "vsock"
+version = "0.5.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ba782755fc073877e567c2253c0be48e4aa9a254c232d36d3985dfae0bd5205"
+dependencies = [
+ "libc",
+ "nix",
+]
 
 [[package]]
 name = "vswhom"

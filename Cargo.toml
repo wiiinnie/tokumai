@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/attest", "crates/proto", "crates/enclave", "crates/client", "crates/server", "app/src-tauri"]
+members = ["crates/core", "crates/attest", "crates/proto", "crates/enclave", "crates/client", "crates/server", "crates/egress", "app/src-tauri"]
 
 [workspace.package]
 edition = "2021"
@@ -23,3 +23,8 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 x509-parser = { version = "0.16", features = ["verify"] }
 ring = "0.17"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time"] }
+
+# The Nym gateway client, reaching its gateway through the enclave's egress proxy when
+# TOKUMAI_EGRESS_PROXY is set (vendor/README.md).
+[patch.crates-io]
+nym-gateway-client = { path = "vendor/nym-gateway-client" }

@@ -25,6 +25,17 @@ A Nitro enclave has no network and no disk of its own. Both have to be built:
 - `attest::nitro::NitroAttester` (feature `nsm`, Linux): asks /dev/nsm for a document over
   the binding. Not compiled on macOS; checked once Docker is there.
 
+- **The way out** (`crates/egress`, `vendor/nym-gateway-client`): inside the enclave a
+  loopback listener pipes every connection over vsock to `tokumai-egress-host` on the host,
+  an HTTP CONNECT proxy for the destinations in `deploy/egress.allow` only. The model
+  providers, Stripe, Apple and the Nym API use it through `HTTPS_PROXY`; the Nym gateway
+  connection through a small patch (`TOKUMAI_EGRESS_PROXY`), since the SDK opens that one
+  itself. Names are resolved outside; TLS ends inside.
+- **Verified without an instance** (`deploy/sim-enclave.sh`): the simulated enclave in a
+  container with no internet, the proxy in another. It came onto the mixnet under its
+  usual address, was attested and answered a chat from the Mac; everything it reached went
+  through the proxy (Nym API, its gateway, Stripe), and what is not on the list was refused.
+
 ## Next
 
 1. **Docker** on this Mac: the enclave image is built in a Linux container, reproducibly
