@@ -70,7 +70,8 @@ impl Ledger {
                  parts TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS nonces (nonce TEXT PRIMARY KEY, ts_ms INTEGER NOT NULL);
              CREATE TABLE IF NOT EXISTS plans (acct TEXT PRIMARY KEY, json TEXT NOT NULL);
-             CREATE TABLE IF NOT EXISTS rails (rail TEXT PRIMARY KEY, acct TEXT NOT NULL);",
+             CREATE TABLE IF NOT EXISTS rails (rail TEXT PRIMARY KEY, acct TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS payments (ref TEXT PRIMARY KEY, at_ms INTEGER NOT NULL);",
         )
         .map_err(|e| e.to_string())?;
         Ok(Ledger { conn, data_key })
@@ -99,6 +100,16 @@ impl Ledger {
         h.update(self.data_key);
         h.update(rail.as_bytes());
         hex::encode(h.finalize())
+    }
+
+    /// A one-off payment (an App Store consumable) is credited once: false if this reference
+    /// was seen before. Stored as a keyed hash, like every payment reference.
+    pub fn first_payment(&self, reference: &str, now_ms: u64) -> Result<bool, String> {
+        let n = self
+            .conn
+            .execute("INSERT OR IGNORE INTO payments (ref, at_ms) VALUES (?1, ?2)", params![self.rail_key(reference), now_ms as i64])
+            .map_err(|e| e.to_string())?;
+        Ok(n == 1)
     }
 
     // ---- plans (see `plans`) ------------------------------------------------------

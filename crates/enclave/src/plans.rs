@@ -100,7 +100,11 @@ fn current_period(l: &Ledger, key: &str) -> Result<u32, String> {
 
 /// Why `rail` may not be attached to `account`, or None.
 pub fn attach_refusal(l: &Ledger, account: &str, rail: &str, now_ms: u64) -> Result<Option<&'static str>, String> {
-    let key = l.acct_key(account);
+    attach_refusal_key(l, &l.acct_key(account), rail, now_ms)
+}
+
+fn attach_refusal_key(l: &Ledger, key: &str, rail: &str, now_ms: u64) -> Result<Option<&'static str>, String> {
+    let key = key.to_string();
     if let Some(owner) = l.rail_owner(rail)? {
         if owner != key {
             return Ok(Some(PLAN_ELSEWHERE));
@@ -135,10 +139,26 @@ pub fn subscribe_or_renew(
     start_ms: u64,
     until_ms: u64,
 ) -> Result<bool, String> {
-    if let Some(why) = attach_refusal(l, account, rail, now_ms)? {
+    renew_key(l, &l.acct_key(account), tier, yearly, rail, now_ms, start_ms, until_ms)
+}
+
+/// The renewal check's way in: the rail's word about a subscription, applied to whichever
+/// account holds it — found by the rail, so no account id is ever at hand. Nothing happens
+/// for a rail nobody holds.
+#[allow(clippy::too_many_arguments)]
+pub fn renew_by_rail(l: &Ledger, rail: &str, tier: usize, yearly: bool, now_ms: u64, start_ms: u64, until_ms: u64) -> Result<bool, String> {
+    match l.rail_owner(rail)? {
+        Some(key) => renew_key(l, &key, tier, yearly, rail, now_ms, start_ms, until_ms),
+        None => Ok(false),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn renew_key(l: &Ledger, key: &str, tier: usize, yearly: bool, rail: &str, now_ms: u64, start_ms: u64, until_ms: u64) -> Result<bool, String> {
+    if let Some(why) = attach_refusal_key(l, key, rail, now_ms)? {
         return Err(why.into());
     }
-    let key = l.acct_key(account);
+    let key = key.to_string();
     let tier = tier.min(TIERS.len() - 1);
     let paid_now = until_ms > now_ms;
     let existing = l.plan_get(&key)?;

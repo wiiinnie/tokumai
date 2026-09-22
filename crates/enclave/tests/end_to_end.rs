@@ -37,6 +37,8 @@ fn with_providers(dev: bool, providers: Providers) -> Enclave {
         db: Db::Memory,
         pricing: PricingTable::parse(PRICING_JSON).unwrap(),
         dev_mode: dev,
+        stripe: None,
+        apple_api: None,
     })
     .unwrap()
 }
@@ -147,4 +149,34 @@ async fn declines_cost_nothing_and_three_a_day_pause_that_provider() {
     let r = call(&e, &s, &a, "chat", ask).await;
     assert!(r["error"].as_str().unwrap().contains("tomorrow"), "{r}");
     assert_eq!(call(&e, &s, &a, "balance", json!({})).await["balance"]["total"], 100_000, "no decline was charged");
+}
+
+#[tokio::test]
+async fn the_plan_ladder_is_offered_and_card_plans_need_stripe() {
+    let e = enclave(false);
+    let s = session(&e, &dev_policy()).await.unwrap();
+    let a = from_mnemonic(PHRASE).unwrap();
+    let ladder = call(&e, &s, &a, "plans", json!({})).await;
+    assert_eq!(ladder["kind"], "plans");
+    assert_eq!(ladder["tiers"].as_array().unwrap().len(), 3);
+    assert_eq!(ladder["byCard"], false);
+    assert!(ladder["plan"].is_null());
+    let order = call(&e, &s, &a, "plan.create", json!({ "tier": 0 })).await;
+    assert!(order["error"].as_str().unwrap().contains("not sold by card"));
+    let change = call(&e, &s, &a, "plan.change", json!({ "tier": 1 })).await;
+    assert!(change["error"].is_string());
+    // No plan yet: the balance says so; the renewal check has nothing to ask about.
+    assert!(call(&e, &s, &a, "balance", json!({})).await["plan"].is_null());
+    e.tick().await;
+}
+
+#[tokio::test]
+async fn an_app_store_transaction_that_does_not_verify_is_final_and_credits_nothing() {
+    let e = enclave(false);
+    let s = session(&e, &dev_policy()).await.unwrap();
+    let a = from_mnemonic(PHRASE).unwrap();
+    let reply = call(&e, &s, &a, "iap.verify", json!({ "jws": "not.a.jws" })).await;
+    assert!(reply["error"].is_string());
+    assert_eq!(reply["final"], true, "the app finishes it instead of re-sending forever");
+    assert_eq!(call(&e, &s, &a, "balance", json!({})).await["balance"]["total"], 0);
 }

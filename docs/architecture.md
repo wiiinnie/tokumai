@@ -34,6 +34,11 @@ follows.
   valid three years from purchase.
 - Plans run in their own months from the day of purchase, on Stripe and the App Store
   alike (`core::subscription`).
+- **Plans are checked from inside.** The enclave itself asks Stripe and Apple about each
+  plan about every six hours: a renewal extends it, a full refund or chargeback ends it at
+  once (and a chargeback also stops the card subscription). Which account a Stripe
+  subscription or App Store transaction belongs to is stored only under a keyed hash
+  (`enclave::subscriptions`).
 
 ## What the operator can still do
 

@@ -52,6 +52,8 @@ async fn main() {
         db: Db::File(dir.join("ledger.db")),
         pricing: PricingTable::parse(PRICING_JSON).expect("pricing.json"),
         dev_mode: true,
+        stripe: tokumai_enclave::stripe::Stripe::from_secrets(&EnvSecrets),
+        apple_api: tokumai_enclave::apple::AppleApi::from_secrets(&EnvSecrets),
     })
     .expect("start the enclave");
     let enclave: &'static Enclave = Box::leak(Box::new(enclave));
@@ -61,6 +63,13 @@ async fn main() {
     println!("  measurement {m}");
     println!("  identity    {}", enclave.identity_hex());
     println!("  sim root    {}", hex::encode(sim::root_public(&root)));
+    // The renewal check: periods roll, and plans are asked about at Stripe and Apple.
+    tokio::spawn(async move {
+        loop {
+            enclave.tick().await;
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        }
+    });
     loop {
         let Ok((sock, _)) = listener.accept().await else { continue };
         tokio::spawn(async move {

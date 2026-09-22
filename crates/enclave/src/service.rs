@@ -48,15 +48,24 @@ pub struct Platform {
     pub pricing: PricingTable,
     /// Development only: allows `dev.*` operations that create credit out of nothing.
     pub dev_mode: bool,
+    /// Plans by card, when Stripe is configured.
+    pub stripe: Option<crate::stripe::Stripe>,
+    /// The App Store Server API, for the renewal check (App Store plans still verify
+    /// without it — from what the app hands over).
+    pub apple_api: Option<crate::apple::AppleApi>,
 }
 
 pub struct Enclave {
     keys: EnclaveKeys,
     attester: Box<dyn Attester>,
     providers: Providers,
-    ledger: Mutex<Ledger>,
+    pub(crate) ledger: Mutex<Ledger>,
     pricing: PricingTable,
     dev_mode: bool,
+    pub(crate) stripe: Option<crate::stripe::Stripe>,
+    pub(crate) apple_api: Option<crate::apple::AppleApi>,
+    /// What the six plans cost at Stripe (cents), and when that was last read.
+    pub(crate) plan_prices: Mutex<(Vec<u64>, u64)>,
     replies: Mutex<HashMap<String, (Instant, Vec<u8>)>>,
     /// Secret behind the per-account pseudonyms sent to providers; derived from the data
     /// key, so it survives restarts and is known only inside.
@@ -76,7 +85,7 @@ struct Inner {
     body: String,
 }
 
-fn error(msg: &str) -> Value {
+pub(crate) fn error(msg: &str) -> Value {
     json!({ "kind": "error", "error": msg })
 }
 
@@ -101,6 +110,9 @@ impl Enclave {
             replies: Mutex::new(HashMap::new()),
             safety_salt: tokumai_core::account::sha256(&[b"tokumai/safety/v1", &key]),
             strikes: Mutex::new(HashMap::new()),
+            stripe: p.stripe,
+            apple_api: p.apple_api,
+            plan_prices: Mutex::new((Vec::new(), 0)),
         })
     }
 
@@ -195,6 +207,11 @@ impl Enclave {
         match op {
             "balance" => self.balance(account, now),
             "chat" => self.chat(account, body, now).await,
+            "plans" => self.plans_op(account, now),
+            "plan.create" => self.plan_create(account, body, now).await,
+            "plan.status" => self.plan_status(account, body, now).await,
+            "plan.change" => self.plan_change(account, body, now).await,
+            "iap.verify" => self.iap_verify(account, body, now),
             "dev.credit" | "dev.allowance" if !self.dev_mode => error("not available on this enclave"),
             "dev.credit" => {
                 let toku = serde_json::from_str::<Value>(body).ok().and_then(|b| b.get("toku").and_then(|t| t.as_u64())).unwrap_or(0);
@@ -223,7 +240,7 @@ impl Enclave {
 
     fn balance(&self, account: &str, now: u64) -> Value {
         match self.ledger.lock().map_err(|_| "ledger unavailable".to_string()).and_then(|l| l.balance(account, now)) {
-            Ok(b) => json!({ "kind": "balance", "balance": b }),
+            Ok(b) => json!({ "kind": "balance", "balance": b, "plan": self.plan_summary(account) }),
             Err(e) => error(&e),
         }
     }
