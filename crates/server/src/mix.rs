@@ -1,8 +1,10 @@
 //! The Nym mixnet, both ends. Lessons carried over from the first server (tokumai 0.x):
 //!
-//! - The server's own sending is not padded (no Poisson stream, no loop cover): a service
-//!   provider has no traffic pattern of its own to hide, and the padding cost all cores at
-//!   load. Replies travel on the app's SURBs either way.
+//! - The server's own sending is not padded (no Poisson stream, no loop cover). Padding it
+//!   would not protect a user: whoever runs the host sees the enclave's side anyway, and to
+//!   tell WHO asked they would also need the user's side — which the app's own cover
+//!   traffic hides for sending, and the app's choice of an entry gateway not run by us
+//!   (a must for the app) hides for receiving. The padding also cost all cores at load.
 //! - An identity whose stream ends is rebuilt with the same keys, so the address stays; a
 //!   reply-SURB store left broken by a crash is wiped on the second attempt.
 //! - Every exchange has its own id, and a question still being answered is not answered

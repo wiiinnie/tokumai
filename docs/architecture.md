@@ -47,6 +47,18 @@ gateway and sees nothing else. Its address is part of every attestation, so an o
 who put a client of their own in front, to watch when requests come and go, is caught by
 the app. The app uses a fresh, ephemeral Nym client per start.
 
+Timing is protected at the user's end, not at ours. Whoever runs the host sees when the
+enclave answers and roughly how much — with or without padding, and in its calls to the
+providers as well. To tell who asked they also need the user's end:
+
+- sending: the app's cover traffic (the SDK's Poisson stream) hides when a question goes;
+- receiving: an answer reaches the user's entry gateway as a burst, so **the app must use
+  an entry gateway not run by us** (a requirement for the app, audit A1 of the first
+  server).
+
+So the server sends unpadded, and the calls to the providers are not disguised: neither
+would add protection for the user.
+
 Messages travel as frames (`enclave::frames`): up to 64 KB whole, bigger ones in
 acknowledged parts, and big replies (pictures) kept in the enclave and fetched chunk by
 chunk. Every frame is retryable, and a question still being answered is never answered
