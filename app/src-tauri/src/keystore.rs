@@ -9,7 +9,9 @@ use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-/// Shared with the first app, so an installed one's keychain entries are found again.
+/// The release app's service name (the first app used the same, so its entries are found
+/// again). A debug build never reaches the keychain (see `dev_key`): a development binary
+/// must not read — or make the OS ask the person for — the keys of the app they use.
 const KEYCHAIN_SERVICE: &str = "com.tokumai.app";
 
 /// A versioned AEAD envelope — what is on disk instead of the data.
@@ -29,9 +31,32 @@ impl EncEnvelope {
     }
 }
 
+/// A debug build keeps its keys in plain files under the repo's `dev-data/app-keys/`
+/// (gitignored): an unsigned binary that changes with every build would otherwise make
+/// macOS ask for the login password again after each one.
+fn dev_key(account: &str, what: &str) -> Result<[u8; 32], String> {
+    use rand::RngCore;
+    let dir = std::env::var_os("TOKUMAI_DEV_DATA")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../dev-data")))
+        .join("app-keys");
+    let path = dir.join(format!("{account}.key"));
+    if let Ok(b) = std::fs::read(&path) {
+        return b.try_into().map_err(|_| format!("the development {what} key has the wrong length"));
+    }
+    let mut key = [0u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut key);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    std::fs::write(&path, key).map_err(|e| e.to_string())?;
+    Ok(key)
+}
+
 /// Fetch or create the key stored under `account` in the OS keychain.
 pub(crate) fn keychain_key(account: &str, what: &str) -> Result<[u8; 32], String> {
     use rand::RngCore;
+    if cfg!(debug_assertions) {
+        return dev_key(account, what);
+    }
     let entry = keyring::Entry::new(KEYCHAIN_SERVICE, account).map_err(|e| e.to_string())?;
     match entry.get_password() {
         Ok(b64) => {

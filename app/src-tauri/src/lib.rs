@@ -27,9 +27,16 @@ fn data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     // Windows: Local, not Roaming — a domain profile would carry the encrypted profile and
     // the chat history to the server with the login.
     #[cfg(target_os = "windows")]
-    return app.path().app_local_data_dir().map_err(|e| e.to_string());
+    let dir = app.path().app_local_data_dir().map_err(|e| e.to_string())?;
     #[cfg(not(target_os = "windows"))]
-    app.path().app_data_dir().map_err(|e| e.to_string())
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    // A debug build shares the bundle id with the installed app, and so its data folder:
+    // it keeps a folder of its own, next to it, and never touches the real one.
+    if cfg!(debug_assertions) {
+        let name = format!("{}.dev", dir.file_name().and_then(|n| n.to_str()).unwrap_or("tokumai"));
+        return Ok(dir.with_file_name(name));
+    }
+    Ok(dir)
 }
 
 /// The account's short, safe-to-show name: the first sixteen characters of its id in fours.
@@ -152,6 +159,17 @@ async fn call(app: &AppHandle, op: &str, body: Value) -> Result<Value, String> {
     Ok(answer)
 }
 
+/// Connect and attest, with or without an account: the proof needs none, and the interface
+/// wants the route up (and the enclave known) before anything is asked.
+async fn ensure_ready(app: &AppHandle) -> Result<(), String> {
+    let st = app.state::<AppState>();
+    let mut guard = st.conn.lock().await;
+    if guard.is_none() {
+        *guard = Some(new_connection(app, &profile::load(&data_dir(app)?))?);
+    }
+    guard.as_mut().ok_or("no connection")?.ready().await
+}
+
 /// Drop the connection, so the next call builds a new one (another gateway, another
 /// account). Waits for a call in flight to finish first.
 async fn reset_connection(app: &AppHandle) {
@@ -227,10 +245,15 @@ async fn state(app: AppHandle) -> Result<Value, String> {
         "balance": 0,
         "models": [],
     });
+    let st = app.state::<AppState>();
     if p.mnemonic.is_none() {
+        if let Some(conn) = st.conn.lock().await.as_ref() {
+            if let Some(s) = conn.session() {
+                out["attested"] = json!({ "platform": s.claims.platform, "measurement": s.claims.measurement });
+            }
+        }
         return Ok(out);
     }
-    let st = app.state::<AppState>();
     match call(&app, "balance", json!({})).await {
         Ok(b) => {
             let bal = &b["balance"];
@@ -500,6 +523,19 @@ async fn mixnet_route(app: AppHandle) -> Result<Value, String> {
         let r = st.route.lock().map_err(|_| "unavailable")?;
         (r.entry.clone(), r.live)
     };
+    if !live {
+        // The interface polls this while it shows "connecting": make sure someone is.
+        let h = app.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Ok(g) = h.state::<AppState>().conn.try_lock() {
+                let idle = g.as_ref().map(|c| !c.has_transport()).unwrap_or(true);
+                drop(g);
+                if idle {
+                    let _ = ensure_ready(&h).await;
+                }
+            }
+        });
+    }
     let dir = app.state::<AppState>().directory.lock().await.clone();
     let exit = target::enclave_address().ok().and_then(|a| gateways::gateway_of(&a).map(str::to_string));
     Ok(json!({
@@ -791,8 +827,8 @@ pub fn run() {
             // Connect and attest right away, so the first question does not wait for it.
             let h = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                if profile::load(&data_dir(&h).unwrap_or_default()).mnemonic.is_some() {
-                    let _ = call(&h, "balance", json!({})).await;
+                if let Err(e) = ensure_ready(&h).await {
+                    log::warn!("[enclave] not ready: {e}");
                 }
                 let _ = directory(&h).await;
             });
