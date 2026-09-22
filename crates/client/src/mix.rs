@@ -38,12 +38,14 @@ impl MixTransport {
     pub async fn connect(enclave_address: &str, choice: &EntryChoice) -> Result<MixTransport, String> {
         let enclave_address = enclave_address.trim();
         let to = Recipient::try_from_base58_string(enclave_address).map_err(|e| format!("not a Nym address: {e}"))?;
+        // The directory and the operator's family, also for a gateway the user chose (it
+        // must not be one of ours either).
+        let directory = gateways::fetch().await?;
         // A random allowed gateway; the directory also lists nodes the SDK will not use
         // as an entry right now ("no gateway with id"), so a few are tried in turn.
         let tries: Vec<String> = match choice {
             EntryChoice::Random => {
                 use rand::seq::SliceRandom;
-                let directory = gateways::fetch().await?;
                 let mut c: Vec<String> = gateways::candidates(&directory, enclave_address).into_iter().map(|g| g.id).collect();
                 c.shuffle(&mut rand::thread_rng());
                 c.truncate(5);
@@ -52,7 +54,7 @@ impl MixTransport {
                 }
                 c
             }
-            chosen => vec![gateways::pick(&[], chosen, enclave_address)?],
+            chosen => vec![gateways::pick(&directory, chosen, enclave_address)?],
         };
         let mut last = String::new();
         let mut found = None;
