@@ -3,6 +3,9 @@
 //!
 //!     cargo run -p tokumai-server --bin tokumai-dev-client -- [--mix] "a question" [model] [imageSize]
 //!
+//! Against a real Nitro enclave: TOKUMAI_PCR0=<its PCR0> TOKUMAI_ENCLAVE=<its Nym address>
+//! with `--mix` — the proof is then checked against the AWS Nitro root and that image only.
+//!
 //! With `--mix` the requests go over the Nym mixnet to the address in ./dev-data/nym-address,
 //! through a random entry gateway that is not ours (rule A1), and the attestation must name
 //! that address. Everything goes through `tokumai_client::app::Connection`, as in the app.
@@ -77,8 +80,16 @@ async fn main() {
     let model = args.get(1).cloned().unwrap_or_else(|| "mock".into());
     // Third argument: the picture size for image models (1K, 2K, 4K).
     let image_size = args.get(2).cloned();
-    let root: [u8; 32] = std::fs::read("dev-data/sim-root.key").expect("start tokumai-enclave-dev first").try_into().expect("32 bytes");
-    let policy = Policy { measurements: vec![], simulated_root: Some(sim::root_public(&root)), simulated_any_measurement: true };
+    // A real Nitro enclave: TOKUMAI_PCR0 (its published image) and TOKUMAI_ENCLAVE (its Nym
+    // address, as it announced it). The policy then pins the image and accepts no simulator.
+    let nitro_pcr0 = std::env::var("TOKUMAI_PCR0").ok().filter(|p| !p.trim().is_empty());
+    let policy = match &nitro_pcr0 {
+        Some(pcr0) => Policy { measurements: vec![pcr0.trim().to_lowercase()], simulated_root: None, simulated_any_measurement: false },
+        None => {
+            let root: [u8; 32] = std::fs::read("dev-data/sim-root.key").expect("start tokumai-enclave-dev first").try_into().expect("32 bytes");
+            Policy { measurements: vec![], simulated_root: Some(sim::root_public(&root)), simulated_any_measurement: true }
+        }
+    };
     let phrase = std::fs::read_to_string("dev-data/dev.phrase").unwrap_or_else(|_| {
         let a = tokumai_core::account::create_account();
         std::fs::write("dev-data/dev.phrase", &a.mnemonic).expect("write dev.phrase");
@@ -88,7 +99,9 @@ async fn main() {
 
     let started = std::time::Instant::now();
     let connector: Box<dyn Connector> = if mix {
-        let address = std::fs::read_to_string("dev-data/nym-address").expect("start tokumai-enclave-dev --mix first");
+        let address = std::env::var("TOKUMAI_ENCLAVE")
+            .or_else(|_| std::fs::read_to_string("dev-data/nym-address"))
+            .expect("start tokumai-enclave-dev --mix first, or set TOKUMAI_ENCLAVE");
         // Rule A1: a random entry gateway, never one of ours, never the enclave's own.
         Box::new(Logged(std::sync::Arc::new(MixConnector::new(&address, EntryChoice::Random))))
     } else {
