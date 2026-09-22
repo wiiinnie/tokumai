@@ -40,13 +40,15 @@ pub struct MixConnector {
     pub entry: EntryChoice,
     pub traffic: Option<crate::mix::Traffic>,
     pub steps: Option<Steps>,
+    /// Passed to every transport: how much of a long reply is in (`have`, `of`).
+    pub progress: Option<std::sync::Arc<dyn Fn(usize, usize) + Send + Sync>>,
     /// The entry gateway of the last connect (for the route display).
     pub last_entry: std::sync::Mutex<Option<String>>,
 }
 
 impl MixConnector {
     pub fn new(enclave_address: &str, entry: EntryChoice) -> MixConnector {
-        MixConnector { enclave_address: enclave_address.trim().to_string(), entry, traffic: None, steps: None, last_entry: Default::default() }
+        MixConnector { enclave_address: enclave_address.trim().to_string(), entry, traffic: None, steps: None, progress: None, last_entry: Default::default() }
     }
 }
 
@@ -58,7 +60,8 @@ impl Connector for MixConnector {
                     s(step);
                 }
             };
-            let t = MixTransport::connect(&self.enclave_address, &self.entry, self.traffic, &say).await?;
+            let mut t = MixTransport::connect(&self.enclave_address, &self.entry, self.traffic, &say).await?;
+            t.on_progress = self.progress.clone();
             if let Ok(mut e) = self.last_entry.lock() {
                 *e = Some(t.entry_gateway.clone());
             }

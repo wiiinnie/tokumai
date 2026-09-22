@@ -132,6 +132,11 @@ fn new_connection(app: &AppHandle, p: &profile::Profile) -> Result<Connection, S
         })
     };
     inner.steps = Some(steps(app.clone()));
+    // A long answer (a picture) comes in pieces; the wait says how many are in.
+    let receiving = app.clone();
+    inner.progress = Some(std::sync::Arc::new(move |have: usize, of: usize| {
+        let _ = receiving.emit("reply-progress", json!({ "have": have, "of": of }));
+    }));
     let connector = Reporting { inner, app: app.clone() };
     let mut conn = Connection::new(Box::new(connector), target::policy()?);
     conn.on_step(steps(app.clone()));

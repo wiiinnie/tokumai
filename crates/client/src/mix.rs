@@ -7,6 +7,7 @@ use crate::Transport;
 use nym_sdk::mixnet::{IncludedSurbs, MixnetClient, MixnetClientBuilder, MixnetMessageSender, Recipient};
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 use tokumai_proto::frames::{Exchange, Step};
 
@@ -57,6 +58,9 @@ pub struct MixTransport {
     pub entry_gateway: String,
     /// Overall limit for one exchange.
     pub timeout: Duration,
+    /// Told how much of a long reply has arrived, as it arrives (`have`, `of`): a picture
+    /// comes in pieces and the wait should say so rather than look stuck.
+    pub on_progress: Option<Arc<dyn Fn(usize, usize) + Send + Sync>>,
 }
 
 impl MixTransport {
@@ -111,7 +115,7 @@ impl MixTransport {
         }
         let Some((client, entry)) = found else { return Err(format!("{last} — try again")) };
         step("cover");
-        Ok(MixTransport { client, to, to_text: enclave_address.to_string(), entry_gateway: entry, timeout: Duration::from_secs(300) })
+        Ok(MixTransport { client, to, to_text: enclave_address.to_string(), entry_gateway: entry, timeout: Duration::from_secs(300), on_progress: None })
     }
 
     pub fn own_address(&self) -> String {
@@ -147,6 +151,9 @@ impl MixTransport {
                     match ex.accept(&m.message)? {
                         Step::Done(reply) => return Ok(reply),
                         Step::Going => moved = true,
+                    }
+                    if let (Some(say), Some((have, of))) = (&self.on_progress, ex.progress()) {
+                        say(have, of);
                     }
                 }
                 // Progress (an acknowledgement, a chunk): send the next frames right away.

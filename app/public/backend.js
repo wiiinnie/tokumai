@@ -110,6 +110,14 @@ export const Backend = {
     const unlisten = [];
     try {
       if (onPhase) unlisten.push(await listen("chat-sent", () => onPhase("sent")));
+      // A long answer (a picture) arrives in pieces. The interface already knows how to
+      // show that under the phase name "image"; this is where the pieces are counted.
+      if (onPhase) {
+        unlisten.push(await listen("reply-progress", (e) => {
+          const p = (e && e.payload) || {};
+          onPhase("image", { done: p.have || 0, total: p.of || 0 });
+        }));
+      }
       const r = await invoke("chat", {
         model: body.model, messages: body.messages, maxTokens: body.maxTokens, live: !!body.live,
         thinkingBudget: (typeof body.thinkingBudget === "number" ? body.thinkingBudget : null),
