@@ -2831,25 +2831,18 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   function emptyConnectingHTML(){
     return `<div class="empty connecting"><div class="cons" id="connCons"></div></div>`;
   }
-  // The connect sequence. Each line belongs to a step the Rust side reports WHEN IT
-  // STARTS (directory · gateway · cover · proof), so the animation follows the real
-  // connection: a line types while its step runs and is ticked when the next one begins.
-  // It used to run on a timer and was either ahead of the truth or behind it.
-  // Set true to show the directory line as well (four lines instead of three). The
-  // directory fetch is real, but it is the least interesting of the four and the whole
-  // connect is only about five seconds.
-  const CONN_SHOW_DIRECTORY = false;
-  const CONN_STEPS = (CONN_SHOW_DIRECTORY ? ["Fetching the gateway directory"] : [])
-    .concat(["Generating session keys","Activating cover traffic","Verifying tokumai enclave"]);
-  // Which real step opens which line. Without the directory line, the keys line opens at
-  // the very start and stands through the directory fetch and the gateway connection —
-  // the part that actually takes seconds.
-  const CONN_OF_STEP = CONN_SHOW_DIRECTORY
-    ? { directory:0, gateway:1, cover:2, proof:3 }
-    : { directory:0, gateway:0, cover:1, proof:2 };
-  // A line stays at least this long before the next one may tick it: two of these steps
-  // are instant, and a line nobody can read is worse than none.
-  const CONN_MIN_MS = 1300;
+  // One line, while the connection is made, ticked when it is up.
+  //
+  // It used to name each step as it started — directory, keys, cover, proof — which was
+  // honest but is no longer worth the screen: the connect takes about two seconds now, so
+  // the steps went by faster than they could be read, and the chats and models were
+  // already standing behind an overlay still narrating them. What a person needs to know
+  // is whether they are connected; the steps are in the route sheet for when they are not.
+  const CONN_STEPS = ["Connecting to tokumai"];
+  // Every real step keeps that one line alive; only "ready" ticks it.
+  const CONN_OF_STEP = { directory:0, gateway:0, cover:0, proof:0 };
+  // Long enough to be read, and no longer.
+  const CONN_MIN_MS = 700;
   // How long the tick at the end stays before the logo takes over.
   const CONN_DONE_MS = 1500;
   const DONE_MARK_SVG = '<svg class="donemark" viewBox="0 0 52 52"><circle cx="26" cy="26" r="23"/><path d="M15 27 L23 35 L37 18"/></svg>';
@@ -3096,8 +3089,8 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // "server" reads as a liveness check here (the boot animation keeps "Connecting to
   // tokumai server"): the step sends a tiny ping through the mixnet and waits for
   // the answer — "reuse" narrates the fast path where the live route is kept as-is.
-  // Named outright, not by their place in CONN_STEPS: that list is three lines or four
-  // depending on CONN_SHOW_DIRECTORY, and an index past its end showed "undefined…".
+  // Named outright, not by their place in CONN_STEPS — which is one line now, and an
+  // index past its end showed "undefined…".
   const PHASE_LABEL = { directory:"Fetching the gateway directory", gateway:"Connecting to entry gateway", cover:"Activating cover traffic", proof:"Verifying tokumai enclave", check:"Checking the route", reuse:"Route is up — reusing it" };
   let routeTitle = "";                          // "" → default "Reconnecting to the mixnet"
   let rt = { lines:[], timers:[], seq:0 };     // overlay console state: lines = [{el, tx, cur, text, typed, closed}]
@@ -3260,7 +3253,15 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     routeTitle = "";                       // normal reconnects own the default title
     if(force || hiddenMs >= RESUME_LONG_PAUSE_MS){ setMixState("reconnecting", auto ? "Retrying the route automatically — new session identity, about 10 s." : force ? "Rebuilding the route on request — new session identity, about 10 s." : pauseWhy(hiddenMs)); }
     else setMixState("checking");
-    try{ const r = await Backend.appResumed(hiddenMs, !!force); if(r && r.action==="alive"){ lastRtt = r.ms||lastRtt; connectedAt = connectedAt||Date.now(); autoRetryN=0; clearAutoRetry(); setMixState("ok"); } }
+    // Either answer means there is a route again: "alive" kept the old one, "rebuilt"
+    // waited for a new one. Ignoring "rebuilt" left the sheet saying "reconnecting…"
+    // forever over a connection that was already back.
+    try{
+      const r = await Backend.appResumed(hiddenMs, !!force);
+      if(r && r.action==="alive") lastRtt = r.ms||lastRtt;
+      if(r && r.action==="rebuilt") connectedAt = Date.now();
+      connectedAt = connectedAt||Date.now(); autoRetryN=0; clearAutoRetry(); setMixState("ok"); routeClose();
+    }
     catch(e){ routeFail = (e&&e.message)||String(e); setMixState("offline"); scheduleAutoRetry(); }
   }
   // Connection sheet: fill the "Resume checks" row from the local resume log.

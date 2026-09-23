@@ -631,9 +631,12 @@ async fn app_hidden(app: AppHandle) {
 }
 
 /// Back in the foreground. After a long pause (or when asked) the mixnet client is
-/// replaced before the next question, instead of that question hanging on a dead socket.
+/// replaced — here and now, not at the next question: the interface is showing "a fresh
+/// route is being built", and that has to be the truth while it says so. The steps reach
+/// it as they happen (`mixnet-phase`), and this returns when the route is up.
 #[tauri::command]
 async fn app_resumed(app: AppHandle, hidden_ms: u64, force: Option<bool>) -> Result<Value, String> {
+    let started = std::time::Instant::now();
     let st = app.state::<AppState>();
     let mut guard = st.conn.lock().await;
     let Some(c) = guard.as_mut() else { return Ok(json!({ "action": "alive", "ms": hidden_ms })) };
@@ -642,7 +645,12 @@ async fn app_resumed(app: AppHandle, hidden_ms: u64, force: Option<bool>) -> Res
     } else {
         c.resumed();
     }
-    Ok(json!({ "action": if c.has_transport() { "alive" } else { "rebuilt" }, "ms": hidden_ms }))
+    if c.has_transport() {
+        return Ok(json!({ "action": "alive", "ms": started.elapsed().as_millis() }));
+    }
+    c.ready().await?;
+    log::info!("[enclave] route rebuilt after {} ms away in {} ms", hidden_ms, started.elapsed().as_millis());
+    Ok(json!({ "action": "rebuilt", "ms": started.elapsed().as_millis() }))
 }
 
 #[tauri::command]
