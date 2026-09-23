@@ -36,6 +36,13 @@ KEY=~/.ssh/$NAME.pem
 ENCLAVE_CPUS=2
 ENCLAVE_MIB=3072
 
+# running · stopped · pending · stopping, or empty when there is no probe instance. A
+# stopped instance has no address, so nothing may try to reach it.
+instance_state() {
+  aws ec2 describe-instances --filters "Name=tag:Name,Values=$NAME" "Name=instance-state-name,Values=pending,running,stopping,stopped" \
+    --query 'Reservations[].Instances[].State.Name' --output text
+}
+
 instance_id() {
   aws ec2 describe-instances --filters "Name=tag:Name,Values=$NAME" "Name=instance-state-name,Values=pending,running,stopping,stopped" \
     --query 'Reservations[].Instances[].InstanceId' --output text
@@ -138,17 +145,30 @@ PY
     echo "dev-data/probe.json written — the app and the dev tools now talk to this enclave"
     ;;
   status)
-    ID=$(instance_id); [ -z "$ID" ] && { echo "no probe instance"; exit 0; }
+    ID=$(instance_id); [ -z "$ID" ] && { echo "no probe instance — 'launch' makes one"; exit 0; }
+    STATE=$(instance_state)
+    if [ "$STATE" != "running" ]; then
+      echo "instance $ID is $STATE (no address; the disk and the enclave's book are kept)"
+      [ "$STATE" = "stopped" ] && echo "'start' brings it back, then 'deploy' puts the enclave on the mixnet"
+      exit 0
+    fi
     echo "instance $ID at $(public_ip)"
-    remote 'test -f /var/tmp/tokumai-host-ready && echo "host ready" || echo "host still preparing"; nitro-cli describe-enclaves 2>/dev/null | grep -E "EnclaveID|State|Flags" || true; tail -n 20 egress.log 2>/dev/null || true'
+    remote 'test -f /var/tmp/tokumai-host-ready && echo "host ready" || echo "host still preparing"; systemctl is-active tokumai-egress 2>/dev/null | sed "s/^/egress service: /"; nitro-cli describe-enclaves 2>/dev/null | grep -E "EnclaveID|State|Flags" || echo "no enclave running"; tail -n 20 egress.log 2>/dev/null || true'
     ;;
-  ssh) exec ssh -i "$KEY" ec2-user@"$(public_ip)" ;;
+  ssh)
+    [ "$(instance_state)" = "running" ] || { echo "the instance is $(instance_state) — 'start' first"; exit 1; }
+    exec ssh -i "$KEY" ec2-user@"$(public_ip)"
+    ;;
   forget)
     rm -f dev-data/probe.json
     echo "dev-data/probe.json removed — the app talks to the simulated enclave again"
     ;;
   stop)
     ID=$(instance_id); [ -z "$ID" ] && { echo "no probe instance"; exit 0; }
+    if [ "$(instance_state)" != "running" ]; then
+      echo "instance $ID is already $(instance_state)"
+      exit 0
+    fi
     # Stopping keeps the root volume, and with it the sealed book the enclave writes to
     # (`down` does not: a fresh instance has a fresh disk and the balances are gone).
     remote "sudo nitro-cli terminate-enclave --all >/dev/null 2>&1 || true; sudo systemctl stop tokumai-egress 2>/dev/null || true" || true
@@ -157,7 +177,11 @@ PY
     echo "stopped — the disk and the enclave's book are kept; 'resume' brings it back"
     ;;
   start)
-    ID=$(instance_id); [ -z "$ID" ] && { echo "no probe instance — 'up' makes one"; exit 1; }
+    ID=$(instance_id); [ -z "$ID" ] && { echo "no probe instance — 'launch' makes one"; exit 1; }
+    if [ "$(instance_state)" = "running" ]; then
+      echo "instance $ID is already running at $(public_ip)"
+      exit 0
+    fi
     aws ec2 start-instances --instance-ids "$ID" >/dev/null
     aws ec2 wait instance-running --instance-ids "$ID"
     # A stopped instance comes back with a new address, and SSH is allowed from this
