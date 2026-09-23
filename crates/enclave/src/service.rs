@@ -424,12 +424,13 @@ impl Enclave {
         // has been through since, one decoy of the same shape goes out beside it — the
         // cover our own users would otherwise have provided (see `cover`).
         let shape = if crate::gemini::is_image_model(&req.model) { crate::cover::Shape::Picture } else { crate::cover::Shape::Text };
-        if self.cover.needs_decoy(&self.account_key(account), shape, now) {
+        let picture = shape == crate::cover::Shape::Picture;
+        for _ in 0..self.cover.decoys_needed(&self.account_key(account), shape, now) {
             let providers = self.providers.clone();
-            let picture = shape == crate::cover::Shape::Picture;
             tokio::spawn(async move {
-                // Not at the same instant: two calls to the millisecond look arranged.
-                let wait = 500 + (rand::random::<u64>() % 7_500);
+                // Each on its own, and none at the same instant as the real call: calls to
+                // the millisecond look arranged, which would defeat the point.
+                let wait = 500 + (rand::random::<u64>() % 20_000);
                 tokio::time::sleep(std::time::Duration::from_millis(wait)).await;
                 providers.decoy(picture).await;
             });
