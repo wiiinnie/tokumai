@@ -18,6 +18,7 @@ use tokumai_core::subscription::TIERS;
 /// How stale a plan must be before the renewal check asks its rail again.
 const STALE_MS: u64 = 6 * 3_600_000;
 /// How often the prices are read again from Stripe.
+#[allow(dead_code)] // kept for the plan sheet's own staleness check
 const PRICES_EVERY_MS: u64 = 3_600_000;
 /// The consent text version the app shows beside the two confirmations (§ 356 (5) BGB).
 const CONSENT_VERSIONS: &[&str] = &["2026-09-22"];
@@ -114,6 +115,11 @@ impl Enclave {
             .lock()
             .map_err(|_| "ledger unavailable".to_string())
             .and_then(|l| plans::subscribe_or_renew(&l, account, st.tier, st.yearly, &rail, now, st.start_ms, st.end_ms));
+        // From here the account's next question is the one that could be tied to the
+        // payment we just took. `cover` watches until it comes (see that module).
+        if done.is_ok() {
+            self.cover.paid(&self.account_key(account), now);
+        }
         match done {
             Ok(_) => json!({ "kind": "plan.paid", "plan": self.plan_summary(account) }),
             Err(e) => error(&e),
@@ -192,6 +198,7 @@ impl Enclave {
                 Err(e) => return error(&e),
                 _ => {}
             }
+            self.cover.paid(&self.account_key(account), now);
             return match plans::subscribe_or_renew(&l, account, tier, yearly, &rail, now, tx.purchased_at_ms, tx.expires_at_ms) {
                 Ok(_) => {
                     drop(l);
@@ -205,7 +212,10 @@ impl Enclave {
                 let first = l.first_payment(&format!("apple-tx:{}", tx.transaction_id), now);
                 let credited = match first {
                     Ok(true) => match l.credit_prepaid(account, toku, now) {
-                        Ok(()) => toku,
+                        Ok(()) => {
+                            self.cover.paid(&self.account_key(account), now);
+                            toku
+                        }
                         Err(e) => return error(&e),
                     },
                     Ok(false) => 0, // a resend: credited the first time
@@ -228,9 +238,26 @@ impl Enclave {
                 Err(_) => eprintln!("tokumai-enclave: the period roll failed"),
             }
         }
+        // One call to Stripe every tick, whether or not there is anything to ask about.
+        //
+        // Our host sees the enclave's traffic, and a call to Stripe that happens only when
+        // something happened says when something happened — which, next to the moment a
+        // question goes out, is half of a join between a named customer and a question.
+        // A steady beat says nothing: there is always a call, and it always looks alike.
+        // It does not protect against us (we hold the merchant records either way); it
+        // protects against whoever else holds the machine.
+        let stale = self.ledger.lock().ok().and_then(|l| plans::stale(&l, now, STALE_MS).ok()).unwrap_or_default();
+        let checked = match stale.iter().find(|(_, p)| !p.is_app_store()) {
+            Some((key, plan)) => {
+                self.check_stripe(key, plan, now).await;
+                true
+            }
+            None => false,
+        };
         if let Some(stripe) = &self.stripe {
-            let due = self.plan_prices.lock().map(|p| now.saturating_sub(p.1) >= PRICES_EVERY_MS).unwrap_or(false);
-            if due {
+            if !checked {
+                // Nothing needed asking, so ask for the prices instead: a real call, on
+                // the same beat, that keeps the plan sheet current as a side effect.
                 match stripe.plan_prices().await {
                     Ok(prices) => {
                         if let Ok(mut p) = self.plan_prices.lock() {
@@ -238,17 +265,12 @@ impl Enclave {
                         }
                     }
                     Err(_) => {
-                        eprintln!("tokumai-enclave: plan prices could not be read from Stripe");
                         if let Ok(mut p) = self.plan_prices.lock() {
-                            p.1 = now; // try again in an hour, not every tick
+                            p.1 = now;
                         }
                     }
                 }
             }
-        }
-        let stale = self.ledger.lock().ok().and_then(|l| plans::stale(&l, now, STALE_MS).ok()).unwrap_or_default();
-        if let Some((key, plan)) = stale.iter().find(|(_, p)| !p.is_app_store()) {
-            self.check_stripe(key, plan, now).await;
         }
         if let Some((key, plan)) = stale.iter().find(|(_, p)| p.is_app_store()) {
             self.check_apple(key, plan, now).await;

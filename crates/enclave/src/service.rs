@@ -64,12 +64,15 @@ pub struct Enclave {
     replayed: usize,
     keys: EnclaveKeys,
     attester: Box<dyn Attester>,
-    providers: Providers,
+    /// Behind an Arc so a decoy call can outlive the question it covers (see `cover`).
+    providers: std::sync::Arc<Providers>,
     pub(crate) ledger: Mutex<Ledger>,
     pricing: PricingTable,
     dev_mode: bool,
     pub(crate) stripe: Option<crate::stripe::Stripe>,
     pub(crate) apple_api: Option<crate::apple::AppleApi>,
+    /// Cover for the first question after a payment (see `cover`).
+    pub(crate) cover: crate::cover::Cover,
     /// What the six plans cost at Stripe (cents), and when that was last read.
     pub(crate) plan_prices: Mutex<(Vec<u64>, u64)>,
     address: Mutex<String>,
@@ -97,6 +100,11 @@ pub(crate) fn error(msg: &str) -> Value {
 }
 
 impl Enclave {
+    /// How the ledger names an account: a keyed hash, never the account id itself.
+    pub(crate) fn account_key(&self, account: &str) -> String {
+        self.ledger.lock().map(|l| l.acct_key(account)).unwrap_or_default()
+    }
+
     pub fn replayed(&self) -> usize {
         self.replayed
     }
@@ -120,10 +128,11 @@ impl Enclave {
             replayed,
             keys: EnclaveKeys::generate(),
             attester: p.attester,
-            providers: p.providers,
+            providers: std::sync::Arc::new(p.providers),
             ledger: Mutex::new(ledger),
             pricing: p.pricing,
             dev_mode: p.dev_mode,
+            cover: Default::default(),
             replies: Mutex::new(HashMap::new()),
             safety_salt: tokumai_core::account::sha256(&[b"tokumai/safety/v1", &key]),
             strikes: Mutex::new(HashMap::new()),
@@ -410,6 +419,22 @@ impl Enclave {
         };
         // The moderation check runs before the model is asked; a flagged turn costs nothing.
         let flagged = self.providers.moderate(&req.messages).await;
+        // What this call looks like from outside our machine, and whether it is the first
+        // one since this account paid for something. If it is, and nobody else's traffic
+        // has been through since, one decoy of the same shape goes out beside it — the
+        // cover our own users would otherwise have provided (see `cover`).
+        let shape = if crate::gemini::is_image_model(&req.model) { crate::cover::Shape::Picture } else { crate::cover::Shape::Text };
+        if self.cover.needs_decoy(&self.account_key(account), shape, now) {
+            let providers = self.providers.clone();
+            let picture = shape == crate::cover::Shape::Picture;
+            tokio::spawn(async move {
+                // Not at the same instant: two calls to the millisecond look arranged.
+                let wait = 500 + (rand::random::<u64>() % 7_500);
+                tokio::time::sleep(std::time::Duration::from_millis(wait)).await;
+                providers.decoy(picture).await;
+            });
+        }
+        self.cover.note(shape, now);
         let result = match flagged {
             Ok(Some(cats)) => Err(format!("Declined by the moderation check ({cats})")),
             _ => {

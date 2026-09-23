@@ -17,6 +17,7 @@
 
 pub mod apple;
 pub mod catalog;
+pub mod cover;
 pub mod gemini;
 pub mod http;
 pub mod keys;

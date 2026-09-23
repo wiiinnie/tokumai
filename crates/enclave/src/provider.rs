@@ -12,7 +12,7 @@ use std::future::Future;
 use std::pin::Pin;
 use tokumai_core::billing::TokenUsage;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ChatRequest {
     pub model: String,
     pub messages: Value,
@@ -93,6 +93,24 @@ impl Providers {
     }
 
     /// Development: the mock alone.
+    /// One call that looks like an ordinary one from outside, and is thrown away. It is
+    /// cover for somebody else's first question (see `cover`), so what matters is the
+    /// shape: a few kilobytes back, or several megabytes. Failure is silence — a decoy
+    /// that did not go out is a missed opportunity, never an error for the person waiting.
+    pub async fn decoy(&self, picture: bool) {
+        let model = if picture { "gemini-3.1-flash-lite-image" } else { "gemini-3.5-flash-lite" };
+        let Some(provider) = self.find(model) else { return };
+        // Harmless, and long enough that the answer is of an ordinary size.
+        let req = ChatRequest {
+            model: model.to_string(),
+            messages: serde_json::json!([{ "role": "user", "content": if picture { "a plain grey square" } else { "Name three colours and say nothing else." } }]),
+            max_tokens: Some(if picture { 64 } else { 256 }),
+            ..Default::default()
+        };
+        let call = Call { req: &req, safety_id: None, image_size: "1K" };
+        let _ = provider.complete(&call).await;
+    }
+
     pub fn mock() -> Providers {
         Providers { list: vec![Box::new(MockProvider)], moderation: None }
     }
