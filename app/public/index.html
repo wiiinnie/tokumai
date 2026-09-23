@@ -3202,9 +3202,13 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         if(p.step==="directory" && rt.lines.length) routeRestart();
         routeLine(PHASE_LABEL[p.step] + (p.detail ? " · " + p.detail : ""));
         return;
+      // "ready" is the client's last step — the enclave answered and its proof held. It
+      // used to be followed by an "online" step from the old server, and when that stopped
+      // coming the sheet simply never finished: a route that was up for half a minute
+      // still read "Verifying tokumai enclave…".
       case "ready":
-        if(p.detail==="alive" && mixState==="checking"){ connectedAt=connectedAt||Date.now(); autoRetryN=0; clearAutoRetry(); setMixState("ok"); setStatus("route alive"); }
-        return;                                     // the rebuild goes on with the server step
+        if(p.detail==="alive" && mixState==="checking"){ connectedAt=connectedAt||Date.now(); autoRetryN=0; clearAutoRetry(); setMixState("ok"); setStatus("route alive"); return; }
+      // falls through
       case "online": {
         const last = rt.lines[rt.lines.length-1]; if(last) routeFinish(last, true);
         connectedAt = Date.now(); autoRetryN=0; clearAutoRetry(); routeQuiet=false;
