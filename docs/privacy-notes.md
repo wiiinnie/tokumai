@@ -59,11 +59,47 @@ the system, and only the second is worth anything to somebody who does not know 
 - No claim about traffic analysis. The mixnet raises its cost; the enclave does nothing for
   it at all.
 
+## Questions for the lawyer
+
+The first one decides a design, not only a sentence.
+
+1. **May we keep no connection logs at all?** Our host carries every call the enclave makes
+   to a model provider. A log of when each one went out is the other half of a join between
+   a named customer (whose payment we must record) and a question. We would rather keep
+   **nothing per call**: counts per destination per hour, no timestamps, no order. Built
+   that way already — the proxy counts by the hour, and a line per tunnel needs an explicit
+   switch that only the development machine sets.
+   - Is there any retention duty that touches this for us? We are not a telecommunications
+     provider and we carry no third-party traffic; our reading is that §176 TKG and the
+     data-retention rules do not apply, and that GDPR's minimisation principle points the
+     same way we want to go.
+   - Does keeping nothing weaken us anywhere else — abuse complaints, a provider's terms, a
+     payment dispute, an investigation where we would be expected to help?
+   - If a duty does exist, what is the shortest lawful window, and may it be counts rather
+     than lines?
+2. **What must we keep, and for how long?** Payment records for tax (§147 AO), the consent
+   version a plan was taken out under, the cancellation trail (§312k BGB). None of those
+   touch usage — we want that separation stated in the published text.
+3. **May the privacy policy say what we cannot do, rather than what we will not do?** The
+   claims are about the system ("the operator cannot read the questions; the app verifies
+   which code is running"), and we want to be sure that promising a property is safe when
+   the property has the limits listed above.
+4. **The residual in item 2 of the disclosure list** — while the service is small, a
+   payment and a first question can be joined by timing. Must that be disclosed explicitly,
+   and in what words?
+5. **One billing boundary for everyone** (all renewals on the same date, pro-rated first
+   period) is a privacy measure for us. Does it raise any issue with consumer law, the
+   pro-rating, or the cancellation right?
+6. **Anonymous payment rails are out** on your earlier advice. Does that also rule out
+   prepaid codes sold through a third party, where we never see the buyer?
+
 ## Housekeeping that the text has to match
 
 - Every model provider has to appear in the published text **before** it serves a single
   request. (Rule carried over from the first version, where it was broken once.)
-- Egress logs on the host are operational only, and should be kept for the shortest window
-  that still allows an outage to be diagnosed — they carry the timing that item 2 is about.
+- Egress logs: the production host keeps **no per-call record** — counts per destination per
+  hour, nothing that pairs a call with a moment. A line per tunnel exists for development
+  and is switched on explicitly (`TOKUMAI_EGRESS_LOG=lines`), which the probe does and a
+  production host does not. Pending question 1 to the lawyer.
 - The pricing table is compiled into the enclave image and therefore attested: we cannot
   reprice a question after the fact, and the text may say so.

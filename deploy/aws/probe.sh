@@ -3,6 +3,11 @@
 # egress proxy beside it. Everything the probe creates is tagged tokumai-probe, and `down`
 # removes all of it again — an instance left running costs about €4 a day.
 #
+# The probe writes a line per tunnel (TOKUMAI_EGRESS_LOG=lines in the unit below): it is a
+# development machine, and that log is how a fault is found. A production host does NOT set
+# it — there the proxy counts by the hour and keeps no per-call timing, because we hold the
+# payment records and a log of when each call went out is the other half of a join.
+#
 # The words are EC2's own, so that what the script does and what the console shows are the
 # same thing: launch · start · stop · terminate. A stopped instance keeps its disk (and the
 # enclave's book on it) and costs storage only; a terminated one is gone, disk and all.
@@ -92,6 +97,7 @@ After=network-online.target
 [Service]
 User=ec2-user
 WorkingDirectory=/home/ec2-user
+Environment=TOKUMAI_EGRESS_LOG=lines
 ExecStart=/home/ec2-user/tokumai-egress-host vsock:4294967295:8080 egress.allow vsock:4294967295:8081 vsock:4294967295:8082 sealed.json book
 Restart=always
 RestartSec=2

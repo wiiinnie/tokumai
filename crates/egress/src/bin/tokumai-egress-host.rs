@@ -4,10 +4,45 @@
 //!     tokumai-egress-host vsock:4294967295:8080 /etc/tokumai/egress.allow vsock:4294967295:8081   (on the EC2 host)
 //!     tokumai-egress-host tcp:127.0.0.1:8080 deploy/egress.allow            (on a laptop)
 //!
-//! One log line per tunnel: destination, bytes each way, or why it was refused.
+//! **What it writes down.** By default: nothing per tunnel. Once an hour, a line per
+//! destination with how many calls and how many bytes — no timestamps, no order, nothing
+//! that pairs one call with one moment. That is deliberate. We hold the payment records,
+//! so a log of when each provider call went out is the other half of a join between a
+//! named customer and a question; a file we do not keep cannot be asked for. An hour is
+//! coarse enough that the pairing does not survive it, and precise enough to see that the
+//! machine is working.
+//!
+//! `TOKUMAI_EGRESS_LOG=lines` brings back a line per tunnel, for development and for
+//! chasing a fault. It is never the default, and the probe sets it explicitly.
+//!
+//! Refusals are always logged: a destination that is not on the allowlist is a
+//! misconfiguration or somebody trying, and it is not a call anyone made.
 
-use std::sync::Arc;
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokumai_egress::{serve, Allowlist, Endpoint, Report};
+
+/// What the proxy writes about the traffic it carries.
+struct Tally {
+    /// destination host → (calls, bytes out, bytes back)
+    per_host: Mutex<BTreeMap<String, (u64, u64, u64)>>,
+}
+
+impl Tally {
+    /// One line per destination, then start again. Called every hour, and once more when
+    /// the process is asked to stop.
+    fn say_and_clear(&self) {
+        let Ok(mut per_host) = self.per_host.lock() else { return };
+        if per_host.is_empty() {
+            println!("egress: nothing in the last hour");
+        }
+        for (host, (calls, up, down)) in per_host.iter() {
+            println!("egress {host}: {calls} call(s), up {up}, down {down} (last hour)");
+        }
+        per_host.clear();
+    }
+}
 
 /// The instance role's temporary credentials, from the metadata service (IMDSv2).
 async fn instance_credentials() -> Result<String, String> {
@@ -43,11 +78,38 @@ async fn main() {
     };
     let listen = Endpoint::parse(listen).unwrap_or_else(|e| panic!("{e}"));
     let allow = Allowlist::parse(&std::fs::read_to_string(file).expect("read the allowlist")).unwrap_or_else(|e| panic!("{e}"));
-    let report: Report = Arc::new(|host, port, r| match r {
-        Ok((0, 0)) => println!("egress {host}:{port} open"),
-        Ok((up, down)) => println!("egress {host}:{port} closed, up {up} down {down}"),
-        Err(e) => println!("egress {host}:{port} refused: {e}"),
-    });
+    // Per tunnel, or per hour: see the note at the top of this file.
+    let lines = std::env::var("TOKUMAI_EGRESS_LOG").map(|v| v == "lines").unwrap_or(false);
+    let report: Report = if lines {
+        println!("tokumai-egress-host: writing a line per tunnel (TOKUMAI_EGRESS_LOG=lines) — development only");
+        Arc::new(|host, port, r| match r {
+            Ok((0, 0)) => println!("egress {host}:{port} open"),
+            Ok((up, down)) => println!("egress {host}:{port} closed, up {up} down {down}"),
+            Err(e) => println!("egress {host}:{port} refused: {e}"),
+        })
+    } else {
+        let tally: Arc<Tally> = Arc::new(Tally { per_host: Mutex::new(BTreeMap::new()) });
+        let hourly = tally.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(3600)).await;
+                hourly.say_and_clear();
+            }
+        });
+        Arc::new(move |host: &str, port: u16, r: Result<(u64, u64), String>| match r {
+            // A tunnel opening is not counted: the same call is counted once, when it closes.
+            Ok((0, 0)) => {}
+            Ok((up, down)) => {
+                if let Ok(mut per_host) = tally.per_host.lock() {
+                    let row = per_host.entry(host.to_string()).or_insert((0, 0, 0));
+                    row.0 += 1;
+                    row.1 += up;
+                    row.2 += down;
+                }
+            }
+            Err(e) => println!("egress {host}:{port} refused: {e}"),
+        })
+    };
     // What the enclave says about itself (its Nym address), on a port of its own.
     if let Some(a) = args.get(2) {
         let a = Endpoint::parse(a).unwrap_or_else(|e| panic!("{e}"));
