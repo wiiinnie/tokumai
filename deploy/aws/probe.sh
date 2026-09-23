@@ -3,17 +3,21 @@
 # egress proxy beside it. Everything the probe creates is tagged tokumai-probe, and `down`
 # removes all of it again — an instance left running costs about €4 a day.
 #
-#     deploy/aws/probe.sh up        # key pair, security group (SSH from this machine's IP only), instance
+# The words are EC2's own, so that what the script does and what the console shows are the
+# same thing: launch · start · stop · terminate. A stopped instance keeps its disk (and the
+# enclave's book on it) and costs storage only; a terminated one is gone, disk and all.
+#
+#     deploy/aws/probe.sh launch    # key pair, security group (SSH from this machine's IP only), instance
 #     deploy/aws/probe.sh deploy    # copy the EIF + the egress proxy, start both (production mode)
 #     deploy/aws/probe.sh debug     # the same, but the enclave in debug mode: console visible,
 #                                   # PCRs all zeros — the app refuses it, by design
 #     deploy/aws/probe.sh status    # the instance, the enclave, the proxy's recent lines
 #     deploy/aws/probe.sh forget    # back to the simulated enclave on this machine
 #     deploy/aws/probe.sh ssh
-#     deploy/aws/probe.sh pause     # stop the instance, keep its disk: the enclave's book
-#                                   # survives, and a stopped instance costs storage only
-#     deploy/aws/probe.sh resume    # start it again and put the enclave back on the mixnet
-#     deploy/aws/probe.sh down      # terminate and delete everything — the book goes too
+#     deploy/aws/probe.sh stop      # keeps the disk, so the enclave's book is there tomorrow
+#     deploy/aws/probe.sh start     # and back again (new address; then `deploy`)
+#     deploy/aws/probe.sh terminate # instance, disk, key pair, security group — all gone,
+#                                   # the book with them (asks first)
 #
 # Uses the CLI profile `tokumai` (the IAM user tokumai-probe), region eu-central-1.
 set -euo pipefail
@@ -35,7 +39,7 @@ public_ip() { aws ec2 describe-instances --instance-ids "$(instance_id)" --query
 remote() { ssh -i "$KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 ec2-user@"$(public_ip)" "$@"; }
 
 case "${1:-}" in
-  up)
+  launch)
     [ -n "$(instance_id)" ] && { echo "already up: $(instance_id)"; exit 0; }
     if [ ! -f "$KEY" ]; then
       aws ec2 create-key-pair --key-name $NAME --query KeyMaterial --output text > "$KEY"; chmod 600 "$KEY"
@@ -109,7 +113,7 @@ PY
     rm -f dev-data/probe.json
     echo "dev-data/probe.json removed — the app talks to the simulated enclave again"
     ;;
-  pause)
+  stop)
     ID=$(instance_id); [ -z "$ID" ] && { echo "no probe instance"; exit 0; }
     # Stopping keeps the root volume, and with it the sealed book the enclave writes to
     # (`down` does not: a fresh instance has a fresh disk and the balances are gone).
@@ -118,7 +122,7 @@ PY
     aws ec2 wait instance-stopped --instance-ids "$ID"
     echo "stopped — the disk and the enclave's book are kept; 'resume' brings it back"
     ;;
-  resume)
+  start)
     ID=$(instance_id); [ -z "$ID" ] && { echo "no probe instance — 'up' makes one"; exit 1; }
     aws ec2 start-instances --instance-ids "$ID" >/dev/null
     aws ec2 wait instance-running --instance-ids "$ID"
@@ -129,7 +133,15 @@ PY
     aws ec2 authorize-security-group-ingress --group-id "$SG" --protocol tcp --port 22 --cidr "$MY_IP/32" >/dev/null 2>&1 || true
     echo "running at $(public_ip) — 'deploy' puts the enclave back on the mixnet (the book is still there)"
     ;;
-  down)
+  terminate)
+    # This destroys the root volume, and the enclave's book with it. Say so, and make the
+    # person say the word: a probe holding real balances looks exactly like one that does not.
+    if [ "${FORCE:-}" != "1" ]; then
+      echo "terminate deletes the instance AND its disk — the enclave's book (balances, plans) goes with it."
+      echo "to keep it, use 'stop'. type 'terminate' to go ahead:"
+      read -r answer
+      [ "$answer" = "terminate" ] || { echo "left alone"; exit 1; }
+    fi
     ID=$(instance_id)
     if [ -n "$ID" ]; then aws ec2 terminate-instances --instance-ids "$ID" >/dev/null; aws ec2 wait instance-terminated --instance-ids "$ID"; fi
     SG=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=$NAME" --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null || true)
@@ -137,5 +149,10 @@ PY
     aws ec2 delete-key-pair --key-name $NAME >/dev/null 2>&1 || true; rm -f "$KEY" dev-data/probe.json
     echo "everything of the probe is gone"
     ;;
-  *) sed -n 2,16p "$0"; exit 2 ;;
+  up | down | pause | resume)
+    # The old names, one of which quietly destroyed a disk.
+    echo "the words are EC2's own now: launch · start · stop · terminate (see the top of this script)"
+    exit 2
+    ;;
+  *) sed -n 2,20p "$0"; exit 2 ;;
 esac

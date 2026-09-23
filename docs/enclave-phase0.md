@@ -45,7 +45,9 @@ A Nitro enclave has no network and no disk of its own. Both have to be built:
   Probe 1: PCR0 `6872f9b709fd3b5b7639a3e3535600c3cf7d41810c742f0657fb7a9fecf82aacd597512551b25d378f7e981893558d51`.
 - **The host side** (`deploy/aws/probe.sh`): one `c7g.xlarge` (Graviton, enclaves
   enabled, the role `tokumai-enclave-host`), SSH from the operator's IP only; the egress
-  proxy (a static binary) and the enclave started on it; `down` removes everything.
+  proxy (a static binary) and the enclave started on it. Its words are EC2's own —
+  `launch`, `start`, `stop`, `terminate` — because `stop` keeps the disk (and the book on
+  it) while `terminate` destroys both.
 
 ## The first probe, 2026-09-22
 
@@ -110,8 +112,20 @@ now says over vsock whether it unsealed and what it measures:
 3. KMS replies in BER with lengths left open, which a DER reader refuses; the envelope is
    read by hand now (`cms_parts`, tested against both forms and against content in pieces).
 
-Still in memory: the ledger. Giving it a home on the host, sealed under the data key, is
-the next step.
+~~Still in memory: the ledger.~~ Done — see below.
+
+## The book, 2026-09-22
+
+The enclave keeps its book in memory and the host keeps a sealed snapshot and a sealed
+journal of it, one record per change, written down before the person is told their request
+went through. At the next start the snapshot is read back and the journal replayed; every
+record is sealed to its place in the line, so one dropped from the middle, reordered, or
+kept from an older snapshot does not open. Verified on the probe: 22 changes replayed
+across a restart onto a NEW image, which is also the upgrade path.
+
+Two things it does not survive, both about where the bytes lie rather than how they are
+sealed, and both on the list below: a host that is replaced, and a host that hands back an
+older pair of files.
 
 ## Next
 
@@ -126,8 +140,28 @@ the next step.
    and the app attest it over the mixnet; 24 h under light load — Nym stable through the
    proxy? latency?)
 5. ~~**KMS**~~ — done, see above.
-6. **The ledger**: sealed storage on the host under the data key, so accounts and balances
-   survive a restart.
+6. ~~**The ledger**~~ — done, see above.
+
+## Before launch
+
+Preconditions, not nice-to-haves. Each is a way the enclave's promise is weaker than it
+looks, and each is cheap to close now and expensive to explain later.
+
+1. **The book must outlive the machine.** It lies on the instance's root volume today, so
+   replacing the instance takes every balance and plan with it — which is exactly what
+   happened on the morning of 2026-09-23, when a terminated probe took a paid test plan
+   with it. It belongs on a volume of its own (`DeleteOnTermination = false`, so it
+   survives the instance it is attached to) with backups, and the operator's own runbook
+   must say `stop`, never `terminate`. A customer's balance may not depend on which
+   machine it was bought on.
+2. **A rewind must be detectable.** The host can hand back an older snapshot and journal,
+   and nothing inside a Nitro enclave survives a restart to notice — no counter, no key.
+   Closing it needs a counter the host cannot turn back, kept outside (a small conditional
+   write per snapshot is enough). Until then the operator is trusted for freshness; that
+   is a sentence we must be willing to write in the privacy policy.
+3. **Signed images (PCR8) instead of a list of PCR0s**, so an upgrade does not mean editing
+   the key policy — and so "whoever can change the policy could name an image of their
+   choosing" stops being true.
 
 ## Account and cost
 
