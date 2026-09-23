@@ -858,6 +858,20 @@
   .memowarn{margin-top:10px;font-size:11.5px;line-height:1.4;color:var(--signal);background:color-mix(in srgb,var(--signal) 10%,transparent);border-radius:8px;padding:8px 10px}
   .setrow{display:flex;gap:14px;align-items:center;justify-content:space-between;padding:12px 13px;border:1px solid var(--line);border-radius:12px;margin-bottom:9px;cursor:pointer;background:var(--surface-2)}
   .setrow > span{display:flex;flex-direction:column;gap:3px;min-width:0;order:1}
+  /* The enclave's front doors: flag, country and key left-aligned, the chosen one marked
+     by its border and a tick. The radio stays in the markup (keyboard, screen readers) and
+     out of sight — the whole row is the label, so the target is the row. */
+  .doorrow{display:flex;gap:13px;align-items:center;padding:11px 13px;border:1px solid var(--line);border-radius:12px;margin-bottom:8px;cursor:pointer;background:var(--surface-2)}
+  .doorrow input{position:absolute;width:1px;height:1px;opacity:0}
+  .doorrow:focus-within{outline:2px solid var(--signal);outline-offset:2px}
+  .doorrow .flag{width:30px;height:21px;border-radius:4px;border:1px solid var(--line);display:block;flex:0 0 auto}
+  .doorrow .txt{display:flex;flex-direction:column;gap:3px;min-width:0;flex-grow:1}
+  .doorrow b{font-size:13px;font-weight:600;color:var(--bone)}
+  .doorrow small{font-size:11px;line-height:1.35;color:var(--muted)}
+  .doorrow small.key{font-family:var(--mono);overflow-wrap:anywhere}
+  .doorrow .tick{width:17px;height:17px;flex:0 0 auto;stroke:var(--signal);stroke-width:2.4;fill:none;stroke-linecap:round;stroke-linejoin:round;visibility:hidden}
+  .doorrow.on{border-color:var(--signal);box-shadow:inset 0 0 0 1px rgba(185,163,255,.22)}
+  .doorrow.on .tick{visibility:visible}
   .setrow b{font-size:13px;font-weight:600;color:var(--bone)}
   .setrow small{font-size:11.5px;line-height:1.4;color:var(--muted)}
   /* Every settings checkbox renders as an iOS-style switch (pure CSS, no markup change):
@@ -5333,7 +5347,26 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       <p class="hint">The enclave listens at several gateways, all of them ours, and every one leads to the same machine and the same balance. If one is down the app moves to another by itself; choose one only if you would rather arrive somewhere in particular. This is not what keeps you unlinkable — that is your own entry gateway, which is never one of ours.</p>`;
   }
 
-  // The enclave's doors, for the Enclave page: one row each, the one in use ticked.
+  // The enclave's doors, for the Enclave page: one row each, the chosen one bordered and
+  // ticked. Flags are drawn here rather than taken from emoji, so they look the same on
+  // every platform and take the row's corner radius.
+  const DOOR_FLAGS = {
+    Germany: '<rect width="30" height="6.67" fill="#111"></rect><rect y="6.67" width="30" height="6.66" fill="#DD0000"></rect><rect y="13.33" width="30" height="6.67" fill="#FFCE00"></rect>',
+    Austria: '<rect width="30" height="6.67" fill="#ED2939"></rect><rect y="6.67" width="30" height="6.66" fill="#fff"></rect><rect y="13.33" width="30" height="6.67" fill="#ED2939"></rect>',
+    Switzerland: '<rect width="30" height="20" fill="#D52B1E"></rect><rect x="13" y="4.5" width="4" height="11" fill="#fff"></rect><rect x="9.5" y="8" width="11" height="4" fill="#fff"></rect>',
+  };
+  const DOOR_TICK = '<svg class="tick" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 13l4.5 4.5L19 7"></path></svg>';
+  function doorRow(address, label, sub, subMono, on, flag){
+    const face = flag
+      ? `<svg class="flag" viewBox="0 0 30 20" aria-hidden="true">${flag}</svg>`
+      : `<svg class="flag" viewBox="0 0 30 20" aria-hidden="true"><rect width="30" height="20" fill="transparent"></rect><path d="M9 10h12M15 4v12" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity=".45"></path></svg>`;
+    return `<label class="doorrow${on?" on":""}">
+      <input type="radio" name="door" ${on?"checked":""} data-door="${esc(address)}">
+      ${face}
+      <span class="txt"><b>${esc(label)}</b><small class="${subMono?"key":""}">${esc(sub)}</small></span>
+      ${DOOR_TICK}
+    </label>`;
+  }
   async function fillDoors(){
     const host=$("doorRows"); if(!host || !isTauri()) return;
     try{
@@ -5341,10 +5374,8 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       const doors = (r && r.doors) || [];
       if(!doors.length){ host.innerHTML = `<p class="hint">This build talks to one enclave address only.</p>`; return; }
       const chosen = r.chosen || "";
-      const row = (address, label, sub, on) =>
-        `<label class="setrow"><input type="radio" name="door" ${on?"checked":""} data-door="${esc(address)}"><span><b>${esc(label)}</b><small>${esc(sub)}</small></span></label>`;
-      host.innerHTML = row("", "Whichever answers", "the usual — the first that is up, in order", !chosen)
-        + doors.map((d,i)=>row(d.address, d.name || `Door ${i+1}`, (d.gateway||"").slice(0,12)+"…", chosen===d.address)).join("");
+      host.innerHTML = doorRow("", "Whichever answers", "the first that is up, in order", false, !chosen, "")
+        + doors.map((d,i)=>doorRow(d.address, d.name || `Door ${i+1}`, d.gateway || "", true, chosen===d.address, DOOR_FLAGS[d.name] || "")).join("");
       host.querySelectorAll("input[name=door]").forEach(el=>{
         el.onchange = async ()=>{
           try{ await Backend.setEnclaveDoor(el.dataset.door || null); setStatus(el.dataset.door ? "door changed — reconnecting" : "any door — reconnecting"); }
