@@ -31,6 +31,15 @@ pub const FAMILY_API: &str = "https://validator.nymtech.net/api/v1/node-families
 
 /// The operator's gateways as of 2026-09-22 (their Nym identity keys, as published in the
 /// directory) — the floor under the family, in the open so anyone can check the rule.
+/// The gateways the enclave itself listens at, by the name we call them — for an
+/// interface that offers the choice ("Germany", not a base58 key). Their being ours is
+/// also why the app never enters through them (rule A1).
+pub const OPERATOR_NAMES: &[(&str, &str)] = &[
+    ("38zcSsvjXsAX7C28ko2H3Lt55X4TYxfZYkPADxKXZHUj", "Germany"),
+    ("98FmUvDdQYEeV1ioi5NpFK7DoeHphVECndaG7fkRUsaF", "Austria"),
+    ("6KZ96sPW6BBcgmghYb7c7BtCXgAEr1nmwnJzzRsszyhe", "Switzerland"),
+];
+
 pub const OPERATOR_GATEWAYS: &[&str] = &[
     "98FmUvDdQYEeV1ioi5NpFK7DoeHphVECndaG7fkRUsaF",
     "FmbUngD26tUGvJN8QqL78iK96bZYV2bWkjWZU7fDwBN1",

@@ -5323,7 +5323,32 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       <div class="setrow" style="cursor:default"><span><b>Vouched for by</b><small>${esc(sim ? "the development simulator" : attested.platform === "aws-nitro" ? "AWS Nitro Enclaves" : "Google Confidential Space")}</small></span></div>
       <div class="setrow" style="cursor:default"><span><b>Code it runs</b><small style="font-family:var(--mono);word-break:break-all">${esc(m)}</small></span></div>
       <div class="setrow" style="cursor:default"><span><b>Its own mixnet address</b><small style="font-family:var(--mono)">${esc(short)}</small></span></div>
-      <p class="hint">The address is part of the proof: an operator who put a relay in front, to watch when questions come and go, would be caught here.</p>`;
+      <p class="hint">The address is part of the proof: an operator who put a relay in front, to watch when questions come and go, would be caught here.</p>
+      <div class="grouplbl">Where it answers</div>
+      <div id="doorRows"><p class="hint">…</p></div>
+      <p class="hint">The enclave listens at several gateways, all of them ours, and every one leads to the same machine and the same balance. If one is down the app moves to another by itself; choose one only if you would rather arrive somewhere in particular. This is not what keeps you unlinkable — that is your own entry gateway, which is never one of ours.</p>`;
+  }
+
+  // The enclave's doors, for the Enclave page: one row each, the one in use ticked.
+  async function fillDoors(){
+    const host=$("doorRows"); if(!host || !isTauri()) return;
+    try{
+      const r = await Backend.enclaveDoors();
+      const doors = (r && r.doors) || [];
+      if(!doors.length){ host.innerHTML = `<p class="hint">This build talks to one enclave address only.</p>`; return; }
+      const chosen = r.chosen || "";
+      const row = (address, label, sub, on) =>
+        `<label class="setrow"><input type="radio" name="door" ${on?"checked":""} data-door="${esc(address)}"><span><b>${esc(label)}</b><small>${esc(sub)}</small></span></label>`;
+      host.innerHTML = row("", "Whichever answers", "the usual — the first that is up, in order", !chosen)
+        + doors.map((d,i)=>row(d.address, d.name || `Door ${i+1}`, (d.gateway||"").slice(0,12)+"…", chosen===d.address)).join("");
+      host.querySelectorAll("input[name=door]").forEach(el=>{
+        el.onchange = async ()=>{
+          try{ await Backend.setEnclaveDoor(el.dataset.door || null); setStatus(el.dataset.door ? "door changed — reconnecting" : "any door — reconnecting"); }
+          catch(e){ setStatus((e&&e.message)||String(e)); }
+          fillDoors();
+        };
+      });
+    }catch(_){ host.innerHTML = `<p class="hint">Could not read the enclave's doors.</p>`; }
   }
 
   function renderAccount(){
@@ -5422,6 +5447,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     const pg = pages[acctPage] || pages.enclave;
     setNav(pg.t);
     b.innerHTML = pg.h;
+    if(pg === pages.enclave) fillDoors();     // its doors are read from Rust, after the page is up
     focusRestore();
   }
   // Stroke icons for the account landing rows (16px grid, currentColor).

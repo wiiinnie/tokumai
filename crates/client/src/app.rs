@@ -27,6 +27,9 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 /// Makes a transport to the enclave.
 pub trait Connector: Send + Sync {
     fn connect(&self) -> BoxFuture<'_, Result<Box<dyn Transport>, String>>;
+    /// The last transport this handed out led nowhere — the enclave never answered on it.
+    /// A connector with several ways in takes that as "not this one" and offers another.
+    fn led_nowhere(&self) {}
 }
 
 /// The mixnet, to the enclave's address, through an entry gateway allowed by rule A1.
@@ -35,8 +38,26 @@ pub trait Connector: Send + Sync {
 /// attestation). Real moments, so nothing has to be guessed with a timer.
 pub type Steps = std::sync::Arc<dyn Fn(&str) + Send + Sync>;
 
+/// How many of the enclave's doors are tried before giving up. Three is what it has.
+const DOORS_TRIED: usize = 3;
+
+/// How the app reaches the enclave. An enclave has several front doors — one address per
+/// gateway it listens at — and any of them leads to the same enclave, the same book, the
+/// same proof. They exist so that a gateway going down does not take tokumai with it, and
+/// so a person can choose to arrive somewhere other than Germany.
+///
+/// The door is not what protects the person: that is their own entry gateway, which is
+/// never one of ours (rule A1, `gateways`). The door only decides where our side stands.
 pub struct MixConnector {
-    pub enclave_address: String,
+    /// Every address the enclave answers at, in the order they are tried.
+    pub doors: Vec<String>,
+    /// The door a person picked, if any. It is tried first — and if it is down, the
+    /// others are still tried: being reachable beats being where you asked for.
+    pub chosen: std::sync::Mutex<Option<String>>,
+    /// The door that last worked, tried before the rest.
+    pub last_door: std::sync::Mutex<Option<String>>,
+    /// Doors that did not answer on this run; tried last, and only if nothing else works.
+    pub silent: std::sync::Mutex<Vec<String>>,
     pub entry: EntryChoice,
     pub traffic: Option<crate::mix::Traffic>,
     pub steps: Option<Steps>,
@@ -47,12 +68,62 @@ pub struct MixConnector {
 }
 
 impl MixConnector {
-    pub fn new(enclave_address: &str, entry: EntryChoice) -> MixConnector {
-        MixConnector { enclave_address: enclave_address.trim().to_string(), entry, traffic: None, steps: None, progress: None, last_entry: Default::default() }
+    /// One address, or several separated by commas — the enclave's doors.
+    pub fn new(addresses: &str, entry: EntryChoice) -> MixConnector {
+        let doors: Vec<String> = addresses.split(',').map(|a| a.trim().to_string()).filter(|a| !a.is_empty()).collect();
+        MixConnector { doors, chosen: Default::default(), last_door: Default::default(), silent: Default::default(), entry, traffic: None, steps: None, progress: None, last_entry: Default::default() }
+    }
+
+    /// The first door of the list — what an enclave with one door has always been.
+    pub fn address(&self) -> String {
+        self.doors.first().cloned().unwrap_or_default()
+    }
+
+    /// Ask for a particular door from now on (`None` = whichever answers).
+    pub fn choose(&self, door: Option<String>) {
+        if let Ok(mut c) = self.chosen.lock() {
+            *c = door.filter(|d| self.doors.iter().any(|k| k == d));
+        }
+    }
+
+    /// The doors to try, in order: the chosen one, then the one that last worked, then
+    /// the rest as listed — and the ones that went silent on this run at the very end,
+    /// because a gateway that came back should not be shut out for good.
+    fn order(&self) -> Vec<String> {
+        let silent = self.silent.lock().map(|s| s.clone()).unwrap_or_default();
+        let mut order: Vec<String> = Vec::new();
+        for first in [self.chosen.lock().ok().and_then(|c| c.clone()), self.last_door.lock().ok().and_then(|d| d.clone())].into_iter().flatten() {
+            if self.doors.contains(&first) && !order.contains(&first) && !silent.contains(&first) {
+                order.push(first);
+            }
+        }
+        for door in &self.doors {
+            if !order.contains(door) && !silent.contains(door) {
+                order.push(door.clone());
+            }
+        }
+        for door in silent {
+            if self.doors.contains(&door) && !order.contains(&door) {
+                order.push(door);
+            }
+        }
+        order
     }
 }
 
 impl Connector for MixConnector {
+    /// The door we came in through never answered: remember it, so the next attempt goes
+    /// somewhere else. It stays in the list, last, for when the gateway comes back.
+    fn led_nowhere(&self) {
+        let Ok(mut last) = self.last_door.lock() else { return };
+        if let (Some(door), Ok(mut silent)) = (last.take(), self.silent.lock()) {
+            if !silent.contains(&door) {
+                log::info!("[enclave] the door at {} went silent — trying another", crate::gateways::gateway_of(&door).unwrap_or("?"));
+                silent.push(door);
+            }
+        }
+    }
+
     fn connect(&self) -> BoxFuture<'_, Result<Box<dyn Transport>, String>> {
         Box::pin(async move {
             let say = |step: &str| {
@@ -60,12 +131,31 @@ impl Connector for MixConnector {
                     s(step);
                 }
             };
-            let mut t = MixTransport::connect(&self.enclave_address, &self.entry, self.traffic, &say).await?;
-            t.on_progress = self.progress.clone();
-            if let Ok(mut e) = self.last_entry.lock() {
-                *e = Some(t.entry_gateway.clone());
+            // Every door in turn: one that does not open is a gateway that is down, not
+            // an enclave that is gone.
+            let mut last = String::new();
+            for door in self.order() {
+                match MixTransport::connect(&door, &self.entry, self.traffic, &say).await {
+                    Ok(mut t) => {
+                        t.on_progress = self.progress.clone();
+                        if let Ok(mut e) = self.last_entry.lock() {
+                            *e = Some(t.entry_gateway.clone());
+                        }
+                        if let Ok(mut d) = self.last_door.lock() {
+                            *d = Some(door.clone());
+                        }
+                        if !last.is_empty() {
+                            log::info!("[enclave] came in through another door after: {last}");
+                        }
+                        return Ok(Box::new(t) as Box<dyn Transport>);
+                    }
+                    Err(e) => {
+                        log::info!("[enclave] the door at {} did not open: {e}", crate::gateways::gateway_of(&door).unwrap_or("?"));
+                        last = e;
+                    }
+                }
             }
-            Ok(Box::new(t) as Box<dyn Transport>)
+            Err(if last.is_empty() { "the enclave has no address to reach it at".into() } else { last })
         })
     }
 }
@@ -128,30 +218,43 @@ impl Connection {
     }
 
     /// Connect and attest now (the app does this at start, so the first question is quick).
+    ///
+    /// The enclave has more than one door, and a door that does not answer is a gateway
+    /// that is down — not an enclave that is gone. So a silent one is set aside and the
+    /// next is tried; the proof is what decides whether we arrived somewhere real.
     pub async fn ready(&mut self) -> Result<(), String> {
-        if self.transport.is_none() {
-            let t0 = Instant::now();
-            self.transport = Some(self.connector.connect().await?);
-            log::info!("[enclave] connected in {} ms", t0.elapsed().as_millis());
-        }
-        if self.session.is_none() {
+        let mut last = String::new();
+        for _ in 0..DOORS_TRIED {
+            if self.transport.is_none() {
+                let t0 = Instant::now();
+                self.transport = Some(self.connector.connect().await?);
+                log::info!("[enclave] connected in {} ms", t0.elapsed().as_millis());
+            }
+            if self.session.is_some() {
+                return Ok(());
+            }
             let t0 = Instant::now();
             self.step("proof");
             let nonce: [u8; 32] = rand::random();
             let t = self.transport.as_mut().ok_or("no transport")?;
-            let reply = match t.roundtrip(&attest_request(&nonce)).await {
-                Ok(r) => r,
-                Err(e) => {
-                    self.transport = None;
-                    return Err(e);
+            match t.roundtrip(&attest_request(&nonce)).await {
+                Ok(reply) => {
+                    let reached = t.reached_at();
+                    self.session = Some(Session::from_attestation(&reply, &nonce, &self.policy, reached.as_deref())?);
+                    log::info!("[enclave] attested in {} ms", t0.elapsed().as_millis());
+                    self.step("ready");
+                    return Ok(());
                 }
-            };
-            let reached = t.reached_at();
-            self.session = Some(Session::from_attestation(&reply, &nonce, &self.policy, reached.as_deref())?);
-            log::info!("[enclave] attested in {} ms", t0.elapsed().as_millis());
-            self.step("ready");
+                Err(e) => {
+                    // Nothing came back through this door. Another one, and if they all
+                    // stay silent the error is the last one's.
+                    self.transport = None;
+                    self.connector.led_nowhere();
+                    last = e;
+                }
+            }
         }
-        Ok(())
+        Err(last)
     }
 
     /// One operation, signed by `account`.

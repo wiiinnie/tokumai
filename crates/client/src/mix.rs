@@ -61,6 +61,12 @@ pub struct MixTransport {
     pub entry_gateway: String,
     /// Overall limit for one exchange.
     pub timeout: Duration,
+    /// The limit for the FIRST exchange on this transport, which is the attestation. A
+    /// door that is not answering must be found out in seconds, not in the five minutes a
+    /// long answer is allowed — otherwise a gateway that is down reads as an enclave that
+    /// is gone, and the next door is never tried.
+    pub first_timeout: Duration,
+    answered: bool,
     /// Told how much of a long reply has arrived, as it arrives (`have`, `of`): a picture
     /// comes in pieces and the wait should say so rather than look stuck.
     pub on_progress: Option<Arc<dyn Fn(usize, usize) + Send + Sync>>,
@@ -118,7 +124,7 @@ impl MixTransport {
         }
         let Some((client, entry)) = found else { return Err(format!("{last} — try again")) };
         step("cover");
-        Ok(MixTransport { client, to, to_text: enclave_address.to_string(), entry_gateway: entry, timeout: Duration::from_secs(300), on_progress: None })
+        Ok(MixTransport { client, to, to_text: enclave_address.to_string(), entry_gateway: entry, timeout: Duration::from_secs(300), first_timeout: Duration::from_secs(25), answered: false, on_progress: None })
     }
 
     pub fn own_address(&self) -> String {
@@ -131,7 +137,7 @@ impl MixTransport {
 
     async fn exchange(&mut self, message: &[u8]) -> Result<Vec<u8>, String> {
         let mut ex = Exchange::new(message.to_vec());
-        let deadline = tokio::time::Instant::now() + self.timeout;
+        let deadline = tokio::time::Instant::now() + if self.answered { self.timeout } else { self.first_timeout };
         loop {
             for f in ex.due(tokumai_proto::frames::window()) {
                 let surbs = if f[0] == 2 { SURBS_ACK } else { surbs_chunk() };
@@ -152,7 +158,10 @@ impl MixTransport {
                         continue; // a late answer to an earlier exchange
                     }
                     match ex.accept(&m.message)? {
-                        Step::Done(reply) => return Ok(reply),
+                        Step::Done(reply) => {
+                            self.answered = true;
+                            return Ok(reply);
+                        }
                         Step::Going => moved = true,
                     }
                     if let Some((have, of)) = ex.progress() {

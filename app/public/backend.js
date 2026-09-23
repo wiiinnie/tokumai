@@ -58,6 +58,9 @@ export const Backend = {
   mixnetRoute: () => invoke("mixnet_route"),
   listEntryGateways: () => invoke("list_entry_gateways"),
   setEntryGateway: (id) => invoke("set_entry_gateway", { id }),
+  // The enclave's own front doors — one per gateway we run, all the same enclave.
+  enclaveDoors: () => invoke("enclave_doors"),
+  setEnclaveDoor: (address) => invoke("set_enclave_door", { address: address || null }),
   setEntryRandom: (on) => invoke("set_entry_random", { on: !!on }),
   // Rust emits mixnet-phase {step, detail} during every connect:
   // directory · keys · gateway · cover · ready · failed.

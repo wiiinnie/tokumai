@@ -27,5 +27,9 @@ COPY --from=build /src/target/release/tokumai-enclave-nitro /tokumai-enclave-nit
 # (The APP's entry gateway is the opposite: never one of ours, rule A1.) Part of what is
 # measured, so a change means a new image; alternates are on the host's allowlist already.
 # DE01 nym-exit-de01.hermes-stakepool.de · AT01 98FmUv… · CH01 6KZ96s…
-ENV TOKUMAI_GATEWAY=38zcSsvjXsAX7C28ko2H3Lt55X4TYxfZYkPADxKXZHUj
+# The enclave's front doors, in the order an app tries them: DE01, AT01, CH01 — all ours,
+# all stable machines. They are part of the image and therefore measured: changing them
+# means a new PCR0. Three of them so that a gateway going down does not take tokumai with
+# it; they all lead to this one enclave.
+ENV TOKUMAI_GATEWAYS=38zcSsvjXsAX7C28ko2H3Lt55X4TYxfZYkPADxKXZHUj,98FmUvDdQYEeV1ioi5NpFK7DoeHphVECndaG7fkRUsaF,6KZ96sPW6BBcgmghYb7c7BtCXgAEr1nmwnJzzRsszyhe
 ENTRYPOINT ["/tokumai-enclave-nitro"]

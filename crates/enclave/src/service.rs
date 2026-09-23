@@ -136,6 +136,10 @@ impl Enclave {
 
     /// The address the enclave's own transport listens at, once it is up (its Nym address).
     /// It goes into every attestation, so it must be the address of a client running in here.
+    ///
+    /// An enclave may have several front doors (one per gateway, for redundancy); this is
+    /// the one it names when a request does not say which door it came through — the
+    /// simulator and the tests, where there is only one.
     pub fn set_address(&self, address: &str) {
         if let Ok(mut a) = self.address.lock() {
             *a = address.to_string();
@@ -152,21 +156,29 @@ impl Enclave {
 
     /// One message in, one message out. Never panics on input.
     pub async fn handle(&self, raw: &[u8]) -> Vec<u8> {
+        self.handle_at(raw, "").await
+    }
+
+    /// The same, saying which of the enclave's front doors the message arrived at. The
+    /// proof names THAT door — the app checks it against the address it dialled, which is
+    /// what makes a relay standing in front of the enclave visible. Naming one fixed door
+    /// would make every other door's proof fail, which is the trap here.
+    pub async fn handle_at(&self, raw: &[u8], arrived_at: &str) -> Vec<u8> {
         let v: Value = serde_json::from_slice(raw).unwrap_or(Value::Null);
         let out = match v.get("kind").and_then(|k| k.as_str()) {
-            Some("attest") => self.attest(&v),
+            Some("attest") => self.attest(&v, arrived_at),
             Some("sealed") => return self.sealed(&v).await,
             _ => error("unknown kind"),
         };
         serde_json::to_vec(&out).unwrap_or_default()
     }
 
-    fn attest(&self, v: &Value) -> Value {
+    fn attest(&self, v: &Value, arrived_at: &str) -> Value {
         let nonce = match v.get("nonce").and_then(|n| n.as_str()).and_then(|n| hex::decode(n).ok()) {
             Some(n) if (16..=64).contains(&n.len()) => n,
             _ => return error("an attestation request needs a nonce of 16 to 64 bytes, hex"),
         };
-        let address = self.address();
+        let address = if arrived_at.is_empty() { self.address() } else { arrived_at.to_string() };
         let binding = tokumai_attest::binding(&self.keys.identity_pub(), &self.keys.kx_pub(), &address, &nonce);
         match self.attester.attest(&binding) {
             Ok(evidence) => json!({

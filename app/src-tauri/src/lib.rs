@@ -90,6 +90,12 @@ struct Reporting {
 }
 
 impl Connector for Reporting {
+    /// Passed on to the connector that owns the doors, or a door that went silent is
+    /// tried again straight away.
+    fn led_nowhere(&self) {
+        self.inner.led_nowhere();
+    }
+
     fn connect(&self) -> BoxFuture<'_, Result<Box<dyn Transport>, String>> {
         Box::pin(async move {
             let st = self.app.state::<AppState>();
@@ -123,6 +129,7 @@ fn entry_choice(p: &profile::Profile) -> EntryChoice {
 fn new_connection(app: &AppHandle, p: &profile::Profile) -> Result<Connection, String> {
     let address = target::enclave_address()?;
     let mut inner = MixConnector::new(&address, entry_choice(p));
+    inner.choose(p.enclave_door.clone());
     inner.traffic = p.traffic.map(|(cover_ms, mix_ms, send_ms, continuous)| tokumai_client::mix::Traffic { cover_ms, mix_ms, send_ms, continuous });
     // Each step as it starts, so the interface follows the real connection instead of a
     // timer: directory · gateway · cover · proof · ready.
@@ -238,7 +245,7 @@ fn account_json(p: &profile::Profile) -> Value {
 #[tauri::command]
 fn local_state(app: AppHandle) -> Result<Value, String> {
     let p = profile::load(&data_dir(&app)?);
-    Ok(json!({ "account": account_json(&p), "server": target::enclave_address().ok() }))
+    Ok(json!({ "account": account_json(&p), "server": target::enclave_door().ok() }))
 }
 
 /// Everything the interface shows: account, balance, plan, models, the plan ladder.
@@ -250,7 +257,7 @@ async fn state(app: AppHandle) -> Result<Value, String> {
         "devBuild": cfg!(debug_assertions),
         "appVersion": app.package_info().version.to_string(),
         "account": account_json(&p),
-        "server": target::enclave_address().ok(),
+        "server": target::enclave_door().ok(),
         "balance": 0,
         "models": [],
     });
@@ -546,7 +553,7 @@ async fn mixnet_route(app: AppHandle) -> Result<Value, String> {
         });
     }
     let dir = app.state::<AppState>().directory.lock().await.clone();
-    let exit = target::enclave_address().ok().and_then(|a| gateways::gateway_of(&a).map(str::to_string));
+    let exit = target::enclave_door().ok().and_then(|a| gateways::gateway_of(&a).map(str::to_string));
     Ok(json!({
         "entry": entry.as_deref().map(|id| edge(dir.as_ref(), id)),
         "exit": exit.as_deref().map(|id| edge(dir.as_ref(), id)),
@@ -561,7 +568,7 @@ async fn mixnet_route(app: AppHandle) -> Result<Value, String> {
 #[tauri::command]
 async fn list_entry_gateways(app: AppHandle) -> Result<Value, String> {
     let d = directory(&app).await?;
-    let address = target::enclave_address().unwrap_or_default();
+    let address = target::enclave_door().unwrap_or_default();
     let mut list: Vec<Value> = gateways::candidates(&d, &address)
         .into_iter()
         .map(|g| json!({ "id": g.id, "country": g.country, "host": g.host, "entry": true }))
@@ -576,7 +583,7 @@ async fn set_entry_gateway(app: AppHandle, id: Option<String>) -> Result<Value, 
     let id = id.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
     if let Some(chosen) = &id {
         let d = directory(&app).await?;
-        gateways::pick(&d, &EntryChoice::Chosen(chosen.clone()), &target::enclave_address().unwrap_or_default())?;
+        gateways::pick(&d, &EntryChoice::Chosen(chosen.clone()), &target::enclave_door().unwrap_or_default())?;
     }
     let dir = data_dir(&app)?;
     let mut p = profile::load(&dir);
@@ -584,6 +591,42 @@ async fn set_entry_gateway(app: AppHandle, id: Option<String>) -> Result<Value, 
     profile::save(&dir, &p)?;
     reset_connection(&app).await;
     Ok(json!({ "entry_gateway": id, "entry_random": id.is_none() }))
+}
+
+/// The enclave's front doors and which one is in use — one per gateway we run, all the
+/// same enclave behind them (`MixConnector`).
+#[tauri::command]
+fn enclave_doors(app: AppHandle) -> Value {
+    let chosen = profile::load(&data_dir(&app).unwrap_or_default()).enclave_door;
+    let doors: Vec<Value> = target::enclave_address()
+        .unwrap_or_default()
+        .split(',')
+        .filter(|a| !a.trim().is_empty())
+        .map(|address| {
+            let gateway = gateways::gateway_of(address).unwrap_or_default().to_string();
+            json!({ "address": address, "gateway": gateway, "name": gateways::OPERATOR_NAMES.iter().find(|(g, _)| *g == gateway).map(|(_, n)| *n).unwrap_or("") })
+        })
+        .collect();
+    json!({ "doors": doors, "chosen": chosen })
+}
+
+/// Pick a door (`None` = whichever answers). The connection is rebuilt, as it is when the
+/// entry gateway changes.
+#[tauri::command]
+async fn set_enclave_door(app: AppHandle, address: Option<String>) -> Result<Value, String> {
+    let address = address.map(|a| a.trim().to_string()).filter(|a| !a.is_empty());
+    let all = target::enclave_address().unwrap_or_default();
+    if let Some(a) = &address {
+        if !all.split(',').any(|d| d.trim() == a) {
+            return Err("that is not one of this enclave's doors".into());
+        }
+    }
+    let dir = data_dir(&app)?;
+    let mut p = profile::load(&dir);
+    p.enclave_door = address.clone();
+    profile::save(&dir, &p)?;
+    reset_connection(&app).await;
+    Ok(json!({ "chosen": address }))
 }
 
 #[tauri::command]
@@ -858,6 +901,7 @@ pub fn run() {
             chat, cancel_chat,
             plan_ladder, plan_checkout, plan_poll, plan_change, plan_forget,
             mixnet_route, list_entry_gateways, set_entry_gateway, set_entry_random, set_mixnet_perf, mixnet_ping,
+            enclave_doors, set_enclave_door,
             app_hidden, app_resumed, mixnet_heartbeat,
             support_send, support_list, support_diag,
             vault_list, vault_load, vault_save, vault_remove, vault_purge_webdata,

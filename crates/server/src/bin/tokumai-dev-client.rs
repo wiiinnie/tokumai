@@ -31,6 +31,12 @@ struct Tcp {
 struct Logged(std::sync::Arc<MixConnector>);
 
 impl Connector for Logged {
+    /// Passed on, or the connector never learns which door went silent and tries the same
+    /// dead one again.
+    fn led_nowhere(&self) {
+        self.0.led_nowhere();
+    }
+
     fn connect(&self) -> BoxFuture<'_, Result<Box<dyn Transport>, String>> {
         Box::pin(async move {
             let t = self.0.connect().await?;

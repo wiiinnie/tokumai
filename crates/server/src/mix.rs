@@ -61,7 +61,10 @@ pub async fn connect_at_boot(dir: &Path, gateway: Option<&str>) -> Result<Mixnet
 /// enclave learns the address first, so every attestation from now on names it.
 pub async fn serve(enclave: &'static Enclave, mut client: MixnetClient, dir: PathBuf) {
     let address = client.nym_address().to_string();
+    // The door this loop answers at. With several doors each has its own loop, and each
+    // request is answered in the name of the door it came through.
     enclave.set_address(&address);
+    let address: &'static str = Box::leak(address.into_boxed_str());
     let gateway = client.nym_address().gateway().to_base58_string();
     let frames: &'static Frames = Box::leak(Box::new(Frames::default()));
     let sender: Arc<RwLock<MixnetClientSender>> = Arc::new(RwLock::new(client.split_sender()));
@@ -70,7 +73,7 @@ pub async fn serve(enclave: &'static Enclave, mut client: MixnetClient, dir: Pat
             for m in batch {
                 let Some(tag) = m.sender_tag else { continue };
                 let sender = sender.clone();
-                tokio::spawn(Box::pin(answer(enclave, frames, sender, tag, m.message)));
+                tokio::spawn(Box::pin(answer(enclave, frames, sender, tag, m.message, address)));
             }
         }
         eprintln!("tokumai-server: the mixnet stream ended — reconnecting the same identity");
@@ -80,8 +83,8 @@ pub async fn serve(enclave: &'static Enclave, mut client: MixnetClient, dir: Pat
     }
 }
 
-async fn answer(enclave: &'static Enclave, frames: &'static Frames, sender: Arc<RwLock<MixnetClientSender>>, tag: AnonymousSenderTag, frame: Vec<u8>) {
-    let reply = frames.handle(&frame, |message| async move { enclave.handle(&message).await }).await;
+async fn answer(enclave: &'static Enclave, frames: &'static Frames, sender: Arc<RwLock<MixnetClientSender>>, tag: AnonymousSenderTag, frame: Vec<u8>, at: &'static str) {
+    let reply = frames.handle(&frame, |message| async move { enclave.handle_at(&message, at).await }).await;
     if let Some(reply) = reply {
         if let Err(e) = sender.read().await.send_reply(tag, reply).await {
             eprintln!("tokumai-server: a reply could not be sent: {e}");

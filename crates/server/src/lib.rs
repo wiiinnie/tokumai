@@ -22,7 +22,11 @@ pub fn dev_data() -> std::path::PathBuf {
 pub fn probe_target() -> (Option<String>, Option<String>) {
     let Ok(raw) = std::fs::read_to_string(dev_data().join("probe.json")) else { return (None, None) };
     let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else { return (None, None) };
-    let address = v["address"].as_str().map(|a| a.trim().to_string()).filter(|a| !a.is_empty());
+    // Every door, comma-separated: the dev tools fail over exactly as the app does.
+    let address = match v["addresses"].as_array() {
+        Some(list) => Some(list.iter().filter_map(|a| a.as_str()).collect::<Vec<_>>().join(",")).filter(|a: &String| !a.is_empty()),
+        None => v["address"].as_str().map(|a| a.trim().to_string()).filter(|a| !a.is_empty()),
+    };
     let pcr0 = v["pcr0"].as_str().map(|p| p.trim().to_lowercase()).filter(|p| p.len() == 96);
     (address, pcr0)
 }

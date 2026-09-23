@@ -210,24 +210,51 @@ async fn main() {
         }
     });
 
-    // Its own Nym identity. Sealed with the secrets, it is written into the enclave's own
-    // (memory-backed) filesystem at every start, so the address stays the same; without
-    // one, the client makes a fresh identity and the address changes with each restart.
-    let nym = PathBuf::from("/tmp/nym");
-    if let Some(files) = sealed.as_ref().and_then(|s| s.nym_identity()) {
-        if let Err(e) = write_identity(&nym, files) {
-            eprintln!("tokumai enclave: could not lay out the sealed Nym identity: {e}");
+    // Its own front doors. One Nym client per gateway (TOKUMAI_GATEWAYS, part of the
+    // image and therefore measured), each with its own sealed identity, all answering out
+    // of this one enclave and its one book. Three doors mean the enclave is still
+    // reachable when a gateway is down — which with one door it is not.
+    //
+    // Each client's identity is laid out in its own directory at every start, so every
+    // address survives a restart; without a sealed identity a door comes up under a new
+    // address, which an app pinned to the old one will not find.
+    let gateways: Vec<String> = std::env::var("TOKUMAI_GATEWAYS")
+        .or_else(|_| std::env::var("TOKUMAI_GATEWAY"))
+        .unwrap_or_default()
+        .split(',')
+        .map(|g| g.trim().to_string())
+        .filter(|g| !g.is_empty())
+        .collect();
+    if gateways.is_empty() {
+        panic!("no gateway in the image — TOKUMAI_GATEWAYS");
+    }
+    let mut doors = Vec::new();
+    for gateway in &gateways {
+        let nym = PathBuf::from("/tmp/nym").join(gateway);
+        if let Some(files) = sealed.as_ref().and_then(|s| s.nym_identity_for(gateway)) {
+            if let Err(e) = write_identity(&nym, files) {
+                eprintln!("tokumai enclave: could not lay out the sealed identity for {gateway}: {e}");
+            }
+        }
+        match tokumai_server::mix::connect_at_boot(&nym, Some(gateway)).await {
+            Ok(client) => {
+                let address = client.nym_address().to_string();
+                println!("tokumai enclave ({PROBE}) on the mixnet at {address}");
+                let _ = tokumai_egress::announce(&Endpoint::Vsock(HOST_CID, ANNOUNCE_PORT), &format!("{PROBE} nym-address {address}")).await;
+                doors.push((client, nym));
+            }
+            // One door that will not open is not a reason to keep the others shut.
+            Err(e) => eprintln!("tokumai enclave: the door at {gateway} stayed shut: {e}"),
         }
     }
-    let gateway = std::env::var("TOKUMAI_GATEWAY").ok().filter(|g| !g.trim().is_empty());
-    let client = tokumai_server::mix::connect_at_boot(&nym, gateway.as_deref()).await.expect("connect to the mixnet");
-    let address = client.nym_address().to_string();
-    println!("tokumai enclave ({PROBE}) on the mixnet at {address}");
-    for _ in 0..30 {
-        match tokumai_egress::announce(&Endpoint::Vsock(HOST_CID, ANNOUNCE_PORT), &format!("{PROBE} nym-address {address}")).await {
-            Ok(()) => break,
-            Err(_) => tokio::time::sleep(std::time::Duration::from_secs(2)).await,
-        }
+    if doors.is_empty() {
+        panic!("not one of the enclave's doors opened");
     }
+    // Every door gets its own loop; the last one holds the process open.
+    let last = doors.pop().expect("checked");
+    for (client, nym) in doors {
+        tokio::spawn(Box::pin(tokumai_server::mix::serve(enclave, client, nym)));
+    }
+    let (client, nym) = last;
     tokumai_server::mix::serve(enclave, client, nym).await;
 }

@@ -16,7 +16,9 @@
 use std::path::PathBuf;
 use tokumai_attest::Policy;
 
-/// The published enclave (its Nym address), and the images a release accepts.
+/// The published enclave's doors (its Nym addresses, comma-separated), and the images a
+/// release accepts. Several doors mean a gateway can be down without tokumai being
+/// unreachable; they all lead to the same enclave.
 const RELEASE_ENCLAVE: Option<&str> = None;
 const RELEASE_MEASUREMENTS: &[&str] = &[];
 
@@ -24,15 +26,26 @@ fn dev_data() -> PathBuf {
     std::env::var_os("TOKUMAI_DEV_DATA").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../dev-data")))
 }
 
-/// What `deploy/aws/probe.sh` writes about a running probe: {"address": …, "pcr0": …}.
+/// What `deploy/aws/probe.sh` writes about a running probe: {"addresses": [ … ], "pcr0": …}
+/// (or a single "address", as it used to).
 fn probe() -> Option<(String, String)> {
     let raw = std::fs::read_to_string(dev_data().join("probe.json")).ok()?;
     let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    let address = v["address"].as_str()?.trim().to_string();
+    let address = match v["addresses"].as_array() {
+        Some(list) => list.iter().filter_map(|a| a.as_str()).collect::<Vec<_>>().join(","),
+        None => v["address"].as_str()?.trim().to_string(),
+    };
     let pcr0 = v["pcr0"].as_str()?.trim().to_lowercase();
     (!address.is_empty() && pcr0.len() == 96).then_some((address, pcr0))
 }
 
+/// The first door — what a single address used to be: for the route display and for
+/// keeping our own gateway out of the entry choice.
+pub fn enclave_door() -> Result<String, String> {
+    enclave_address().map(|a| a.split(',').next().unwrap_or_default().to_string())
+}
+
+/// Every door, comma-separated, in the order they should be tried.
 pub fn enclave_address() -> Result<String, String> {
     if cfg!(debug_assertions) {
         if let Ok(a) = std::env::var("TOKUMAI_ENCLAVE") {

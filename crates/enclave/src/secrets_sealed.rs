@@ -66,6 +66,14 @@ impl Sealed {
     pub fn nym_identity(&self) -> Option<&serde_json::Map<String, Value>> {
         self.0["nymIdentity"].as_object()
     }
+
+    /// One identity per front door, kept under the gateway it belongs to
+    /// (`nymIdentities: { "<gateway>": { "<file>": "<base64>" } }`). An enclave with
+    /// several doors keeps every one of its addresses across restarts; without an entry
+    /// for a gateway, that door gets a fresh identity and a new address.
+    pub fn nym_identity_for(&self, gateway: &str) -> Option<&serde_json::Map<String, Value>> {
+        self.0["nymIdentities"].get(gateway).and_then(|v| v.as_object()).or_else(|| self.nym_identity())
+    }
 }
 
 impl crate::secrets::SecretSource for Sealed {

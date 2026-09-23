@@ -88,18 +88,22 @@ UD
     # what the app and the dev tools read, so nobody has to remember two environment
     # variables (and talk to the wrong enclave when they forget one).
     echo "waiting for the enclave to come onto the mixnet…"
+    # Every door it announces, in the order it announces them (the image's gateway order).
     for _ in $(seq 1 40); do
-      ADDRESS=$(remote "grep -o 'nym-address .*' egress.log | tail -1 | cut -d' ' -f2" 2>/dev/null | tr -d '\r')
-      [ -n "$ADDRESS" ] && break
+      ADDRESSES=$(remote "grep -o 'nym-address .*' egress.log | cut -d' ' -f2 | awk '!seen[\$0]++'" 2>/dev/null | tr -d '\r')
+      [ -n "$ADDRESSES" ] && sleep 10 && ADDRESSES=$(remote "grep -o 'nym-address .*' egress.log | cut -d' ' -f2 | awk '!seen[\$0]++'" 2>/dev/null | tr -d '\r') && break
       sleep 5
     done
-    if [ -z "$ADDRESS" ]; then echo "it has not announced itself yet — 'status' shows the proxy log"; exit 1; fi
+    if [ -z "$ADDRESSES" ]; then echo "it has not announced itself yet — 'status' shows the proxy log"; exit 1; fi
+    ADDRESS=$(echo "$ADDRESSES" | head -1)
     PCR0=$(python3 -c "import json,sys; print(json.load(open('dev-data/eif/tokumai-$TAG.pcrs.json'))['Measurements']['PCR0'])")
-    python3 - "$ADDRESS" "$PCR0" <<'PY'
+    python3 - "$ADDRESSES" "$PCR0" <<'PY'
 import json, sys, pathlib
-pathlib.Path("dev-data/probe.json").write_text(json.dumps({"address": sys.argv[1], "pcr0": sys.argv[2]}, indent=2) + "\n")
+doors = [a for a in sys.argv[1].split() if a]
+pathlib.Path("dev-data/probe.json").write_text(json.dumps({"addresses": doors, "address": doors[0], "pcr0": sys.argv[2]}, indent=2) + "\n")
 PY
-    echo "on the mixnet at $ADDRESS"
+    echo "on the mixnet, $(echo "$ADDRESSES" | wc -l | tr -d ' ') door(s):"
+    echo "$ADDRESSES" | sed 's/^/  /' 
     remote "grep -E 'unsealed' egress.log | tail -1; ls -l book 2>/dev/null | tail -2" || true
     echo "dev-data/probe.json written — the app and the dev tools now talk to this enclave"
     ;;

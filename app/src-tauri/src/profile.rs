@@ -20,6 +20,10 @@ pub struct Profile {
     pub entry_gateway: Option<String>,
     /// A card checkout that was opened and not yet seen paid.
     pub pending_plan_session: Option<String>,
+    /// A front door of the enclave the user picked (its Nym address); `None` = whichever
+    /// answers, starting with the first. All doors lead to the same enclave; the choice is
+    /// about where our side stands, not about what the person is protected by.
+    pub enclave_door: Option<String>,
     /// The mixnet speed/anonymity trade-off from the settings: [cover, mix, send] ms and
     /// whether cover traffic runs while idle. `None` = Nym's defaults.
     pub traffic: Option<(u64, u64, u64, bool)>,
