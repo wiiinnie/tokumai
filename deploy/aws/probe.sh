@@ -10,7 +10,10 @@
 #     deploy/aws/probe.sh status    # the instance, the enclave, the proxy's recent lines
 #     deploy/aws/probe.sh forget    # back to the simulated enclave on this machine
 #     deploy/aws/probe.sh ssh
-#     deploy/aws/probe.sh down      # terminate and delete everything
+#     deploy/aws/probe.sh pause     # stop the instance, keep its disk: the enclave's book
+#                                   # survives, and a stopped instance costs storage only
+#     deploy/aws/probe.sh resume    # start it again and put the enclave back on the mixnet
+#     deploy/aws/probe.sh down      # terminate and delete everything — the book goes too
 #
 # Uses the CLI profile `tokumai` (the IAM user tokumai-probe), region eu-central-1.
 set -euo pipefail
@@ -105,6 +108,26 @@ PY
   forget)
     rm -f dev-data/probe.json
     echo "dev-data/probe.json removed — the app talks to the simulated enclave again"
+    ;;
+  pause)
+    ID=$(instance_id); [ -z "$ID" ] && { echo "no probe instance"; exit 0; }
+    # Stopping keeps the root volume, and with it the sealed book the enclave writes to
+    # (`down` does not: a fresh instance has a fresh disk and the balances are gone).
+    remote "sudo nitro-cli terminate-enclave --all >/dev/null 2>&1 || true; pkill -f '[t]okumai-egress-host' || true" || true
+    aws ec2 stop-instances --instance-ids "$ID" >/dev/null
+    aws ec2 wait instance-stopped --instance-ids "$ID"
+    echo "stopped — the disk and the enclave's book are kept; 'resume' brings it back"
+    ;;
+  resume)
+    ID=$(instance_id); [ -z "$ID" ] && { echo "no probe instance — 'up' makes one"; exit 1; }
+    aws ec2 start-instances --instance-ids "$ID" >/dev/null
+    aws ec2 wait instance-running --instance-ids "$ID"
+    # A stopped instance comes back with a new address, and SSH is allowed from this
+    # machine's address only — both are settled here.
+    SG=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=$NAME" --query 'SecurityGroups[0].GroupId' --output text)
+    MY_IP=$(curl -s https://checkip.amazonaws.com | tr -d '[:space:]')
+    aws ec2 authorize-security-group-ingress --group-id "$SG" --protocol tcp --port 22 --cidr "$MY_IP/32" >/dev/null 2>&1 || true
+    echo "running at $(public_ip) — 'deploy' puts the enclave back on the mixnet (the book is still there)"
     ;;
   down)
     ID=$(instance_id)
