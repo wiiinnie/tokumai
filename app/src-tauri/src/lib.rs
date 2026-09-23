@@ -166,13 +166,36 @@ async fn call(app: &AppHandle, op: &str, body: Value) -> Result<Value, String> {
         *guard = Some(new_connection(app, &profile::load(&data_dir(app)?))?);
     }
     let conn = guard.as_mut().ok_or("no connection")?;
-    let answer = conn.call(&account, op, &body).await?;
+    let answer = match conn.call(&account, op, &body).await {
+        Ok(a) => {
+            // An answer is also the best proof the enclave is there: whatever the chip
+            // said while it was silent, it is wrong now.
+            let _ = app.emit("mixnet-phase", json!({ "step": "ready", "detail": "alive" }));
+            a
+        }
+        Err(e) => {
+            // The route can be perfectly good while the enclave behind it is not
+            // answering — it is restarting, or its host is stopped. Saying "mixnet
+            // connected" then is true and useless; this is the difference.
+            if enclave_silent(&e) {
+                let _ = app.emit("mixnet-phase", json!({ "step": "failed", "detail": e, "srv": true }));
+            }
+            return Err(e);
+        }
+    };
     if answer.get("kind").and_then(|k| k.as_str()) == Some("error") {
         let msg = answer.get("error").and_then(|e| e.as_str()).unwrap_or("the enclave refused").to_string();
         // Marked, so the interface offers credit rather than a retry.
         return Err(if answer["noCredit"] == true { format!("NO_CREDIT: {msg}") } else { msg });
     }
     Ok(answer)
+}
+
+/// Whether a failure is the enclave's silence rather than the route's. The transport says
+/// so when nothing at all comes back for long enough that a slow model is ruled out
+/// (`tokumai_client::mix`), and attesting through every door in turn ends the same way.
+fn enclave_silent(e: &str) -> bool {
+    e.contains("not answering") || e.contains("no answer from the enclave")
 }
 
 /// Connect and attest, with or without an account: the proof needs none, and the interface
@@ -183,7 +206,13 @@ async fn ensure_ready(app: &AppHandle) -> Result<(), String> {
     if guard.is_none() {
         *guard = Some(new_connection(app, &profile::load(&data_dir(app)?))?);
     }
-    guard.as_mut().ok_or("no connection")?.ready().await
+    let ready = guard.as_mut().ok_or("no connection")?.ready().await;
+    if let Err(e) = &ready {
+        if enclave_silent(e) {
+            let _ = app.emit("mixnet-phase", json!({ "step": "failed", "detail": e, "srv": true }));
+        }
+    }
+    ready
 }
 
 /// Drop the connection, so the next call builds a new one (another gateway, another

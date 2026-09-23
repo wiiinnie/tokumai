@@ -3094,6 +3094,11 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // ok · checking (short pause: one ping decides, chip only) · reconnecting (overlay over the
   // whole app: typewriter + ✓ per REAL step, same words as the boot animation) · offline.
   // Every step is reported by Rust as it actually starts — nothing is typed on a timer.
+  // The enclave went quiet while the route stayed up (its host stopped, or it is
+  // restarting). Kept apart from mixState, because "the mixnet is down" and "the machine
+  // behind it is not answering" call for different things — saying the first when the
+  // second is true sends people off to change gateways for nothing.
+  let enclaveSilent = false;
   let mixState = "ok", routeStart = 0, routeTicker = null, routeFail = "", connectedAt = 0, hiddenAt = 0, lastRtt = 0, lastRebuildSecs = 0, routeWhy = "";
   // Heartbeat state lives HERE, at module scope, because the send path touches it too — a
   // question resets the clock. Declared inside the init block it would have thrown a
@@ -3221,6 +3226,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       // coming the sheet simply never finished: a route that was up for half a minute
       // still read "Verifying tokumai enclave…".
       case "ready":
+        enclaveSilent = false;                       // it answered, whatever it was before
         if(p.detail==="alive" && mixState==="checking"){ connectedAt=connectedAt||Date.now(); autoRetryN=0; clearAutoRetry(); setMixState("ok"); setStatus("route alive"); return; }
       // falls through
       case "online": {
@@ -3237,20 +3243,29 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       }
       case "failed": {
         routeFail = p.detail||"";
+        enclaveSilent = p.srv===true;
         // srv: the route itself is up — the SERVER didn't answer the liveness check.
         // Different title, and "Use official server" as the escape hatch after a bad
         // custom address (a gateway change wouldn't help, so that button is dropped).
         const srvFail = p.srv===true;
         const last = rt.lines[rt.lines.length-1]; if(last) routeFinish(last, false);
-        const box=$("routeBox"); if(box){ box.classList.add("bad"); const t=box.querySelector(".t span"); if(t) t.textContent = srvFail ? "Server not answering" : "Mixnet offline"; }
+        const box=$("routeBox"); if(box){ box.classList.add("bad"); const t=box.querySelector(".t span"); if(t) t.textContent = srvFail ? "Enclave not answering" : "Mixnet offline"; }
         const why=$("routeWhy");
         if(why) why.textContent = routeFail || "Could not reach an entry gateway. Usually the phone has no internet right now, or the chosen gateway is down.";
         // A gateway that accepts the connection and then carries nothing reads exactly like
         // a server that is down: the route is up, and nothing gets an answer through it.
         // So the gateway is named as a suspect here too, and its button is offered — which
         // it was not, on precisely the failure where it was the cause.
-        if(srvFail && why) why.textContent += " If it keeps happening, the entry gateway may be accepting connections without carrying traffic — try another one.";
+        if(srvFail && why) why.textContent = (routeFail || "The enclave did not answer.") + " Your route to the mixnet is fine — the machine behind it is not answering, which usually means it is restarting. If it keeps happening, the entry gateway may be accepting connections without carrying traffic, and another one is worth a try.";
         const btns=$("routeBtns"); if(btns) btns.innerHTML = `<div class="btnrow"><button class="btn primary" data-click="rebuildRoute">Try again</button><button class="btn" data-click="openEntryPicker">Pick another gateway</button><button class="btn" data-click="routeDismiss">Close</button></div><div class="hint" id="routeAuto" style="margin-top:8px"></div>`;
+        // The enclave being silent is not the route being down: leave the mixnet state
+        // alone (the chip says "Enclave not answering" on its own) and do not rebuild the
+        // route on a timer — a new route reaches the same silent machine. The next
+        // question finds out, and an answer clears it.
+        if(srvFail){
+          updateRouteUI();
+          return;
+        }
         setMixState("offline");
         scheduleAutoRetry();
         return;
@@ -3345,7 +3360,8 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     if(isTauri()){
       const env=$("env"), t=$("envText");
       if(env && t){
-        if(everConnected && mixState==="checking"){ env.className="env wake"; t.textContent="Checking route…"; }
+        if(enclaveSilent && mixState!=="offline"){ env.className="env bad"; t.textContent="Enclave not answering"; }
+        else if(everConnected && mixState==="checking"){ env.className="env wake"; t.textContent="Checking route…"; }
         else if(everConnected && mixState==="reconnecting"){ env.className="env wake"; t.textContent=`Reconnecting · ${routeSecs()} s`; }
         else if(everConnected && mixState==="offline"){ env.className="env bad"; t.textContent="Mixnet offline — tap to retry"; }
         else if(mixConnected){ env.className="env ok"; t.textContent="Mixnet connected"; }
