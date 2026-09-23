@@ -159,7 +159,15 @@ looks, and each is cheap to close now and expensive to explain later.
    Closing it needs a counter the host cannot turn back, kept outside (a small conditional
    write per snapshot is enough). Until then the operator is trusted for freshness; that
    is a sentence we must be willing to write in the privacy policy.
-3. **Signed images (PCR8) instead of a list of PCR0s**, so an upgrade does not mean editing
+3. **The purchase must not point at the first question.** We hold the merchant records
+   (who paid, when) and our host sees when a provider call goes out; while the service is
+   small those two join up, and we learn that a named person asked something at a given
+   moment. To build, in this order: cover counted from other accounts' calls since the
+   payment, with a shape-matched decoy only when there is none (self-liquidating — the
+   decoy spend falls to zero as traffic rises); one billing boundary for everyone instead
+   of per-customer anniversaries; constant-rate polling of the payment provider. Written up
+   in docs/privacy-notes.md and in the pitch notes.
+4. **Signed images (PCR8) instead of a list of PCR0s**, so an upgrade does not mean editing
    the key policy — and so "whoever can change the policy could name an image of their
    choosing" stops being true.
 
