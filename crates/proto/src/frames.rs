@@ -61,6 +61,11 @@ const R_ACK: u8 = 12;
 const R_KEPT: u8 = 13;
 const R_CHUNK: u8 = 14;
 const R_FAIL: u8 = 15;
+/// "I have your question and I am still on it." Sent when a resend arrives for something
+/// already being answered. Without it that resend got silence — the same silence as an
+/// enclave that is gone, so an app could not tell a model taking its time from a machine
+/// that had stopped, and waited five minutes to find out.
+const R_WORKING: u8 = 16;
 
 pub type Id = [u8; 16];
 
@@ -129,7 +134,7 @@ impl Frames {
         let (message, parted) = match f[0] {
             WHOLE => match self.state(&id) {
                 Some(Seen::Answered) => return self.reply_again(&id),
-                Some(Seen::Busy) => return None,
+                Some(Seen::Busy) => return Some(frame(R_WORKING, &id, &[])),
                 _ => (f[17..].to_vec(), false),
             },
             PART => match self.part(&id, f) {
@@ -388,6 +393,7 @@ impl Exchange {
                 }
                 Ok(Step::Done(reply))
             }
+            R_WORKING => Ok(Step::Going),
             R_FAIL => Err(String::from_utf8_lossy(&f[17..]).into_owned()),
             _ => Ok(Step::Going),
         }
@@ -471,13 +477,22 @@ mod tests {
         assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
+    /// A question in hand is never answered a second time — the resend is told it is being
+    /// worked on, and the model is not asked again (which is what would be charged twice).
     #[tokio::test]
-    async fn a_question_still_being_answered_gets_no_second_answer() {
+    async fn a_question_still_being_answered_is_not_answered_again() {
         let frames = Frames::default();
+        let asked = std::sync::atomic::AtomicUsize::new(0);
         let mut ex = Exchange::new(b"slow".to_vec());
         let f = ex.due(1).remove(0);
         assert!(frames.claim(&ex.id));
-        assert!(frames.handle(&f, echo).await.is_none(), "the resend waits for the first answer");
+        let count = |m: Vec<u8>| {
+            asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            echo(m)
+        };
+        let answer = frames.handle(&f, count).await.expect("the resend is answered");
+        assert_eq!(answer[0], R_WORKING);
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 0, "the question must not be asked a second time");
     }
 
     #[tokio::test]
@@ -518,6 +533,21 @@ mod tests {
 
         // The ones that never came back are asked for again once they are old enough.
         assert_eq!(ex.due_at(4, now + RETRY + Duration::from_secs(1)).len(), 3);
+    }
+
+
+    /// A question already being answered gets "still on it" rather than silence — the app
+    /// cannot otherwise tell a model taking its time from an enclave that has stopped.
+    #[tokio::test]
+    async fn a_question_in_hand_says_so_when_asked_again() {
+        let frames = Frames::default();
+        let mut ex = Exchange::new(b"slow".to_vec());
+        let f = ex.due(1).remove(0);
+        assert!(frames.claim(&ex.id));
+        let answer = frames.handle(&f, echo).await.expect("the resend is answered");
+        assert_eq!(answer[0], R_WORKING);
+        // And the app reads it as a sign of life, not as the answer.
+        assert_eq!(ex.accept(&answer).unwrap(), Step::Going);
     }
 
 }

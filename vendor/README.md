@@ -9,6 +9,15 @@ resolving the name with its own DNS). An AWS Nitro enclave has no network; every
 leaves through that proxy, over vsock, to the host. The WebSocket and its TLS still run
 end to end over the tunnel. `Cargo.toml` adds tokio's `io-util` and `net` features for it.
 
+The second addition is in `src/packet_router.rs`, also marked `tokumai patch`: upstream
+**panics** when it cannot hand a received message or acknowledgement to its client, on the
+reasoning that a gone receiver "should never happen during ordinary operation the way it's
+currently used". With several clients in one process — the enclave has one per front door
+— it happens whenever one of them is dropped, for instance when a gateway will not take
+us, and the panic ended the whole enclave: book, doors and all, fifteen seconds after
+start, with no console to say why. A receiver that is gone means that client is finished,
+which is what `ShutdownInProgress` already says, so it returns that instead.
+
 Unset, the code path is the original one. The root `Cargo.toml` substitutes this copy with
 `[patch.crates-io]`. When nym-sdk moves to a newer nym-gateway-client, re-apply the patch
 to that version (or drop it, should the SDK learn to use a proxy itself).

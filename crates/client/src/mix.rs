@@ -12,9 +12,14 @@ use std::time::Duration;
 use tokumai_proto::frames::{Exchange, Step};
 
 /// How long the app waits in silence before it sends what is still missing again. A
-/// question being answered stays silent until the model is done; the resend is then
-/// answered with nothing, and costs a few SURBs.
+/// question being answered is silent until the model is done; the resend is answered with
+/// "still on it", which costs a few SURBs and is how the app knows somebody is there.
 const QUIET: Duration = Duration::from_secs(20);
+
+/// How long the enclave may say nothing at all before this door counts as gone. It answers
+/// every resend, and those go every [`QUIET`], so three unanswered in a row is not a slow
+/// model — it is nobody there. Without this the app waited out the whole five minutes.
+const SILENCE: Duration = Duration::from_secs(70);
 /// Reply budget for one 64 KB chunk: about 33 packets of payload, so this is headroom of
 /// roughly two. Too thin and the enclave has to stop and ask for more, which costs a round
 /// trip through the mixnet for every chunk. (v1 gave 64 for a 96 KB chunk.)
@@ -138,6 +143,7 @@ impl MixTransport {
     async fn exchange(&mut self, message: &[u8]) -> Result<Vec<u8>, String> {
         let mut ex = Exchange::new(message.to_vec());
         let deadline = tokio::time::Instant::now() + if self.answered { self.timeout } else { self.first_timeout };
+        let mut heard = tokio::time::Instant::now();
         loop {
             for f in ex.due(tokumai_proto::frames::window()) {
                 let surbs = if f[0] == 2 { SURBS_ACK } else { surbs_chunk() };
@@ -149,6 +155,9 @@ impl MixTransport {
                 if now >= deadline {
                     return Err("no answer from the enclave in time".into());
                 }
+                if now.duration_since(heard) > SILENCE {
+                    return Err("the enclave is not answering — it may be restarting".into());
+                }
                 let wait = QUIET.min(deadline - now);
                 let Ok(batch) = tokio::time::timeout(wait, self.client.wait_for_messages()).await else { break };
                 let Some(batch) = batch else { return Err("the mixnet client stopped".into()) };
@@ -157,6 +166,7 @@ impl MixTransport {
                     if !ex.owns(&m.message) {
                         continue; // a late answer to an earlier exchange
                     }
+                    heard = tokio::time::Instant::now();
                     match ex.accept(&m.message)? {
                         Step::Done(reply) => {
                             self.answered = true;

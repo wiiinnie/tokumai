@@ -72,17 +72,41 @@ UD
   deploy|debug)
     remote 'test -f /var/tmp/tokumai-host-ready' || { echo "the host is not ready yet (user data still running)"; exit 1; }
     # Stop first: a running proxy binary cannot be overwritten ("text file busy").
-    remote "sudo nitro-cli terminate-enclave --all >/dev/null 2>&1 || true; pkill -f '[t]okumai-egress-host' || true; sleep 1" || true
+    remote "sudo nitro-cli terminate-enclave --all >/dev/null 2>&1 || true; sudo systemctl stop tokumai-egress 2>/dev/null || true; pkill -f '[t]okumai-egress-host' || true; sleep 1" || true
     # The sealed secrets travel with it: the host cannot read them, and without them the
     # enclave would run on the mock model (deploy/aws/kms.sh secrets writes the file).
     SEALED=dev-data/sealed/sealed.json
     [ -f "$SEALED" ] || { echo "no $SEALED — 'deploy/aws/kms.sh secrets <secrets.json>' first"; exit 1; }
     scp -i "$KEY" -q dev-data/eif/tokumai-$TAG.eif dev-data/linux-release/tokumai-egress-host deploy/egress.allow "$SEALED" ec2-user@"$(public_ip)":/home/ec2-user/
     DEBUG=""; [ "$1" = debug ] && DEBUG="--debug-mode"
+    # The proxy runs as a service, not as a background job of an ssh session: started with
+    # nohup it died with the session, and an enclave whose host service is gone cannot read
+    # its book — so it panicked seconds after starting, which read as "the image is broken".
     remote "set -e
       chmod +x tokumai-egress-host
-      nohup ./tokumai-egress-host vsock:4294967295:8080 egress.allow vsock:4294967295:8081 vsock:4294967295:8082 sealed.json book > egress.log 2>&1 &
-      sleep 1
+      sudo tee /etc/systemd/system/tokumai-egress.service >/dev/null <<'UNIT'
+[Unit]
+Description=tokumai egress proxy and host service
+After=network-online.target
+
+[Service]
+User=ec2-user
+WorkingDirectory=/home/ec2-user
+ExecStart=/home/ec2-user/tokumai-egress-host vsock:4294967295:8080 egress.allow vsock:4294967295:8081 vsock:4294967295:8082 sealed.json book
+Restart=always
+RestartSec=2
+StandardOutput=append:/home/ec2-user/egress.log
+StandardError=append:/home/ec2-user/egress.log
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+      : > egress.log
+      sudo systemctl daemon-reload
+      sudo systemctl enable --now tokumai-egress
+      sudo systemctl restart tokumai-egress
+      sleep 2
+      systemctl is-active tokumai-egress
       nitro-cli run-enclave --eif-path tokumai-$TAG.eif --cpu-count $ENCLAVE_CPUS --memory $ENCLAVE_MIB $DEBUG"
     # Its address, once it is on the mixnet, and the image it runs: dev-data/probe.json is
     # what the app and the dev tools read, so nobody has to remember two environment
@@ -121,7 +145,7 @@ PY
     ID=$(instance_id); [ -z "$ID" ] && { echo "no probe instance"; exit 0; }
     # Stopping keeps the root volume, and with it the sealed book the enclave writes to
     # (`down` does not: a fresh instance has a fresh disk and the balances are gone).
-    remote "sudo nitro-cli terminate-enclave --all >/dev/null 2>&1 || true; pkill -f '[t]okumai-egress-host' || true" || true
+    remote "sudo nitro-cli terminate-enclave --all >/dev/null 2>&1 || true; sudo systemctl stop tokumai-egress 2>/dev/null || true" || true
     aws ec2 stop-instances --instance-ids "$ID" >/dev/null
     aws ec2 wait instance-stopped --instance-ids "$ID"
     echo "stopped — the disk and the enclave's book are kept; 'resume' brings it back"

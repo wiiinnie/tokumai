@@ -121,6 +121,29 @@ impl tokumai_enclave::state::Store for HostBook {
     }
 }
 
+/// Say the last words out loud. An enclave has no console in production, so a panic is
+/// otherwise a machine that simply disappears: the host sees a hang-up and nothing else.
+/// The hook hands the message to a thread of its own, which announces it over vsock the
+/// way the addresses are announced.
+fn announce_panics() {
+    let (say, heard) = std::sync::mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("a runtime for last words");
+        while let Ok(words) = heard.recv() {
+            let _ = runtime.block_on(tokumai_egress::announce(&Endpoint::Vsock(HOST_CID, ANNOUNCE_PORT), &words));
+        }
+    });
+    let before = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let where_ = info.location().map(|l| format!("{}:{}", l.file(), l.line())).unwrap_or_default();
+        let what = info.payload().downcast_ref::<&str>().map(|s| (*s).to_string()).or_else(|| info.payload().downcast_ref::<String>().cloned()).unwrap_or_default();
+        let _ = say.send(format!("{PROBE} panicked at {where_}: {what}"));
+        // A moment for it to leave the enclave before the process is torn down.
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        before(info);
+    }));
+}
+
 /// `ip link set lo up`, without a shell or iproute2 in the image.
 fn loopback_up() -> std::io::Result<()> {
     unsafe {
@@ -146,6 +169,7 @@ fn loopback_up() -> std::io::Result<()> {
 #[tokio::main]
 async fn main() {
     println!("tokumai enclave ({PROBE}) starting");
+    announce_panics();
     loopback_up().expect("bring up the loopback");
     // Everything leaves through the tunnel: the providers, Stripe, Apple and the Nym API by
     // HTTPS_PROXY, the Nym gateway by TOKUMAI_EGRESS_PROXY (vendor/nym-gateway-client).
@@ -186,6 +210,21 @@ async fn main() {
         // Nothing sealed: a random key for the run, the mock model, test credit.
         None => (Box::new(FixedKeyProvider(rand::random())) as Box<dyn tokumai_enclave::seal::KeyProvider>, Providers::mock(), None, None, true),
     };
+    // The book lives on the host, so the host service has to be there. It may still be
+    // starting (a reboot brings both up at once), and an enclave that gives up on the
+    // first try dies in a second and looks like a broken image — which is what happened.
+    if sealed.is_some() {
+        for attempt in 1..=30 {
+            match tokumai_egress::ask_host(&Endpoint::Vsock(HOST_CID, HOST_SERVICE_PORT), "snapshot").await {
+                Ok(_) => break,
+                Err(e) if attempt == 30 => {
+                    let _ = tokumai_egress::announce(&Endpoint::Vsock(HOST_CID, ANNOUNCE_PORT), &format!("{PROBE} cannot reach its book: {e}")).await;
+                    panic!("the host is not keeping the book: {e}");
+                }
+                Err(_) => tokio::time::sleep(std::time::Duration::from_secs(2)).await,
+            }
+        }
+    }
     let enclave = Enclave::start(Platform {
         attester: Box::new(attester),
         keys,
@@ -256,5 +295,6 @@ async fn main() {
         tokio::spawn(Box::pin(tokumai_server::mix::serve(enclave, client, nym)));
     }
     let (client, nym) = last;
+    let _ = tokumai_egress::announce(&Endpoint::Vsock(HOST_CID, ANNOUNCE_PORT), &format!("{PROBE} serving on its doors")).await;
     tokumai_server::mix::serve(enclave, client, nym).await;
 }

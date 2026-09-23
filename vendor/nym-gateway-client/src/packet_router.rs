@@ -48,9 +48,14 @@ impl PacketRouter {
                 tracing::warn!("Failed to send mixnet messages due to receiver task shutdown");
                 return Err(GatewayClientError::ShutdownInProgress);
             }
-            // This should never happen during ordinary operation the way it's currently used.
-            // Abort to be on the safe side
-            panic!("Failed to send mixnet message: {err}");
+            // tokumai: upstream panics here, reasoning that a gone receiver cannot happen
+            // "during ordinary operation the way it's currently used". In an enclave with
+            // several clients it happens whenever one of them is dropped — a gateway that
+            // would not take us, say — and the panic took the whole enclave down with it,
+            // book, doors and all. A receiver that is gone means that client is finished,
+            // which is what ShutdownInProgress already says.
+            tracing::warn!("Failed to send mixnet messages, the receiver is gone: {err}");
+            return Err(GatewayClientError::ShutdownInProgress);
         }
         Ok(())
     }
@@ -65,9 +70,10 @@ impl PacketRouter {
                 tracing::warn!("Failed to send acks due to receiver task shutdown");
                 return Err(GatewayClientError::ShutdownInProgress);
             }
-            // This should never happen during ordinary operation the way it's currently used.
-            // Abort to be on the safe side
-            panic!("Failed to send acks: {err}");
+            // tokumai: the same as above — a client on its way out is not a reason to end
+            // the process.
+            tracing::warn!("Failed to send acks, the receiver is gone: {err}");
+            return Err(GatewayClientError::ShutdownInProgress);
         }
         Ok(())
     }
