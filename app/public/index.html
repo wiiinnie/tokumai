@@ -2841,10 +2841,11 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   const CONN_STEPS = ["Connecting to tokumai"];
   // Every real step keeps that one line alive; only "ready" ticks it.
   const CONN_OF_STEP = { directory:0, gateway:0, cover:0, proof:0 };
-  // Long enough to be read, and no longer.
-  const CONN_MIN_MS = 700;
-  // How long the tick at the end stays before the logo takes over.
-  const CONN_DONE_MS = 1500;
+  // Nothing is held back: if the connection is already up, the line finishes at once and
+  // ticks. An animation that outlives what it describes is a waiting room, not a report.
+  const CONN_MIN_MS = 0;
+  // Just long enough for the tick to register as an answer rather than a flicker.
+  const CONN_DONE_MS = 450;
   const DONE_MARK_SVG = '<svg class="donemark" viewBox="0 0 52 52"><circle cx="26" cy="26" r="23"/><path d="M15 27 L23 35 L37 18"/></svg>';
   let connState = { timers:[], seq:0, lines:[], at:-1, want:-1, advancing:false, done:false };
   function stopConnType(){ connState.timers.forEach(clearTimeout); connState.timers=[]; connState.seq++; connState.lines=[]; connState.at=-1; connState.want=-1; connState.advancing=false; connState.done=false; }
