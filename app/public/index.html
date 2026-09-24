@@ -4091,7 +4091,23 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
                            totalSecs: (now - t0)/1000, genSecs, xferSecs };
           }
         }
-        if(!ai.text && !(ai.images&&ai.images.length)){
+        // A declined question — our safety check, OpenAI's policy or Google's filter — comes
+        // back in one shape: no model prose, a reason, and from the second one of the day
+        // what happens after the third. Shown as a note, never as if the model had said it.
+        if(evt.declined === true){
+          let note = evt.why || "This question was declined before it reached the model.";
+          const s = evt.strikes;
+          if(s && Number(s.of)){
+            // The server sends the moment, not the word "tomorrow": its day turns over at
+            // UTC midnight, which is one or two in the morning for most people reading this.
+            const at = new Date(Number(s.untilMs)||Date.now()).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
+            note += Number(s.used) >= Number(s.of)
+              ? ` That is ${s.of} of ${s.of} today on ${s.provider}, so it stays closed for this account until ${at}. Another model is still open.`
+              : ` That was ${s.used} of ${s.of} declined questions today on ${s.provider}. After the third it closes for this account until ${at} — another model stays open.`;
+          }
+          ai.note=note; ai.noteKind="rust"; ai.text=""; ai.canResend=true;
+        }
+        if(!ai.note && !ai.text && !(ai.images&&ai.images.length)){
           if(modelKind==="image"){
             // a question sent to a painter — older servers answer with nothing at all
             ai.note="This is an image model — it draws pictures from a description and can't answer questions. Pick a text model (e.g. Gemini 3.5 Flash-Lite) and tap Resend, or describe the picture you want.";

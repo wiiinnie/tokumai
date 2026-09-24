@@ -368,8 +368,14 @@ impl Enclave {
         let price = self.pricing.price(&req.model);
         let day = now / 86_400_000;
         let strike_key = (account.to_string(), day, provider.name());
-        if self.strike_count(&strike_key) >= policy::STRIKES_PER_DAY {
-            return error("this account has had too many requests declined by this provider today — it can be used again tomorrow");
+        let already = self.strike_count(&strike_key);
+        if already >= policy::STRIKES_PER_DAY {
+            // The same shape as a decline itself, so the app says it in one voice — and with
+            // the moment rather than "tomorrow", which the reader's own clock can render.
+            let total = self.ledger.lock().ok().and_then(|l| l.balance(account, now).ok()).map(|b| b.total).unwrap_or(0);
+            return json!({ "kind": "chat", "text": "", "declined": true, "cost": 0, "balance": total,
+                "why": format!("Nothing was sent: {} of this account's questions were declined by {} today.", already, provider.name()),
+                "strikes": { "used": already, "of": policy::STRIKES_PER_DAY, "untilMs": (day + 1) * 86_400_000, "provider": provider.name() } });
         }
         let image_size = crate::gemini::effective_image_size(&req.model, req.image_size.as_deref());
         let search_usd = if crate::openai::is_openai_model(&req.model) { policy::OPENAI_USD_PER_QUERY } else { policy::GEMINI_USD_PER_QUERY };
@@ -418,7 +424,10 @@ impl Enclave {
             Err(e) => return error(&e),
         };
         // The moderation check runs before the model is asked; a flagged turn costs nothing.
-        let flagged = self.providers.moderate(&req.messages).await;
+        // Only in front of OpenAI's own models: Google filters its traffic itself
+        // (`policy::GEMINI_SAFETY`), and having OpenAI read a Gemini user's question would
+        // be a second provider seeing it for no gain to the person who asked.
+        let flagged = if crate::openai::is_openai_model(&req.model) { self.providers.moderate(&req.messages).await } else { Ok(None) };
         // What this call looks like from outside our machine, and whether it is the first
         // one since this account paid for something. If it is, and nobody else's traffic
         // has been through since, one decoy of the same shape goes out beside it — the
@@ -437,7 +446,10 @@ impl Enclave {
         }
         self.cover.note(shape, now);
         let result = match flagged {
-            Ok(Some(cats)) => Err(format!("Declined by the moderation check ({cats})")),
+            Ok(Some(cats)) => Err(format!(
+                "Declined by the safety check ({}). The question was not sent to the model and nothing was charged.",
+                crate::openai::plain_categories(&cats)
+            )),
             _ => {
                 let call = Call { req: &req, safety_id: Some(self.safety_id(account, day)), image_size };
                 provider.complete(&call).await
@@ -456,12 +468,31 @@ impl Enclave {
             Ok(k) => k,
             Err(e) => return error(&e),
         };
+        // A decline arrives two ways — as an error (our safety check, OpenAI's policy) and as
+        // an answer whose text says so (Google's finish reason). Both are the same event to
+        // the person who asked, so both leave here in the same shape: no model prose, a
+        // reason, and from the second one of the day what happens after the third.
         let declined = match &result {
             Ok(c) => c.text.starts_with("Declined by"),
             Err(e) => e.starts_with("Declined by"),
         };
         if declined {
-            self.strike(strike_key);
+            self.strike(strike_key.clone());
+            let used = self.strike_count(&strike_key);
+            let why = match &result {
+                Ok(c) => c.text.clone(),
+                Err(e) => e.clone(),
+            };
+            let total = self.ledger.lock().ok().and_then(|l| l.balance(account, now).ok()).map(|b| b.total).unwrap_or(0);
+            let mut out = json!({ "kind": "chat", "text": "", "declined": true, "why": why, "cost": charged, "balance": total });
+            if used >= policy::STRIKE_WARN_FROM {
+                // The app says the time in the reader's own clock; "tomorrow" from here
+                // would mean UTC midnight, which is one or two in the morning for most of
+                // the people this is said to.
+                out["strikes"] = json!({ "used": used, "of": policy::STRIKES_PER_DAY,
+                                         "untilMs": (day + 1) * 86_400_000, "provider": provider.name() });
+            }
+            return out;
         }
         match result {
             Ok(c) => {

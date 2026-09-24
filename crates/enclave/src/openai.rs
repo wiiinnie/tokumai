@@ -204,6 +204,35 @@ fn last_user_turn(messages: &Value) -> Option<Value> {
     Some(Value::Array(parts))
 }
 
+/// OpenAI's category slugs (`self-harm/intent`, `illicit/violent`) as something a person can
+/// read. A slug is a taxonomy for machines; somebody whose question was just refused is owed
+/// a word, not a path. An unknown slug is passed through rather than dropped — a category we
+/// have not seen before should still reach the person it is about.
+pub fn plain_categories(cats: &str) -> String {
+    let mut out: Vec<&str> = Vec::new();
+    for slug in cats.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        let plain = match slug {
+            s if s.starts_with("sexual/minors") => "sexual content involving minors",
+            s if s.starts_with("sexual") => "sexual content",
+            s if s.starts_with("self-harm") => "self-harm",
+            s if s.starts_with("harassment") => "harassment",
+            s if s.starts_with("hate") => "hate speech",
+            s if s.starts_with("illicit/violent") => "instructions for violence",
+            s if s.starts_with("illicit") => "instructions for something illegal",
+            s if s.starts_with("violence") => "violence",
+            other => other,
+        };
+        if !out.contains(&plain) {
+            out.push(plain);
+        }
+    }
+    match out.len() {
+        0 => "its content policy".into(),
+        1 => out[0].to_string(),
+        n => format!("{} and {}", out[..n - 1].join(", "), out[n - 1]),
+    }
+}
+
 impl Moderation {
     /// `Ok(Some(categories))` when flagged. An outage fails OPEN (logged): the model's own
     /// policy check still stands behind it.
@@ -243,6 +272,16 @@ impl Moderation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_refused_question_is_told_in_words_not_in_slugs() {
+        assert_eq!(plain_categories("self-harm, self-harm/intent"), "self-harm", "one word, not the whole tree");
+        assert_eq!(plain_categories("hate/threatening, violence"), "hate speech and violence");
+        assert_eq!(plain_categories("illicit/violent"), "instructions for violence");
+        assert_eq!(plain_categories("sexual/minors"), "sexual content involving minors");
+        assert_eq!(plain_categories(""), "its content policy", "never an empty parenthesis");
+        assert_eq!(plain_categories("something_new"), "something_new", "an unknown category still reaches the person");
+    }
 
     #[test]
     fn model_routing_recognises_openai_ids_only() {

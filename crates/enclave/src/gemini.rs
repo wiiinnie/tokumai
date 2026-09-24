@@ -113,7 +113,11 @@ pub fn to_gemini(messages: &Value, answer_tokens: u64, thinking: u64, live: bool
             json!({ "role": if role_of(m) == "assistant" { "model" } else { "user" }, "parts": parts })
         })
         .collect();
-    let mut body = json!({ "contents": contents, "generationConfig": { "maxOutputTokens": answer_tokens + thinking } });
+    // Google's filters are off unless we ask for them (see `policy::GEMINI_SAFETY`), so this
+    // is not a tightening of a default — it is the only filter in front of a Gemini question.
+    let safety: Vec<Value> = crate::policy::GEMINI_SAFETY.iter().map(|(c, t)| json!({ "category": c, "threshold": t })).collect();
+    let mut body = json!({ "contents": contents, "safetySettings": safety,
+                           "generationConfig": { "maxOutputTokens": answer_tokens + thinking } });
     // A budget of 0 is refused by Gemini 3 models ("invalid argument", seen 2026-09-22):
     // leave the thinking settings out and let the output cap bound it instead.
     if thinking > 0 {
@@ -250,6 +254,18 @@ impl Provider for Gemini {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_gemini_request_carries_googles_own_filters() {
+        // Without this Google runs with its adjustable filters OFF, so its absence would
+        // not be a laxer setting — it would be no setting at all.
+        let b = to_gemini(&json!([{ "role": "user", "content": "hi" }]), 100, 0, false);
+        let set = b["safetySettings"].as_array().expect("safetySettings must be sent");
+        assert_eq!(set.len(), crate::policy::GEMINI_SAFETY.len());
+        assert!(set.iter().all(|s| s["threshold"].as_str().is_some_and(|t| t.starts_with("BLOCK_"))), "never OFF or BLOCK_NONE");
+        let explicit = set.iter().find(|s| s["category"] == "HARM_CATEGORY_SEXUALLY_EXPLICIT").unwrap();
+        assert_eq!(explicit["threshold"], "BLOCK_MEDIUM_AND_ABOVE", "the App Store's rule, not ours");
+    }
 
     #[test]
     fn usage_splits_picture_text_thinking_and_cache() {

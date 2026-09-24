@@ -47,6 +47,34 @@ pub const OPENAI_USD_PER_QUERY: f64 = 0.01;
 /// one provider before that provider refuses it until tomorrow.
 pub const STRIKES_PER_DAY: u32 = 3;
 
+/// The decline from which the answer also says how many are left before the provider
+/// closes. The first one carries its reason and nothing else: a single mis-fire should read
+/// as an accident, not as a warning to a paying customer.
+pub const STRIKE_WARN_FROM: u32 = 2;
+
+/// Google's own safety filters, switched on deliberately.
+///
+/// Without `safetySettings` the adjustable filters on Gemini 2.5 and 3 are **off** — Google
+/// ships them off and lets through everything but the core harms it never allows (child
+/// safety) — so leaving this out does not mean "Google's default", it means no filter on
+/// that side at all. Until 2026-09-24 the only gate in front of a Gemini question was
+/// OpenAI's moderation endpoint, which also meant every Gemini user's question was sent to
+/// OpenAI. Now each provider filters its own traffic and nobody else sees it.
+///
+/// `BLOCK_ONLY_HIGH` for three of the four, because the model refuses on its own (which is
+/// why Google ships the filters off) and an over-eager filter costs the person a strike
+/// towards a day's lockout. The people this product is for ask about security, medicine and
+/// self-defence, and a middle threshold is known to trip on exactly those. Sexually
+/// explicit is stricter for a reason that has nothing to do with the content: App Review is
+/// a third party with its own rules, and an app that can be made to draw explicit pictures
+/// loses the iOS route altogether.
+pub const GEMINI_SAFETY: [(&str, &str); 4] = [
+    ("HARM_CATEGORY_HARASSMENT", "BLOCK_ONLY_HIGH"),
+    ("HARM_CATEGORY_HATE_SPEECH", "BLOCK_ONLY_HIGH"),
+    ("HARM_CATEGORY_DANGEROUS_CONTENT", "BLOCK_ONLY_HIGH"),
+    ("HARM_CATEGORY_SEXUALLY_EXPLICIT", "BLOCK_MEDIUM_AND_ABOVE"),
+];
+
 /// The App Store: the app's bundle id and product ids. Compiled in, like everything that
 /// decides what a purchase is.
 pub const APPLE_BUNDLE_ID: &str = "com.tokumai.app";
