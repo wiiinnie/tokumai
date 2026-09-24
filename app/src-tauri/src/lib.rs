@@ -199,6 +199,16 @@ async fn call(app: &AppHandle, op: &str, body: Value) -> Result<Value, String> {
     if answer.get("kind").and_then(|k| k.as_str()) == Some("error") {
         let msg = answer.get("error").and_then(|e| e.as_str()).unwrap_or("the enclave refused").to_string();
         // Marked, so the interface offers credit rather than a retry.
+        // Two markers travel with a refusal, and both change what the caller does next.
+        // "final" says the App Store transaction can never be credited — refunded, expired,
+        // a chain that does not check out — so it must be acknowledged to Apple instead of
+        // being re-sent forever. Dropping it here is why an hour of refused sandbox
+        // purchases piled up as unfinished transactions, and why `purchase()` then kept
+        // handing back the oldest, long-expired one: "this subscription has ended"
+        // (2026-09-24, from the phone).
+        if answer["final"] == true {
+            return Err(format!("final: {msg}"));
+        }
         return Err(if answer["noCredit"] == true { format!("NO_CREDIT: {msg}") } else { msg });
     }
     Ok(answer)
@@ -652,7 +662,17 @@ async fn iap_buy(app: AppHandle, product_id: String) -> Result<Value, String> {
     if jws.is_empty() {
         return Err("the App Store returned no signed transaction".into());
     }
-    let mut granted = call(&app, "iap.verify", json!({ "jws": jws, "restore": false })).await?;
+    let mut granted = match call(&app, "iap.verify", json!({ "jws": jws, "restore": false })).await {
+        Ok(v) => v,
+        Err(e) => {
+            // A refusal nothing can fix: acknowledge it, or Apple re-offers this very
+            // transaction to the next `purchase()` and the person can never buy again.
+            if e.starts_with("final: ") && !tx.is_empty() {
+                let _ = iap_ios::finish(&tx).await;
+            }
+            return Err(e.trim_start_matches("final: ").to_string());
+        }
+    };
     if !tx.is_empty() {
         // A failure here is not the customer's problem: they paid and they were credited.
         // Apple re-offers the transaction until it is finished, and `iap_sync` will.
