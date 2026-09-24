@@ -40,10 +40,17 @@ the system, and only the second is worth anything to somebody who does not know 
 4. **The root of trust is Amazon.** The proof that the published code is what runs ends at
    an AWS certificate, and the secrets are released by AWS KMS. A compelled or compromised
    AWS breaks the guarantee, and no check in the app would notice.
-5. **The book can be rewound by whoever holds the machine.** Balances live in a sealed file
+5. **A seized book says when each account spent, and how much.** Not what was asked — the
+   enclave keeps no question anywhere. But the book is a snapshot plus an append-only
+   journal of single changes, the host may keep every record it was handed, and the same key
+   opens an old one. An amount says whether it was a picture, and a timestamp lines up with
+   a model provider's own logs. Who can have that key released: we can, by naming an image
+   in the KMS key policy — which is the honest answer to "who could compel this", because it
+   makes us the short path, not AWS. (On the list to close before launch.)
+6. **The book can be rewound by whoever holds the machine.** Balances live in a sealed file
    on the host; an older copy could be put back. Spent credit would return. Nothing inside
    the enclave survives a restart to notice. (On the list to close before launch.)
-6. **Recovery phrase, not account.** There is no email, no password and no way for us to
+7. **Recovery phrase, not account.** There is no email, no password and no way for us to
    help: a lost phrase is a lost balance, and we must say so in plain words rather than in a
    clause.
 

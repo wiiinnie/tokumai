@@ -182,6 +182,23 @@ looks, and each is cheap to close now and expensive to explain later.
 4. **Signed images (PCR8) instead of a list of PCR0s**, so an upgrade does not mean editing
    the key policy — and so "whoever can change the policy could name an image of their
    choosing" stops being true.
+5. **The journal is a usage history, and the host may keep every record of it.** Found on
+   2026-09-24 while tracing what a seized book would actually reveal. The book is a snapshot
+   plus an append-only journal of single SQL changes with their parameters
+   (`UPDATE allowance SET left = … WHERE acct = …`), and the enclave folds it into a fresh
+   snapshot every 2,000 changes — but the host is not trusted and can keep every record it
+   was ever handed. Each is sealed to `(generation, number)`, not to a time, so the same
+   data key opens a journal from months ago. Whoever can have that key released (us, by
+   naming an image in the key policy; AWS, by holding the root of trust) therefore gets a
+   per-account spending history with timestamps, and an amount says whether it was a
+   picture. It is the log we deliberately stopped keeping at the proxy, sealed and in
+   another place. The fix is a journal key per generation, bound to the monotonic counter of
+   item 2 — the same missing building block — so that moving on makes the old journals
+   unreadable. **To decide later**, with it: whether the per-day `safety_salt` stops being
+   derived from a stored secret (`service.rs:137`), which today lets anyone with that key
+   recompute the selector OpenAI's 30 days of logs are filed under. On its own it closes the
+   convenient door while the timestamps leave the window open, which is why it waits for
+   this item rather than going first.
 
 ## Account and cost
 
