@@ -54,6 +54,19 @@ export const Backend = {
   planChange: (tier, yearly) => invoke("plan_change", { tier, yearly: !!yearly }),
   planForget: () => invoke("plan_forget"),
 
+  // ---- plans bought through the App Store (iOS; elsewhere these refuse politely)
+  // What is on sale, priced by the App Store in the reader's own currency.
+  iapOffers: () => invoke("iap_offers"),
+  // Apple's sheet, then the enclave, then the acknowledgement to Apple — in that order,
+  // so a crash in the middle costs nobody anything.
+  iapBuy: (productId) => invoke("iap_buy", { productId }),
+  // Everything Apple still holds for this Apple ID, handed to the enclave: the live
+  // subscription (a renewal never arrives as a purchase — StoreKit charges in the
+  // background) and anything paid but not yet acknowledged. `restore` is the one flag that
+  // may move a plan from another account to this one, so it is set for a deliberate
+  // "Restore purchases" and never on a launch.
+  iapSync: (restore) => invoke("iap_sync", { restore: !!restore }),
+
   // ---- the route (entry gateway: never one of tokumai's — rule A1)
   mixnetRoute: () => invoke("mixnet_route"),
   listEntryGateways: () => invoke("list_entry_gateways"),

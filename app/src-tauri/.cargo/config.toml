@@ -1,0 +1,13 @@
+# iOS: let the cdylib link with the StoreKit shim's symbols still open.
+#
+# `cargo build --lib` builds every crate type, the cdylib included, and the cdylib's link
+# step cannot resolve `tokumai_iap_*` — those live in StoreKitShim.swift, which only Xcode
+# compiles. The app itself never uses the cdylib: Xcode links `libapp.a`, the staticlib,
+# and resolves the Swift symbols there. So the honest fix is to let the unused artefact
+# link with them unresolved rather than to bend the bridge around a build artefact nobody
+# ships.
+[target.aarch64-apple-ios]
+rustflags = ["-C", "link-arg=-Wl,-undefined,dynamic_lookup"]
+
+[target.aarch64-apple-ios-sim]
+rustflags = ["-C", "link-arg=-Wl,-undefined,dynamic_lookup"]

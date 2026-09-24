@@ -8,6 +8,9 @@
 //! the enclave, and comes back from the phrase on any device.
 
 mod detect;
+/// The StoreKit 2 bridge, and only on the platform that has a StoreKit.
+#[cfg(target_os = "ios")]
+mod iap_ios;
 mod keystore;
 mod ocr;
 mod profile;
@@ -542,6 +545,149 @@ fn plan_forget(app: AppHandle) -> Result<Value, String> {
     Ok(json!({ "ok": true }))
 }
 
+// ---- plans bought through the App Store -------------------------------------------------
+//
+// Three commands, and the shape of all three is the same: ask StoreKit, hand Apple's signed
+// transaction to the enclave, and acknowledge it to Apple only once the enclave says the
+// plan is granted. Nothing on the device decides what was bought — the device cannot be
+// trusted about money, and the JWS is checked against Apple's pinned root inside the
+// enclave (`apple.rs`).
+//
+// Which product ids exist is the enclave's word too: they are compiled into its image and
+// come back with `plans`, so an app that was built against an older list cannot invent one.
+
+/// The product ids the enclave sells, from its own `plans` answer.
+#[cfg(target_os = "ios")]
+async fn appstore_ids(app: &AppHandle) -> Result<(Vec<String>, Vec<String>), String> {
+    let l = call(app, "plans", json!({})).await?;
+    let ids = |k: &str| -> Vec<String> {
+        l["appStore"][k].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default()
+    };
+    Ok((ids("plans"), ids("credit")))
+}
+
+/// What is on sale here: the enclave's ids, priced by the App Store in the reader's own
+/// currency. `missing` is not noise — it is the only way to tell "Apple has not published
+/// this one yet" from "we asked for the wrong string", and App Store Connect says neither.
+#[cfg(target_os = "ios")]
+#[tauri::command]
+async fn iap_offers(app: AppHandle) -> Result<Value, String> {
+    let (plans, credit) = appstore_ids(&app).await?;
+    let mut all = plans.clone();
+    all.extend(credit.iter().cloned());
+    if all.is_empty() {
+        return Ok(json!({ "plans": [], "credit": [], "missing": [] }));
+    }
+    let answer = iap_ios::products(&all).await?;
+    let of = |ids: &[String]| -> Value {
+        let rows: Vec<Value> = answer["products"]
+            .as_array()
+            .map(|ps| ps.iter().filter(|p| ids.iter().any(|i| p["id"] == i.as_str())).cloned().collect())
+            .unwrap_or_default();
+        json!(rows)
+    };
+    Ok(json!({ "plans": of(&plans), "credit": of(&credit), "missing": answer["missing"] }))
+}
+
+/// Buy one product: Apple's sheet, then the enclave, then — and only then — the
+/// acknowledgement to Apple. A transaction left unfinished is re-sent by `iap_sync` on the
+/// next launch, so a crash between paying and crediting costs nobody anything.
+#[cfg(target_os = "ios")]
+#[tauri::command]
+async fn iap_buy(app: AppHandle, product_id: String) -> Result<Value, String> {
+    let (plans, credit) = appstore_ids(&app).await?;
+    if !plans.contains(&product_id) && !credit.contains(&product_id) {
+        return Err("that product is not sold here".into());
+    }
+    let bought = iap_ios::purchase(&product_id).await?;
+    match bought["status"].as_str().unwrap_or("") {
+        "cancelled" => return Ok(json!({ "status": "cancelled" })),
+        // "Ask to Buy": a parent has to approve, and the transaction turns up later.
+        "pending" => return Ok(json!({ "status": "pending" })),
+        _ => {}
+    }
+    let jws = bought["jws"].as_str().unwrap_or("").to_string();
+    let tx = bought["transactionId"].as_str().unwrap_or("").to_string();
+    if jws.is_empty() {
+        return Err("the App Store returned no signed transaction".into());
+    }
+    let mut granted = call(&app, "iap.verify", json!({ "jws": jws, "restore": false })).await?;
+    if !tx.is_empty() {
+        // A failure here is not the customer's problem: they paid and they were credited.
+        // Apple re-offers the transaction until it is finished, and `iap_sync` will.
+        let _ = iap_ios::finish(&tx).await;
+    }
+    granted["plan"] = ui_plan(&granted["plan"]);
+    granted["status"] = json!("ok");
+    Ok(granted)
+}
+
+/// Every transaction Apple still holds for this Apple ID, handed to the enclave.
+///
+/// Two lists, for two different silences. `currentEntitlements` carries the live
+/// subscription, which matters because a RENEWAL never reaches the app as a purchase —
+/// StoreKit charges the card in the background and the app only learns of it by asking.
+/// `unfinished` carries anything paid but not yet acknowledged, which is what a crash
+/// between paying and crediting leaves behind.
+///
+/// `restore` is passed through to the enclave, and only a deliberate "Restore purchases"
+/// may set it: it is the one flag that moves a plan from another account to this one.
+#[cfg(target_os = "ios")]
+#[tauri::command]
+async fn iap_sync(app: AppHandle, restore: bool) -> Result<Value, String> {
+    let mut seen: Vec<String> = Vec::new();
+    let mut sent = 0u32;
+    let mut plan = Value::Null;
+    let mut trouble: Option<String> = None;
+    let mut all = iap_ios::entitlements().await.unwrap_or_default();
+    all.extend(iap_ios::unfinished().await.unwrap_or_default());
+    for t in all {
+        let jws = t["jws"].as_str().unwrap_or("").to_string();
+        let tx = t["transactionId"].as_str().unwrap_or("").to_string();
+        if jws.is_empty() || seen.contains(&tx) {
+            continue;
+        }
+        seen.push(tx.clone());
+        match call(&app, "iap.verify", json!({ "jws": jws, "restore": restore })).await {
+            Ok(r) => {
+                sent += 1;
+                if r["plan"].is_object() {
+                    plan = ui_plan(&r["plan"]);
+                }
+                let _ = iap_ios::finish(&tx).await;
+            }
+            // A refusal nothing can fix — refunded, revoked, a chain that does not check
+            // out — is marked `final` by the enclave, and then the transaction is
+            // acknowledged so Apple stops re-offering it forever.
+            Err(e) => {
+                if e.starts_with("final: ") || e.contains("refunded") {
+                    let _ = iap_ios::finish(&tx).await;
+                }
+                trouble = Some(e);
+            }
+        }
+    }
+    Ok(json!({ "sent": sent, "plan": plan, "trouble": trouble }))
+}
+
+#[cfg(not(target_os = "ios"))]
+#[tauri::command]
+async fn iap_offers(_app: AppHandle) -> Result<Value, String> {
+    Err("App Store purchases exist only on iOS".into())
+}
+
+#[cfg(not(target_os = "ios"))]
+#[tauri::command]
+async fn iap_buy(_app: AppHandle, _product_id: String) -> Result<Value, String> {
+    Err("App Store purchases exist only on iOS".into())
+}
+
+#[cfg(not(target_os = "ios"))]
+#[tauri::command]
+async fn iap_sync(_app: AppHandle, _restore: bool) -> Result<Value, String> {
+    Ok(json!({ "sent": 0, "plan": Value::Null, "trouble": Value::Null }))
+}
+
 // ---- the route and the entry gateway (rule A1) ------------------------------------------
 
 async fn directory(app: &AppHandle) -> Result<Directory, String> {
@@ -948,6 +1094,7 @@ pub fn run() {
             phrase_check_start, phrase_check_verify, phrase_backup_get,
             chat, cancel_chat,
             plan_ladder, plan_checkout, plan_poll, plan_change, plan_forget,
+            iap_offers, iap_buy, iap_sync,
             mixnet_route, list_entry_gateways, set_entry_gateway, set_entry_random, set_mixnet_perf, mixnet_ping,
             enclave_doors, set_enclave_door,
             app_hidden, app_resumed, mixnet_heartbeat,

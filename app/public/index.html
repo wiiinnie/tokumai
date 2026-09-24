@@ -2949,6 +2949,13 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     // The boot-time fetch retries only 6× and then gives up for good, so a slow
     // first connect used to strand the app on "no models yet" forever.
     if(mixConnected && !wasConnected && (!models.length || !account)){ modelRetries=0; refreshState(); }
+    // A renewal never reaches the app as a purchase — StoreKit charges the card in the
+    // background — so the only way the enclave learns the plan was paid for again is by
+    // being told. Once per connect, and never with `restore`: that flag moves a plan
+    // between accounts and belongs to a deliberate tap, not to a launch.
+    if(mixConnected && !wasConnected && isIOSNative() && account){
+      Backend.iapSync(false).then(r => { if(r && r.plan && r.plan.tier != null){ refreshState(); } }).catch(() => {});
+    }
     // A restored thread shows no connect animation, so gate terms on the raw connect event.
     if(messages.length!==0){ if(mixConnected && !wasConnected) armTermsGate(); return; }
     if(mixConnected && !wasConnected){
@@ -5660,10 +5667,13 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       <small>Valid three years from purchase. Used automatically once a month's allowance runs out.</small></span></div>`;
   }
 
-  // ---------- the plan row on the buy sheet, everywhere but the iPhone ----------
+  // ---------- the plan row on the buy sheet ----------
   /// A plan is what is sold; this row is the way into the sheet that sells it. Shown when
-  /// the server publishes a ladder, hidden in the invite flow (nothing is bought there).
-  function webPlansOn(){ return Array.isArray(planLadder) && planLadder.length > 0; }
+  /// the enclave publishes a ladder — and always on iOS, where the ladder describes the
+  /// tiers but the App Store, not Stripe, is what sells them: the enclave reports
+  /// `byCard: false` for a build with no Stripe key, and that must not hide the iPhone's
+  /// only way to buy anything.
+  function webPlansOn(){ return isIOSNative() || (Array.isArray(planLadder) && planLadder.length > 0); }
   function renderWebPlans(){
     const box = $("webPlans"); if(!box) return;
     if(!webPlansOn()){ box.style.display = "none"; box.innerHTML = ""; return; }
@@ -5709,9 +5719,28 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     }
     return out;
   }
+  /// The App Store's own products, in the reader's currency. The ids carry the euro tier
+  /// (`…plan.10`, `…plan.10.year`), which is exactly what `planEuro` already reads, so the
+  /// sheet draws Apple's prices with no special case below this line.
+  async function appStoreProducts(){
+    const r = await Backend.iapOffers();
+    const rows = (r && Array.isArray(r.plans)) ? r.plans : [];
+    return rows.map(p => {
+      const l = ladderOf(p.id);
+      return { id: p.id, tier: l ? Number(l.tier) || 0 : 0, price: Number(p.price) || 0, displayPrice: String(p.displayPrice || "") };
+    });
+  }
   async function loadPlans(){
     try{ const l = await Backend.planLadder(); if(Array.isArray(l)) planLadder = l; }catch(_){}
-    planList = ladderProducts(); planErr = ""; planLoading = false;
+    planErr = ""; planLoading = false;
+    if(isIOSNative()){
+      try{ planList = await appStoreProducts(); }
+      catch(e){ planList = []; planErr = "The App Store did not answer: " + String((e && e.message) || e); }
+      if(!planErr && !planList.length) planErr = "No plans are published in the App Store yet.";
+      renderPlans();
+      return;                 // no Stripe checkout exists on this platform to poll for
+    }
+    planList = ladderProducts();
     if(!planList.length){ planList = null; planErr = "Plans are not on sale here yet."; }
     renderPlans();
     checkPlanCheckout();      // a checkout opened earlier may have been paid meanwhile
@@ -5809,8 +5838,11 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         planBusy ? "Raising the checkout…"
                  : !sel ? "Pick a plan above"
                  : !(planC1 && planC2) ? "Tick both boxes to continue"
-                 : `Subscribe — ${esc(String(sel.displayPrice || ""))} ${planYearly ? "a year" : "a month"} ↗`}</button></div>
-      <p class="hint" style="margin:10px 2px 0;text-align:center">Card, PayPal, Apple Pay or Google Pay on Stripe's page in your browser. Renews until you cancel — any time, without signing in, at ${planLegalLink("cancel","tokumai.com/cancel")}; ${esc(planYearly ? "a year" : "a month")} already paid for stays yours.</p>
+                 : `Subscribe — ${esc(String(sel.displayPrice || ""))} ${planYearly ? "a year" : "a month"}${isIOSNative() ? "" : " ↗"}`}</button></div>
+      ${isIOSNative()
+        ? `<p class="hint" style="margin:10px 2px 0;text-align:center">Billed by the App Store to your Apple ID. Renews until you cancel it under Settings → Apple ID → Subscriptions; ${esc(planYearly ? "a year" : "a month")} already paid for stays yours.</p>
+           <div class="setrow" style="margin-top:12px" data-click="restorePurchases"><span><b>Restore purchases</b><small>Brings a plan bought on another device, or before a reinstall, onto this account.</small></span><span class="chev">›</span></div>`
+        : `<p class="hint" style="margin:10px 2px 0;text-align:center">Card, PayPal, Apple Pay or Google Pay on Stripe's page in your browser. Renews until you cancel — any time, without signing in, at ${planLegalLink("cancel","tokumai.com/cancel")}; ${esc(planYearly ? "a year" : "a month")} already paid for stays yours.</p>`}
       ${planMsg ? `<p class="hint" style="margin:10px 0 0">${esc(planMsg)}</p>` : ``}`;
   }
   /// A running web plan: the same tiers, the current one marked, and a CHANGE instead of a
@@ -5918,7 +5950,43 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   async function subscribePlan(){
     const sel = planList && planList.find(p => p.id === planSel);
     if(!sel || planBusy) return;
-    if(planC1 && planC2) await subscribeWebPlan(sel);
+    if(!(planC1 && planC2)) return;
+    if(isIOSNative()) await subscribeAppStorePlan(sel); else await subscribeWebPlan(sel);
+  }
+  /// The App Store path. Apple's sheet decides; the enclave decides what it is worth; and
+  /// the transaction is acknowledged to Apple only after the enclave has granted the plan
+  /// (all three inside `iap_buy`). Nothing is charged by us and there is no page to open.
+  async function subscribeAppStorePlan(sel){
+    planBusy = true; planMsg = ""; renderPlans();
+    try{
+      const r = await Backend.iapBuy(sel.id);
+      const st = String((r && r.status) || "");
+      if(st === "cancelled"){ planMsg = ""; }
+      // "Ask to Buy": a parent has to approve, and the transaction turns up later — the
+      // next launch hands it over. Saying "nothing happened" here would be wrong.
+      else if(st === "pending"){ planMsg = "Waiting for approval on this Apple ID. The plan starts by itself once it is approved."; }
+      else {
+        planSel = null;
+        planMsg = "✓ Your plan is active. This month's allowance is on your account.";
+        await refreshState(); renderBal(); renderWebPlans();
+      }
+    }catch(e){ planMsg = "The purchase did not go through: " + String((e && e.message) || e); }
+    planBusy = false; renderPlans();
+  }
+  /// Restore purchases — the App Store's own requirement for a subscription app, and the
+  /// only way in with a plan bought under this Apple ID on another device or before a
+  /// reinstall. It is also the one call that may move a plan to THIS account, which is why
+  /// it happens on a tap and never on a launch.
+  async function restorePurchases(){
+    planBusy = true; planMsg = "Asking the App Store…"; renderPlans();
+    try{
+      const r = await Backend.iapSync(true);
+      planMsg = (r && r.plan && r.plan.tier != null) ? "✓ Your plan is back on this device."
+        : Number(r && r.sent) > 0 ? "The App Store's purchases were handed over."
+        : "The App Store has no purchase for this Apple ID.";
+      await refreshState(); renderBal(); renderWebPlans();
+    }catch(e){ planMsg = "Could not reach the App Store: " + String((e && e.message) || e); }
+    planBusy = false; renderPlans();
   }
   // Our own legal pages. With no site known the text still reads correctly — it just is
   // not a link, rather than a dead one.
@@ -5955,7 +6023,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // expose for inline handlers
   Object.assign(window,{
     toggleGwRandom, tapVersion, hideDev, openPlans, closePlans, loadPlans, selectPlan, planPeriod,
-    subscribePlan, changeWebPlan, togglePlanConsent, reopenPlanCheckout, abandonPlanCheckout, pickModel,
+    subscribePlan, restorePurchases, changeWebPlan, togglePlanConsent, reopenPlanCheckout, abandonPlanCheckout, pickModel,
     copyPhrase, newChat, openSession, deleteSession, exportSession, toggleMenu, selectModelIdx, autogrow,
     onKey, sendMsg, retryMsg, showHandover, downloadHandover, closeHandover, pickImport, importHandover,
     cancelMsg, resendMsg, showDismissed, retrieveMsg, openConnSheet, closeConnSheet, rebuildRoute,
