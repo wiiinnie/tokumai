@@ -20,6 +20,15 @@
 //! 15 questions per user per day the text case pays for itself at about 250 users and the
 //! picture case at about 2,500, and the bill peaks under a dollar a month on the way.
 //!
+//! Every payment arms this, renewals included, and that is deliberate. A renewal is
+//! usually no anchor at all — the account has been making calls for weeks, so the payment
+//! says nothing new about any one of them, and the count comes back covered and buys
+//! nothing. The exception is an account that lies dormant and wakes after its renewal: its
+//! first call of the month does follow its payment, exactly like a first purchase. Arming
+//! on every payment catches that case and costs nothing in the ordinary one, which is why
+//! a shared billing boundary — all renewals on one date — was considered and dropped
+//! (docs/enclave-phase0.md, "Before launch").
+//!
 //! What it does not do: with a single active account there is nobody to hide among, so the
 //! whole set is bought from us — and decoys we buy are, to an adversary who can repeat the
 //! observation for months, our decoys. It blunts the sharpest edge; it does not make a

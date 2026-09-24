@@ -164,9 +164,21 @@ looks, and each is cheap to close now and expensive to explain later.
    small those two join up, and we learn that a named person asked something at a given
    moment. To build, in this order: cover counted from other accounts' calls since the
    payment, with a shape-matched decoy only when there is none (self-liquidating — the
-   decoy spend falls to zero as traffic rises); one billing boundary for everyone instead
-   of per-customer anniversaries; constant-rate polling of the payment provider. Written up
-   in docs/privacy-notes.md and in the pitch notes.
+   decoy spend falls to zero as traffic rises); constant-rate polling of the payment
+   provider. Written up in docs/privacy-notes.md and in the pitch notes.
+
+   **Considered and rejected on 2026-09-24: one billing boundary for everyone** (all
+   renewals on the same date, the first period pro-rated). It answers the wrong question.
+   The anchor is the FIRST purchase, and a common boundary does not move it: the card is
+   charged when it is charged, and a new account's first call to a provider follows within
+   minutes either way. Renewals, which it does move, are not an anchor to begin with — a
+   renewing account has been making calls for weeks, so its payment says nothing new about
+   any one of them. The one case it would have helped is a dormant account that renews and
+   then wakes, and the cover watcher already covers that for nothing. Against it: a second
+   invoice for the part-period, an allowance pro-rated along with it (or subscribing afresh
+   on the 29th of each month becomes a free month), and the end of one rule for both rails —
+   Apple bills from the day of purchase and cannot be told otherwise, which is the symmetry
+   that closed H2 and H5 on 2026-09-21.
 4. **Signed images (PCR8) instead of a list of PCR0s**, so an upgrade does not mean editing
    the key policy — and so "whoever can change the policy could name an image of their
    choosing" stops being true.

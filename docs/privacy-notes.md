@@ -87,10 +87,7 @@ The first one decides a design, not only a sentence.
 4. **The residual in item 2 of the disclosure list** — while the service is small, a
    payment and a first question can be joined by timing. Must that be disclosed explicitly,
    and in what words?
-5. **One billing boundary for everyone** (all renewals on the same date, pro-rated first
-   period) is a privacy measure for us. Does it raise any issue with consumer law, the
-   pro-rating, or the cancellation right?
-6. **Anonymous payment rails are out** on your earlier advice. Does that also rule out
+5. **Anonymous payment rails are out** on your earlier advice. Does that also rule out
    prepaid codes sold through a third party, where we never see the buyer?
 
 ## Housekeeping that the text has to match
@@ -103,3 +100,9 @@ The first one decides a design, not only a sentence.
   production host does not. Pending question 1 to the lawyer.
 - The pricing table is compiled into the enclave image and therefore attested: we cannot
   reprice a question after the fact, and the text may say so.
+- A plan runs in months counted from the day it was bought, on both rails, and the text
+  should say that rather than name a billing date. **One shared billing boundary was
+  considered as a privacy measure on 2026-09-24 and rejected**: it moves only the
+  renewals, and a renewal is not what a payment record points at — the first purchase is,
+  and that happens whenever it happens. The reasoning is in docs/enclave-phase0.md, under
+  "Before launch".
