@@ -788,6 +788,12 @@ async fn vault_purge_webdata(webview: tauri::Webview) -> Result<(), String> {
 // ---- files and links ------------------------------------------------------------------
 
 /// Save bytes where the person chooses (a picture, an export). `None` = cancelled.
+///
+/// A desktop file dialog has no counterpart on a phone: there a file goes into a share
+/// sheet and a picture into the photo library, both of which need native code
+/// (`UIActivityViewController`, `writeToSavedPhotosAlbum`). Until that lands, the phone
+/// says so plainly rather than failing somewhere deeper down.
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 #[tauri::command]
 async fn save_file(data: String, filename: String) -> Result<Option<String>, String> {
     use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
@@ -801,9 +807,22 @@ async fn save_file(data: String, filename: String) -> Result<Option<String>, Str
     }
 }
 
+#[cfg(any(target_os = "ios", target_os = "android"))]
+#[tauri::command]
+async fn save_file(_data: String, _filename: String) -> Result<Option<String>, String> {
+    Err("saving to a file is not in this build yet — it needs the share sheet".into())
+}
+
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 #[tauri::command]
 async fn save_image(data: String, filename: String) -> Result<Option<String>, String> {
     save_file(data, filename).await
+}
+
+#[cfg(any(target_os = "ios", target_os = "android"))]
+#[tauri::command]
+async fn save_image(_data: String, _filename: String) -> Result<Option<String>, String> {
+    Err("saving a picture is not in this build yet — it needs the photo library".into())
 }
 
 /// Only plain http(s) links and a support mailto (one address, subject and body only) may

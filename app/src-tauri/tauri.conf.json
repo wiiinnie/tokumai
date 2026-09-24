@@ -60,6 +60,10 @@
       "nsis": {
         "installMode": "currentUser"
       }
+    },
+    "iOS": {
+      "developmentTeam": "T23Z4LDMGV",
+      "minimumSystemVersion": "15.0"
     }
   }
 }

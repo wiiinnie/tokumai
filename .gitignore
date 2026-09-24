@@ -7,3 +7,6 @@
 .DS_Store
 /app/node_modules/
 /app/src-tauri/gen/schemas/
+# gen/apple IS tracked, on purpose: project.yml carries the signing team, the SDK list, the
+# privacy strings and the Externals trick, and a regeneration wipes every one of them. Its
+# own .gitignore keeps out what really is build output (xcuserdata, build, Externals).
