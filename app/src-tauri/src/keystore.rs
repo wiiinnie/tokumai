@@ -54,7 +54,13 @@ fn dev_key(account: &str, what: &str) -> Result<[u8; 32], String> {
 /// Fetch or create the key stored under `account` in the OS keychain.
 pub(crate) fn keychain_key(account: &str, what: &str) -> Result<[u8; 32], String> {
     use rand::RngCore;
-    if cfg!(debug_assertions) {
+    // Only where the problem it solves exists. On a desktop an unsigned development binary
+    // changes identity with every build, and the keychain asks for the login password after
+    // each one. A phone build is signed with a stable application identifier and asks
+    // nothing — and it has no `dev-data` to fall back to at all, that path being on the
+    // developing Mac. (2026-09-24, from the device: "restore failed: operation not
+    // permitted" was this function trying to create a folder that cannot exist on a phone.)
+    if cfg!(debug_assertions) && !cfg!(any(target_os = "ios", target_os = "android")) {
         return dev_key(account, what);
     }
     let entry = keyring::Entry::new(KEYCHAIN_SERVICE, account).map_err(|e| e.to_string())?;

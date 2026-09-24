@@ -182,6 +182,22 @@ looks, and each is cheap to close now and expensive to explain later.
 4. **Signed images (PCR8) instead of a list of PCR0s**, so an upgrade does not mean editing
    the key policy — and so "whoever can change the policy could name an image of their
    choosing" stops being true.
+5. **TAKE THE SANDBOX IMAGE OUT OF THE KEY POLICY.** On 2026-09-24 the probe key was widened
+   to two measurements so an App Store **sandbox** purchase could be tested from a real
+   phone: `tokumai-probe-2` (production rules) and `tokumai-sandbox-1`
+   (`--features nitro,apple-sandbox`, which accepts Apple's sandbox receipts). The whole
+   point of building sandbox acceptance into a separate image is that a production image
+   cannot be talked into taking a free purchase — and that safeguard is worth nothing if the
+   sandbox image is still allowed to open the same book. Anybody who can run it could mint
+   balance out of sandbox receipts, which cost nothing.
+
+   Before a mainnet key ever holds real money:
+   - `deploy/aws/kms.sh policy` must list **exactly one** measurement, and it must be the
+     production image;
+   - no image built with `apple-sandbox` may appear in any policy that guards a book with
+     paying customers in it;
+   - and this belongs in the release notes, not only here: it is a thing that was
+     deliberately loosened, and the loosening has to be undone by hand.
 5. **The journal is a usage history, and the host may keep every record of it.** Found on
    2026-09-24 while tracing what a seized book would actually reveal. The book is a snapshot
    plus an append-only journal of single SQL changes with their parameters

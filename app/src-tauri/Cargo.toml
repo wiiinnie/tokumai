@@ -16,6 +16,9 @@ smart-guard = ["dep:gline-rs", "dep:orp"]
 
 [build-dependencies]
 tauri-build = { version = "2.6.3", features = [] }
+# build.rs reads dev-data/probe.json, so a build for a phone carries the enclave it was
+# built against — a device cannot read the developing machine's dev-data at runtime.
+serde_json = "1"
 
 [dependencies]
 tokumai-core = { path = "../../crates/core" }

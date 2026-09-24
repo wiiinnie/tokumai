@@ -70,3 +70,16 @@ is a promise that can be checked rather than believed.
 - The strike counter is in memory only. If it ever moves into the sealed book, this page and
   `privacy-notes.md` both change: a per-account counter that survives a restart is a record
   of conduct, and it would have to be disclosed as one.
+
+## Release notes: what must be undone before mainnet
+
+One entry so far, and it is not a nicety.
+
+**The App Store sandbox image must lose its access to the key.** For testing purchases from
+a real phone, the probe's KMS key currently allows two measurements: the production image
+and one built with `--features nitro,apple-sandbox`, which accepts Apple's *sandbox*
+receipts. A sandbox receipt costs nothing, so an image that honours one can mint balance.
+Building that acceptance into a separate image is exactly what keeps a production image
+honest — and it only works while the sandbox image is not allowed to open the same book.
+Before any key guards real money: `deploy/aws/kms.sh policy` must show exactly one
+measurement, the production one. See docs/enclave-phase0.md, "Before launch", item 5.

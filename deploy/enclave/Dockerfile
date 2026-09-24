@@ -16,9 +16,12 @@ ENV SOURCE_DATE_EPOCH=1790000000 \
     CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 \
     CARGO_PROFILE_RELEASE_STRIP=symbols \
     RUSTFLAGS="--remap-path-prefix=/src=/tokumai --remap-path-prefix=/usr/local/cargo=/cargo"
+# The feature list, so a sandbox image can be built from the same file. It changes the
+# binary and therefore PCR0 — which is the point: the measurement says which one runs.
+ARG FEATURES=nitro
 WORKDIR /src
 COPY . .
-RUN cargo build --release --locked -p tokumai-server --bin tokumai-enclave-nitro --features nitro
+RUN cargo build --release --locked -p tokumai-server --bin tokumai-enclave-nitro --features "$FEATURES"
 
 FROM gcr.io/distroless/cc-debian12@sha256:e5d81ddde149641e2a9ba55be4545bc125c67de07508b03ba4c22e6eb0ded5aa
 COPY --from=build /src/target/release/tokumai-enclave-nitro /tokumai-enclave-nitro

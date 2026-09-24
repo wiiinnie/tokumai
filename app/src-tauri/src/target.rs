@@ -29,14 +29,21 @@ fn dev_data() -> PathBuf {
 /// What `deploy/aws/probe.sh` writes about a running probe: {"addresses": [ … ], "pcr0": …}
 /// (or a single "address", as it used to).
 fn probe() -> Option<(String, String)> {
-    let raw = std::fs::read_to_string(dev_data().join("probe.json")).ok()?;
-    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    // A phone cannot read the Mac's dev-data, so a debug build for a device carries the
+    // probe it was built against (see `build.rs`). The FILE still wins where it exists: on
+    // the machine that deploys, the newest deploy should beat the last build.
+    let baked = || match (option_env!("TOKUMAI_BAKED_ENCLAVE"), option_env!("TOKUMAI_BAKED_PCR0")) {
+        (Some(a), Some(p)) if !a.is_empty() && p.len() == 96 => Some((a.to_string(), p.to_string())),
+        _ => None,
+    };
+    let Ok(raw) = std::fs::read_to_string(dev_data().join("probe.json")) else { return baked() };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else { return baked() };
     let address = match v["addresses"].as_array() {
         Some(list) => list.iter().filter_map(|a| a.as_str()).collect::<Vec<_>>().join(","),
-        None => v["address"].as_str()?.trim().to_string(),
+        None => v["address"].as_str().unwrap_or_default().trim().to_string(),
     };
-    let pcr0 = v["pcr0"].as_str()?.trim().to_lowercase();
-    (!address.is_empty() && pcr0.len() == 96).then_some((address, pcr0))
+    let pcr0 = v["pcr0"].as_str().unwrap_or_default().trim().to_lowercase();
+    (!address.is_empty() && pcr0.len() == 96).then_some((address, pcr0)).or_else(baked)
 }
 
 /// The first door — what a single address used to be: for the route display and for

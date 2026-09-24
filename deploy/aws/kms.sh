@@ -61,9 +61,14 @@ case "${1:-}" in
     echo "$KEY ($ALIAS) — nothing may decrypt yet; 'allow <pcr0>' says which image may"
     ;;
   allow)
-    PCR0=${2:?usage: kms.sh allow <pcr0>}
-    aws kms put-key-policy --key-id "$(key_id)" --policy-name default --policy "$(policy_json "$PCR0")"
-    echo "an enclave running image $PCR0 may now decrypt — and nothing else"
+    # Several are accepted (policy_json always could) because a sandbox build is a second,
+    # differently measured image of the same code. Naming more than one IS a widening,
+    # though: every image listed here can open the book. Prefer swapping to one and back.
+    : "${2:?usage: kms.sh allow <pcr0> [<pcr0> …]}"
+    shift
+    aws kms put-key-policy --key-id "$(key_id)" --policy-name default --policy "$(policy_json "$@")"
+    echo "$# image(s) may now decrypt — and nothing else:"
+    for p in "$@"; do echo "  $p"; done
     ;;
   seal)
     FILE=${2:?usage: kms.sh seal <file>}

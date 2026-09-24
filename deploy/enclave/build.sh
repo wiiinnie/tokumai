@@ -20,7 +20,12 @@ mkdir -p dev-data/eif
 # PCR2 differ.
 EPOCH=$(grep -m1 -o 'SOURCE_DATE_EPOCH=[0-9]*' deploy/enclave/Dockerfile | cut -d= -f2)
 # (The docker exporter cannot rewrite timestamps while it unpacks, so: an OCI archive, loaded.)
-docker buildx build ${NO_CACHE:+--no-cache} --build-arg SOURCE_DATE_EPOCH=$EPOCH \
+# FEATURES=nitro,apple-sandbox builds the image that accepts App Store SANDBOX receipts,
+# for testing on a real phone. It is a DIFFERENT image with a different PCR0, and that is
+# the safeguard: the production image cannot be talked into taking a sandbox purchase, and
+# the attestation says which of the two a person is talking to.
+FEATURES=${FEATURES:-nitro}
+docker buildx build ${NO_CACHE:+--no-cache} --build-arg SOURCE_DATE_EPOCH=$EPOCH --build-arg FEATURES="$FEATURES" \
   --output type=oci,name=tokumai-enclave:$TAG,dest=dev-data/eif/tokumai-$TAG.oci.tar,rewrite-timestamp=true \
   -f deploy/enclave/Dockerfile .
 docker load -i dev-data/eif/tokumai-$TAG.oci.tar

@@ -182,6 +182,15 @@ impl Enclave {
             let _ = plans::revoke(&l, &format!("iap:{}", tx.original_transaction_id), false, now);
             return final_error("this plan was refunded by Apple and has ended");
         }
+        // A subscription that is refused stays a subscription: reporting the credit path's
+        // reason for it says "this purchase is not a credit product", which answers a
+        // question nobody asked and hides the real one. Seen from a phone on 2026-09-24,
+        // where the true answer was "sandbox purchases are not accepted by this server".
+        if tx.kind == "Auto-Renewable Subscription" {
+            if let Err(why) = apple::plan_for(&tx, now) {
+                return final_error(&why);
+            }
+        }
         if let Ok((tier, yearly)) = apple::plan_for(&tx, now) {
             let rail = format!("iap:{}", tx.original_transaction_id);
             let mine = l.acct_key(account);

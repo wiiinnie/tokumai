@@ -29,6 +29,10 @@ libc = "0.2"
 [features]
 # The Nitro enclave binary: the Nitro Secure Module as attester (Linux only).
 nitro = ["tokumai-attest/nsm"]
+# Accept App Store SANDBOX purchases. A separate image with its own PCR0, on purpose:
+# a production image can then never be talked into taking a sandbox receipt, and the
+# measurement says which of the two is running.
+apple-sandbox = ["tokumai-enclave/apple-sandbox"]
 
 [[bin]]
 name = "tokumai-enclave-nitro"

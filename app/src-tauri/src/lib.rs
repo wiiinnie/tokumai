@@ -169,7 +169,14 @@ async fn call(app: &AppHandle, op: &str, body: Value) -> Result<Value, String> {
     let st = app.state::<AppState>();
     let mut guard = st.conn.lock().await;
     if guard.is_none() {
-        *guard = Some(new_connection(app, &profile::load(&data_dir(app)?))?);
+        // A connection that cannot even be BUILT — no enclave address in this build, no
+        // policy — used to fail here in silence, and the interface sat on "Connecting to
+        // tokumai…" for as long as anyone was willing to watch. There is nothing to retry
+        // and nothing to wait for, so it says so at once. (2026-09-24, on the phone: a
+        // build for a device cannot read the developing Mac's dev-data.)
+        *guard = Some(new_connection(app, &profile::load(&data_dir(app)?)).inspect_err(|e| {
+            let _ = app.emit("mixnet-phase", json!({ "step": "failed", "detail": e, "srv": true }));
+        })?);
     }
     let conn = guard.as_mut().ok_or("no connection")?;
     let answer = match conn.call(&account, op, &body).await {
