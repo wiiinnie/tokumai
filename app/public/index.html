@@ -5574,6 +5574,9 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   async function doAccountReveal(){
     try{
       const r=await Backend.accountReveal();
+      // On iOS the words are drawn by UIKit behind Face ID and never reach this page —
+      // `native: true` is all that comes back, and there is nothing here to render.
+      if(r && r.native === true){ acctView=null; renderAccount(); return; }
       acctPhrase=r.mnemonic; acctView=null; renderAccount();
     }
     catch(e){ acctStatus(e.message||String(e)); }
@@ -5597,7 +5600,11 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   }
   async function doMigrate(){
     try{
-      migrateData = await Backend.accountMigrateQr();
+      const r = await Backend.accountMigrateQr();
+      // iOS has no QR: a QR of the phrase is the phrase, and it would live in this page.
+      // The native sheet shows the words instead, so there is nothing to draw here.
+      if(r && r.native === true){ acctView=null; acctPhrase=null; renderAccount(); return; }
+      migrateData = r;
       acctView="migrate"; acctPhrase=null; renderAccount();
     }catch(e){ acctStatus("Could not show the code: "+(e.message||e), "bad"); }
   }

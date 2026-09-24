@@ -44,6 +44,21 @@ orp = { version = "1", optional = true }
 [target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
 rfd = "0.15"
 
+# --- iOS: what a phone has and a desktop does not ---
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2-ui-kit = { version = "0.3", features = [
+  "UIImage", "UIImagePickerController", "UIActivityViewController",
+  "UIViewController", "UIResponder", "UIView", "UIWindow", "UIApplication",
+  "UIPopoverPresentationController", "UIPresentationController",
+  # The picker's delegate inherits UINavigationControllerDelegate.
+  "UINavigationController", "UIScrollView",
+  # The recovery phrase is shown and copied by NATIVE code, so the 24 words never enter
+  # the webview: a script that got into the page cannot read what was never there.
+  "UIAlertController", "block2", "UIPasteboard",
+] }
+block2 = "0.6"
+objc2-local-authentication = { version = "0.3", features = ["LAContext", "LAError"] }
+
 # On-device OCR for the privacy guard (Apple Vision); elsewhere the page falls back to the
 # bundled Tesseract.
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]

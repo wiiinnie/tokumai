@@ -10,6 +10,7 @@
 		0DE2CB9FE7C8BE564B2013E2 /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9BAC6A7E86A0E9F80BB09B29 /* UIKit.framework */; };
 		138DA9B88017FC6390407BFF /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8B9F81F9FA851D0061D66D34 /* SystemConfiguration.framework */; };
 		244D5067DE0025BF9504BFEE /* main.mm in Sources */ = {isa = PBXBuildFile; fileRef = 3A6E16640543CD218B03410B /* main.mm */; };
+		2F4AE9261B135B3D61102E67 /* StoreKitShim.swift in Sources */ = {isa = PBXBuildFile; fileRef = 480D60AD544933A2378A28E1 /* StoreKitShim.swift */; };
 		403EEAA0DB0617584C3A927B /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0B167887AACFAA24F57E536B /* Security.framework */; };
 		64EB7C43FAFDF5ED907DF856 /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3CC4980D2AE3B0E058F01266 /* MetalKit.framework */; };
 		737561AC96B017379ADADA4C /* WebKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 02EC1930E5AA421732ECD5C5 /* WebKit.framework */; };
@@ -34,6 +35,7 @@
 		3492AABD36FAAE185BD8AFCA /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
 		3A6E16640543CD218B03410B /* main.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = main.mm; sourceTree = "<group>"; };
 		3CC4980D2AE3B0E058F01266 /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
+		480D60AD544933A2378A28E1 /* StoreKitShim.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreKitShim.swift; sourceTree = "<group>"; };
 		50AE670FCC6D9F1FB5773DB2 /* bindings.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = bindings.h; sourceTree = "<group>"; };
 		57AE51A4FBDDFC377F434147 /* CoreFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreFoundation.framework; path = System/Library/Frameworks/CoreFoundation.framework; sourceTree = SDKROOT; };
 		586A431F3ADC8A04DE382FB8 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
@@ -49,7 +51,10 @@
 		A7C0A6D2ED537D7471E44544 /* StoreKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = StoreKit.framework; path = System/Library/Frameworks/StoreKit.framework; sourceTree = SDKROOT; };
 		BEC651B5AACAEF269119DC24 /* lib.rs */ = {isa = PBXFileReference; path = lib.rs; sourceTree = "<group>"; };
 		CF82CB202654629FDD2E0978 /* keystore.rs */ = {isa = PBXFileReference; path = keystore.rs; sourceTree = "<group>"; };
+		D0846225E8C7001D5AF25577 /* iap_ios.rs */ = {isa = PBXFileReference; path = iap_ios.rs; sourceTree = "<group>"; };
+		E5BD13F1DECDB2930546F481 /* ios_native.rs */ = {isa = PBXFileReference; path = ios_native.rs; sourceTree = "<group>"; };
 		EC7D2D5296432993878EBA7B /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
+		ED2FBCFBFA3EA203BBA3E577 /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
 		F7D0D2D5E2952E15D9C2A83C /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
 		F9C815566B9FE0914482F968 /* Vision.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Vision.framework; path = System/Library/Frameworks/Vision.framework; sourceTree = SDKROOT; };
 		FB56BA9C4243A14EF38FBBBD /* main.rs */ = {isa = PBXFileReference; path = main.rs; sourceTree = "<group>"; };
@@ -83,6 +88,8 @@
 			isa = PBXGroup;
 			children = (
 				7D1C1166E99697A6C52A4E9B /* detect.rs */,
+				D0846225E8C7001D5AF25577 /* iap_ios.rs */,
+				E5BD13F1DECDB2930546F481 /* ios_native.rs */,
 				CF82CB202654629FDD2E0978 /* keystore.rs */,
 				BEC651B5AACAEF269119DC24 /* lib.rs */,
 				FB56BA9C4243A14EF38FBBBD /* main.rs */,
@@ -103,9 +110,18 @@
 			path = Sources;
 			sourceTree = "<group>";
 		};
+		3560F081F20882D82ED0F5C2 /* debug */ = {
+			isa = PBXGroup;
+			children = (
+				ED2FBCFBFA3EA203BBA3E577 /* libapp.a */,
+			);
+			path = debug;
+			sourceTree = "<group>";
+		};
 		3A3F052A3C3DE484B8018164 /* Externals */ = {
 			isa = PBXGroup;
 			children = (
+				89E488F8063BCD2D75C78F1E /* arm64 */,
 			);
 			path = Externals;
 			sourceTree = "<group>";
@@ -161,6 +177,14 @@
 			path = "tokumai-app_iOS";
 			sourceTree = "<group>";
 		};
+		89E488F8063BCD2D75C78F1E /* arm64 */ = {
+			isa = PBXGroup;
+			children = (
+				3560F081F20882D82ED0F5C2 /* debug */,
+			);
+			path = arm64;
+			sourceTree = "<group>";
+		};
 		938E13E6EA4EE1E44028DEF5 /* Products */ = {
 			isa = PBXGroup;
 			children = (
@@ -173,9 +197,17 @@
 			isa = PBXGroup;
 			children = (
 				3A6E16640543CD218B03410B /* main.mm */,
+				480D60AD544933A2378A28E1 /* StoreKitShim.swift */,
 				5C7D495EE37FD913AC5E2A45 /* bindings */,
 			);
 			path = "tokumai-app";
+			sourceTree = "<group>";
+		};
+		"TEMP_3A80C499-4992-4B69-B458-626984B08CA1" /* x86_64 */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = x86_64;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -277,6 +309,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				2F4AE9261B135B3D61102E67 /* StoreKitShim.swift in Sources */,
 				244D5067DE0025BF9504BFEE /* main.mm in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

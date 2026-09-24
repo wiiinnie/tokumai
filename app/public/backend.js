@@ -103,10 +103,11 @@ export const Backend = {
 
   // ---- files and links
   saveImage: (dataB64, filename) => invoke("save_image", { data: dataB64, filename }),
+  // iOS only: the native picker, because <input type=file> in a WKWebView will not
+  // reopen after a cancel. `source` is "library" or "camera".
+  pickImage: (source) => invoke("pick_image", { source }),
   saveFile: (dataB64, filename) => invoke("save_file", { data: dataB64, filename }),
   openExternal: (url) => invoke("open_external", { url }),
-  // The phone apps' native picker and share sheet come with the phone apps.
-  pickImage: () => Promise.reject(new Error("the native picker is part of the phone app")),
   shareText: () => Promise.reject(new Error("the share sheet is part of the phone app")),
 
   // ---- the privacy guard's readers, on the device

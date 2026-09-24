@@ -11,6 +11,9 @@ mod detect;
 /// The StoreKit 2 bridge, and only on the platform that has a StoreKit.
 #[cfg(target_os = "ios")]
 mod iap_ios;
+/// The picker, the photo library, the share sheet and the link opener — all native.
+#[cfg(target_os = "ios")]
+mod ios_native;
 mod keystore;
 mod ocr;
 mod profile;
@@ -388,19 +391,50 @@ async fn forget_account_caches(app: &AppHandle) {
 
 #[tauri::command]
 fn account_reveal(app: AppHandle) -> Result<Value, String> {
-    let p = profile::load(&data_dir(&app)?);
-    Ok(json!({ "mnemonic": p.mnemonic.ok_or("no account")? }))
+    // iOS: the words are drawn by UIKit behind Face ID and never cross into the webview.
+    // Nothing is returned here but the fact that the native sheet was raised.
+    #[cfg(target_os = "ios")]
+    {
+        let dir = data_dir(&app)?;
+        if profile::load(&dir).mnemonic.is_none() {
+            return Err("no account".into());
+        }
+        let handle = app.clone();
+        app.run_on_main_thread(move || ios_native::secure::reveal_phrase(handle, dir, "Your recovery phrase")).map_err(|e| e.to_string())?;
+        return Ok(json!({ "native": true }));
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        let p = profile::load(&data_dir(&app)?);
+        Ok(json!({ "mnemonic": p.mnemonic.ok_or("no account")? }))
+    }
 }
 
 /// The phrase and a QR code of it, to set up another device.
 #[tauri::command]
 fn account_migrate_qr(app: AppHandle) -> Result<Value, String> {
+    // iOS: no QR. A QR of the phrase IS the phrase — drawing it in the page would put the
+    // words there in another costume. The native sheet shows them instead, and the other
+    // device is set up by typing or by pasting from it.
+    #[cfg(target_os = "ios")]
+    {
+        let dir = data_dir(&app)?;
+        if profile::load(&dir).mnemonic.is_none() {
+            return Err("no account".into());
+        }
+        let handle = app.clone();
+        app.run_on_main_thread(move || ios_native::secure::reveal_phrase(handle, dir, "Move to another device")).map_err(|e| e.to_string())?;
+        return Ok(json!({ "native": true }));
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
     let p = profile::load(&data_dir(&app)?);
     let m = p.mnemonic.ok_or("no account")?;
     let qr = qrcode::QrCode::new(m.as_bytes())
         .map(|c| c.render::<qrcode::render::svg::Color>().min_dimensions(200, 200).quiet_zone(true).build())
         .unwrap_or_default();
     Ok(json!({ "mnemonic": m, "qr": qr }))
+    }
 }
 
 /// The three-word check, step one: three positions, fresh on every call. The words never
@@ -953,10 +987,32 @@ async fn save_file(data: String, filename: String) -> Result<Option<String>, Str
     }
 }
 
-#[cfg(any(target_os = "ios", target_os = "android"))]
+/// iOS: a file goes into the share sheet — the person decides where it lands (Files,
+/// Mail, AirDrop). It is written to the app's own temp directory first, because the sheet
+/// hands over a file URL, not bytes.
+#[cfg(target_os = "ios")]
+#[tauri::command]
+async fn save_file(app: AppHandle, data: String, filename: String) -> Result<Option<String>, String> {
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+    let bytes = B64.decode(data.as_bytes()).map_err(|e| format!("bad file data: {e}"))?;
+    let safe = filename.replace(['/', '\\', '\0'], "_");
+    let path = std::env::temp_dir().join(if safe.is_empty() { "tokumai-export".into() } else { safe });
+    std::fs::write(&path, &bytes).map_err(|e| e.to_string())?;
+    let p = path.to_string_lossy().to_string();
+    let (shown, rx) = (p.clone(), p.clone());
+    app.run_on_main_thread(move || {
+        if let Err(e) = ios_native::share::present_share_sheet(&shown) {
+            log::warn!("[share] {e}");
+        }
+    })
+    .map_err(|e| e.to_string())?;
+    Ok(Some(rx))
+}
+
+#[cfg(target_os = "android")]
 #[tauri::command]
 async fn save_file(_data: String, _filename: String) -> Result<Option<String>, String> {
-    Err("saving to a file is not in this build yet — it needs the share sheet".into())
+    Err("saving to a file is not in this build yet".into())
 }
 
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
@@ -965,10 +1021,48 @@ async fn save_image(data: String, filename: String) -> Result<Option<String>, St
     save_file(data, filename).await
 }
 
-#[cfg(any(target_os = "ios", target_os = "android"))]
+/// iOS: a picture goes straight to the photo library, which is where somebody looks for it
+/// afterwards. iOS asks for permission itself the first time
+/// (`NSPhotoLibraryAddUsageDescription`) and writes asynchronously.
+#[cfg(target_os = "ios")]
+#[tauri::command]
+async fn save_image(app: AppHandle, data: String, filename: String) -> Result<Option<String>, String> {
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+    let _ = filename;
+    let bytes = B64.decode(data.as_bytes()).map_err(|e| format!("bad image data: {e}"))?;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.run_on_main_thread(move || {
+        let _ = tx.send(ios_native::share::save_image_to_photos(&bytes));
+    })
+    .map_err(|e| e.to_string())?;
+    rx.await.map_err(|e| e.to_string())??;
+    Ok(Some("photos".into()))
+}
+
+#[cfg(target_os = "android")]
 #[tauri::command]
 async fn save_image(_data: String, _filename: String) -> Result<Option<String>, String> {
-    Err("saving a picture is not in this build yet — it needs the photo library".into())
+    Err("saving a picture is not in this build yet".into())
+}
+
+/// The native image/camera picker. `source` is "library" or "camera"; the answer is the
+/// picked photo as JPEG, or null when the sheet was cancelled.
+#[cfg(target_os = "ios")]
+#[tauri::command]
+async fn pick_image(app: AppHandle, source: String) -> Result<Option<Value>, String> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.run_on_main_thread(move || ios_native::picker::present(&source, tx)).map_err(|e| e.to_string())?;
+    let bytes = rx.await.map_err(|e| e.to_string())??;
+    Ok(bytes.map(|b| {
+        use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+        json!({ "mimeType": "image/jpeg", "name": "photo.jpg", "dataB64": B64.encode(&b) })
+    }))
+}
+
+#[cfg(not(target_os = "ios"))]
+#[tauri::command]
+async fn pick_image(_source: String) -> Result<Option<Value>, String> {
+    Err("the native picker exists only on iOS".into())
 }
 
 /// Only plain http(s) links and a support mailto (one address, subject and body only) may
@@ -993,8 +1087,18 @@ fn open_external(app: AppHandle, url: String) -> Result<(), String> {
     if !is_openable_url(&url) {
         return Err("only plain http(s) links and a support mailto are allowed".into());
     }
-    use tauri_plugin_opener::OpenerExt;
-    app.opener().open_url(&url, None::<&str>).map_err(|e| e.to_string())
+    // iOS goes through UIKit directly: the opener plugin's Swift package is not linked
+    // into the generated Xcode project, so its command fails at runtime there and nowhere
+    // else — a dead legal link on the one platform whose review reads them.
+    #[cfg(target_os = "ios")]
+    {
+        return app.run_on_main_thread(move || ios_native::open_url(&url)).map_err(|e| e.to_string());
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        use tauri_plugin_opener::OpenerExt;
+        app.opener().open_url(&url, None::<&str>).map_err(|e| e.to_string())
+    }
 }
 
 // ---- the privacy guard's readers (all on the device) -----------------------------------
@@ -1100,7 +1204,7 @@ pub fn run() {
             app_hidden, app_resumed, mixnet_heartbeat,
             support_send, support_list, support_diag,
             vault_list, vault_load, vault_save, vault_remove, vault_purge_webdata,
-            save_file, save_image, open_external,
+            save_file, save_image, pick_image, open_external,
             ocr_scan, pdf_text, pdf_ocr, pdf_pages, smart_available, smart_detect,
         ])
         .run(tauri::generate_context!())
