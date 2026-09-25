@@ -18,6 +18,31 @@ use tokio::sync::RwLock;
 use tokumai_proto::frames::Frames;
 use tokumai_enclave::service::Enclave;
 
+/// How often each door posts a packet to ITSELF, and how long a door may hear nothing at
+/// all before it counts as deaf and is rebuilt.
+///
+/// This exists because of 2026-09-24, and again overnight: the enclave sat with
+/// `wait_for_messages()` pending on a gateway connection that was, from outside, gone.
+/// Nothing ever ended, so the reconnect below never ran, and no line was logged because
+/// there was nothing to log. `nitro-cli` said RUNNING, the Nym client kept fetching the
+/// topology, and all three doors were unreachable for hours. Silence cannot be noticed by
+/// looking at it — only by expecting something and missing it.
+///
+/// A packet addressed to our own address travels the whole way: out through our gateway,
+/// across the mix nodes, back in through the same gateway. If it arrives, the path is open
+/// in both directions, which is the only claim worth making. It carries no reply SURB, so
+/// it arrives without a `sender_tag` and the request loop skips it by itself — it is not a
+/// message in the protocol, it is evidence that messages arrive.
+///
+/// Three misses before acting: a single lost packet is ordinary over a mixnet, and one
+/// missing echo must not tear down a door that works.
+const PING_EVERY: Duration = Duration::from_secs(120);
+const DEAF_AFTER_MS: u64 = 7 * 60 * 1000;
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
 /// The server's traffic shape (see the module notes).
 fn server_config() -> nym_sdk::DebugConfig {
     let mut d = nym_sdk::DebugConfig::default();
@@ -68,9 +93,41 @@ pub async fn serve(enclave: &'static Enclave, mut client: MixnetClient, dir: Pat
     let gateway = client.nym_address().gateway().to_base58_string();
     let frames: &'static Frames = Box::leak(Box::new(Frames::default()));
     let sender: Arc<RwLock<MixnetClientSender>> = Arc::new(RwLock::new(client.split_sender()));
+    // When this door last heard anything at all, and the bell that wakes the loop when it
+    // has heard nothing for too long (see PING_EVERY).
+    let heard = Arc::new(std::sync::atomic::AtomicU64::new(now_ms()));
+    let deaf = Arc::new(tokio::sync::Notify::new());
+    {
+        let (sender, heard, deaf) = (sender.clone(), heard.clone(), deaf.clone());
+        let me = *client.nym_address();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(PING_EVERY).await;
+                if let Err(e) = sender.read().await.send_plain_message(me, b"tokumai/still-there").await {
+                    eprintln!("tokumai-server: could not post to our own door: {e}");
+                }
+                if now_ms().saturating_sub(heard.load(std::sync::atomic::Ordering::Relaxed)) > DEAF_AFTER_MS {
+                    deaf.notify_one();
+                }
+            }
+        });
+    }
     loop {
-        while let Some(batch) = client.wait_for_messages().await {
+        loop {
+            // Either something arrives, or the watchdog says nothing has for too long. The
+            // second is what the old `while let` could not express: a stream that neither
+            // yields nor ends leaves a loop with nothing to react to.
+            let batch = tokio::select! {
+                b = client.wait_for_messages() => b,
+                _ = deaf.notified() => {
+                    eprintln!("tokumai-server: nothing has arrived at this door for {} minutes — rebuilding it", DEAF_AFTER_MS / 60_000);
+                    None
+                }
+            };
+            let Some(batch) = batch else { break };
+            heard.store(now_ms(), std::sync::atomic::Ordering::Relaxed);
             for m in batch {
+                // Our own packet comes back without a tag, having proved the point.
                 let Some(tag) = m.sender_tag else { continue };
                 let sender = sender.clone();
                 tokio::spawn(Box::pin(answer(enclave, frames, sender, tag, m.message, address)));
@@ -78,6 +135,8 @@ pub async fn serve(enclave: &'static Enclave, mut client: MixnetClient, dir: Pat
         }
         eprintln!("tokumai-server: the mixnet stream ended — reconnecting the same identity");
         client = reconnect(&dir, &gateway).await;
+        // A fresh door has heard nothing yet, and must not be torn down for it.
+        heard.store(now_ms(), std::sync::atomic::Ordering::Relaxed);
         *sender.write().await = client.split_sender();
         println!("tokumai-server: back on the mixnet: {}", client.nym_address());
     }

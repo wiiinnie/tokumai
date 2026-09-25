@@ -290,9 +290,24 @@ impl Connection {
         Err("the enclave keeps changing — try again in a moment".into())
     }
 
-    /// Send, and if the transport fails, reconnect once and send the same bytes again.
+    /// Send, giving a lost reply a second chance BEFORE giving up on the connection.
+    ///
+    /// A roundtrip that does not come back is ordinary over a mixnet: a packet is dropped,
+    /// a SURB expires, the enclave takes longer than the wait. Treating that as a broken
+    /// transport — which this did — rebuilt the whole Nym client for it: seconds of
+    /// directory, gateway and cover, a fresh registration at the gateway, and the old
+    /// session left standing there. On every lost reply that becomes a reconnection
+    /// spiral, and two sessions of one identity at a gateway are how a message comes to be
+    /// delivered to the dead one. It is also why the app announced "Connecting to the
+    /// mixnet" after every other tap (2026-09-24).
+    ///
+    /// Resending the same bytes is safe by design: the enclave remembers a nonce it has
+    /// answered and hands the same answer back (`service.rs`, "a resend of a request
+    /// already answered gets that answer again").
     async fn send(&mut self, bytes: &[u8]) -> Result<Vec<u8>, String> {
-        for attempt in 0..2 {
+        let mut last = "no connection".to_string();
+        // Twice down the connection we have; only then is the connection itself the suspect.
+        for attempt in 0..3 {
             if self.transport.is_none() {
                 self.transport = Some(self.connector.connect().await?);
             }
@@ -300,14 +315,14 @@ impl Connection {
             match t.roundtrip(bytes).await {
                 Ok(reply) => return Ok(reply),
                 Err(e) => {
-                    self.transport = None;
+                    last = e;
                     if attempt == 1 {
-                        return Err(e);
+                        self.transport = None;
                     }
                 }
             }
         }
-        Err("no connection".into())
+        Err(last)
     }
 }
 
@@ -381,20 +396,44 @@ mod tests {
         Policy { measurements: vec!["image-1".into()], simulated_root: Some(sim::root_public(&ROOT)), simulated_any_measurement: false }
     }
 
+    /// One lost reply is weather, not a broken connection: the same bytes go down the same
+    /// transport again, the enclave hands back the answer it already gave, and the Nym
+    /// client is NOT rebuilt — which is what used to announce "Connecting to the mixnet"
+    /// after every other tap, and left a spare session at the gateway each time.
     #[tokio::test]
-    async fn a_dead_transport_is_replaced_and_the_question_is_charged_once() {
+    async fn a_lost_reply_does_not_throw_the_connection_away() {
         let to = Arc::new(Mutex::new(enclave()));
         let fail = Arc::new(AtomicUsize::new(0));
         let connects = Arc::new(AtomicUsize::new(0));
         let mut c = Connection::new(Box::new(LocalConnector { to: to.clone(), fail_next: fail.clone(), connects: connects.clone() }), policy());
         let a = tokumai_core::account::from_mnemonic(PHRASE).unwrap();
         c.call(&a, "dev.credit", &json!({ "toku": 100_000 })).await.unwrap();
+        let before = connects.load(Ordering::SeqCst);
         fail.store(1, Ordering::SeqCst);
         let answer = c.call(&a, "chat", &json!({ "model": "mock", "messages": [{ "role": "user", "content": "hi" }], "maxTokens": 200 })).await.unwrap();
         let cost = answer["cost"].as_u64().unwrap_or_else(|| panic!("{answer}"));
-        assert_eq!(connects.load(Ordering::SeqCst), 2, "reconnected once");
+        assert_eq!(connects.load(Ordering::SeqCst), before, "one lost reply must not rebuild the client");
         let b = c.call(&a, "balance", &json!({})).await.unwrap();
         assert_eq!(b["balance"]["total"].as_u64().unwrap(), 100_000 - cost, "the lost answer was not charged twice");
+    }
+
+    /// Twice is not weather. Then the connection itself is the suspect, a fresh one is
+    /// built, and the question is still charged exactly once.
+    #[tokio::test]
+    async fn a_connection_that_keeps_failing_is_replaced_and_charged_once() {
+        let to = Arc::new(Mutex::new(enclave()));
+        let fail = Arc::new(AtomicUsize::new(0));
+        let connects = Arc::new(AtomicUsize::new(0));
+        let mut c = Connection::new(Box::new(LocalConnector { to: to.clone(), fail_next: fail.clone(), connects: connects.clone() }), policy());
+        let a = tokumai_core::account::from_mnemonic(PHRASE).unwrap();
+        c.call(&a, "dev.credit", &json!({ "toku": 100_000 })).await.unwrap();
+        let before = connects.load(Ordering::SeqCst);
+        fail.store(2, Ordering::SeqCst);
+        let answer = c.call(&a, "chat", &json!({ "model": "mock", "messages": [{ "role": "user", "content": "hi" }], "maxTokens": 200 })).await.unwrap();
+        let cost = answer["cost"].as_u64().unwrap_or_else(|| panic!("{answer}"));
+        assert_eq!(connects.load(Ordering::SeqCst), before + 1, "reconnected once, after the second failure");
+        let b = c.call(&a, "balance", &json!({})).await.unwrap();
+        assert_eq!(b["balance"]["total"].as_u64().unwrap(), 100_000 - cost, "the lost answers were not charged twice");
     }
 
     #[tokio::test]
