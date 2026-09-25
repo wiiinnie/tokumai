@@ -102,7 +102,13 @@ impl HostBook {
         self.ask
             .send((what.to_string(), body.to_vec(), back))
             .map_err(|_| "the channel to the host is gone — the book cannot be kept".to_string())?;
-        answer.recv().map_err(|_| "the host never answered about the book".to_string())?
+        // A deadline of its own, longer than the one inside `tell_host`, so that a worker
+        // already stuck on an older exchange cannot hold every caller behind it. Without
+        // this the enclave attested happily and answered nothing, for hours: a wait that
+        // cannot end is not a slow book, it is a dead enclave (2026-09-25).
+        answer
+            .recv_timeout(std::time::Duration::from_secs(45))
+            .map_err(|_| "the host never answered about the book".to_string())?
     }
 }
 

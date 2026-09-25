@@ -126,13 +126,33 @@ pub async fn hear(listen: Endpoint) -> io::Result<()> {
 /// attested enclave can open, and the book the host keeps for it (sealed too: `snapshot`
 /// and `journal`).
 pub async fn ask_host(host: &Endpoint, what: &str) -> Result<Vec<u8>, String> {
-    hand_over(host, what, &[]).await
+    within(hand_over(host, what, &[]), what).await
 }
 
 /// The same channel the other way: what the enclave gives the host to keep (`put-snapshot`,
 /// `add-record`). The answer says it is on the host's disk.
 pub async fn tell_host(host: &Endpoint, what: &str, body: &[u8]) -> Result<Vec<u8>, String> {
-    hand_over(host, what, body).await
+    within(hand_over(host, what, body), what).await
+}
+
+/// How long the enclave waits on the host for one exchange.
+///
+/// The host is across a vsock on the same machine and a book write is milliseconds, so this
+/// is generous. What it replaces is no deadline at all: `connect`, `write` and `read` below
+/// had none, and a vsock that dies half-open then holds the caller forever.
+///
+/// That is not a slow book, it is a dead enclave. Every request writes its nonce to the
+/// book before it is dispatched (`service.rs`, against replays), so one stuck host call
+/// hangs every request after it — while attestation, which never touches the book, goes on
+/// answering cheerfully. Which is precisely what "it connects but never answers" looked
+/// like from the phone (2026-09-25).
+const HOST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+async fn within<F: std::future::Future<Output = Result<Vec<u8>, String>>>(f: F, what: &str) -> Result<Vec<u8>, String> {
+    match tokio::time::timeout(HOST_TIMEOUT, f).await {
+        Ok(answer) => answer,
+        Err(_) => Err(format!("the host did not answer about '{what}' within {}s", HOST_TIMEOUT.as_secs())),
+    }
 }
 
 async fn hand_over(host: &Endpoint, what: &str, body: &[u8]) -> Result<Vec<u8>, String> {
