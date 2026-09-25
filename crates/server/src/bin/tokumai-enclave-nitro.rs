@@ -175,6 +175,11 @@ fn loopback_up() -> std::io::Result<()> {
 #[tokio::main]
 async fn main() {
     println!("tokumai enclave ({PROBE}) starting");
+    // Give the enclave a voice before anything can go wrong in it. Without this its
+    // `eprintln!`s go nowhere — there is no console in a non-debug enclave — and the host
+    // log stops at the last explicit announcement, which is how two days of failures left
+    // no trace at all.
+    tokumai_server::speaks_to(Endpoint::Vsock(HOST_CID, ANNOUNCE_PORT));
     announce_panics();
     loopback_up().expect("bring up the loopback");
     // Everything leaves through the tunnel: the providers, Stripe, Apple and the Nym API by

@@ -91,6 +91,8 @@ pub async fn serve(enclave: &'static Enclave, mut client: MixnetClient, dir: Pat
     enclave.set_address(&address);
     let address: &'static str = Box::leak(address.into_boxed_str());
     let gateway = client.nym_address().gateway().to_base58_string();
+    // A short name for the log, so a line says WHICH of the three doors it is about.
+    let short: &'static str = Box::leak(gateway.chars().take(8).collect::<String>().into_boxed_str());
     let frames: &'static Frames = Box::leak(Box::new(Frames::default()));
     let sender: Arc<RwLock<MixnetClientSender>> = Arc::new(RwLock::new(client.split_sender()));
     // When this door last heard anything at all, and the bell that wakes the loop when it
@@ -104,7 +106,7 @@ pub async fn serve(enclave: &'static Enclave, mut client: MixnetClient, dir: Pat
             loop {
                 tokio::time::sleep(PING_EVERY).await;
                 if let Err(e) = sender.read().await.send_plain_message(me, b"tokumai/still-there").await {
-                    eprintln!("tokumai-server: could not post to our own door: {e}");
+                    crate::say(format!("door {short}: could not post to our own address: {e}"));
                 }
                 if now_ms().saturating_sub(heard.load(std::sync::atomic::Ordering::Relaxed)) > DEAF_AFTER_MS {
                     deaf.notify_one();
@@ -120,7 +122,7 @@ pub async fn serve(enclave: &'static Enclave, mut client: MixnetClient, dir: Pat
             let batch = tokio::select! {
                 b = client.wait_for_messages() => b,
                 _ = deaf.notified() => {
-                    eprintln!("tokumai-server: nothing has arrived at this door for {} minutes — rebuilding it", DEAF_AFTER_MS / 60_000);
+                    crate::say(format!("door {short}: nothing has arrived for {} minutes — rebuilding it", DEAF_AFTER_MS / 60_000));
                     None
                 }
             };
@@ -133,12 +135,12 @@ pub async fn serve(enclave: &'static Enclave, mut client: MixnetClient, dir: Pat
                 tokio::spawn(Box::pin(answer(enclave, frames, sender, tag, m.message, address)));
             }
         }
-        eprintln!("tokumai-server: the mixnet stream ended — reconnecting the same identity");
+        crate::say(format!("door {short}: the mixnet stream ended — reconnecting the same identity"));
         client = reconnect(&dir, &gateway).await;
         // A fresh door has heard nothing yet, and must not be torn down for it.
         heard.store(now_ms(), std::sync::atomic::Ordering::Relaxed);
         *sender.write().await = client.split_sender();
-        println!("tokumai-server: back on the mixnet: {}", client.nym_address());
+        crate::say(format!("door {short}: back on the mixnet"));
     }
 }
 
@@ -146,7 +148,7 @@ async fn answer(enclave: &'static Enclave, frames: &'static Frames, sender: Arc<
     let reply = frames.handle(&frame, |message| async move { enclave.handle_at(&message, at).await }).await;
     if let Some(reply) = reply {
         if let Err(e) = sender.read().await.send_reply(tag, reply).await {
-            eprintln!("tokumai-server: a reply could not be sent: {e}");
+            crate::say(format!("a reply could not be sent: {e}"));
         }
     }
 }
