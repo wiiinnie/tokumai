@@ -33,6 +33,9 @@ nitro = ["tokumai-attest/nsm"]
 # a production image can then never be talked into taking a sandbox receipt, and the
 # measurement says which of the two is running.
 apple-sandbox = ["tokumai-enclave/apple-sandbox"]
+# DEVELOPMENT ONLY, and a separate image again: one line per request, no account, no
+# content. See tokumai-enclave's own note.
+trace-requests = ["tokumai-enclave/trace-requests"]
 
 [[bin]]
 name = "tokumai-enclave-nitro"

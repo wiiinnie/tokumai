@@ -150,6 +150,173 @@ fn announce_panics() {
     }));
 }
 
+/// A pulse from outside the runtime, one from inside it — and, when the inner one stops,
+/// a report of what every thread is doing.
+///
+/// On 2026-09-25 the enclave stopped doing everything at once — three doors, the topology
+/// refresh, the Stripe beat — 93 minutes after start, and stayed that way for three days
+/// with `nitro-cli` saying RUNNING and every vsock still open. On 2026-09-28 it did the
+/// same with ONE door, 101 minutes after start, and this time the two pulses told the
+/// story: the thread's went on, the runtime's stopped. The process was alive and the tokio
+/// runtime was wedged — every worker thread stuck in something that never returns.
+///
+/// Where they are stuck is the one thing that cannot be seen from outside, so the thread
+/// that is still alive reports it: for every thread of the process, its state and the
+/// kernel function it sleeps in (`/proc/self/task/*/wchan`, `/stack`), and its own stack,
+/// obtained by sending it a signal whose handler captures a backtrace. Then the process
+/// exits, so that the enclave is gone rather than RUNNING and deaf. Two lines a minute
+/// until then, about the machine and nobody else.
+mod stuck {
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::Mutex;
+
+    /// Seconds since start when a task on the runtime last ran (`heartbeat`).
+    pub static RUNTIME_SEEN: AtomicU64 = AtomicU64::new(0);
+    /// After this long without the runtime, the report is made and the process ends.
+    pub const SILENT_FOR: u64 = 180;
+
+    static SLOT: Mutex<Option<std::backtrace::Backtrace>> = Mutex::new(None);
+    static DONE: AtomicBool = AtomicBool::new(false);
+
+    extern "C" fn on_signal(_: libc::c_int) {
+        // Runs on the thread being asked. Not strictly signal-safe (it allocates), which
+        // is acceptable in a report made once, on a machine that is finished anyway.
+        let bt = std::backtrace::Backtrace::force_capture();
+        if let Ok(mut s) = SLOT.try_lock() {
+            *s = Some(bt);
+        }
+        DONE.store(true, Ordering::SeqCst);
+    }
+
+    pub fn install() {
+        unsafe {
+            let mut sa: libc::sigaction = std::mem::zeroed();
+            sa.sa_sigaction = on_signal as usize;
+            sa.sa_flags = libc::SA_RESTART;
+            libc::sigemptyset(&mut sa.sa_mask);
+            libc::sigaction(libc::SIGUSR1, &sa, std::ptr::null_mut());
+        }
+    }
+
+    fn read(path: &str) -> String {
+        std::fs::read_to_string(path).unwrap_or_default().trim().to_string()
+    }
+
+    /// Resident memory in MiB and the number of threads, for the pulse line.
+    pub fn vitals() -> String {
+        let pages: u64 = read("/proc/self/statm").split(' ').nth(1).and_then(|p| p.parse().ok()).unwrap_or(0);
+        let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) }.max(4096) as u64;
+        let threads = std::fs::read_dir("/proc/self/task").map(|d| d.count()).unwrap_or(0);
+        format!("rss {} MiB, {threads} threads", pages * page / (1024 * 1024))
+    }
+
+    /// A backtrace as one line: the frames that name a function, each with its place.
+    fn one_line(bt: &std::backtrace::Backtrace) -> String {
+        let text = format!("{bt}");
+        let mut frames: Vec<String> = Vec::new();
+        for line in text.lines() {
+            let line = line.trim();
+            if let Some(at) = line.strip_prefix("at ") {
+                // "at /tokumai/crates/x/src/y.rs:12:3" → the last frame gets "(y.rs:12)"
+                let place = at.rsplit('/').next().unwrap_or(at);
+                let place = place.rsplit_once(':').map(|(p, _)| p).unwrap_or(place);
+                if let Some(last) = frames.last_mut() {
+                    last.push_str(&format!(" ({place})"));
+                }
+            } else if let Some((_, name)) = line.split_once(": ") {
+                frames.push(name.to_string());
+            }
+        }
+        frames.join(" < ")
+    }
+
+    /// Every thread: where it is in the kernel and where it is in the program.
+    pub fn report(say: &mut dyn FnMut(String)) {
+        let Ok(tasks) = std::fs::read_dir("/proc/self/task") else {
+            say("no /proc/self/task — the threads cannot be seen".into());
+            return;
+        };
+        let pid = std::process::id() as libc::pid_t;
+        let me = unsafe { libc::syscall(libc::SYS_gettid) } as libc::pid_t;
+        for t in tasks.flatten() {
+            let Ok(tid) = t.file_name().to_string_lossy().parse::<libc::pid_t>() else { continue };
+            let dir = format!("/proc/self/task/{tid}");
+            let comm = read(&format!("{dir}/comm"));
+            let stat = read(&format!("{dir}/stat"));
+            let state = stat.rsplit_once(") ").map(|(_, r)| r.split(' ').next().unwrap_or("?")).unwrap_or("?").to_string();
+            let wchan = read(&format!("{dir}/wchan"));
+            let kstack = read(&format!("{dir}/stack")).lines().map(|l| l.trim().trim_start_matches("[<0>] ")).collect::<Vec<_>>().join(" < ");
+            say(format!("thread {tid} {comm:?} state {state} wchan {wchan} kernel: {kstack}"));
+            if tid == me {
+                continue;
+            }
+            DONE.store(false, Ordering::SeqCst);
+            if unsafe { libc::syscall(libc::SYS_tgkill, pid, tid, libc::SIGUSR1) } != 0 {
+                say(format!("thread {tid}: could not be signalled"));
+                continue;
+            }
+            let t0 = std::time::Instant::now();
+            while !DONE.load(Ordering::SeqCst) && t0.elapsed() < std::time::Duration::from_secs(3) {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            match SLOT.lock().ok().and_then(|mut s| s.take()) {
+                Some(bt) => {
+                    let line = one_line(&bt);
+                    // The host reads at most 4 KiB per announcement.
+                    let bytes = line.as_bytes();
+                    let mut at = 0;
+                    let mut part = 1;
+                    while at < bytes.len() {
+                        let mut end = (at + 3500).min(bytes.len());
+                        while end < bytes.len() && !line.is_char_boundary(end) {
+                            end -= 1;
+                        }
+                        say(format!("thread {tid} stack {part}: {}", &line[at..end]));
+                        at = end;
+                        part += 1;
+                    }
+                }
+                None => say(format!("thread {tid}: did not answer the signal in 3 s")),
+            }
+        }
+    }
+}
+
+fn heartbeat() {
+    stuck::install();
+    let started = std::time::Instant::now();
+    std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("a runtime for the pulse");
+        let mut say = |line: String| {
+            let _ = runtime.block_on(tokumai_egress::announce(&Endpoint::Vsock(HOST_CID, ANNOUNCE_PORT), &line));
+        };
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(60));
+            let now = started.elapsed().as_secs();
+            let silent = now.saturating_sub(stuck::RUNTIME_SEEN.load(std::sync::atomic::Ordering::Relaxed));
+            say(format!("{PROBE} pulse thread {} min, {}, runtime seen {silent} s ago", now / 60, stuck::vitals()));
+            if silent >= stuck::SILENT_FOR {
+                say(format!("{PROBE} the runtime has been silent for {silent} s — what every thread is doing:"));
+                stuck::report(&mut say);
+                say(format!("{PROBE} reported, and leaving: a RUNNING enclave that answers nothing is worse than none"));
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                std::process::exit(70);
+            }
+        }
+    });
+    tokio::spawn(async move {
+        let mut n = 0u64;
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+            stuck::RUNTIME_SEEN.store(started.elapsed().as_secs(), std::sync::atomic::Ordering::Relaxed);
+            n += 1;
+            if n % 6 == 0 {
+                tokumai_server::say(format!("{PROBE} pulse runtime {} min", started.elapsed().as_secs() / 60));
+            }
+        }
+    });
+}
+
 /// `ip link set lo up`, without a shell or iproute2 in the image.
 fn loopback_up() -> std::io::Result<()> {
     unsafe {
@@ -180,7 +347,10 @@ async fn main() {
     // log stops at the last explicit announcement, which is how two days of failures left
     // no trace at all.
     tokumai_server::speaks_to(Endpoint::Vsock(HOST_CID, ANNOUNCE_PORT));
+    // …and lends it to the core, which has no way to reach the host on its own.
+    tokumai_enclave::trace::speaks(tokumai_server::say);
     announce_panics();
+    heartbeat();
     loopback_up().expect("bring up the loopback");
     // Everything leaves through the tunnel: the providers, Stripe, Apple and the Nym API by
     // HTTPS_PROXY, the Nym gateway by TOKUMAI_EGRESS_PROXY (vendor/nym-gateway-client).

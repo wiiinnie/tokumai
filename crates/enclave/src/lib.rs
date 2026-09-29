@@ -38,6 +38,41 @@ pub mod subscriptions;
 
 pub use service::{Enclave, Platform};
 
+/// A development-only account of what the enclave is doing, for the one question an
+/// operator cannot otherwise answer: did the request arrive at all?
+///
+/// "It hangs" has three quite different causes — the request never arrived, it arrived and
+/// is stuck, or it was answered and the answer was lost on the way back — and from outside
+/// all three look identical. Two days went into telling them apart by guessing.
+///
+/// What a line carries: the operation's NAME, the kind of answer, and the milliseconds.
+/// Never an account, never any content. It is a trace of the machine, not of a person.
+/// Even so it is a trace of use, so the feature is off unless an image is built for
+/// testing, and PCR0 says which image is running. It comes out before mainnet
+/// (docs/terms-notes.md).
+pub mod trace {
+    use std::sync::OnceLock;
+
+    /// Compiled in only with the feature; every call below is a no-op otherwise, and the
+    /// formatting goes with it.
+    pub const ON: bool = cfg!(feature = "trace-requests");
+
+    static VOICE: OnceLock<fn(String)> = OnceLock::new();
+
+    /// The enclave has no console of its own; the binary lends it one (`server::say`).
+    pub fn speaks(f: fn(String)) {
+        let _ = VOICE.set(f);
+    }
+
+    pub fn say(line: impl FnOnce() -> String) {
+        if ON {
+            if let Some(f) = VOICE.get() {
+                f(line());
+            }
+        }
+    }
+}
+
 /// Milliseconds since the epoch. The one clock the enclave reads.
 pub fn now_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)

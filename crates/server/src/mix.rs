@@ -147,6 +147,10 @@ pub async fn serve(enclave: &'static Enclave, mut client: MixnetClient, dir: Pat
 async fn answer(enclave: &'static Enclave, frames: &'static Frames, sender: Arc<RwLock<MixnetClientSender>>, tag: AnonymousSenderTag, frame: Vec<u8>, at: &'static str) {
     let reply = frames.handle(&frame, |message| async move { enclave.handle_at(&message, at).await }).await;
     if let Some(reply) = reply {
+        let n = reply.len();
+        if tokumai_enclave::trace::ON {
+            crate::say(format!("reply of {n} bytes handed to the mixnet"));
+        }
         if let Err(e) = sender.read().await.send_reply(tag, reply).await {
             crate::say(format!("a reply could not be sent: {e}"));
         }

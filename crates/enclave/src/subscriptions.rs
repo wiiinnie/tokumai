@@ -177,8 +177,21 @@ impl Enclave {
             Ok(tx) => tx,
             Err(e) => return final_error(&e),
         };
+        self.iap_apply(account, &tx, restore, now)
+    }
+
+    /// What a verified App Store transaction does to the account: a plan begins or renews,
+    /// or a credit tile is added. Apart from `iap_verify` only the tests call this — with
+    /// a transaction they made up, since nobody can sign one of Apple's.
+    ///
+    /// The ledger is locked for the whole of it. NOTHING in here may take that lock again
+    /// (`self.account_key`, `self.balance`, `self.plan_summary`…): a std mutex taken twice
+    /// by the same thread waits for ever, and with the runtime's other worker waiting for
+    /// the same lock the enclave answers nothing more — which it did, for three days, and
+    /// again the next time a purchase went through (2026-09-25, -28). Use `l` instead.
+    pub(crate) fn iap_apply(&self, account: &str, tx: &apple::AppleTx, restore: bool, now: u64) -> Value {
         let Ok(l) = self.ledger.lock() else { return error("ledger unavailable") };
-        if apple::revoked_plan(&tx) {
+        if apple::revoked_plan(tx) {
             let _ = plans::revoke(&l, &format!("iap:{}", tx.original_transaction_id), false, now);
             return final_error("this plan was refunded by Apple and has ended");
         }
@@ -187,11 +200,11 @@ impl Enclave {
         // question nobody asked and hides the real one. Seen from a phone on 2026-09-24,
         // where the true answer was "sandbox purchases are not accepted by this server".
         if tx.kind == "Auto-Renewable Subscription" {
-            if let Err(why) = apple::plan_for(&tx, now) {
+            if let Err(why) = apple::plan_for(tx, now) {
                 return final_error(&why);
             }
         }
-        if let Ok((tier, yearly)) = apple::plan_for(&tx, now) {
+        if let Ok((tier, yearly)) = apple::plan_for(tx, now) {
             let rail = format!("iap:{}", tx.original_transaction_id);
             let mine = l.acct_key(account);
             match l.rail_owner(&rail) {
@@ -207,7 +220,10 @@ impl Enclave {
                 Err(e) => return error(&e),
                 _ => {}
             }
-            self.cover.paid(&self.account_key(account), now);
+            // `l` is held here: `self.account_key` would take the ledger lock a second time,
+            // and a std mutex taken twice by one thread waits for ever. That was the
+            // enclave that went deaf whenever a purchase went THROUGH (2026-09-25, -28).
+            self.cover.paid(&l.acct_key(account), now);
             return match plans::subscribe_or_renew(&l, account, tier, yearly, &rail, now, tx.purchased_at_ms, tx.expires_at_ms) {
                 Ok(_) => {
                     drop(l);
@@ -216,13 +232,16 @@ impl Enclave {
                 Err(e) => error(&e),
             };
         }
-        match apple::credit_for(&tx) {
+        match apple::credit_for(tx) {
             Ok(toku) => {
                 let first = l.first_payment(&format!("apple-tx:{}", tx.transaction_id), now);
                 let credited = match first {
                     Ok(true) => match l.credit_prepaid(account, toku, now) {
                         Ok(()) => {
-                            self.cover.paid(&self.account_key(account), now);
+                            // `l` is held here: `self.account_key` would take the ledger lock a second time,
+            // and a std mutex taken twice by one thread waits for ever. That was the
+            // enclave that went deaf whenever a purchase went THROUGH (2026-09-25, -28).
+            self.cover.paid(&l.acct_key(account), now);
                             toku
                         }
                         Err(e) => return error(&e),
@@ -347,5 +366,71 @@ impl Enclave {
         if !applied {
             let _ = plans::mark_checked(&l, key, now);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::apple::AppleTx;
+    use crate::service::{Db, Enclave, Platform};
+    use std::time::Duration;
+
+    fn enclave() -> &'static Enclave {
+        let e = Enclave::start(Platform {
+            attester: Box::new(tokumai_attest::sim::SimAttester::new([5; 32], "image-1")),
+            keys: Box::new(crate::seal::FixedKeyProvider([9; 32])),
+            providers: crate::provider::Providers::mock(),
+            db: Db::Memory,
+            pricing: tokumai_core::pricing::PricingTable::parse(crate::policy::PRICING_JSON).unwrap(),
+            dev_mode: false,
+            stripe: None,
+            apple_api: None,
+        })
+        .unwrap();
+        Box::leak(Box::new(e))
+    }
+
+    fn tx(product: &str, kind: &str, expires_at_ms: u64) -> AppleTx {
+        AppleTx {
+            bundle_id: "com.tokumai.app".into(),
+            product_id: product.into(),
+            transaction_id: format!("2000000{product}"),
+            original_transaction_id: format!("2000000{product}"),
+            environment: "Production".into(),
+            kind: kind.into(),
+            quantity: 1,
+            purchased_at_ms: 1_757_500_000_000,
+            revoked: false,
+            ownership: "PURCHASED".into(),
+            storefront: "DEU".into(),
+            expires_at_ms,
+        }
+    }
+
+    /// `f` on a thread of its own, with a deadline: a deadlock is a test that never ends,
+    /// and a test that never ends says nothing.
+    fn within(secs: u64, f: impl FnOnce() -> serde_json::Value + Send + 'static) -> serde_json::Value {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(f());
+        });
+        rx.recv_timeout(Duration::from_secs(secs)).expect("the transaction was still being applied when the deadline passed — the ledger lock is taken twice on one thread")
+    }
+
+    /// The enclave went deaf whenever a purchase went THROUGH: the successful branches
+    /// took the ledger lock a second time while holding it. Both branches, with a deadline.
+    #[test]
+    fn a_purchase_that_goes_through_does_not_lock_the_enclave_up() {
+        let e = enclave();
+        let now = 1_757_600_000_000;
+        let credited = within(10, move || e.iap_apply("acct-a", &tx("com.tokumai.app.credit.10", "Consumable", 0), false, now));
+        assert_eq!(credited["kind"], "iap.ok", "{credited}");
+        assert_eq!(credited["credited"], 10 * tokumai_core::billing::TOKU_PER_USD);
+        let plan = within(10, move || e.iap_apply("acct-b", &tx("com.tokumai.app.plan.10", "Auto-Renewable Subscription", now + 86_400_000), false, now));
+        assert_eq!(plan["kind"], "iap.ok", "{plan}");
+        assert!(plan["plan"].is_object(), "{plan}");
+        // And the enclave still answers afterwards.
+        let again = within(10, move || e.iap_apply("acct-a", &tx("com.tokumai.app.credit.10", "Consumable", 0), false, now));
+        assert_eq!(again["credited"], 0, "a resend is credited once: {again}");
     }
 }

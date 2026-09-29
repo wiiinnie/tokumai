@@ -25,7 +25,9 @@ EPOCH=$(grep -m1 -o 'SOURCE_DATE_EPOCH=[0-9]*' deploy/enclave/Dockerfile | cut -
 # the safeguard: the production image cannot be talked into taking a sandbox purchase, and
 # the attestation says which of the two a person is talking to.
 FEATURES=${FEATURES:-nitro}
+# STRIP=none DEBUGINFO=line-tables-only: symbols kept, so a stack report names functions.
 docker buildx build ${NO_CACHE:+--no-cache} --build-arg SOURCE_DATE_EPOCH=$EPOCH --build-arg FEATURES="$FEATURES" \
+  --build-arg STRIP="${STRIP:-symbols}" --build-arg DEBUGINFO="${DEBUGINFO:-0}" \
   --output type=oci,name=tokumai-enclave:$TAG,dest=dev-data/eif/tokumai-$TAG.oci.tar,rewrite-timestamp=true \
   -f deploy/enclave/Dockerfile .
 docker load -i dev-data/eif/tokumai-$TAG.oci.tar

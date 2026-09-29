@@ -35,3 +35,10 @@ image = { version = "0.25.10", default-features = false, features = ["png", "jpe
 [features]
 # Accept App Store sandbox purchases in a release image (testnet). See policy::APPLE_SANDBOX.
 apple-sandbox = []
+# DEVELOPMENT ONLY. One line per request — the OPERATION, the result and how long it took,
+# with no account and no content — so that "it hangs" can be told apart from "it never
+# arrived" and from "it was answered and the answer was lost". It is still a trace of use,
+# so it belongs in no image that serves anybody: a production image is built without it, and
+# PCR0 says which is running. Comes out before mainnet, with the sandbox feature — the list
+# is in docs/terms-notes.md.
+trace-requests = []

@@ -83,3 +83,12 @@ Building that acceptance into a separate image is exactly what keeps a productio
 honest — and it only works while the sandbox image is not allowed to open the same book.
 Before any key guards real money: `deploy/aws/kms.sh policy` must show exactly one
 measurement, the production one. See docs/enclave-phase0.md, "Before launch", item 5.
+
+**The request trace must go with it.** The same testing image is built with
+`--features trace-requests`, which makes the enclave announce one line per request: the
+operation's name, the kind of answer, the milliseconds — no account, no content. It exists
+because "it hangs" has three causes that look identical from outside (never arrived,
+arrived and stuck, answered and the answer lost), and two days went into telling them apart
+by guessing. It is a trace of the machine rather than of a person, but it is still a trace
+of use, and the promise is that the machine keeps none. A production image is built without
+the feature, and PCR0 says which one is running.

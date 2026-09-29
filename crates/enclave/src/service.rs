@@ -238,9 +238,19 @@ impl Enclave {
             }
             Err(e) => return seal(error(&e)),
         }
+        // Three lines, because "it hangs" has three causes that look alike from outside.
+        // The operation's name and nothing else about it (`crate::trace`).
+        let op = req.op.clone();
+        crate::trace::say(|| format!("req {op} arrived"));
+        let started = std::time::Instant::now();
         let answer = self.dispatch(&account_id, &req.op, &req.body, now).await;
+        crate::trace::say(|| {
+            let kind = answer.get("kind").and_then(|k| k.as_str()).unwrap_or("?");
+            format!("req {op} -> {kind} in {} ms", started.elapsed().as_millis())
+        });
         let out = seal(answer);
         self.remember(&req.nonce, &out);
+        crate::trace::say(|| format!("req {op} sealed, {} bytes to send", out.len()));
         out
     }
 
