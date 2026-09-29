@@ -102,7 +102,7 @@ export const Backend = {
   vaultPurgeWebdata: () => invoke("vault_purge_webdata"),
 
   // ---- files and links
-  saveImage: (dataB64, filename) => invoke("save_image", { data: dataB64, filename }),
+  saveImage: (dataB64, filename, mime, lossless) => invoke("save_image", { data: dataB64, filename, mime: mime || "", lossless: !!lossless }),
   // iOS only: the native picker, because <input type=file> in a WKWebView will not
   // reopen after a cancel. `source` is "library" or "camera".
   pickImage: (source) => invoke("pick_image", { source }),

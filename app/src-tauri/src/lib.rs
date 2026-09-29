@@ -300,6 +300,18 @@ fn local_state(app: AppHandle) -> Result<Value, String> {
     Ok(json!({ "account": account_json(&p), "server": target::enclave_door().ok() }))
 }
 
+/// What the interface shows of a `balance` answer from the enclave (`{ balance, plan }`):
+/// the one number, the allowance, the prepaid credit, the plan. Read the same way at
+/// start and at every heartbeat, so the two can never disagree.
+fn balance_fields(out: &mut Value, b: &Value) {
+    let bal = &b["balance"];
+    out["balance"] = bal["total"].clone();
+    out["allowance"] = json!({ "left": bal["allowance"], "endsMs": bal["allowance_ends_ms"] });
+    let prepaid: u64 = bal["prepaid"].as_array().map(|l| l.iter().filter_map(|x| x[0].as_u64()).sum()).unwrap_or(0);
+    out["prepaid"] = json!(prepaid);
+    out["plan"] = ui_plan(&b["plan"]);
+}
+
 /// Everything the interface shows: account, balance, plan, models, the plan ladder.
 #[tauri::command]
 async fn state(app: AppHandle) -> Result<Value, String> {
@@ -326,13 +338,7 @@ async fn state(app: AppHandle) -> Result<Value, String> {
     // three seconds, and the app used to make three of them before its first screen.
     match call(&app, "start", json!({})).await {
         Ok(r) => {
-            let b = &r["balance"];
-            let bal = &b["balance"];
-            out["balance"] = bal["total"].clone();
-            out["allowance"] = json!({ "left": bal["allowance"], "endsMs": bal["allowance_ends_ms"] });
-            let prepaid: u64 = bal["prepaid"].as_array().map(|l| l.iter().filter_map(|x| x[0].as_u64()).sum()).unwrap_or(0);
-            out["prepaid"] = json!(prepaid);
-            out["plan"] = ui_plan(&b["plan"]);
+            balance_fields(&mut out, &r["balance"]);
             if r["models"].as_array().is_some_and(|m| !m.is_empty()) {
                 *st.models.lock().await = Some(r["models"].clone());
             }
@@ -932,9 +938,19 @@ async fn app_resumed(app: AppHandle, hidden_ms: u64, force: Option<bool>) -> Res
     Ok(json!({ "action": "rebuilt", "ms": started.elapsed().as_millis() }))
 }
 
+/// The once-a-minute beat from the interface, while the app is open and idle. It used to
+/// answer "alive" without asking anybody, which kept nothing alive and told nothing: a
+/// route that had died was found by the next question, and a balance the enclave had
+/// already changed — a plan's month ending, a sandbox plan lapsing, credit spent from
+/// another device — sat in the menu until somebody tapped "Check balance" (2026-09-28).
+/// One small round trip, the balance, and the menu shows what the enclave says.
 #[tauri::command]
-fn mixnet_heartbeat() -> Value {
-    json!({ "action": "alive", "ms": 0 })
+async fn mixnet_heartbeat(app: AppHandle) -> Result<Value, String> {
+    let t0 = std::time::Instant::now();
+    let r = call(&app, "balance", json!({})).await?;
+    let mut out = json!({ "action": "alive", "ms": t0.elapsed().as_millis() as u64 });
+    balance_fields(&mut out, &r);
+    Ok(out)
 }
 
 // ---- support (not in the enclave yet) --------------------------------------------------
@@ -1044,31 +1060,36 @@ async fn save_file(_data: String, _filename: String) -> Result<Option<String>, S
 
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
 #[tauri::command]
-async fn save_image(data: String, filename: String) -> Result<Option<String>, String> {
+async fn save_image(data: String, filename: String, mime: Option<String>, lossless: Option<bool>) -> Result<Option<String>, String> {
+    let _ = (mime, lossless); // the bytes go to disk as they are
     save_file(data, filename).await
 }
 
 /// iOS: a picture goes straight to the photo library, which is where somebody looks for it
 /// afterwards. iOS asks for permission itself the first time
-/// (`NSPhotoLibraryAddUsageDescription`) and writes asynchronously.
+/// (`NSPhotoLibraryAddUsageDescription`) and writes asynchronously; the answer is
+/// Photos' own, so "saved" means saved. A person left staring at the permission prompt
+/// is the one way the answer never comes, hence the deadline.
 #[cfg(target_os = "ios")]
 #[tauri::command]
-async fn save_image(app: AppHandle, data: String, filename: String) -> Result<Option<String>, String> {
+async fn save_image(app: AppHandle, data: String, filename: String, mime: Option<String>, lossless: Option<bool>) -> Result<Option<String>, String> {
     use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
     let _ = filename;
     let bytes = B64.decode(data.as_bytes()).map_err(|e| format!("bad image data: {e}"))?;
+    let mime = mime.unwrap_or_default();
+    let lossless = lossless.unwrap_or(false);
     let (tx, rx) = tokio::sync::oneshot::channel();
-    app.run_on_main_thread(move || {
-        let _ = tx.send(ios_native::share::save_image_to_photos(&bytes));
-    })
-    .map_err(|e| e.to_string())?;
-    rx.await.map_err(|e| e.to_string())??;
+    app.run_on_main_thread(move || ios_native::share::save_image_to_photos(&bytes, &mime, lossless, tx)).map_err(|e| e.to_string())?;
+    match tokio::time::timeout(std::time::Duration::from_secs(120), rx).await {
+        Ok(answer) => answer.map_err(|e| e.to_string())??,
+        Err(_) => return Err("Photos has not answered — if it asked for permission, allow it and save again".into()),
+    }
     Ok(Some("photos".into()))
 }
 
 #[cfg(target_os = "android")]
 #[tauri::command]
-async fn save_image(_data: String, _filename: String) -> Result<Option<String>, String> {
+async fn save_image(_data: String, _filename: String, _mime: Option<String>, _lossless: Option<bool>) -> Result<Option<String>, String> {
     Err("saving a picture is not in this build yet".into())
 }
 

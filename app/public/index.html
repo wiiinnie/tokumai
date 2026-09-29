@@ -287,17 +287,6 @@
   .netbar .nl{font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);display:block}
   .netbar .nv{font-size:13px;font-weight:600;color:var(--bone)}
   .netbar .nw{font-family:var(--mono);font-size:9.5px;color:var(--acc2);margin-left:auto;text-align:right;line-height:1.4}
-  /* Invite code: the card above the amounts + the memo note on the invoice */
-  #testnetRow{margin:0 0 12px;border-color:var(--gold-dim,var(--line))}
-  .inviteline{display:flex;gap:8px;margin-top:8px}
-  .inviteline input{flex:1;min-width:0;font:500 13px var(--mono);letter-spacing:.05em;color:var(--bone);
-    background:var(--surface-2,var(--panel));border:1px solid var(--line);border-radius:9px;padding:9px 10px;text-transform:uppercase}
-  .inviteline input:focus{outline:none;border-color:var(--gold)}
-  .inviteline .ibtn{flex:none;font:600 12px var(--body);color:var(--bone);background:transparent;
-    border:1px solid var(--line);border-radius:9px;padding:0 14px;cursor:pointer}
-  .inviteline .ibtn:hover{border-color:var(--gold)}
-  #inviteMsg{display:block;margin-top:7px;font-size:11.5px;line-height:1.4}
-  #inviteMsg.good{color:var(--gold)} #inviteMsg.bad{color:var(--warn,#E4642A)}
   #testnetRow b .tpill{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:999px;font:600 9.5px var(--mono);letter-spacing:.04em;color:var(--gold);border:1px solid var(--gold);vertical-align:2px}
   .tnote{border:1px solid var(--gold);border-radius:12px;padding:10px 12px;margin:0 0 12px;font-size:13px;line-height:1.45;background:color-mix(in srgb,var(--gold) 8%,transparent)}
   .tnote b{color:var(--gold)}
@@ -538,9 +527,6 @@
   .mprow.off .mpslider.flat{background:var(--line)}
   .mprow.off .mpout{color:var(--muted)}
   .mprow.off .btn[disabled]{cursor:default}
-  #heldLine{align-items:flex-start}
-  #heldLine details.why{margin:2px 0 0}
-  #heldLine details.why .body b{color:var(--bone)}
   .mpticks .act{color:var(--signal);font-weight:700}
   .btnrow.center{justify-content:center}
   .mpval{color:var(--signal);font-family:var(--mono);font-size:13px;white-space:nowrap}
@@ -780,7 +766,7 @@
   .sheetbtns .btn{width:100%;min-height:44px}
   /* category icon tints — fixed hues, mixed low over the surface so they read on light + dark themes */
   .ic.c-appear,.ic.c-key,.ic.c-buy{background:color-mix(in srgb,var(--signal) 22%,transparent);color:var(--signal)}
-  .ic.c-net,.ic.c-redeem{background:color-mix(in srgb,var(--mix) 24%,transparent);color:var(--mix)}
+  .ic.c-net{background:color-mix(in srgb,var(--mix) 24%,transparent);color:var(--mix)}
   .ic.c-guard,.ic.c-restore,.ic.c-pend{background:color-mix(in srgb,#6E9CC4 24%,transparent);color:#6E9CC4}
   .ic.c-eff,.ic.c-migrate{background:color-mix(in srgb,#B08AD0 26%,transparent);color:#B08AD0}
   .ic.c-gen{background:color-mix(in srgb,var(--muted) 32%,transparent);color:var(--muted)}
@@ -811,29 +797,6 @@
   .checkline.busy{color:var(--muted);cursor:default}
   .checkline .dots{display:inline-block;width:1.1em;text-align:left}
   .checkline .dots::after{content:"";animation:reddots 1.2s steps(4,end) infinite}
-  .heldbox{margin-top:12px;border-top:1px solid var(--line);padding-top:11px}
-  .heldbox .hh{display:flex;align-items:baseline;gap:7px;flex-wrap:wrap}
-  .heldbox .amt{font-family:var(--mono);font-size:12.5px;font-weight:700;color:var(--rust)}
-  .heldbox .where{font-family:var(--mono);font-size:10.5px;color:var(--rust);opacity:.9}
-  .heldbox p{margin:5px 0 0;font-size:11.5px;line-height:1.5;color:var(--muted)}
-  .heldbox p b{color:var(--bone);font-weight:600}
-  .heldbox .act{margin-top:10px;display:flex;align-items:center;gap:11px;flex-wrap:wrap}
-  /* One width for both labels so pressing it does not resize the button, and the animated
-     dots sit in a fixed-width slot so the word itself does not shuffle. */
-  .heldbox .rbtn{font-family:var(--body);font-size:12.5px;font-weight:600;padding:7px 13px;border-radius:9px;border:1px solid var(--mix);background:var(--mix);color:#fff;cursor:pointer;min-width:124px;text-align:center}
-  .heldbox .rbtn.busy{background:transparent;border-color:var(--line);color:var(--muted);cursor:default}
-  .heldbox .rbtn .dots{display:inline-block;width:1.1em;text-align:left}
-  .heldbox .rbtn .dots::after{content:"";animation:reddots 1.2s steps(4,end) infinite}
-  @keyframes reddots{0%{content:""}25%{content:"."}50%{content:".."}75%{content:"..."}}
-  @media (prefers-reduced-motion:reduce){ .heldbox .rbtn .dots::after{content:"…";animation:none} }
-  .heldbox .rsmall{font-family:var(--mono);font-size:10px;color:var(--muted)}
-  .heldbox .prog{margin-top:9px;height:4px;border-radius:999px;background:var(--line);overflow:hidden}
-  .heldbox .prog i{display:block;height:100%;background:var(--mix);border-radius:999px;transition:width .3s}
-  .heldbox .rlink{font-family:var(--mono);font-size:10.5px;color:var(--mix);cursor:pointer}
-  .heldbox .rlink:hover{color:var(--signal)}
-  .heldbox .rslider{margin-top:11px}
-  .heldbox .rslider .mpticks{display:flex;justify-content:space-between;font-family:var(--mono);font-size:9.5px;color:var(--muted);margin-top:5px}
-  .heldbox .rslider #redeemLabel{color:var(--bone)}
   .dangergroup{color:var(--rust)}
   .btn{font-family:var(--body);font-weight:600;font-size:13px;padding:9px 16px;border-radius:9px;cursor:pointer;border:1px solid var(--line);background:var(--surface-2);color:var(--bone)}
   .btn:hover{border-color:var(--mix)}
@@ -1136,7 +1099,6 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       <div class="bar"><i id="balbar"></i></div>
       <div class="meta" id="planLine" style="display:none"><span class="d" style="background:var(--mix)"></span> <span id="planText"></span></div>
       <div class="meta"><span class="d"></span> <span id="acctLine">no account</span></div>
-      <div class="meta" id="heldLine" style="display:none"><span class="d" style="background:var(--signal)"></span> <span id="heldText"></span></div>
       <button class="refill" id="buyBtn" data-click="openBuy">+ Get credit</button>
       <button class="refill" id="acctBtn" data-click="openAccount" style="margin-top:6px">Account &amp; recovery</button>
       <button class="refill" id="setBtn" data-click="openSettings" style="margin-top:6px">Settings</button>
@@ -1835,6 +1797,11 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       }
       renderMenu();
       if((!currentModel || !models.some(m=>m.model===currentModel)) && models.length) selectModel(defaultModel());
+      // The start tiles say whether an image model exists, and they may have been drawn
+      // before the catalogue arrived ("No image model on this server" on a server that
+      // has one — 2026-09-29, after a restore). Redrawn here, where the catalogue lands,
+      // and only if they are on screen: the connecting animation is left alone.
+      if(messages.length===0 && document.querySelector("#thread .starttiles")){ const t=$("thread"); if(t) t.innerHTML=emptyLogoHTML(); }
       if(!models.length){
         $("mName").textContent = account ? "no models yet" : "create an account";
         $("mVend").textContent = account ? "connecting to the enclave" : "Account & recovery";
@@ -2270,7 +2237,6 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     $("acctLine").textContent = account
       ? `account ${account.fingerprint}`
       : "no account — open Account & recovery";
-    $("heldLine").style.display="none";
   }
   // The footer's right side shows either a status word or the price of the last
   // turn. Both write through here, so neither clobbers the other's markup.
@@ -2374,15 +2340,23 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     const name = `tokumai-image-${ii+1}.${ext}`;
     const ovl = fig.querySelector(".sovl"), tx = fig.querySelector(".stx"), ic = fig.querySelector(".sic");
     try{
-      const r = await Backend.saveImage(im.data, name, im.mimeType);
+      // Photos gets the bytes as delivered; if it refuses them, "lossless" says whether the
+      // second try is PNG or JPEG (see ios_native).
+      const r = await Backend.saveImage(im.data, name, im.mimeType, !!(im.packed && im.packed.lossless));
       if(r){
         setStatus("saved: "+r);
         if(ovl){ ovl.classList.add("done"); if(ic) ic.textContent="✓";
           if(tx) tx.textContent = isIOSNative() ? "Saved to Photos" : "Downloaded"; }
         setTimeout(()=>{ fig.classList.remove("open"); }, 1200);
       }
-    }catch(err){ setStatus("save failed: "+((err&&err.message)||err));
-      if(tx) tx.textContent = "save failed"; }
+    }catch(err){
+      // Photos' own words (a denied permission names the Settings path), on the tile
+      // itself: the footer line is too short for them and the tile is where the tap was.
+      const why = String((err&&err.message)||err);
+      setStatus("not saved");
+      if(tx) tx.textContent = why;
+      if(ic) ic.textContent = "!";
+    }
   }
   function renderThread(){
     const t=$("thread");
@@ -2954,7 +2928,11 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     // being told. Once per connect, and never with `restore`: that flag moves a plan
     // between accounts and belongs to a deliberate tap, not to a launch.
     if(mixConnected && !wasConnected && isIOSNative() && account){
-      Backend.iapSync(false).then(r => { if(r && r.plan && r.plan.tier != null){ refreshState(); } }).catch(() => {});
+      // Anything the enclave took — a plan, or a purchase left unfinished by an earlier
+      // failure — changes the balance, so the menu is refreshed for either, not only for
+      // a plan (2026-09-28: a purchase credited on the launch after a failed buy showed
+      // as 0 TOKU until "Check balance" was tapped).
+      Backend.iapSync(false).then(r => { if(r && ((r.plan && r.plan.tier != null) || Number(r.sent) > 0)){ refreshState(); } }).catch(() => {});
     }
     // A restored thread shows no connect animation, so gate terms on the raw connect event.
     if(messages.length!==0){ if(mixConnected && !wasConnected) armTermsGate(); return; }
@@ -4173,6 +4151,9 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         if(noCredit) err = String(err).replace(/^NO_CREDIT:\s*/, "");
         messages[messages.length-1]= noCredit ? {role:"err",text:err,retry:{text},noCredit:true} : {role:"err",text:err,retry:{text}};
         renderThread(); setStatus("error"); await persist(text);
+        // The enclave has just said what the balance is; the menu must not keep saying
+        // something else. One beat, now, and the number is the enclave's.
+        if(noCredit) Backend.mixnetHeartbeat().then(applyBeat).catch(()=>{});
         updateSendEnabled();
         // Transport-level failure → the Rust core dropped its mixnet client.
         // Flip the route to "connecting" and start the poll, which actively
@@ -5537,6 +5518,20 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // sheet, and keeps its answer until the next check (tester, 2026-09-07).
   let checking = false, credResult = "";
   let lastCredCheck = 0;
+  // What a heartbeat brought back: the balance and the plan as the enclave has them NOW.
+  // A month that ended, a sandbox plan that lapsed, credit spent from another device — all
+  // of it used to wait in the menu for a tap on "Check balance" (2026-09-28).
+  function applyBeat(r){
+    if(!r || typeof r.balance !== "number") return;
+    const wasActive = planActive();
+    balance = r.balance; prepaid = Number(r.prepaid)||0;
+    plan = (r.plan && typeof r.plan === "object") ? r.plan : null;
+    lastCredCheck = Date.now();
+    renderBal();
+    // The account page says "your plan has ended" in its own words: redrawn when that
+    // changed, and only then, so a form being typed into is left alone.
+    if(wasActive !== planActive() && $("acctBody") && !acctView) renderAccount();
+  }
   function checkedAgo(){
     if(!lastCredCheck) return "not checked yet";
     const m = Math.floor((Date.now()-lastCredCheck)/60000);
@@ -5975,9 +5970,19 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       else {
         planSel = null;
         planMsg = "✓ Your plan is active. This month's allowance is on your account.";
+        // The menu must say so the moment the sheet closes: what the enclave answered
+        // is applied at once, the full state is fetched, and one more beat follows a few
+        // seconds later in case the first fetch lost a race with the enclave's tick.
+        applyBeat(r);
         await refreshState(); renderBal(); renderWebPlans();
+        setTimeout(()=>{ Backend.mixnetHeartbeat().then(applyBeat).catch(()=>{}); }, 5000);
       }
-    }catch(e){ planMsg = "The purchase did not go through: " + String((e && e.message) || e); }
+    }catch(e){
+      planMsg = "The purchase did not go through: " + String((e && e.message) || e);
+      // Paid but not answered (the mixnet, the enclave): the transaction is handed over
+      // again on the next connect, and the balance must follow when that happens.
+      Backend.mixnetHeartbeat().then(applyBeat).catch(()=>{});
+    }
     planBusy = false; renderPlans();
   }
   /// Restore purchases — the App Store's own requirement for a subscription app, and the
@@ -6242,6 +6247,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         const r = await Backend.mixnetHeartbeat();
         // "reconnect" surfaces on its own through the phase events; nothing to say here.
         if(r && r.action === "alive") connectedAt = connectedAt || Date.now();
+        applyBeat(r);
       }catch(_){ /* the next beat asks again; a heartbeat must never be the thing that breaks */ }
     }
     if(!heartbeatTimer) heartbeatTimer = setInterval(heartbeat, 15_000);

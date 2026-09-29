@@ -11,21 +11,122 @@
 //!   the generated Xcode project, so its command fails at runtime on iOS and nowhere else.
 
 pub mod share {
+    use block2::RcBlock;
     use objc2::rc::Retained;
-    use objc2::runtime::AnyObject;
-    use objc2::{AnyThread, MainThreadMarker};
-    use objc2_foundation::{NSArray, NSData, NSString, NSURL};
+    use objc2::runtime::{AnyObject, Bool};
+    use objc2::{msg_send, AnyThread, MainThreadMarker};
+    use objc2_foundation::{NSArray, NSData, NSError, NSString, NSURL};
+    use objc2_photos::{PHAssetCreationRequest, PHAssetResourceCreationOptions, PHAssetResourceType, PHPhotoLibrary};
     use objc2_ui_kit::{UIActivityViewController, UIApplication, UIImage};
+    use std::sync::{Arc, Mutex};
+    use tokio::sync::oneshot::Sender;
 
-    pub fn save_image_to_photos(bytes: &[u8]) -> Result<(), String> {
-        let _mtm = MainThreadMarker::new().ok_or("not on the main thread")?;
+    /// The error in words a person can act on. Photos refuses with code 3311 (PHPhotos,
+    /// "access denied") or -3311 (the older ALAssetsLibrary domain) when the app has no
+    /// permission to add — the case that used to look like success (2026-09-29).
+    fn explain(e: &NSError) -> String {
+        let code = e.code();
+        let text = e.localizedDescription().to_string();
+        if code == 3311 || code == -3311 || text.to_lowercase().contains("denied") {
+            "Photos access is off for tokumai. Allow “Add Photos Only” under Settings › tokumai › Photos, then save again.".to_string()
+        } else {
+            format!("Photos did not take the picture: {text} ({} {code})", e.domain())
+        }
+    }
+
+    /// How Photos is told what the bytes are.
+    fn uti(mime: &str) -> &'static str {
+        match mime {
+            "image/webp" => "org.webmproject.webp",
+            "image/png" => "public.png",
+            "image/gif" => "com.compuserve.gif",
+            _ => "public.jpeg",
+        }
+    }
+
+    /// The picture as bytes Photos always accepts, for when it will not take the original:
+    /// PNG when every pixel matters, JPEG otherwise. Copied out at once — the NSData UIKit
+    /// hands back is autoreleased.
+    unsafe fn reencode(bytes: &[u8], lossless: bool) -> Result<Vec<u8>, String> {
+        extern "C-unwind" {
+            fn UIImageJPEGRepresentation(image: &UIImage, quality: f64) -> *mut AnyObject;
+            fn UIImagePNGRepresentation(image: &UIImage) -> *mut AnyObject;
+        }
         let data = NSData::with_bytes(bytes);
-        let img = UIImage::initWithData(UIImage::alloc(), &data)
-            .ok_or("could not decode the image data")?;
-        // Fire-and-forget: iOS shows its own permission prompt on first use
-        // (NSPhotoLibraryAddUsageDescription) and saves asynchronously.
-        unsafe { img.write_to_saved_photos_album(None, None, std::ptr::null_mut()) };
-        Ok(())
+        let img = UIImage::initWithData(UIImage::alloc(), &data).ok_or("could not decode the image data")?;
+        let data: *mut AnyObject = if lossless { UIImagePNGRepresentation(&img) } else { UIImageJPEGRepresentation(&img, 0.95) };
+        if data.is_null() {
+            return Err("could not re-encode the picture for Photos".into());
+        }
+        let len: usize = msg_send![data, length];
+        let ptr: *const u8 = msg_send![data, bytes];
+        if ptr.is_null() || len == 0 {
+            return Err("the picture re-encoded to nothing".into());
+        }
+        Ok(std::slice::from_raw_parts(ptr, len).to_vec())
+    }
+
+    /// One creation request: the bytes as a photo resource, typed. `done` hears Photos.
+    unsafe fn submit(bytes: Vec<u8>, uti: &'static str, done: RcBlock<dyn Fn(Bool, *mut NSError)>) {
+        let library = PHPhotoLibrary::sharedPhotoLibrary();
+        let change = RcBlock::new(move || unsafe {
+            let resource = NSData::with_bytes(&bytes);
+            let options = PHAssetResourceCreationOptions::new();
+            options.setUniformTypeIdentifier(Some(&NSString::from_str(uti)));
+            // The request registers itself with the library on creation; nothing to keep.
+            let req = PHAssetCreationRequest::creationRequestForAsset();
+            req.addResourceWithType_data_options(PHAssetResourceType::Photo, &resource, Some(&options));
+        });
+        let _: () = msg_send![&*library, performChanges: &*change, completionHandler: &*done];
+    }
+
+    /// Hand the picture to Photos and report what Photos said.
+    ///
+    /// Through PhotoKit, not `UIImageWriteToSavedPhotosAlbum`: the old function answers
+    /// "Unknown error" for a picture decoded from WebP under an "Add Photos Only"
+    /// permission (2026-09-29, iOS 26), and a change request made from that UIImage
+    /// answers 3302, "invalid". So the bytes go in **as delivered** — the WebP the enclave
+    /// packed for the mixnet, typed as such; Photos keeps WebP — and only if Photos will
+    /// not take them are they decoded and handed over again as PNG or JPEG. No picture is
+    /// converted twice unless the first way failed. The completion handler carries Photos'
+    /// own verdict; before it was heard, a picture that never arrived showed as saved.
+    pub fn save_image_to_photos(bytes: &[u8], mime: &str, lossless: bool, tx: Sender<Result<(), String>>) {
+        let tx = Arc::new(Mutex::new(Some(tx)));
+        let answer = move |tx: &Arc<Mutex<Option<Sender<Result<(), String>>>>>, v: Result<(), String>| {
+            if let Some(tx) = tx.lock().ok().and_then(|mut t| t.take()) {
+                let _ = tx.send(v);
+            }
+        };
+        let verdict = |ok: Bool, err: *mut NSError| -> Result<(), String> {
+            if ok.as_bool() {
+                Ok(())
+            } else {
+                Err(unsafe { err.as_ref() }.map(explain).unwrap_or_else(|| "Photos did not take the picture, and did not say why".into()))
+            }
+        };
+        // The second try's handler: whatever Photos says now is the answer.
+        let finish = {
+            let tx = tx.clone();
+            RcBlock::new(move |ok: Bool, err: *mut NSError| answer(&tx, verdict(ok, err)))
+        };
+        // The first try's handler: taken as delivered, or once more re-encoded.
+        let original = bytes.to_vec();
+        let first = {
+            let tx = tx.clone();
+            let original = original.clone();
+            RcBlock::new(move |ok: Bool, err: *mut NSError| {
+                let first = verdict(ok, err);
+                if first.is_ok() {
+                    answer(&tx, Ok(()));
+                    return;
+                }
+                match unsafe { reencode(&original, lossless) } {
+                    Ok(plain) => unsafe { submit(plain, if lossless { "public.png" } else { "public.jpeg" }, finish.clone()) },
+                    Err(e) => answer(&tx, Err(format!("{} — and re-encoding failed: {e}", first.unwrap_err()))),
+                }
+            })
+        };
+        unsafe { submit(original, uti(mime), first) };
     }
 
     // keyWindow is deprecated for multi-scene apps; this app is single-scene.

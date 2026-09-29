@@ -61,12 +61,13 @@ objc2-ui-kit = { version = "0.3", features = [
 ] }
 block2 = "0.6"
 objc2-local-authentication = { version = "0.3", features = ["LAContext", "LAError"] }
+objc2-photos = { version = "0.3", features = ["PHPhotoLibrary", "PHAssetChangeRequest", "PHAssetCreationRequest", "PHChangeRequest", "PhotosTypes", "block2", "PHObject", "PHAsset"] }
 
 # On-device OCR for the privacy guard (Apple Vision); elsewhere the page falls back to the
 # bundled Tesseract.
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSData", "NSString", "NSArray", "NSDictionary", "NSURL", "NSDate", "NSValue"] }
+objc2-foundation = { version = "0.3", features = ["NSData", "NSString", "NSArray", "NSDictionary", "NSURL", "NSDate", "NSValue", "NSError"] }
 objc2-vision = { version = "0.3", features = ["VNRequest", "VNRecognizeTextRequest", "VNRequestHandler", "VNObservation", "VNTypes", "VNError", "alloc", "std", "objc2-image-io"] }
 objc2-image-io = { version = "0.3", features = ["CGImageProperties"] }
 objc2-core-graphics = { version = "0.3", features = ["CGDataProvider", "CGPDFDocument", "CGPDFPage", "CGContext", "CGColorSpace", "CGImage", "CGBitmapContext"] }

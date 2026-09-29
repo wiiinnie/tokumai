@@ -19,8 +19,28 @@ use tokumai_attest::Policy;
 /// The published enclave's doors (its Nym addresses, comma-separated), and the images a
 /// release accepts. Several doors mean a gateway can be down without tokumai being
 /// unreachable; they all lead to the same enclave.
-const RELEASE_ENCLAVE: Option<&str> = None;
-const RELEASE_MEASUREMENTS: &[&str] = &[];
+///
+/// 0.7.0 (zizzolo), 2026-09-29: the three doors DE01, AT01, CH01, whose identities are
+/// sealed and therefore survive every redeploy. Two images, because App Review and
+/// TestFlight buy in Apple's SANDBOX and only the sandbox image honours those receipts:
+///
+/// - `tokumai-zizzolo-sandbox` (FEATURES=nitro,apple-sandbox), running during review;
+/// - `tokumai-zizzolo` (FEATURES=nitro), the production image, deployed at the same
+///   addresses once the app is approved.
+///
+/// The sandbox measurement is a mint for anyone with a sandbox account and must leave
+/// this list — and the KMS policy — before real money is in the book (docs/terms-notes.md).
+const RELEASE_ENCLAVE: Option<&str> = Some(concat!(
+    "nbnWr8CugHhRFvpKUJtuTjM5XA56pSJa2aUAiBaQoWE.HsRNYPx7FY3LsYtsZrCASovcnNRo6FvKPFg3By6PpWcw@38zcSsvjXsAX7C28ko2H3Lt55X4TYxfZYkPADxKXZHUj,",
+    "DVpFrxQrWmURn4ztD7Hi8LBEywvEvtA726x5ioHf2WYa.ALh5osBxzqddxaAekRm2tciimg844m8nm4BJ1kMSq4nn@98FmUvDdQYEeV1ioi5NpFK7DoeHphVECndaG7fkRUsaF,",
+    "GPscM2poKqpkHdDD3JPGEHiLHufBNRtQyLsvjrMUHQ3o.FhmyxZfn6dHvxASzcR44foa2TjMrCHmm8sQJziAQD3ds@6KZ96sPW6BBcgmghYb7c7BtCXgAEr1nmwnJzzRsszyhe"
+));
+const RELEASE_MEASUREMENTS: &[&str] = &[
+    // tokumai-zizzolo-sandbox — review and TestFlight
+    "e16805da3efc2650fc5eeac8a74feed60ba232f9df8bb448df36877c0ee750619451fd51b179b56c427bf846739e85bd",
+    // tokumai-zizzolo — production, the same code without the sandbox feature
+    "e03cb32930db205cfa4d69387e7a21b440d74293b40b7dc81528af2488ab6c09ee0e89acba25a6ce9c40923845f75801",
+];
 
 fn dev_data() -> PathBuf {
     std::env::var_os("TOKUMAI_DEV_DATA").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../dev-data")))

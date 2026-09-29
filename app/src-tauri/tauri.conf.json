@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "tokumai",
-  "version": "0.1.0",
+  "version": "0.7.0",
   "identifier": "com.tokumai.app",
   "build": {
     "frontendDist": "../public",
