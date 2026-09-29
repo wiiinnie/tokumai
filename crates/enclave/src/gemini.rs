@@ -172,6 +172,60 @@ pub struct Gemini {
     pub key: String,
 }
 
+/// Two usages as one: an answer that took two requests is billed for both.
+fn add(a: TokenUsage, b: TokenUsage) -> TokenUsage {
+    TokenUsage {
+        input: a.input + b.input,
+        output: a.output + b.output,
+        cached_input: a.cached_input + b.cached_input,
+        audio_input: a.audio_input + b.audio_input,
+        output_image: a.output_image + b.output_image,
+        grounding_queries: a.grounding_queries + b.grounding_queries,
+        estimated: a.estimated || b.estimated,
+    }
+}
+
+impl Gemini {
+    /// One request to Google, parsed: the text, the pictures, and the raw answer (for its
+    /// finish reason, its usage and its grounding).
+    async fn once(&self, model: &str, body: &Value) -> Result<(String, Vec<Value>, Value), String> {
+        let res = crate::http::client()
+            .post(format!("{BASE}/{model}:generateContent"))
+            .header("x-goog-api-key", &self.key)
+            .timeout(std::time::Duration::from_millis(TIMEOUT_MS))
+            .json(body)
+            .send()
+            .await
+            .map_err(|_| "Google could not be reached".to_string())?;
+        let status = res.status();
+        let j: Value = res.json().await.map_err(|_| format!("Google sent an unreadable answer ({status})"))?;
+        if !status.is_success() {
+            eprintln!("tokumai-enclave: gemini {status}");
+            let msg = j.pointer("/error/message").and_then(|m| m.as_str()).unwrap_or("unknown error");
+            return Err(format!("Google {status}: {}", msg.chars().take(200).collect::<String>()));
+        }
+        let parts = j.pointer("/candidates/0/content/parts").and_then(|p| p.as_array()).map(Vec::as_slice).unwrap_or(&[]);
+        let text: String = parts.iter().filter_map(|p| p.get("text").and_then(|t| t.as_str())).collect();
+        let imgs: Vec<Value> = parts
+            .iter()
+            .filter_map(|p| {
+                let d = p.get("inlineData")?;
+                Some(json!({ "mimeType": d.get("mimeType")?.as_str()?, "data": d.get("data")?.as_str()? }))
+            })
+            .collect();
+        Ok((text, imgs, j))
+    }
+}
+
+/// An image model that answered in words with a plain STOP and no block: it described the
+/// picture instead of drawing it. Not a decline — a decline names its reason.
+fn narrated(model: &str, text: &str, j: &Value) -> bool {
+    is_image_model(model)
+        && !text.trim().is_empty()
+        && j.pointer("/candidates/0/finishReason").and_then(|f| f.as_str()) == Some("STOP")
+        && j.pointer("/promptFeedback/blockReason").is_none()
+}
+
 impl Provider for Gemini {
     fn name(&self) -> &'static str {
         "gemini"
@@ -191,30 +245,27 @@ impl Provider for Gemini {
             if model_takes_image_size(model) {
                 body["generationConfig"]["imageConfig"] = json!({ "imageSize": call.image_size });
             }
-            let res = crate::http::client()
-                .post(format!("{BASE}/{model}:generateContent"))
-                .header("x-goog-api-key", &self.key)
-                .timeout(std::time::Duration::from_millis(TIMEOUT_MS))
-                .json(&body)
-                .send()
-                .await
-                .map_err(|_| "Google could not be reached".to_string())?;
-            let status = res.status();
-            let j: Value = res.json().await.map_err(|_| format!("Google sent an unreadable answer ({status})"))?;
-            if !status.is_success() {
-                eprintln!("tokumai-enclave: gemini {status}");
-                let msg = j.pointer("/error/message").and_then(|m| m.as_str()).unwrap_or("unknown error");
-                return Err(format!("Google {status}: {}", msg.chars().take(200).collect::<String>()));
+            let (mut text, mut imgs, mut j) = self.once(model, &body).await?;
+            let mut u = usage(j.get("usageMetadata").unwrap_or(&Value::Null), !imgs.is_empty());
+            // "I have regenerated the image…" — and no image in the answer (2026-09-29, an
+            // edit on gemini-3.1-flash-lite-image). Even with IMAGE among the response
+            // modalities the model sometimes narrates instead. One more attempt, because a
+            // fresh request usually draws it; both are billed, because both were made.
+            if imgs.is_empty() && narrated(model, &text, &j) {
+                let (t2, i2, j2) = self.once(model, &body).await?;
+                u = add(u, usage(j2.get("usageMetadata").unwrap_or(&Value::Null), !i2.is_empty()));
+                j = j2;
+                if i2.is_empty() {
+                    text = format!(
+                        "{}\n\nNo picture came back, twice: the model described the change instead of drawing it. \
+                         Send the request again — only the tokens it used were billed.",
+                        t2.trim()
+                    );
+                } else {
+                    text = t2;
+                    imgs = i2;
+                }
             }
-            let parts = j.pointer("/candidates/0/content/parts").and_then(|p| p.as_array()).map(Vec::as_slice).unwrap_or(&[]);
-            let mut text: String = parts.iter().filter_map(|p| p.get("text").and_then(|t| t.as_str())).collect();
-            let imgs: Vec<Value> = parts
-                .iter()
-                .filter_map(|p| {
-                    let d = p.get("inlineData")?;
-                    Some(json!({ "mimeType": d.get("mimeType")?.as_str()?, "data": d.get("data")?.as_str()? }))
-                })
-                .collect();
             if text.trim().is_empty() && imgs.is_empty() {
                 let finish = j.pointer("/candidates/0/finishReason").and_then(|f| f.as_str());
                 let block = j.pointer("/promptFeedback/blockReason").and_then(|f| f.as_str());
@@ -227,7 +278,6 @@ impl Provider for Gemini {
                         a fresh request usually draws it. Only the tokens it used were billed."
                     .into();
             }
-            let mut u = usage(j.get("usageMetadata").unwrap_or(&Value::Null), !imgs.is_empty());
             // No usage reported but content came back: bill an estimate, never nothing.
             if u.input + u.output + u.output_image + u.cached_input + u.audio_input == 0 && (!text.is_empty() || !imgs.is_empty()) {
                 let in_chars: u64 = req.messages.as_array().map(|a| a.iter().filter_map(|m| m.get("content").and_then(|c| c.as_str())).map(|s| s.len() as u64).sum()).unwrap_or(0);
@@ -254,6 +304,22 @@ impl Provider for Gemini {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Words with a plain STOP from an image model are a narration, to be asked again;
+    /// a decline, an empty answer, or a text model are not.
+    #[test]
+    fn a_narrated_picture_is_told_from_a_decline() {
+        let stop = json!({ "candidates": [{ "finishReason": "STOP" }] });
+        assert!(narrated("gemini-3.1-flash-lite-image", "I have regenerated the image", &stop));
+        assert!(!narrated("gemini-3.1-flash-lite-image", "  ", &stop));
+        assert!(!narrated("gemini-3.5-flash-lite", "I have regenerated the image", &stop));
+        let blocked = json!({ "candidates": [{ "finishReason": "STOP" }], "promptFeedback": { "blockReason": "SAFETY" } });
+        assert!(!narrated("gemini-3.1-flash-lite-image", "no", &blocked));
+        let safety = json!({ "candidates": [{ "finishReason": "IMAGE_SAFETY" }] });
+        assert!(!narrated("gemini-3.1-flash-lite-image", "no", &safety));
+        let two = add(TokenUsage { input: 10, output: 5, ..Default::default() }, TokenUsage { input: 1, output_image: 7, estimated: true, ..Default::default() });
+        assert_eq!((two.input, two.output, two.output_image, two.estimated), (11, 5, 7, true));
+    }
 
     #[test]
     fn every_gemini_request_carries_googles_own_filters() {
