@@ -36,10 +36,10 @@ const RELEASE_ENCLAVE: Option<&str> = Some(concat!(
     "GPscM2poKqpkHdDD3JPGEHiLHufBNRtQyLsvjrMUHQ3o.FhmyxZfn6dHvxASzcR44foa2TjMrCHmm8sQJziAQD3ds@6KZ96sPW6BBcgmghYb7c7BtCXgAEr1nmwnJzzRsszyhe"
 ));
 const RELEASE_MEASUREMENTS: &[&str] = &[
-    // tokumai-zizzolo-sandbox — review and TestFlight
-    "e16805da3efc2650fc5eeac8a74feed60ba232f9df8bb448df36877c0ee750619451fd51b179b56c427bf846739e85bd",
-    // tokumai-zizzolo — production, the same code without the sandbox feature
-    "e03cb32930db205cfa4d69387e7a21b440d74293b40b7dc81528af2488ab6c09ee0e89acba25a6ce9c40923845f75801",
+    // tokumai-notes-sandbox — review and TestFlight (blind notes, App Store sandbox receipts)
+    "0439b19260ed67d0342c3e1db652ec0dbc4cddd19ed5c45d7cf565bd759a28e4a1bdf74132e593cfdcb837422dc2037d",
+    // tokumai-notes — production, the same code without the sandbox feature
+    "cd2d8cfe81d8864d6422c75a5f443af5523fd741ee31ef6648d05458aa529b502c8ff76f0025243b5ad8d3b542564669",
 ];
 
 fn dev_data() -> PathBuf {
