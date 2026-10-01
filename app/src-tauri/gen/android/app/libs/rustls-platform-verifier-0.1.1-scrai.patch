@@ -1,0 +1,21 @@
+diff --git a/android/rustls-platform-verifier/src/main/java/org/rustls/platformverifier/CertificateVerifier.kt b/android/rustls-platform-verifier/src/main/java/org/rustls/platformverifier/CertificateVerifier.kt
+index febbcfd..00e5fe3 100644
+--- a/android/rustls-platform-verifier/src/main/java/org/rustls/platformverifier/CertificateVerifier.kt
++++ b/android/rustls-platform-verifier/src/main/java/org/rustls/platformverifier/CertificateVerifier.kt
+@@ -365,6 +365,16 @@ internal object CertificateVerifier {
+                     return VerificationResult(StatusCode.Ok)
+                 }
+ 
++                // ScrambleAI patch (rustls/rustls-platform-verifier#221): Android's checker throws
++                // BasicReason.UNSPECIFIED ("Certificate does not specify OCSP responder") for every
++                // Let's Encrypt certificate issued since 2025, when LE dropped OCSP URLs. That is
++                // "revocation status unknown", not "revoked" — treat it as the soft failure the
++                // SOFT_FAIL option already intends. A real REVOKED verdict still fails below.
++                if (e.reason == CertPathValidatorException.BasicReason.UNSPECIFIED) {
++                    Log.w(TAG, "revocation status unknown (no OCSP responder / soft fail): $e")
++                    return VerificationResult(StatusCode.Ok)
++                }
++
+                 return VerificationResult(StatusCode.Revoked, e.toString())
+             }
+         } else {

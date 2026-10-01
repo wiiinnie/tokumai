@@ -44,6 +44,14 @@ pdf-extract = "0.9"
 gline-rs = { version = "1", optional = true }
 orp = { version = "1", optional = true }
 
+# --- Android: TLS through the system trust store ---
+# nym-http-api-client → reqwest verifies TLS with rustls-platform-verifier, which on Android
+# must be initialised with a JNI env + Context (lib.rs::init_android_tls_verifier). Without
+# it the app hangs at "Connecting to tokumai server" (the directory fetch never completes).
+[target.'cfg(target_os = "android")'.dependencies]
+rustls-platform-verifier = "0.7"
+jni = { version = "0.22", default-features = false }
+
 [target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
 rfd = "0.15"
 

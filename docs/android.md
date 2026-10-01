@@ -1,0 +1,97 @@
+# Android build notes
+
+Ported from the first app on 2026-10-01 (the 0.7.0 APK for the beta testers was the first build
+from this repo). The project lives in `app/src-tauri/gen/android` and IS tracked: `build.gradle.kts`
+carries the signing block and the patched verifier, the manifest the keyboard and no-backup
+settings — a regeneration (`tauri android init`) wipes all of it.
+
+Toolchain (this Mac): `brew install openjdk@17`, `brew install --cask android-commandlinetools`, SDK in
+`~/Library/Android/sdk` (platform-tools, platforms 34/36, build-tools 34/35/36, NDK 27.3.13750724,
+cmdline-tools;latest, emulator + `system-images;android-34;google_apis;arm64-v8a`), rustup targets
+`aarch64-linux-android` (+ armv7/x86_64). Env for every build:
+
+```
+export JAVA_HOME=/opt/homebrew/opt/openjdk@17 ANDROID_HOME=$HOME/Library/Android/sdk \
+       NDK_HOME=$ANDROID_HOME/ndk/27.3.13750724 PATH=/opt/homebrew/opt/openjdk@17/bin:$ANDROID_HOME/platform-tools:$PATH
+cd app && npx tauri android build --apk --target aarch64   # release, signed with ~/.tokumai-android/
+```
+
+## Signing
+
+`~/.tokumai-android/tokumai-release.jks` + `keystore.properties` (never in the repo); without the
+properties file the release APK is built unsigned. The build prints which properties file it used.
+`~/.scrai-android/` is still read as a fallback, and `TOKUMAI_ANDROID_KEYSTORE_PROPS` overrides both.
+
+Create it once (the password is yours — it must not end up in a shell history you share):
+
+```
+# keytool lives in the JDK, which is not on PATH on this Mac (nor is apksigner's runtime)
+mkdir -p ~/.tokumai-android && cd ~/.tokumai-android
+/opt/homebrew/opt/openjdk@17/bin/keytool -genkeypair -v \
+        -keystore tokumai-release.jks -alias tokumai \
+        -keyalg RSA -keysize 4096 -validity 10000 \
+        -dname "CN=tokumai, O=Hermes Blockchain Ventures, C=DE"
+```
+
+then write `~/.tokumai-android/keystore.properties` (mode 600):
+
+```
+storeFile=/Users/<you>/.tokumai-android/tokumai-release.jks
+storePassword=…
+keyAlias=tokumai
+keyPassword=…
+```
+
+**The keystore IS the app's identity.** An APK signed with a different key cannot update an
+existing install — the user has to uninstall first, losing the app's data (the account phrase
+must be exported beforehand). The key was changed once, on 2026-09-07, from `CN=ScrambleAI` to
+`CN=tokumai`, deliberately and while distribution was still a handful of sideloaded APKs. After
+publication on Play it can never change again: Play pins the signing identity for the lifetime of
+the listing. Back the file up somewhere you will still have in ten years; losing it means losing
+the ability to ship an update at all.
+
+Check what an APK is actually signed with (same missing-runtime trap):
+
+```
+JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=$JAVA_HOME/bin:$PATH \
+  $ANDROID_HOME/build-tools/36.0.0/apksigner verify --print-certs <apk>
+```
+
+Debug APKs are ~1.3 GB (unoptimised nym-sdk) — use release APKs for emulator tests.
+
+## TLS on Android — the two things that were missing (2026-08-30)
+
+Symptom: the app connected to the mixnet but hung forever at "Connecting to tokumai server".
+
+1. `nym-http-api-client` → `reqwest 0.13` verifies TLS with **rustls-platform-verifier**, which on
+   Android must be initialised with a JNI env + Context and needs its Kotlin half in the APK.
+   `lib.rs::init_android_tls_verifier()` does that from Tauri's `setup` via
+   `tauri::wry::prelude::dispatch` (Tauri does not populate `ndk_context` — that panics).
+2. Upstream's Kotlin verifier (0.1.1) marks every **Let's Encrypt** certificate "Revoked" because LE
+   stopped including OCSP URLs in 2025 and Android's revocation checker throws
+   `BasicReason.UNSPECIFIED` ("Certificate does not specify OCSP responder") —
+   rustls/rustls-platform-verifier#221, open. The Nym directory (`validator.nymtech.net`) uses LE.
+   `app/src-tauri/gen/android/app/libs/rustls-platform-verifier-0.1.1-scrai.aar` is our build of the
+   Kotlin component with that case treated as "revocation status unknown" (soft fail, like browsers);
+   the change is `libs/rustls-platform-verifier-0.1.1-scrai.patch`. To rebuild it:
+
+   ```
+   git clone --depth 1 --branch v/0.7.0 https://github.com/rustls/rustls-platform-verifier
+   cd rustls-platform-verifier && git apply <repo>/app/src-tauri/gen/android/app/libs/rustls-platform-verifier-0.1.1-scrai.patch
+   cd android && echo "sdk.dir=$ANDROID_HOME" > local.properties && ./gradlew :rustls-platform-verifier:assembleRelease
+   # → android/rustls-platform-verifier/build/outputs/aar/rustls-platform-verifier-release.aar
+   ```
+   Drop the `.aar` and switch `app/build.gradle.kts` back to the crate's maven repo once #221 is fixed upstream.
+
+Emulator: `emulator -avd scrai` (Pixel 7, API 34 arm64), `adb install -r <apk>`,
+`adb logcat | grep -E "RustStdoutStderr|rustls_platform_verifier|nym_"`.
+
+## Launcher icon and keyboard (0.4.2, 2026-08-30)
+
+- `tauri android init` ships the **Tauri template icon** in `gen/android/app/src/main/res/mipmap-*`; the
+  project's own launcher icons are generated by `tauri icon` into `app/src-tauri/icons/android/` and must be
+  copied over (`mipmap-*` incl. `mipmap-anydpi-v26/ic_launcher.xml`, `values/ic_launcher_background.xml`,
+  background set to `#000000`). The Pixel launcher caches the old icon in the hotseat for a while.
+- `MainActivity.kt` calls `enableEdgeToEdge()`, which makes the window ignore the IME: the keyboard covered
+  the composer. Fix: `android:windowSoftInputMode="adjustResize"` in the manifest **and** an
+  `OnApplyWindowInsetsListener` on `android.R.id.content` that applies the IME inset as bottom padding.

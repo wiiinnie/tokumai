@@ -1417,6 +1417,10 @@ pub fn run() {
         .manage(AppState::default())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            // Android: the TLS verifier needs the Activity's JNI env before the first
+            // directory fetch (see init_android_tls_verifier).
+            #[cfg(target_os = "android")]
+            init_android_tls_verifier();
             app.handle().plugin(
                 tauri_plugin_log::Builder::default()
                     .level(if cfg!(debug_assertions) { log::LevelFilter::Info } else { log::LevelFilter::Warn })
@@ -1471,4 +1475,33 @@ mod tests {
         assert_eq!(fingerprint("abcdefghijklmnopqrst"), "abcd-efgh-ijkl-mnop");
         let _ = rand_hex(4);
     }
+}
+
+/// Android: hand rustls-platform-verifier the JNI env and the Activity so TLS checks use
+/// the system trust store. Must run before any networking (the Nym client's first directory
+/// fetch is TLS). Tauri does not populate `ndk_context` (that panics: "android context was
+/// not initialized"); wry's `dispatch` runs a closure on the Android main thread with the
+/// JNI env (jni 0.21) and the Activity — we bridge the raw pointers into the verifier's
+/// jni 0.22 types.
+#[cfg(target_os = "android")]
+fn init_android_tls_verifier() {
+    tauri::wry::prelude::dispatch(|env, activity, _webview| {
+        let raw_vm = match env.get_java_vm() {
+            Ok(vm) => vm.get_java_vm_pointer(),
+            Err(e) => {
+                log::error!("tokumai: android TLS verifier: no JavaVM from the activity env: {e}");
+                return;
+            }
+        };
+        let raw_ctx = activity.as_raw();
+        let vm = unsafe { jni::JavaVM::from_raw(raw_vm.cast()) };
+        let res: Result<(), jni::errors::Error> = vm.attach_current_thread(|env22| {
+            let context = unsafe { jni::objects::JObject::from_raw(env22, raw_ctx.cast()) };
+            rustls_platform_verifier::android::init_with_env(env22, context)
+        });
+        match res {
+            Ok(()) => log::info!("tokumai: android TLS verifier initialised"),
+            Err(e) => log::error!("tokumai: android TLS verifier init FAILED: {e} — mixnet directory fetches will not work"),
+        }
+    });
 }
