@@ -142,12 +142,18 @@ async fn declines_cost_nothing_and_three_a_day_pause_that_provider() {
     let a = from_mnemonic(PHRASE).unwrap();
     call(&e, &s, &a, "dev.credit", json!({ "toku": 100_000 })).await;
     let ask = json!({ "model": "gemini-3.5-flash-lite", "messages": [{ "role": "user", "content": "x" }] });
+    // A decline is an answer in the chat's own shape — no prose, a reason, nothing charged —
+    // not an error (since "Each provider filters its own questions", 2026-09).
     for _ in 0..3 {
         let r = call(&e, &s, &a, "chat", ask.clone()).await;
-        assert!(r["error"].as_str().unwrap().starts_with("Declined by"), "{r}");
+        assert_eq!(r["declined"], true, "{r}");
+        assert!(r["why"].as_str().unwrap().starts_with("Declined by"), "{r}");
+        assert_eq!(r["cost"], 0, "{r}");
     }
     let r = call(&e, &s, &a, "chat", ask).await;
-    assert!(r["error"].as_str().unwrap().contains("tomorrow"), "{r}");
+    assert_eq!(r["declined"], true, "{r}");
+    assert!(r["why"].as_str().unwrap().contains("declined by"), "{r}");
+    assert!(r["strikes"]["untilMs"].as_u64().is_some(), "the pause says until when: {r}");
     assert_eq!(call(&e, &s, &a, "balance", json!({})).await["balance"]["total"], 100_000, "no decline was charged");
 }
 

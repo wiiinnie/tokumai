@@ -166,6 +166,12 @@ fn current_account(app: &AppHandle) -> Result<Account, String> {
 /// errors, with its own words.
 async fn call(app: &AppHandle, op: &str, body: Value) -> Result<Value, String> {
     let account = current_account(app)?;
+    call_as(app, &account, op, body).await
+}
+
+/// The same, signed by a given account — the blind notes are minted under a key made for
+/// that one request and thrown away, so the minting names nobody (`notes`).
+async fn call_as(app: &AppHandle, account: &Account, op: &str, body: Value) -> Result<Value, String> {
     let st = app.state::<AppState>();
     let mut guard = st.conn.lock().await;
     if guard.is_none() {
@@ -179,7 +185,7 @@ async fn call(app: &AppHandle, op: &str, body: Value) -> Result<Value, String> {
         })?);
     }
     let conn = guard.as_mut().ok_or("no connection")?;
-    let answer = match conn.call(&account, op, &body).await {
+    let answer = match conn.call(account, op, &body).await {
         Ok(a) => {
             // An answer is also the best proof the enclave is there: whatever the chip
             // said while it was silent, it is wrong now.
@@ -324,6 +330,8 @@ async fn state(app: AppHandle) -> Result<Value, String> {
         "server": target::enclave_door().ok(),
         "balance": 0,
         "models": [],
+        // Blind notes minted and not yet redeemed: a month that will join at its moment.
+        "notesWaiting": p.notes.len(),
     });
     let st = app.state::<AppState>();
     if p.mnemonic.is_none() {
@@ -664,29 +672,19 @@ async fn iap_buy(app: AppHandle, product_id: String) -> Result<Value, String> {
         _ => {}
     }
     let jws = bought["jws"].as_str().unwrap_or("").to_string();
-    let tx = bought["transactionId"].as_str().unwrap_or("").to_string();
     if jws.is_empty() {
         return Err("the App Store returned no signed transaction".into());
     }
-    let mut granted = match call(&app, "iap.verify", json!({ "jws": jws, "restore": false })).await {
-        Ok(v) => v,
-        Err(e) => {
-            // A refusal nothing can fix: acknowledge it, or Apple re-offers this very
-            // transaction to the next `purchase()` and the person can never buy again.
-            if e.starts_with("final: ") && !tx.is_empty() {
-                let _ = iap_ios::finish(&tx).await;
-            }
-            return Err(e.trim_start_matches("final: ").to_string());
+    // The purchase becomes notes, and the notes become the month — the same path a launch
+    // takes, so a crash between paying and minting costs nobody anything: Apple keeps
+    // offering the transaction until it is finished, and the sync finishes it once minted.
+    let r = notes_sync(&app).await?;
+    if let Some(t) = r["trouble"].as_str() {
+        if r["sent"].as_u64().unwrap_or(0) == 0 {
+            return Err(t.trim_start_matches("final: ").to_string());
         }
-    };
-    if !tx.is_empty() {
-        // A failure here is not the customer's problem: they paid and they were credited.
-        // Apple re-offers the transaction until it is finished, and `iap_sync` will.
-        let _ = iap_ios::finish(&tx).await;
     }
-    granted["plan"] = ui_plan(&granted["plan"]);
-    granted["status"] = json!("ok");
-    Ok(granted)
+    Ok(json!({ "status": "ok", "plan": r["plan"] }))
 }
 
 /// Every transaction Apple still holds for this Apple ID, handed to the enclave.
@@ -702,39 +700,11 @@ async fn iap_buy(app: AppHandle, product_id: String) -> Result<Value, String> {
 #[cfg(target_os = "ios")]
 #[tauri::command]
 async fn iap_sync(app: AppHandle, restore: bool) -> Result<Value, String> {
-    let mut seen: Vec<String> = Vec::new();
-    let mut sent = 0u32;
-    let mut plan = Value::Null;
-    let mut trouble: Option<String> = None;
-    let mut all = iap_ios::entitlements().await.unwrap_or_default();
-    all.extend(iap_ios::unfinished().await.unwrap_or_default());
-    for t in all {
-        let jws = t["jws"].as_str().unwrap_or("").to_string();
-        let tx = t["transactionId"].as_str().unwrap_or("").to_string();
-        if jws.is_empty() || seen.contains(&tx) {
-            continue;
-        }
-        seen.push(tx.clone());
-        match call(&app, "iap.verify", json!({ "jws": jws, "restore": restore })).await {
-            Ok(r) => {
-                sent += 1;
-                if r["plan"].is_object() {
-                    plan = ui_plan(&r["plan"]);
-                }
-                let _ = iap_ios::finish(&tx).await;
-            }
-            // A refusal nothing can fix — refunded, revoked, a chain that does not check
-            // out — is marked `final` by the enclave, and then the transaction is
-            // acknowledged so Apple stops re-offering it forever.
-            Err(e) => {
-                if e.starts_with("final: ") || e.contains("refunded") {
-                    let _ = iap_ios::finish(&tx).await;
-                }
-                trouble = Some(e);
-            }
-        }
-    }
-    Ok(json!({ "sent": sent, "plan": plan, "trouble": trouble }))
+    // "Restore" used to be the one call allowed to move a plan between accounts. With
+    // notes there is nothing to move: the notes of a phrase are the phrase's, on any
+    // device, and the enclave signs them again for a restored phone.
+    let _ = restore;
+    notes_sync(&app).await
 }
 
 #[cfg(not(target_os = "ios"))]
@@ -947,10 +917,232 @@ async fn app_resumed(app: AppHandle, hidden_ms: u64, force: Option<bool>) -> Res
 #[tauri::command]
 async fn mixnet_heartbeat(app: AppHandle) -> Result<Value, String> {
     let t0 = std::time::Instant::now();
-    let r = call(&app, "balance", json!({})).await?;
+    let mut r = call(&app, "balance", json!({})).await?;
+    // A note whose moment has come, or an account with nothing left to chat on: redeemed
+    // here, on the beat, so nobody waits for a launch.
+    if !profile::load(&data_dir(&app)?).notes.is_empty() {
+        if let Ok(Some(_)) = redeem_due(&app, !has_room(&r)).await {
+            r = call(&app, "balance", json!({})).await?;
+        }
+    }
     let mut out = json!({ "action": "alive", "ms": t0.elapsed().as_millis() as u64 });
     balance_fields(&mut out, &r);
     Ok(out)
+}
+
+// ---- blind notes ---------------------------------------------------------------------
+//
+// A payment no longer credits the account. It buys a note for each paid month — signed
+// blind by the enclave under a key made for one request and thrown away — and the account
+// redeems the note later for that month's allowance. The enclave cannot connect the two;
+// the book records no payment → account row (docs/blind-tokens.md). What this side does:
+//
+// 1. read which months the App Store says are paid (the signed transaction, read without
+//    verifying — the enclave verifies; the app only needs to know what to ask for);
+// 2. mint a note for each open month not yet held, with the nonce and the blinding derived
+//    from the account's seed, so a phone restored from the phrase makes the same note and
+//    the enclave signs it again instead of refusing a second one;
+// 3. redeem by the one rule: at once when the account has nothing to chat on (nobody ever
+//    runs dry), else at a random moment inside the grace, so a renewal hides among the
+//    month's other renewals. The first month of a new subscriber is redeemed at once, and
+//    is the one redemption exposed to timing; the note says so, and so does the pitch.
+
+use tokumai_core::notes as core_notes;
+
+/// A paid period as the App Store states it.
+#[cfg(target_os = "ios")]
+struct Paid {
+    rail: String,
+    tier: u8,
+    yearly: bool,
+    start_ms: u64,
+    until_ms: u64,
+    proof: Value,
+}
+
+/// The claims of a signed App Store transaction, read without verifying.
+#[cfg(target_os = "ios")]
+fn jws_claims(jws: &str) -> Option<Value> {
+    use base64::Engine as _;
+    let mid = jws.split('.').nth(1)?;
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(mid).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+#[cfg(target_os = "ios")]
+fn paid_from_jws(jws: &str) -> Option<Paid> {
+    use tokumai_core::subscription::TIERS;
+    let c = jws_claims(jws)?;
+    if c["type"].as_str()? != "Auto-Renewable Subscription" || c.get("revocationDate").and_then(|r| r.as_u64()).is_some() {
+        return None;
+    }
+    let rest = c["productId"].as_str()?.strip_prefix("com.tokumai.app.plan.")?;
+    let mut parts = rest.split('.');
+    let euros: u64 = parts.next()?.parse().ok()?;
+    let yearly = parts.next() == Some("year");
+    let tier = TIERS.iter().position(|(_, cents)| *cents == euros * 100)? as u8;
+    Some(Paid {
+        rail: format!("iap:{}", c["originalTransactionId"].as_str()?),
+        tier,
+        yearly,
+        start_ms: c["purchaseDate"].as_u64()?,
+        until_ms: c["expiresDate"].as_u64()?,
+        proof: json!({ "kind": "apple", "jws": jws }),
+    })
+}
+
+/// The enclave's published key for a month, from the attested session.
+async fn note_key(app: &AppHandle, epoch: u16) -> Result<Vec<u8>, String> {
+    ensure_ready(app).await?;
+    let st = app.state::<AppState>();
+    let guard = st.conn.lock().await;
+    let session = guard.as_ref().and_then(|c| c.session()).ok_or("not attested")?;
+    session.note_key(epoch).map(|k| k.to_vec()).ok_or_else(|| format!("the enclave published no key for month {epoch}"))
+}
+
+/// Mint one note: blind it with the seed, have it signed under a throwaway key, unblind.
+#[cfg(target_os = "ios")]
+async fn mint_note(app: &AppHandle, paid: &Paid, epoch: u16, redeem_after_ms: u64) -> Result<profile::WalletNote, String> {
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+    let account = current_account(app)?;
+    let seed = account.note_seed();
+    let pk = core_notes::public_from_spki(&note_key(app, epoch).await?)?;
+    let note = core_notes::note_for(&seed, paid.tier, epoch);
+    let (blinded, secret) = core_notes::blind(&pk, &note, &seed)?;
+    let throwaway = account::create_account();
+    let r = call_as(app, &throwaway, "note.mint", json!({ "proof": paid.proof, "epoch": epoch, "blinded": B64.encode(&blinded) })).await?;
+    let blind_sig = r["sig"].as_str().and_then(|x| B64.decode(x).ok()).ok_or("the enclave sent no signature")?;
+    let sig = core_notes::finalize(&pk, &blind_sig, &secret, &note)?;
+    Ok(profile::WalletNote {
+        rail: paid.rail.clone(),
+        epoch,
+        tier: paid.tier,
+        note: B64.encode(note.to_bytes()),
+        sig: B64.encode(sig),
+        minted_ms: tokumai_proto::now_ms(),
+        redeem_after_ms,
+    })
+}
+
+/// A moment inside the grace, drawn from the seed and the month so it is the same on every
+/// launch: no dice to be reproduced, and no clustering at app start.
+fn jitter_ms(seed: &[u8; 32], epoch: u16, span_ms: u64) -> u64 {
+    if span_ms == 0 {
+        return 0;
+    }
+    let h = core_notes::derive(seed, "jitter", epoch);
+    u64::from_be_bytes(h[..8].try_into().expect("8 bytes")) % span_ms
+}
+
+/// Whether the account can still chat on what it has: an allowance that is active and not
+/// empty. Read from a `balance` answer.
+fn has_room(balance: &Value) -> bool {
+    let b = &balance["balance"];
+    b["total"].as_u64().unwrap_or(0) > 0 && balance["plan"]["active"] == true
+}
+
+/// Redeem the notes that are due — all of them when the account has nothing to chat on.
+/// Returns the plan summary of the last redemption, if any.
+async fn redeem_due(app: &AppHandle, need_now: bool) -> Result<Option<Value>, String> {
+    let dir = data_dir(app)?;
+    let mut p = profile::load(&dir);
+    let now = tokumai_proto::now_ms();
+    let due: Vec<profile::WalletNote> = p.notes.iter().filter(|n| need_now || n.redeem_after_ms <= now).cloned().collect();
+    if due.is_empty() {
+        return Ok(None);
+    }
+    let list: Vec<Value> = due.iter().map(|n| json!({ "note": n.note, "sig": n.sig })).collect();
+    let r = match call(app, "note.redeem", json!({ "notes": list })).await {
+        Ok(r) => r,
+        Err(e) if e.starts_with("final: ") => {
+            // Refused for good — a note of another version, a month no longer open. Kept
+            // nowhere: it would be refused the same way every launch.
+            log::warn!("[notes] dropped {} note(s): {e}", due.len());
+            p.notes.retain(|n| !due.iter().any(|d| d.note == n.note));
+            profile::save(&dir, &p)?;
+            return Err(e);
+        }
+        Err(e) => return Err(e),
+    };
+    for n in &due {
+        p.notes_done.push(format!("{}:{}", n.rail, n.epoch));
+    }
+    p.notes.retain(|n| !due.iter().any(|d| d.note == n.note));
+    profile::save(&dir, &p)?;
+    log::info!("[notes] redeemed {} note(s), {} already spent", r["granted"], r["again"]);
+    Ok(Some(ui_plan(&r["plan"])))
+}
+
+/// Everything the App Store says is paid, as notes: minted once per month, redeemed by the
+/// rule. The one call behind a purchase, a launch and "restore purchases" alike.
+#[cfg(target_os = "ios")]
+async fn notes_sync(app: &AppHandle) -> Result<Value, String> {
+    use tokumai_core::subscription::TIERS;
+    let _ = TIERS;
+    let dir = data_dir(app)?;
+    let account = current_account(app)?;
+    let seed = account.note_seed();
+    let now = tokumai_proto::now_ms();
+    let (from, to) = core_notes::window(now);
+    // What the account has to chat on decides when a new note is redeemed.
+    let balance = call(app, "balance", json!({})).await.unwrap_or(Value::Null);
+    let room = has_room(&balance);
+    let period_end = balance["plan"]["periodEnd"].as_u64().unwrap_or(0);
+    let mut all = iap_ios::entitlements().await.unwrap_or_default();
+    all.extend(iap_ios::unfinished().await.unwrap_or_default());
+    let mut minted = 0u32;
+    let mut trouble: Option<String> = None;
+    let mut seen: Vec<String> = Vec::new();
+    for t in all {
+        let jws = t["jws"].as_str().unwrap_or("").to_string();
+        let tx = t["transactionId"].as_str().unwrap_or("").to_string();
+        let Some(paid) = paid_from_jws(&jws) else { continue };
+        for epoch in core_notes::epochs_covered(paid.start_ms, paid.until_ms, paid.yearly) {
+            if epoch < from || epoch > to {
+                continue;
+            }
+            let key = format!("{}:{}", paid.rail, epoch);
+            let p = profile::load(&dir);
+            if seen.contains(&key) || p.notes_done.contains(&key) || p.notes.iter().any(|n| n.rail == paid.rail && n.epoch == epoch) {
+                continue;
+            }
+            seen.push(key.clone());
+            // Nothing to chat on: redeem the moment the note exists. Otherwise a random
+            // moment inside the grace — never past the old allowance's own end.
+            let redeem_after = if room {
+                let span = core_notes::GRACE_MS.min(period_end.saturating_sub(now));
+                now + jitter_ms(&seed, epoch, span)
+            } else {
+                now
+            };
+            match mint_note(app, &paid, epoch, redeem_after).await {
+                Ok(note) => {
+                    let mut p = profile::load(&dir);
+                    p.notes.push(note);
+                    profile::save(&dir, &p)?;
+                    minted += 1;
+                    if !tx.is_empty() {
+                        let _ = iap_ios::finish(&tx).await;
+                    }
+                }
+                Err(e) => {
+                    if e.starts_with("final: ") {
+                        // Never mintable: say so once in the done list, and acknowledge
+                        // the transaction so Apple stops offering it.
+                        let mut p = profile::load(&dir);
+                        p.notes_done.push(key);
+                        profile::save(&dir, &p)?;
+                        if !tx.is_empty() {
+                            let _ = iap_ios::finish(&tx).await;
+                        }
+                    }
+                    trouble = Some(e);
+                }
+            }
+        }
+    }
+    let plan = redeem_due(app, !room).await.ok().flatten().unwrap_or(Value::Null);
+    Ok(json!({ "sent": minted, "plan": plan, "trouble": trouble }))
 }
 
 // ---- support (not in the enclave yet) --------------------------------------------------

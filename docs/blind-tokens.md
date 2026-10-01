@@ -1,7 +1,25 @@
 # Blind tokens: taking the purchase out of the book
 
-Design note, 2026-09-28. An addition to the enclave as it stands (`docs/enclave-phase0.md`),
-not a rebuild. Nothing here is implemented yet.
+Design note, 2026-09-28; built 2026-10-01 (enclave `notes.rs`, shared `core::notes`, the
+wallet in the app). An addition to the enclave as it stands (`docs/enclave-phase0.md`),
+not a rebuild.
+
+**Tech stack, as built.** RSA-2048 blind signatures after RFC 9474 (RSABSSA-SHA384-PSS,
+deterministic), written out on the `rsa` crate's integers in `crates/core/src/notes.rs`:
+EMSA-PSS encoding with an empty salt, blind = m·rᵉ, sign = zᵈ, unblind = s'·r⁻¹, verify.
+Month keys derived from the data key through HKDF-SHA256 into a seeded ChaCha20 generator,
+so nothing is stored and every start of an image that can open the sealed secrets makes
+the same keys; their SPKI forms travel in every attestation and a SHA-256 digest of them
+is in the binding (`attest::binding_with`). A note is 36 bytes: version, tier, month,
+nonce; nonce and blinding factor come from HKDF of the account's seed and the month, so a
+restored phone makes the same blinded message and the enclave re-signs it. The book keeps
+`minted` (payment-and-month → fingerprint of the blinded message) and the spent nonces in
+`payments`; both under keyed hashes. Operations `note.mint` (under a throwaway key) and
+`note.redeem` (signed by the account); the plan row's rail becomes `note:<own name>`, which
+the renewal check skips. The app reads the App Store's signed transaction to learn the paid
+months, mints each open one once, and redeems at once when the account has nothing to chat
+on, else at a seed-derived moment inside the seven-day grace. Card plans on the web still
+take the old path until the checkout is moved onto notes.
 
 ## The problem it addresses
 

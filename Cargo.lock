@@ -5484,6 +5484,7 @@ dependencies = [
  "num-iter",
  "num-traits",
  "rand 0.8.8",
+ "serde",
  "smallvec",
  "zeroize",
 ]
@@ -11072,6 +11073,10 @@ dependencies = [
  "bip39",
  "ed25519-dalek",
  "hex",
+ "hkdf",
+ "num-bigint-dig",
+ "rand_chacha 0.3.1",
+ "rsa",
  "serde",
  "serde_json",
  "sha2 0.10.9",

@@ -79,6 +79,17 @@ pub fn binding(identity_pub: &[u8; 32], kx_pub: &[u8; 32], address: &str, nonce:
     h.finalize().into()
 }
 
+/// The binding with one more thing the proof vouches for: a digest of what the enclave
+/// publishes beside its keys — today the month keys of the blind notes. Bound here so
+/// that every app sees the same published set, or its attestation check fails.
+pub fn binding_with(identity_pub: &[u8; 32], kx_pub: &[u8; 32], address: &str, nonce: &[u8], published: &[u8; 32]) -> [u8; 32] {
+    let mut h = Sha256::new();
+    h.update(b"tokumai/attest/v2");
+    h.update(binding(identity_pub, kx_pub, address, nonce));
+    h.update(published);
+    h.finalize().into()
+}
+
 /// Check `evidence` against `policy`, and that it vouches for exactly `expected_user_data`.
 pub fn verify(evidence: &Evidence, policy: &Policy, expected_user_data: &[u8; 32]) -> Result<Claims, String> {
     let (measurement, user_data) = match evidence.platform {

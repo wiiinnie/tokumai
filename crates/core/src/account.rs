@@ -42,6 +42,16 @@ pub struct Account {
     pub account_id: String,
 }
 
+impl Account {
+    /// The secret the account's blind notes are derived from (`notes`): a note's nonce and
+    /// its blinding factor come from here, so a phone restored from the phrase makes the
+    /// very same notes again. Separate from the signing key by a hash, so a note can never
+    /// be turned back into it.
+    pub fn note_seed(&self) -> [u8; 32] {
+        sha256(&[b"tokumai/note-seed/v1", &self.signing.to_bytes()])
+    }
+}
+
 /// A fresh account, as 24 words.
 pub fn create_account() -> Account {
     let m = Mnemonic::generate_in(bip39::Language::English, 24).expect("mnemonic generation");

@@ -12,3 +12,7 @@ hex.workspace = true
 base64.workspace = true
 ed25519-dalek.workspace = true
 bip39.workspace = true
+rand_chacha = "0.3"
+hkdf = "0.12"
+rsa = "0.9"
+num-bigint-dig = "0.8"

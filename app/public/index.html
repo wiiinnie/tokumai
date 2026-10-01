@@ -1693,7 +1693,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   let account = null;                    // { fingerprint, phraseVerified } | null
   // TOKU on the account, inside the enclave: the month's allowance plus credit bought
   // outright. Nothing is held on the device.
-  let balance = 0, prepaid = 0;
+  let balance = 0, prepaid = 0, notesWaiting = 0;
   let migrateData = null;                // {mnemonic, qr} for the "use on another device" view
   let siteUrl = null;                    // tokumai's site (legal pages); none known yet
   // Which enclave answered and what vouched for it: { platform, measurement } | null.
@@ -1772,6 +1772,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       account = s.account || null;
       balance = Number(s.balance) || 0;
       prepaid = Number(s.prepaid) || 0;
+      notesWaiting = Number(s.notesWaiting) || 0;
       plan = (s.plan && typeof s.plan === "object") ? s.plan : null;
       planLadder = Array.isArray(s.plans) ? s.plans : planLadder;
       consentVersion = String(s.consentVersion || consentVersion || "");
@@ -2235,7 +2236,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       $("planLine").style.display = "none";
     }
     $("acctLine").textContent = account
-      ? `account ${account.fingerprint}`
+      ? `account ${account.fingerprint}` + (notesWaiting > 0 ? ` · ${notesWaiting} paid month${notesWaiting>1?"s":""} waiting to join` : "")
       : "no account — open Account & recovery";
   }
   // The footer's right side shows either a status word or the price of the last
@@ -5817,7 +5818,9 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         ${planMsg ? `<p class="hint" style="margin:10px 0 0">${esc(planMsg)}</p>` : ``}`;
       return;
     }
-    if(planActive() && plan.rail === "appstore"){
+    // A plan paid with blind notes says "note" as its rail — on a phone that means the
+    // App Store bills it, and the App Store is where it is changed.
+    if(planActive() && (plan.rail === "appstore" || (plan.rail === "note" && isIOSNative()))){
       box.innerHTML = `${allowanceHTML()}
         <div class="setrow" style="cursor:default"><span><b>Your plan is billed through the App Store</b><small>Change or cancel it on your iPhone, under Settings → Apple ID → Subscriptions. This account already has a plan, so a second one cannot be taken out here.</small></span></div>
         ${planMsg ? `<p class="hint" style="margin:10px 0 0">${esc(planMsg)}</p>` : ``}`;

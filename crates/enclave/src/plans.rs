@@ -45,6 +45,11 @@ impl Plan {
     pub fn is_app_store(&self) -> bool {
         self.rail.starts_with("iap:")
     }
+    /// Paid with blind notes: the enclave holds no rail to ask about, by design. The app
+    /// brings the next month's note itself.
+    pub fn is_note(&self) -> bool {
+        self.rail.starts_with("note:")
+    }
 }
 
 /// One ended period, as a chargeback answer needs it.

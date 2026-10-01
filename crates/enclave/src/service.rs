@@ -83,6 +83,8 @@ pub struct Enclave {
     /// Declines per (account, UTC day, provider). In memory: a restart forgives, which is
     /// the lenient side.
     strikes: Mutex<HashMap<(String, u64, &'static str), u32>>,
+    /// The blind notes' month keys (`notes`), derived from the data key.
+    pub(crate) notes: crate::notes::Mint,
 }
 
 #[derive(Deserialize)]
@@ -124,7 +126,7 @@ impl Enclave {
         if released > 0 {
             eprintln!("tokumai-enclave: gave back {released} hold(s) of requests cut off by the last stop");
         }
-        Ok(Enclave {
+        let enclave = Enclave {
             replayed,
             keys: EnclaveKeys::generate(),
             attester: p.attester,
@@ -140,7 +142,11 @@ impl Enclave {
             apple_api: p.apple_api,
             plan_prices: Mutex::new((Vec::new(), 0)),
             address: Mutex::new(String::new()),
-        })
+            notes: crate::notes::Mint::new(key),
+        };
+        // This month's keys before the first attestation asks for them.
+        enclave.notes.warm(crate::now_ms());
+        Ok(enclave)
     }
 
     /// The address the enclave's own transport listens at, once it is up (its Nym address).
@@ -188,7 +194,15 @@ impl Enclave {
             _ => return error("an attestation request needs a nonce of 16 to 64 bytes, hex"),
         };
         let address = if arrived_at.is_empty() { self.address() } else { arrived_at.to_string() };
-        let binding = tokumai_attest::binding(&self.keys.identity_pub(), &self.keys.kx_pub(), &address, &nonce);
+        // The month keys of the blind notes travel with the proof and are bound by it, so
+        // every app sees the same keys or fails this check (`notes`).
+        let published = match self.notes.published(crate::now_ms()) {
+            Ok(p) => p,
+            Err(e) => return error(&format!("the month keys are not available: {e}")),
+        };
+        let digest = tokumai_core::notes::keys_digest(&published);
+        let binding = tokumai_attest::binding_with(&self.keys.identity_pub(), &self.keys.kx_pub(), &address, &nonce, &digest);
+        let notes: Vec<Value> = published.iter().map(|(e, k)| json!({ "epoch": e, "key": B64.encode(k) })).collect();
         match self.attester.attest(&binding) {
             Ok(evidence) => json!({
                 "kind": "attest.ok",
@@ -196,6 +210,7 @@ impl Enclave {
                 "kx": hex::encode(self.keys.kx_pub()),
                 "address": address,
                 "evidence": evidence,
+                "notes": notes,
             }),
             Err(e) => error(&format!("attestation failed: {e}")),
         }
@@ -286,6 +301,10 @@ impl Enclave {
             "plan.status" => self.plan_status(account, body, now).await,
             "plan.change" => self.plan_change(account, body, now).await,
             "iap.verify" => self.iap_verify(account, body, now),
+            // The blind notes: minting is not for this account (the key is thrown away);
+            // redeeming is.
+            "note.mint" => self.note_mint(body, now).await,
+            "note.redeem" => self.note_redeem(account, body, now),
             "dev.credit" | "dev.allowance" | "dev.bytes" if !self.dev_mode => error("not available on this enclave"),
             // A reply of a given size, to measure what the mixnet does with a big answer
             // without paying a model for a picture. Never on a sealed enclave.

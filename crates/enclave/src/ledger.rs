@@ -33,6 +33,7 @@ const TABLES: &[(&str, &[&str])] = &[
     ("plans", &["acct", "json"]),
     ("rails", &["rail", "acct"]),
     ("payments", &["ref", "at_ms"]),
+    ("minted", &["ref", "fp"]),
 ];
 
 /// A value as it travels in a journal record. The book writes nothing else.
@@ -142,7 +143,8 @@ impl Ledger {
              CREATE TABLE IF NOT EXISTS nonces (nonce TEXT PRIMARY KEY, ts_ms INTEGER NOT NULL);
              CREATE TABLE IF NOT EXISTS plans (acct TEXT PRIMARY KEY, json TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS rails (rail TEXT PRIMARY KEY, acct TEXT NOT NULL);
-             CREATE TABLE IF NOT EXISTS payments (ref TEXT PRIMARY KEY, at_ms INTEGER NOT NULL);",
+             CREATE TABLE IF NOT EXISTS payments (ref TEXT PRIMARY KEY, at_ms INTEGER NOT NULL);
+             CREATE TABLE IF NOT EXISTS minted (ref TEXT PRIMARY KEY, fp TEXT NOT NULL);",
         )
         .map_err(|e| e.to_string())?;
         Ok(Ledger { conn, data_key, kept: None, replayed: 0 })
@@ -291,6 +293,22 @@ impl Ledger {
     pub fn first_payment(&self, reference: &str, now_ms: u64) -> Result<bool, String> {
         let n = self.change("INSERT OR IGNORE INTO payments (ref, at_ms) VALUES (?1, ?2)", vec![Val::S(self.rail_key(reference)), Val::I(now_ms as i64)])?;
         Ok(n == 1)
+    }
+
+    // ---- blind notes (see `notes`) ------------------------------------------------
+
+    /// What was minted for a payment's month: the fingerprint of the blinded message the
+    /// enclave signed, under a keyed hash of the payment reference. Nothing here names an
+    /// account, and the fingerprint names no note.
+    pub fn minted_get(&self, reference: &str) -> Result<Option<String>, String> {
+        self.conn
+            .query_row("SELECT fp FROM minted WHERE ref = ?1", params![self.rail_key(reference)], |r| r.get(0))
+            .optional()
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn minted_put(&self, reference: &str, fingerprint: &str) -> Result<(), String> {
+        self.change("INSERT OR IGNORE INTO minted (ref, fp) VALUES (?1, ?2)", vec![Val::S(self.rail_key(reference)), Val::S(fingerprint.into())]).map(|_| ())
     }
 
     // ---- plans (see `plans`) ------------------------------------------------------

@@ -3,5 +3,6 @@
 
 pub mod account;
 pub mod billing;
+pub mod notes;
 pub mod pricing;
 pub mod subscription;

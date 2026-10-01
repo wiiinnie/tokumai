@@ -23,6 +23,7 @@ pub mod http;
 pub mod keys;
 pub mod kms;
 pub mod ledger;
+pub mod notes;
 pub mod openai;
 pub mod plans;
 pub mod picture;

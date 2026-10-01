@@ -44,7 +44,7 @@ impl Enclave {
             .map(|(_, ends, g, left)| (g, left, ends))
             .unwrap_or((0, 0, 0));
         json!({
-            "tier": p.tier, "yearly": p.yearly, "rail": if p.is_app_store() { "appstore" } else { "stripe" },
+            "tier": p.tier, "yearly": p.yearly, "rail": if p.is_note() { "note" } else if p.is_app_store() { "appstore" } else { "stripe" },
             "active": p.paid_at(now), "paidUntil": p.paid_until_ms, "periodEnd": ends,
             "granted": granted, "left": left, "tokuPerMonth": TIERS[p.tier.min(TIERS.len() - 1)].0,
         })
@@ -274,7 +274,16 @@ impl Enclave {
         // A steady beat says nothing: there is always a call, and it always looks alike.
         // It does not protect against us (we hold the merchant records either way); it
         // protects against whoever else holds the machine.
-        let stale = self.ledger.lock().ok().and_then(|l| plans::stale(&l, now, STALE_MS).ok()).unwrap_or_default();
+        let stale: Vec<_> = self
+            .ledger
+            .lock()
+            .ok()
+            .and_then(|l| plans::stale(&l, now, STALE_MS).ok())
+            .unwrap_or_default()
+            .into_iter()
+            // A note plan has no rail to ask: the next month arrives as a note, or it does not.
+            .filter(|(_, p)| !p.is_note())
+            .collect();
         let checked = match stale.iter().find(|(_, p)| !p.is_app_store()) {
             Some((key, plan)) => {
                 self.check_stripe(key, plan, now).await;

@@ -22,6 +22,16 @@ pub struct Session {
     pub claims: Claims,
     /// The transport address the enclave attested (its Nym address; empty over TCP).
     pub address: String,
+    /// The month keys of the blind notes the enclave published with this proof, bound by
+    /// it: (epoch, SPKI DER). Every app that attests sees the same set, or fails here.
+    pub notes: Vec<(u16, Vec<u8>)>,
+}
+
+impl Session {
+    /// The enclave's published key for a month, if it was in this proof.
+    pub fn note_key(&self, epoch: u16) -> Option<&[u8]> {
+        self.notes.iter().find(|(e, _)| *e == epoch).map(|(_, k)| k.as_slice())
+    }
 }
 
 fn key32(v: &Value, field: &str) -> Result<[u8; 32], String> {
@@ -46,13 +56,28 @@ impl Session {
         let evidence: Evidence = serde_json::from_value(v.get("evidence").cloned().unwrap_or(Value::Null))
             .map_err(|_| "the enclave sent no proof")?;
         let address = v.get("address").and_then(|a| a.as_str()).unwrap_or("").to_string();
-        let claims = tokumai_attest::verify(&evidence, policy, &tokumai_attest::binding(&identity, &kx, &address, nonce))?;
+        let notes: Vec<(u16, Vec<u8>)> = v
+            .get("notes")
+            .and_then(|n| n.as_array())
+            .map(|list| {
+                list.iter()
+                    .filter_map(|k| {
+                        use base64::Engine as _;
+                        let epoch = u16::try_from(k.get("epoch")?.as_u64()?).ok()?;
+                        let der = base64::engine::general_purpose::STANDARD.decode(k.get("key")?.as_str()?).ok()?;
+                        Some((epoch, der))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let digest = tokumai_core::notes::keys_digest(&notes);
+        let claims = tokumai_attest::verify(&evidence, policy, &tokumai_attest::binding_with(&identity, &kx, &address, nonce, &digest))?;
         if let Some(sent_to) = reached_at {
             if sent_to != address {
                 return Err("the enclave does not listen at the address this app reached — something sits in between".into());
             }
         }
-        Ok(Session { identity, kx, claims, address })
+        Ok(Session { identity, kx, claims, address, notes })
     }
 
     /// Sign `body` as `account` for operation `op`, and seal it to the enclave.

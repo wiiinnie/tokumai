@@ -27,6 +27,30 @@ pub struct Profile {
     /// The mixnet speed/anonymity trade-off from the settings: [cover, mix, send] ms and
     /// whether cover traffic runs while idle. `None` = Nym's defaults.
     pub traffic: Option<(u64, u64, u64, bool)>,
+    /// Blind notes minted and not yet redeemed — the wallet (see `notes` in lib.rs). A
+    /// note is a bearer secret: whoever holds it can redeem it, which is why the profile
+    /// is kept as the phrase is kept.
+    pub notes: Vec<WalletNote>,
+    /// Payments and months already turned into notes and redeemed, as "rail:epoch", so
+    /// the launch sync does not ask for them again.
+    pub notes_done: Vec<String>,
+}
+
+/// One paid month, signed blind by the enclave, waiting to be redeemed.
+#[derive(Serialize, Deserialize, Default, Clone, Debug)]
+#[serde(rename_all = "camelCase", default)]
+pub struct WalletNote {
+    /// The payment it came from ("iap:<original transaction>"), for the done list only.
+    pub rail: String,
+    pub epoch: u16,
+    pub tier: u8,
+    /// The note's 36 bytes and its signature, base64.
+    pub note: String,
+    pub sig: String,
+    pub minted_ms: u64,
+    /// When the app intends to redeem it: at once when the account has nothing to chat
+    /// on, else a random moment inside the grace, so a renewal hides among its month's.
+    pub redeem_after_ms: u64,
 }
 
 fn path(dir: &Path) -> PathBuf {
