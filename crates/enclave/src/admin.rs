@@ -210,6 +210,7 @@ impl Enclave {
             "uptimeS": self.stats.started.elapsed().as_secs(),
             "replayed": self.replayed,
             "devMode": self.dev_mode,
+            "appleSandbox": crate::policy::APPLE_SANDBOX,
             "address": self.address.lock().map(|a| a.clone()).unwrap_or_default(),
             "book": { "generation": book.0, "record": book.1, "flushedGeneration": flushed.0, "flushedRecord": flushed.1, "sinceSnapshot": since, "holdsOpen": holds },
             "replies": { "count": replies, "bytes": reply_bytes },

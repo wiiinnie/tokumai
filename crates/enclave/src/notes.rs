@@ -68,6 +68,8 @@ struct Proof {
     start_ms: u64,
     until_ms: u64,
     rail: String,
+    /// An App Store test purchase (the sandbox): counted apart, for the operator.
+    sandbox: bool,
 }
 
 fn epochs_of(p: &Proof) -> Vec<u16> {
@@ -92,7 +94,7 @@ impl Enclave {
                     return Err("this plan was refunded by Apple and has ended".into());
                 }
                 let (tier, yearly) = apple::plan_for(&tx, now)?;
-                Ok(Proof { tier: tier as u8, yearly, start_ms: tx.purchased_at_ms, until_ms: tx.expires_at_ms, rail: format!("iap:{}", tx.original_transaction_id) })
+                Ok(Proof { tier: tier as u8, yearly, start_ms: tx.purchased_at_ms, until_ms: tx.expires_at_ms, rail: format!("iap:{}", tx.original_transaction_id), sandbox: tx.environment == "Sandbox" })
             }
             "stripe" => {
                 let Some(stripe) = &self.stripe else { return Err("plans are not sold by card here".into()) };
@@ -107,7 +109,7 @@ impl Enclave {
                 if st.back != crate::stripe::MoneyBack::None {
                     return Err("this subscription was refunded and has ended".into());
                 }
-                Ok(Proof { tier: st.tier as u8, yearly: st.yearly, start_ms: st.start_ms, until_ms: st.end_ms, rail: format!("stripe:{sub}") })
+                Ok(Proof { tier: st.tier as u8, yearly: st.yearly, start_ms: st.start_ms, until_ms: st.end_ms, rail: format!("stripe:{sub}"), sandbox: false })
             }
             _ => Err("a proof is an App Store transaction or a Stripe subscription".into()),
         }
@@ -150,7 +152,7 @@ impl Enclave {
                         return error(&e);
                     }
                     // A count for the operator: how many notes this month, never for whom.
-                    self.stats.add(&format!("notes:minted:{epoch}:{}", proof.tier), 1);
+                    self.stats.add(&format!("notes:minted:{epoch}:{}{}", proof.tier, if proof.sandbox { ":sandbox" } else { "" }), 1);
                 }
                 Err(e) => return error(&e),
             }
@@ -259,7 +261,7 @@ mod tests {
     }
 
     fn proof(start_ms: u64, months: u32, yearly: bool) -> Proof {
-        Proof { tier: 1, yearly, start_ms, until_ms: tokumai_core::subscription::add_months_ms(start_ms, months), rail: "iap:2000000111".into() }
+        Proof { tier: 1, yearly, start_ms, until_ms: tokumai_core::subscription::add_months_ms(start_ms, months), rail: "iap:2000000111".into(), sandbox: false }
     }
 
     #[test]
@@ -272,7 +274,7 @@ mod tests {
         assert_eq!(year[11], 20); // ends Sep 28, 2027 → September 2027
         // A period ending exactly on the 1st belongs to the month before.
         let oct1 = tokumai_core::subscription::ms_from_civil(2026, 10, 1);
-        assert_eq!(epochs_of(&Proof { tier: 0, yearly: false, start_ms: tokumai_core::subscription::ms_from_civil(2026, 9, 1), until_ms: oct1, rail: "x".into() }), vec![8]);
+        assert_eq!(epochs_of(&Proof { tier: 0, yearly: false, start_ms: tokumai_core::subscription::ms_from_civil(2026, 9, 1), until_ms: oct1, rail: "x".into(), sandbox: false }), vec![8]);
     }
 
     /// The whole round against a real enclave in memory: the app blinds with the key the
@@ -294,7 +296,7 @@ mod tests {
 
         // Minting, through the same path the operation takes, with the proof already
         // verified: the dedup, the window, the signature.
-        let p = Proof { tier: 1, yearly: false, start_ms: now - 10 * 86_400_000, until_ms: now + 20 * 86_400_000, rail: "iap:2000000111".into() };
+        let p = Proof { tier: 1, yearly: false, start_ms: now - 10 * 86_400_000, until_ms: now + 20 * 86_400_000, rail: "iap:2000000111".into(), sandbox: false };
         let reference = format!("note:mint:{}:{cur}", p.rail);
         let fp = core_notes::blinded_fingerprint(&blinded);
         {

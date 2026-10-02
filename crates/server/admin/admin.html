@@ -85,6 +85,7 @@
   <span>admin</span>
   <span id="hImage" class="muted"></span>
   <span class="grow"></span>
+  <span id="hSandbox" class="pill warn" hidden>sandbox receipts accepted</span>
   <span id="hAlarm" class="pill">alarm ?</span>
   <span id="hEnclave" class="pill">enclave ?</span>
   <span class="clock" id="hClock">connecting…</span>
@@ -117,7 +118,7 @@
     <div class="card"><h3>Money · estimate</h3><div id="cMoney"></div><p class="hint">From active plans at list price, before store fees. Stripe and App Store Connect are not connected yet; their reports are the real numbers.</p></div>
   </div>
   <div class="tw"><table id="tiers"><thead><tr><th>Tier</th><th>App Store</th><th>Notes</th><th>Stripe</th><th>Yearly</th><th>Active</th><th>Ending ≤ 7 d</th><th>Disputed</th></tr></thead><tbody></tbody></table></div>
-  <div class="tw"><table id="notes"><thead><tr><th>Month</th><th>Tier</th><th>Minted</th><th>Spent</th><th>Outstanding</th></tr></thead><tbody></tbody></table></div>
+  <div class="tw"><table id="notes"><thead><tr><th>Month</th><th>Tier</th><th>Minted</th><th>of which test</th><th>Spent</th><th>Outstanding</th></tr></thead><tbody></tbody></table></div>
 
   <h2>Support · one account</h2>
   <div class="card">
@@ -150,6 +151,9 @@
     $('hImage').textContent = (host.image || '') + '  ' + d.target.pcr0.slice(0,12) + '…';
     if(h.error){ errs.push('enclave: ' + h.error); pill($('hEnclave'), 'enclave unreachable', 'bad'); }
     else pill($('hEnclave'), 'enclave ' + (h.working > 0 ? h.working + ' working' : 'idle'), 'ok');
+    // A sandbox image takes Apple's test purchases beside real ones: its numbers are test
+    // numbers until the production image runs, and the page says so.
+    $('hSandbox').hidden = !(h.appleSandbox === true);
     if(al.error){ errs.push('alarm: ' + al.error); pill($('hAlarm'), 'alarm ?', 'warn'); }
     else pill($('hAlarm'), 'alarm ' + al.state.toLowerCase(), al.state === 'OK' ? 'ok' : al.state === 'ALARM' ? 'bad' : 'warn');
     if(host.error) errs.push('host: ' + host.error);
@@ -248,11 +252,11 @@
     }).join('');
     // Notes per month and tier
     const nm = {};
-    for(const n of p.notes){ const m = /^notes:(minted|spent):(\d+):(\d+)$/.exec(n.key); if(!m) continue; const k = m[2] + '|' + m[3]; const r = nm[k] || (nm[k] = {epoch:+m[2], tier:+m[3], minted:0, spent:0}); r[m[1]] += n.n; }
+    for(const n of p.notes){ const m = /^notes:(minted|spent):(\d+):(\d+)(:sandbox)?$/.exec(n.key); if(!m) continue; const k = m[2] + '|' + m[3]; const r = nm[k] || (nm[k] = {epoch:+m[2], tier:+m[3], minted:0, test:0, spent:0}); r[m[1]] += n.n; if(m[4]) r.test += n.n; }
     const nrows = Object.values(nm).sort((a,b) => b.epoch - a.epoch || a.tier - b.tier);
     const monthName = e => { const y = 2026 + Math.floor(e / 12), mo = e % 12; return y + '-' + String(mo + 1).padStart(2,'0'); };
-    $('notes').querySelector('tbody').innerHTML = nrows.length ? nrows.map(r => `<tr><td>${monthName(r.epoch)}</td><td class="d">${fmt(p.tiers[r.tier] ? p.tiers[r.tier].toku : r.tier)} TOKU</td><td>${fmt(r.minted)}</td><td class="g">${fmt(r.spent)}</td><td class="${r.minted - r.spent > 0 ? 'a' : 'd'}">${fmt(r.minted - r.spent)}</td></tr>`).join('')
-      : '<tr><td colspan="5" class="d">no notes minted yet</td></tr>';
+    $('notes').querySelector('tbody').innerHTML = nrows.length ? nrows.map(r => `<tr><td>${monthName(r.epoch)}</td><td class="d">${fmt(p.tiers[r.tier] ? p.tiers[r.tier].toku : r.tier)} TOKU</td><td>${fmt(r.minted)}</td><td class="${r.test ? 'a' : 'd'}">${fmt(r.test)}</td><td class="g">${fmt(r.spent)}</td><td class="${r.minted - r.spent > 0 ? 'a' : 'd'}">${fmt(r.minted - r.spent)}</td></tr>`).join('')
+      : '<tr><td colspan="6" class="d">no notes minted yet</td></tr>';
   }
 
   function esc(s){ return String(s === undefined || s === null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
