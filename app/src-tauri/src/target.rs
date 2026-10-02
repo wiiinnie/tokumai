@@ -36,10 +36,10 @@ const RELEASE_ENCLAVE: Option<&str> = Some(concat!(
     "GPscM2poKqpkHdDD3JPGEHiLHufBNRtQyLsvjrMUHQ3o.FhmyxZfn6dHvxASzcR44foa2TjMrCHmm8sQJziAQD3ds@6KZ96sPW6BBcgmghYb7c7BtCXgAEr1nmwnJzzRsszyhe"
 ));
 const RELEASE_MEASUREMENTS: &[&str] = &[
-    // tokumai-notes-sandbox — review and TestFlight (blind notes, App Store sandbox receipts)
-    "0439b19260ed67d0342c3e1db652ec0dbc4cddd19ed5c45d7cf565bd759a28e4a1bdf74132e593cfdcb837422dc2037d",
-    // tokumai-notes — production, the same code without the sandbox feature
-    "cd2d8cfe81d8864d6422c75a5f443af5523fd741ee31ef6648d05458aa529b502c8ff76f0025243b5ad8d3b542564669",
+    // tokumai-book-sandbox — review and TestFlight (blind notes, the book written behind, App Store sandbox receipts)
+    "03206a368faaa3464b7141be7b238c668144c5b3c8a34b94477f83fedcb4e9a21fd209c11ebd31fac3686cb431f378d6",
+    // tokumai-book — production, the same code without the sandbox feature
+    "b2e091ec2144140a4e98209c0a3355819e88c8e6ef6850d6250982f1d7a1588039c76bbf8f54c9ccd18acdb014010da3",
 ];
 
 fn dev_data() -> PathBuf {
