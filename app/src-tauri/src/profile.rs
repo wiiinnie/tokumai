@@ -34,6 +34,12 @@ pub struct Profile {
     /// Payments and months already turned into notes and redeemed, as "rail:epoch", so
     /// the launch sync does not ask for them again.
     pub notes_done: Vec<String>,
+    /// Notes already redeemed, kept for the month they bought. The book on the host is
+    /// the only record that a note was spent; a book restored from a backup may not have
+    /// that record, and the plan with it. The note is the proof of the payment, so the
+    /// app presents it again when the plan is gone (`reclaim_plan` in lib.rs): the
+    /// enclave honours an unspent note once and answers a spent one with "again".
+    pub spent: Vec<WalletNote>,
 }
 
 /// One paid month, signed blind by the enclave, waiting to be redeemed.

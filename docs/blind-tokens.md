@@ -250,3 +250,13 @@ So the policy in the app:
 - Docs: `privacy-notes.md` ("what we can see") changes, and the Nym pitch can then say
   that the enclave holds no record joining a payment to an account — which is a sentence
   the current design cannot say.
+
+## A plan the book forgot (2026-10-02)
+
+The book is the only record that a note was spent. A book restored from a backup may not
+have that record — and then not the plan either. The app keeps every redeemed note for the
+month it bought (`profile.spent`), and when the enclave reports no plan while that month is
+still running, presents the note again (`reclaim_plan`, on the heartbeat and after a sync,
+at most every ten minutes). The enclave honours an unspent note once and answers a spent one
+with "again", so nothing is gained where the plan is still there, and a lost one comes back
+without anyone at support learning who asked. Test: `a_spent_note_buys_its_month_again_only_where_the_book_forgot_it`.

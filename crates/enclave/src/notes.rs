@@ -326,6 +326,30 @@ mod tests {
         assert_ne!(core_notes::blinded_fingerprint(&other), fp);
     }
 
+    /// The book is the only record that a note was spent. A book restored from a backup
+    /// may not have that record: then the same note, presented again by the app, buys
+    /// the month again — once — and a book that does have it answers "again".
+    #[tokio::test]
+    async fn a_spent_note_buys_its_month_again_only_where_the_book_forgot_it() {
+        let now = tokumai_core::subscription::ms_from_civil(2026, 10, 5);
+        let cur = core_notes::epoch_of_ms(now);
+        let seed = [4u8; 32];
+        let note = core_notes::note_for(&seed, 1, cur);
+        // Two enclaves on the same data key: the same month keys, two books.
+        let first = enclave();
+        let pk = core_notes::public_from_spki(&first.notes.published(now).unwrap()[1].1).unwrap();
+        let (blinded, secret) = core_notes::blind(&pk, &note, &seed).unwrap();
+        let sig = core_notes::finalize(&pk, &core_notes::blind_sign(&first.notes.key(cur).unwrap().sk, &blinded).unwrap(), &secret, &note).unwrap();
+        let body = json!({ "notes": [{ "note": B64.encode(note.to_bytes()), "sig": B64.encode(&sig) }] }).to_string();
+        assert_eq!(first.note_redeem("acct-a", &body, now)["granted"], 1);
+        assert_eq!(first.note_redeem("acct-a", &body, now + 1)["again"], 1, "the book that has the record grants nothing");
+        // The book restored from before the redemption: no record, the note is honoured once.
+        let restored = enclave();
+        let r = restored.note_redeem("acct-a", &body, now + 2);
+        assert_eq!((r["granted"].as_u64(), r["plan"]["active"].as_bool()), (Some(1), Some(true)), "{r}");
+        assert_eq!(restored.note_redeem("acct-a", &body, now + 3)["again"], 1);
+    }
+
     #[tokio::test]
     async fn minting_through_the_operation_refuses_what_it_should() {
         let e = enclave();

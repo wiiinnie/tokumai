@@ -925,6 +925,11 @@ async fn mixnet_heartbeat(app: AppHandle) -> Result<Value, String> {
             r = call(&app, "balance", json!({})).await?;
         }
     }
+    // A plan that was paid for and is gone from the book: the note that bought it is
+    // presented again (a restored book has no record of it being spent).
+    if let Ok(true) = reclaim_plan(&app, &r).await {
+        r = call(&app, "balance", json!({})).await?;
+    }
     let mut out = json!({ "action": "alive", "ms": t0.elapsed().as_millis() as u64 });
     balance_fields(&mut out, &r);
     Ok(out)
@@ -1066,11 +1071,49 @@ async fn redeem_due(app: &AppHandle, need_now: bool) -> Result<Option<Value>, St
     };
     for n in &due {
         p.notes_done.push(format!("{}:{}", n.rail, n.epoch));
+        // Kept, spent, for the month it bought (see `reclaim_plan`).
+        if !p.spent.iter().any(|s| s.note == n.note) {
+            p.spent.push(n.clone());
+        }
     }
     p.notes.retain(|n| !due.iter().any(|d| d.note == n.note));
+    p.spent.retain(|n| core_notes::epoch_end_ms(n.epoch) + core_notes::GRACE_MS > now);
     profile::save(&dir, &p)?;
     log::info!("[notes] redeemed {} note(s), {} already spent", r["granted"], r["again"]);
     Ok(Some(ui_plan(&r["plan"])))
+}
+
+/// When the last redemption's month is still running but the enclave reports no plan,
+/// the book has lost the redemption — a book restored from a backup, for one. The spent
+/// note is the proof of the payment; presented again it is honoured once if the book has
+/// no record of it, and answered with "again" if it has. Nothing can be gained by it: a
+/// plan that is there is not granted twice. Tried at most every ten minutes.
+async fn reclaim_plan(app: &AppHandle, balance: &Value) -> Result<bool, String> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static LAST: AtomicU64 = AtomicU64::new(0);
+    if balance["plan"]["active"] == true {
+        return Ok(false);
+    }
+    let dir = data_dir(app)?;
+    let p = profile::load(&dir);
+    let now = tokumai_proto::now_ms();
+    let (from, to) = core_notes::window(now);
+    let live: Vec<&profile::WalletNote> = p
+        .spent
+        .iter()
+        .filter(|n| n.epoch >= from && n.epoch <= to && core_notes::epoch_end_ms(n.epoch) + core_notes::GRACE_MS > now)
+        .collect();
+    if live.is_empty() || now.saturating_sub(LAST.load(Ordering::Relaxed)) < 10 * 60 * 1000 {
+        return Ok(false);
+    }
+    LAST.store(now, Ordering::Relaxed);
+    let list: Vec<Value> = live.iter().map(|n| json!({ "note": n.note, "sig": n.sig })).collect();
+    let r = call(app, "note.redeem", json!({ "notes": list })).await?;
+    let granted = r["granted"].as_u64().unwrap_or(0);
+    if granted > 0 {
+        log::warn!("[notes] the plan was gone from the book; {granted} note(s) presented again brought it back");
+    }
+    Ok(granted > 0)
 }
 
 /// Everything the App Store says is paid, as notes: minted once per month, redeemed by the
@@ -1141,7 +1184,12 @@ async fn notes_sync(app: &AppHandle) -> Result<Value, String> {
             }
         }
     }
-    let plan = redeem_due(app, !room).await.ok().flatten().unwrap_or(Value::Null);
+    let mut plan = redeem_due(app, !room).await.ok().flatten().unwrap_or(Value::Null);
+    if plan.is_null() {
+        if let Ok(true) = reclaim_plan(app, &balance).await {
+            plan = call(app, "balance", json!({})).await.map(|b| ui_plan(&b["plan"])).unwrap_or(Value::Null);
+        }
+    }
     Ok(json!({ "sent": minted, "plan": plan, "trouble": trouble }))
 }
 
