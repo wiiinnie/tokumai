@@ -36,10 +36,14 @@ const RELEASE_ENCLAVE: Option<&str> = Some(concat!(
     "GPscM2poKqpkHdDD3JPGEHiLHufBNRtQyLsvjrMUHQ3o.FhmyxZfn6dHvxASzcR44foa2TjMrCHmm8sQJziAQD3ds@6KZ96sPW6BBcgmghYb7c7BtCXgAEr1nmwnJzzRsszyhe"
 ));
 const RELEASE_MEASUREMENTS: &[&str] = &[
-    // tokumai-book-sandbox — review and TestFlight (blind notes, the book written behind, App Store sandbox receipts)
+    // tokumai-book-sandbox — the image under App Review with 1.0 (0.8.0); sandbox receipts
     "03206a368faaa3464b7141be7b238c668144c5b3c8a34b94477f83fedcb4e9a21fd209c11ebd31fac3686cb431f378d6",
     // tokumai-book — production, the same code without the sandbox feature
     "b2e091ec2144140a4e98209c0a3355819e88c8e6ef6850d6250982f1d7a1588039c76bbf8f54c9ccd18acdb014010da3",
+    // tokumai-witness-sandbox — the book's witness (rollback detection); deployed after the review
+    "fa6e1024f977b8599a99ae341867628f44a3576077593aca8e5ab2ca01976a1ec5817bcd439452c012fa24c0d92f7a68",
+    // tokumai-witness — production, the same code without the sandbox feature
+    "bfe53036cde9d3c623023f1f03ec25907e0910404df63e9677755d6e9ba42ea22efee4f0898bcc3c197709e12065117f",
 ];
 
 fn dev_data() -> PathBuf {
