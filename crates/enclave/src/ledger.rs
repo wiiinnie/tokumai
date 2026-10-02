@@ -103,7 +103,12 @@ struct Kept {
 enum Job {
     Record { generation: u64, number: u64, sealed: Vec<u8> },
     Snapshot { generation: u64, sealed: Vec<u8> },
+    /// Tell the witness where the book stands now, whatever the clock says.
+    Witness,
 }
+
+/// How often the witness hears where the book stands while it moves (`crate::witness`).
+const WITNESS_EVERY: Duration = Duration::from_secs(10 * 60);
 
 /// A place in the line: (generation, number). Marks compare like the records they name.
 pub type Mark = (u64, u64);
@@ -155,30 +160,72 @@ const RETRY_AFTER: Duration = Duration::from_secs(2);
 /// on from one until the host has confirmed it, so a record never lands before the ones
 /// in front of it — and a record the host already took (the answer was lost) is answered
 /// again instead of written again (`Store::append`).
-fn writer(store: Arc<dyn Store>, jobs: std::sync::mpsc::Receiver<Job>, flushed: Arc<Flushed>) {
+fn writer(store: Arc<dyn Store>, jobs: std::sync::mpsc::Receiver<Job>, flushed: Arc<Flushed>, witness: Option<crate::witness::Record>) {
     let mut last_said = std::time::Instant::now() - Duration::from_secs(60);
-    while let Ok(job) = jobs.recv() {
-        let (mark, what) = match &job {
-            Job::Record { generation, number, .. } => ((*generation, *number), "record"),
-            Job::Snapshot { generation, .. } => ((*generation, 0), "snapshot"),
+    // What the witness has been told, and what it should be told: after a fold, at once;
+    // while the book moves, every WITNESS_EVERY; and whenever an earlier try failed.
+    let mut told: Mark = (0, 0);
+    let mut told_at = std::time::Instant::now();
+    let mut owed = false;
+    loop {
+        let job = match jobs.recv_timeout(Duration::from_secs(30)) {
+            Ok(job) => Some(job),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => None,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         };
-        loop {
-            let result = match &job {
-                Job::Record { generation, number, sealed } => store.append(*generation, *number, sealed),
-                Job::Snapshot { sealed, .. } => store.put_snapshot(sealed),
-            };
-            match result {
-                Ok(()) => break,
+        match job {
+            Some(Job::Witness) => owed = true,
+            Some(job) => {
+                let (mark, what) = match &job {
+                    Job::Record { generation, number, .. } => ((*generation, *number), "record"),
+                    Job::Snapshot { generation, .. } => ((*generation, 0), "snapshot"),
+                    Job::Witness => unreachable!("handled above"),
+                };
+                loop {
+                    let result = match &job {
+                        Job::Record { generation, number, sealed } => store.append(*generation, *number, sealed),
+                        Job::Snapshot { sealed, .. } => store.put_snapshot(sealed),
+                        Job::Witness => Ok(()),
+                    };
+                    match result {
+                        Ok(()) => break,
+                        Err(e) => {
+                            if last_said.elapsed() >= Duration::from_secs(60) {
+                                crate::voice::say(format!("book: the host did not take {what} {}/{}: {e} — trying again", mark.0, mark.1));
+                                last_said = std::time::Instant::now();
+                            }
+                            std::thread::sleep(RETRY_AFTER);
+                        }
+                    }
+                }
+                flushed.reached(mark);
+                if matches!(job, Job::Snapshot { .. }) {
+                    owed = true;
+                }
+            }
+            None => {}
+        }
+        let Some(witness) = &witness else { continue };
+        let at = match flushed.at.lock() {
+            Ok(a) => *a,
+            Err(p) => *p.into_inner(),
+        };
+        if at > told && (owed || told_at.elapsed() >= WITNESS_EVERY) {
+            match witness(at) {
+                Ok(()) => {
+                    told = at;
+                    told_at = std::time::Instant::now();
+                    owed = false;
+                }
                 Err(e) => {
+                    owed = true;
                     if last_said.elapsed() >= Duration::from_secs(60) {
-                        crate::voice::say(format!("book: the host did not take {what} {}/{}: {e} — trying again", mark.0, mark.1));
+                        crate::voice::say(format!("witness: the mark {}/{} could not be written: {e} — trying again", at.0, at.1));
                         last_said = std::time::Instant::now();
                     }
-                    std::thread::sleep(RETRY_AFTER);
                 }
             }
         }
-        flushed.reached(mark);
     }
 }
 
@@ -249,7 +296,9 @@ impl Ledger {
 
     /// The book kept on the host, sealed: the snapshot is read back, the journal replayed,
     /// and from then on every change is written down behind the request that made it.
-    pub fn open_sealed(store: Arc<dyn Store>, data_key: [u8; 32]) -> Result<Ledger, String> {
+    /// With a witness, a book that stands before the last mark the witness saw is refused
+    /// (`crate::witness::may_start`).
+    pub fn open_sealed(store: Arc<dyn Store>, data_key: [u8; 32], witness: Option<crate::witness::Setup>) -> Result<Ledger, String> {
         let mut ledger = Self::with(Connection::open_in_memory().map_err(|e| e.to_string())?, data_key)?;
         let sealing = Sealing::new(&data_key);
         let snapshot = store.snapshot()?;
@@ -271,11 +320,25 @@ impl Ledger {
         }
         let replayed = journal.records.len();
         ledger.replayed = replayed;
-        let flushed = Arc::new(Flushed { at: Mutex::new((generation, replayed as u64)), changed: Condvar::new() });
+        let position: Mark = (generation, replayed as u64);
+        let (seen, record) = match witness {
+            Some(w) => (Some(w.seen), Some(w.record)),
+            None => (None, None),
+        };
+        let accepted = match &seen {
+            Some(seen) => crate::witness::may_start(position, seen)?,
+            None => false,
+        };
+        let flushed = Arc::new(Flushed { at: Mutex::new(position), changed: Condvar::new() });
         let (queue, jobs) = std::sync::mpsc::channel();
         {
             let flushed = flushed.clone();
-            std::thread::Builder::new().name("book".into()).spawn(move || writer(store, jobs, flushed)).map_err(|e| format!("no thread for the book: {e}"))?;
+            std::thread::Builder::new().name("book".into()).spawn(move || writer(store, jobs, flushed, record)).map_err(|e| format!("no thread for the book: {e}"))?;
+        }
+        if accepted {
+            // An acknowledged restore: the witness hears the new position at once, so the
+            // acknowledgement is spent (`crate::witness`).
+            let _ = queue.send(Job::Witness);
         }
         ledger.kept = Some(Mutex::new(Kept { sealing, generation, next: replayed as u64 + 1, since: replayed, queue, flushed }));
         if snapshot.is_empty() || journal.legacy {
@@ -812,7 +875,7 @@ mod tests {
         let store = Arc::new(crate::state::FileStore::new(&dir).unwrap());
         let now = 1_790_000_000_000;
 
-        let mut first = Ledger::open_sealed(store.clone(), [4u8; 32]).unwrap();
+        let mut first = Ledger::open_sealed(store.clone(), [4u8; 32], None).unwrap();
         first.grant_allowance("acct", now, now + 30 * DAY, 700_000).unwrap();
         first.credit_prepaid("acct", 50_000, now).unwrap();
         assert!(first.first_payment("stripe-sub-1", now).unwrap());
@@ -825,7 +888,7 @@ mod tests {
         drop(first);
 
         // A new enclave, the same host: the snapshot and the journal are all it has.
-        let mut again = Ledger::open_sealed(store.clone(), [4u8; 32]).unwrap();
+        let mut again = Ledger::open_sealed(store.clone(), [4u8; 32], None).unwrap();
         assert!(again.replayed() > 0, "the journal should have carried the changes");
         assert_eq!(again.balance("acct", now).unwrap(), before);
         // The payment is still known, so a second delivery of it credits nothing twice.
@@ -838,18 +901,18 @@ mod tests {
         let total = again.balance("acct", now).unwrap().total;
         again.flush(Duration::from_secs(5)).unwrap();
         drop(again);
-        let third = Ledger::open_sealed(store.clone(), [4u8; 32]).unwrap();
+        let third = Ledger::open_sealed(store.clone(), [4u8; 32], None).unwrap();
         assert_eq!(third.balance("acct", now).unwrap().total, total);
 
         // Another key does not open it, and a bent record is not quietly skipped.
         drop(third);
-        assert!(Ledger::open_sealed(store.clone(), [5u8; 32]).is_err());
+        assert!(Ledger::open_sealed(store.clone(), [5u8; 32], None).is_err());
         let journal = dir.join("book.journal");
         let mut bytes = std::fs::read(&journal).unwrap();
         let last = bytes.len() - 1;
         bytes[last] ^= 1;
         std::fs::write(&journal, &bytes).unwrap();
-        assert!(Ledger::open_sealed(store, [4u8; 32]).is_err());
+        assert!(Ledger::open_sealed(store, [4u8; 32], None).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -861,7 +924,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let store = Arc::new(crate::state::FileStore::new(&dir).unwrap());
         let now = 1_790_000_000_000;
-        let book = Ledger::open_sealed(store.clone(), [6u8; 32]).unwrap();
+        let book = Ledger::open_sealed(store.clone(), [6u8; 32], None).unwrap();
         book.grant_allowance("acct", now, now + 30 * DAY, 1_000).unwrap();
         for i in 0..CHANGES_PER_SNAPSHOT {
             assert!(book.first_payment(&format!("payment-{i}"), now).unwrap());
@@ -870,7 +933,7 @@ mod tests {
         assert!(crate::state::split(&store.journal().unwrap()).unwrap().records.len() < CHANGES_PER_SNAPSHOT, "the journal should have been folded in");
         drop(book);
 
-        let again = Ledger::open_sealed(store, [6u8; 32]).unwrap();
+        let again = Ledger::open_sealed(store, [6u8; 32], None).unwrap();
         assert_eq!(again.balance("acct", now).unwrap().allowance, 1_000);
         // A payment seen before the snapshot is still a payment seen before.
         assert!(!again.first_payment("payment-7", now).unwrap());
@@ -884,7 +947,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("tokumai-nonce-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let store = Arc::new(crate::state::FileStore::new(&dir).unwrap());
-        let book = Ledger::open_sealed(store.clone(), [6u8; 32]).unwrap();
+        let book = Ledger::open_sealed(store.clone(), [6u8; 32], None).unwrap();
         assert!(book.first_sight("n", 1_000).unwrap());
         assert!(!book.first_sight("n", 2_000).unwrap());
         book.flush(Duration::from_secs(5)).unwrap();
@@ -922,7 +985,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let store = Arc::new(Flaky { inner: crate::state::FileStore::new(&dir).unwrap(), fail_next: std::sync::atomic::AtomicBool::new(false) });
         let now = 1_790_000_000_000;
-        let book = Ledger::open_sealed(store.clone(), [7u8; 32]).unwrap();
+        let book = Ledger::open_sealed(store.clone(), [7u8; 32], None).unwrap();
         book.flush(Duration::from_secs(5)).unwrap();
         store.fail_next.store(true, std::sync::atomic::Ordering::SeqCst);
         book.credit_prepaid("acct", 1_000, now).unwrap(); // this one lands, unconfirmed
@@ -930,8 +993,60 @@ mod tests {
         book.flush(Duration::from_secs(10)).unwrap();
         assert_eq!(crate::state::split(&store.journal().unwrap()).unwrap().records.len(), 2);
         drop(book);
-        let again = Ledger::open_sealed(store, [7u8; 32]).unwrap();
+        let again = Ledger::open_sealed(store, [7u8; 32], None).unwrap();
         assert_eq!(again.balance("acct", now).unwrap().total, 2_000);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A book that stands before the witness's last mark does not start; an acknowledged
+    /// restore does, and tells the witness at once.
+    #[test]
+    fn a_rewound_book_is_refused_and_an_acknowledged_restore_tells_the_witness() {
+        use crate::witness::{Setup, Witnessed};
+        let dir = std::env::temp_dir().join(format!("tokumai-witness-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Arc::new(crate::state::FileStore::new(&dir).unwrap());
+        let told: Arc<Mutex<Vec<Mark>>> = Arc::new(Mutex::new(Vec::new()));
+        let record: crate::witness::Record = {
+            let told = told.clone();
+            Arc::new(move |m: Mark| {
+                told.lock().unwrap().push(m);
+                Ok(())
+            })
+        };
+        let now = 1_790_000_000_000;
+        // A fresh book: its first snapshot is a fold, and the witness hears of it.
+        let book = Ledger::open_sealed(store.clone(), [7u8; 32], Some(Setup { seen: Witnessed::default(), record: record.clone() })).unwrap();
+        book.credit_prepaid("acct", 10, now).unwrap();
+        book.flush(Duration::from_secs(5)).unwrap();
+        for _ in 0..50 {
+            if !told.lock().unwrap().is_empty() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let first = *told.lock().unwrap().first().expect("the fold was witnessed");
+        assert_eq!(first.0, 2, "the fold made generation 2");
+        drop(book);
+        // The witness now says generation 2 (and a record): the same book is fine.
+        let seen = Witnessed { mark: Some(((2, 1), 1_000)), accepts: vec![] };
+        assert!(Ledger::open_sealed(store.clone(), [7u8; 32], Some(Setup { seen, record: record.clone() })).is_ok());
+        // A witness that has seen further than this book: refused.
+        let ahead = Witnessed { mark: Some(((3, 0), 1_000)), accepts: vec![] };
+        let refused = Ledger::open_sealed(store.clone(), [7u8; 32], Some(Setup { seen: ahead, record: record.clone() }));
+        assert!(refused.err().unwrap_or_default().contains("older book"));
+        // Acknowledged for this very position, after the mark: it starts and tells the witness.
+        told.lock().unwrap().clear();
+        let acked = Witnessed { mark: Some(((3, 0), 1_000)), accepts: vec![((2, 1), 2_000)] };
+        let book = Ledger::open_sealed(store, [7u8; 32], Some(Setup { seen: acked, record })).unwrap();
+        for _ in 0..50 {
+            if !told.lock().unwrap().is_empty() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        assert_eq!(told.lock().unwrap().first().copied(), Some((2, 1)), "the accepted position was witnessed at once");
+        drop(book);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -964,7 +1079,7 @@ mod tests {
         std::fs::write(dir.join("book.journal"), &journal).unwrap();
 
         let store = Arc::new(crate::state::FileStore::new(&dir).unwrap());
-        let book = Ledger::open_sealed(store.clone(), key).unwrap();
+        let book = Ledger::open_sealed(store.clone(), key, None).unwrap();
         assert_eq!(book.replayed(), 2);
         let left: i64 = book.conn.query_row("SELECT left FROM allowance WHERE acct = 'k'", [], |r| r.get(0)).unwrap();
         assert_eq!(left, 400);
@@ -975,7 +1090,7 @@ mod tests {
         book.flush(Duration::from_secs(5)).unwrap();
         assert!(store.journal().unwrap().starts_with(crate::state::MAGIC));
         drop(book);
-        let again = Ledger::open_sealed(store, key).unwrap();
+        let again = Ledger::open_sealed(store, key, None).unwrap();
         assert_eq!(again.balance("acct", now).unwrap().total, 10);
         let _ = std::fs::remove_dir_all(&dir);
     }

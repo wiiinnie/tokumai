@@ -353,6 +353,7 @@ mod tests {
                 dev_mode: true,
                 stripe: None,
                 apple_api: None,
+            witness: None,
             })
             .unwrap(),
         )

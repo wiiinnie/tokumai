@@ -155,6 +155,10 @@ Three of the things that would have ended real operation, closed together:
    a new instance beside it. `probe.sh backups` snapshots it daily, fourteen kept. Item 1
    of the list below, closed.
 
+Also that day: the alarm (`probe.sh alarm <email>` — the host reports the pulse's age to
+CloudWatch every minute, a mail when it passes five minutes or stops arriving) and the
+witness of item 2 below.
+
 What a restart still loses: requests in flight (their holds come back), the 30-minute
 reply cache, the strike counter, the cover queue. A planned upgrade is a stop and a start,
 a few minutes without doors; a drain that finishes in-flight requests first is next.
@@ -185,11 +189,16 @@ looks, and each is cheap to close now and expensive to explain later.
    morning of 2026-09-23, when a terminated probe took a paid test plan with it. Now on a
    volume of its own that survives the instance, snapshotted daily. The runbook still says
    `stop`, never `terminate`, out of habit; `terminate` keeps the volume.
-2. **A rewind must be detectable.** The host can hand back an older snapshot and journal,
-   and nothing inside a Nitro enclave survives a restart to notice — no counter, no key.
-   Closing it needs a counter the host cannot turn back, kept outside (a small conditional
-   write per snapshot is enough). Until then the operator is trusted for freshness; that
-   is a sentence we must be willing to write in the privacy policy.
+2. ~~**A rewind must be detectable.**~~ Built 2026-10-02 (`crates/enclave/src/witness.rs`),
+   live once the bucket exists (docs/aws-admin.md). The host can hand back an older
+   snapshot and journal, and nothing inside a Nitro enclave survives a restart to notice —
+   so the enclave tells a witness outside: one object per mark in an S3 bucket with Object
+   Lock in compliance mode, after every fold and every ten minutes while the book moves.
+   At start it refuses a book standing before the newest mark. A restore we mean is
+   acknowledged by the operator's own identity (`probe.sh accept-rewind`), which the
+   host's role may not write, and the acknowledgement is spent by the fresh mark the
+   enclave writes on starting. What stays: a rewind of under ten minutes, and the host's
+   power to stop the enclave by writing a false mark — visible, never silent.
 3. **The purchase must not point at the first question.** We hold the merchant records
    (who paid, when) and our host sees when a provider call goes out; while the service is
    small those two join up, and we learn that a named person asked something at a given

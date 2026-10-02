@@ -25,6 +25,8 @@
 #                                   # the enclave image stays (TAG names the one running)
 #     deploy/aws/probe.sh volume    # the book on a disk of its own (survives the instance; see below)
 #     deploy/aws/probe.sh backups   # a snapshot of that disk every day, kept 14 days
+#     deploy/aws/probe.sh alarm <email>      # mail when the enclave's pulse stops (CloudWatch + SNS)
+#     deploy/aws/probe.sh accept-rewind <g> <n>  # acknowledge a restore from backup (see below)
 #     deploy/aws/probe.sh terminate # instance, root disk, key pair, security group — gone;
 #                                   # the book's own volume is kept (asks first)
 #
@@ -37,6 +39,16 @@
 # replaced instance keep every balance and plan (before 2026-10-02 it lay on the root
 # volume, and a terminated probe took a paid plan with it on 2026-09-23). `launch` looks
 # for that volume and starts the new instance beside it.
+#
+# The host reports the age of the enclave's last pulse line to CloudWatch every minute
+# (tokumai-pulse.timer); `alarm` makes the alarm that mails when it passes five minutes or
+# the number stops arriving, which is a host that is down.
+#
+# The book's witness (crates/enclave/src/witness.rs) is the bucket named in the image; the
+# enclave refuses a book older than the witness's last mark. A restore from a backup is
+# older by definition and must be acknowledged with `accept-rewind <generation> <record>` —
+# the numbers are in the enclave's refusal in the host log. Only the operator's identity
+# may write that acknowledgement (bucket policy), never the host's role.
 #
 # Uses the CLI profile `tokumai` (the IAM user tokumai-probe), region eu-central-1.
 set -euo pipefail
@@ -53,6 +65,10 @@ ENCLAVE_MIB=3072
 BOOK_VOLUME=tokumai-book
 BOOK_GIB=4
 BOOK_MOUNT=/home/ec2-user/book
+# The witness bucket (also in deploy/enclave/Dockerfile — the image names it, the host
+# cannot change it) and the alarm's topic.
+WITNESS_BUCKET=tokumai-book-$(aws sts get-caller-identity --query Account --output text 2>/dev/null || echo 946944821363)
+ALARM_TOPIC=tokumai-alarms
 
 # running · stopped · pending · stopping, or empty when there is no probe instance. A
 # stopped instance has no address, so nothing may try to reach it.
@@ -138,8 +154,61 @@ echo \"enclave-run: the enclave is gone — it will be started again\"
 exit 1
 RUN
     chmod +x tokumai-enclave-run.sh
+    # The pulse: a stamp file touched whenever the enclave's pulse line appears, and once a
+    # minute its age sent to CloudWatch as tokumai/PulseAge (the alarm watches that).
+    cat > tokumai-pulse-watch.sh <<'WATCH'
+#!/bin/bash
+cd /home/ec2-user
+tail -n0 -F egress.log 2>/dev/null | grep --line-buffered \"pulse runtime\" | while read -r _; do touch pulse.stamp; done
+WATCH
+    cat > tokumai-pulse-metric.sh <<'METRIC'
+#!/bin/bash
+cd /home/ec2-user
+now=\$(date +%s)
+if [ -f pulse.stamp ]; then age=\$(( now - \$(stat -c %Y pulse.stamp) )); else age=9999; fi
+aws cloudwatch put-metric-data --region eu-central-1 --namespace tokumai --metric-name PulseAge --unit Seconds --value \"\$age\" 2>>pulse-metric.err || true
+METRIC
+    chmod +x tokumai-pulse-watch.sh tokumai-pulse-metric.sh
+    sudo tee /etc/systemd/system/tokumai-pulse-watch.service >/dev/null <<'UNIT'
+[Unit]
+Description=tokumai: stamp the enclave's pulse
+After=tokumai-egress.service
+
+[Service]
+User=ec2-user
+WorkingDirectory=/home/ec2-user
+ExecStart=/home/ec2-user/tokumai-pulse-watch.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+    sudo tee /etc/systemd/system/tokumai-pulse.service >/dev/null <<'UNIT'
+[Unit]
+Description=tokumai: report the pulse's age to CloudWatch
+
+[Service]
+Type=oneshot
+User=ec2-user
+WorkingDirectory=/home/ec2-user
+ExecStart=/home/ec2-user/tokumai-pulse-metric.sh
+UNIT
+    sudo tee /etc/systemd/system/tokumai-pulse.timer >/dev/null <<'UNIT'
+[Unit]
+Description=tokumai: the pulse's age, every minute
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target
+UNIT
     sudo systemctl daemon-reload
-    sudo systemctl enable tokumai-egress tokumai-enclave >/dev/null 2>&1"
+    sudo systemctl enable tokumai-egress tokumai-enclave tokumai-pulse-watch tokumai-pulse.timer >/dev/null 2>&1
+    sudo systemctl restart tokumai-pulse-watch tokumai-pulse.timer"
 }
 
 case "${1:-}" in
@@ -360,6 +429,29 @@ PY
     aws dlm create-lifecycle-policy --description "$BOOK_VOLUME daily" --state ENABLED --execution-role-arn "$ARN" \
       --policy-details "{\"PolicyType\":\"EBS_SNAPSHOT_MANAGEMENT\",\"ResourceTypes\":[\"VOLUME\"],\"TargetTags\":[{\"Key\":\"Name\",\"Value\":\"$BOOK_VOLUME\"}],\"Schedules\":[{\"Name\":\"daily\",\"CreateRule\":{\"Interval\":24,\"IntervalUnit\":\"HOURS\",\"Times\":[\"03:00\"]},\"RetainRule\":{\"Count\":14},\"CopyTags\":true}]}" \
       --query PolicyId --output text | sed 's/^/backups are on: policy /'
+    ;;
+  alarm)
+    # The topic, the address, the alarm. The address gets one mail from AWS asking to
+    # confirm the subscription; nothing arrives before that link is clicked.
+    EMAIL=${2:?usage: probe.sh alarm <email>}
+    TOPIC=$(aws sns create-topic --name $ALARM_TOPIC --query TopicArn --output text)
+    if ! aws sns list-subscriptions-by-topic --topic-arn "$TOPIC" --query "Subscriptions[?Endpoint=='$EMAIL'].SubscriptionArn" --output text | grep -q .; then
+      aws sns subscribe --topic-arn "$TOPIC" --protocol email --notification-endpoint "$EMAIL" >/dev/null
+      echo "a confirmation mail is on its way to $EMAIL — the alarm reaches it once the link in it is clicked"
+    fi
+    aws cloudwatch put-metric-alarm --alarm-name tokumai-enclave-silent \
+      --alarm-description "The tokumai enclave has not written a pulse line for five minutes, or the host is not reporting at all." \
+      --namespace tokumai --metric-name PulseAge --statistic Maximum --period 60 --evaluation-periods 5 --datapoints-to-alarm 5 \
+      --threshold 300 --comparison-operator GreaterThanThreshold --treat-missing-data breaching \
+      --alarm-actions "$TOPIC" --ok-actions "$TOPIC"
+    echo "alarm tokumai-enclave-silent is set: PulseAge > 300 s for 5 minutes, or no data, mails $EMAIL (and again when it recovers)"
+    ;;
+  accept-rewind)
+    # The operator says: this older book is the one to run (a restore from backup). The
+    # enclave's refusal in the host log names the generation and record to acknowledge.
+    G=${2:?usage: probe.sh accept-rewind <generation> <record>}; N=${3:?usage: probe.sh accept-rewind <generation> <record>}
+    aws s3api put-object --bucket "$WITNESS_BUCKET" --key "accept/$G-$N" --body /dev/null >/dev/null
+    echo "acknowledged generation $G record $N in $WITNESS_BUCKET — restart the enclave (systemctl restart tokumai-enclave on the host, or 'host'); the acknowledgement counts once"
     ;;
   terminate)
     # This destroys the root volume. The book's own volume (if `volume` made one) is kept:

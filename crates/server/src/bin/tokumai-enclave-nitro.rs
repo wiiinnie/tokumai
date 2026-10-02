@@ -435,6 +435,60 @@ async fn main() {
             }
         }
     }
+    // The witness outside the machine (tokumai_enclave::witness): the bucket is part of
+    // the image, so the host cannot point the enclave at one of its own. The enclave does
+    // not start on a book the witness has seen the future of, and does not start without
+    // the witness's answer either — a book that cannot be checked is not run.
+    let witness = match (&sealed, std::env::var("TOKUMAI_WITNESS_BUCKET").ok().filter(|b| !b.is_empty())) {
+        (Some(_), Some(name)) => {
+            let bucket = std::sync::Arc::new(tokumai_enclave::witness::Bucket { name, region: REGION.to_string() });
+            let mut seen = None;
+            for attempt in 1..=30 {
+                let looked = async {
+                    let creds = tokumai_egress::ask_host(&Endpoint::Vsock(HOST_CID, HOST_SERVICE_PORT), "credentials").await?;
+                    let creds: tokumai_enclave::kms::Credentials = serde_json::from_slice(&creds).map_err(|e| format!("the host's credentials are unreadable: {e}"))?;
+                    tokumai_enclave::witness::read(&bucket, &creds, tokumai_proto::now_ms()).await
+                }
+                .await;
+                match looked {
+                    Ok(s) => {
+                        seen = Some(s);
+                        break;
+                    }
+                    Err(e) if attempt == 30 => {
+                        let _ = tokumai_egress::announce(&Endpoint::Vsock(HOST_CID, ANNOUNCE_PORT), &format!("{PROBE} cannot read its witness: {e}")).await;
+                        panic!("the witness cannot be read: {e}");
+                    }
+                    Err(_) => tokio::time::sleep(std::time::Duration::from_secs(4)).await,
+                }
+            }
+            let seen = seen.expect("looked");
+            let _ = tokumai_egress::announce(
+                &Endpoint::Vsock(HOST_CID, ANNOUNCE_PORT),
+                &match seen.mark {
+                    Some(((g, n), _)) => format!("{PROBE} witness: last mark generation {g} record {n}, {} acknowledgement(s)", seen.accepts.len()),
+                    None => format!("{PROBE} witness: no mark yet"),
+                },
+            )
+            .await;
+            let record: tokumai_enclave::witness::Record = std::sync::Arc::new(move |mark| {
+                // From the book's writer thread: a runtime of its own for the two calls.
+                let bucket = bucket.clone();
+                let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
+                runtime.block_on(async move {
+                    let creds = tokumai_egress::ask_host(&Endpoint::Vsock(HOST_CID, HOST_SERVICE_PORT), "credentials").await?;
+                    let creds: tokumai_enclave::kms::Credentials = serde_json::from_slice(&creds).map_err(|e| format!("the host's credentials are unreadable: {e}"))?;
+                    tokumai_enclave::witness::record(&bucket, &creds, mark, tokumai_proto::now_ms()).await
+                })
+            });
+            Some(tokumai_enclave::witness::Setup { seen, record })
+        }
+        (Some(_), None) => {
+            let _ = tokumai_egress::announce(&Endpoint::Vsock(HOST_CID, ANNOUNCE_PORT), &format!("{PROBE} witness: none in this image — a rewound book would not be noticed")).await;
+            None
+        }
+        _ => None,
+    };
     let enclave = Enclave::start(Platform {
         attester: Box::new(attester),
         keys,
@@ -446,6 +500,7 @@ async fn main() {
         dev_mode,
         stripe,
         apple_api,
+        witness,
     })
     .expect("start the enclave");
     // What the book came back with, over vsock: a production enclave has no console, and

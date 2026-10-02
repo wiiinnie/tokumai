@@ -26,6 +26,8 @@ ring.workspace = true
 # KMS from inside the enclave: the request is signed here (hmac), the answer comes as CMS
 # (the content key to our RSA key, the content under AES-CBC).
 hmac = "0.12"
+# Content-MD5 on the witness's writes: S3 asks for it on a bucket with Object Lock.
+md-5 = "0.10"
 rsa = "0.9"
 aes = "0.8"
 cbc = { version = "0.1", features = ["alloc"] }

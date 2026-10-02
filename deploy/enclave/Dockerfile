@@ -41,4 +41,7 @@ COPY --from=build /src/target/release/tokumai-enclave-nitro /tokumai-enclave-nit
 # (Reduced to DE01 alone on 2026-09-28 to test whether three clients in one runtime were
 # behind the silent deaths; they were not — a lock taken twice was — so all three are back.)
 ENV TOKUMAI_GATEWAYS=38zcSsvjXsAX7C28ko2H3Lt55X4TYxfZYkPADxKXZHUj,98FmUvDdQYEeV1ioi5NpFK7DoeHphVECndaG7fkRUsaF,6KZ96sPW6BBcgmghYb7c7BtCXgAEr1nmwnJzzRsszyhe
+# The witness of the book's progress (crates/enclave/src/witness.rs): an S3 bucket with
+# Object Lock in compliance mode, named here so that the host cannot substitute one.
+ENV TOKUMAI_WITNESS_BUCKET=tokumai-book-946944821363
 ENTRYPOINT ["/tokumai-enclave-nitro"]

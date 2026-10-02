@@ -12,6 +12,8 @@ generativelanguage.googleapis.com 443
 
 # AWS KMS: where the enclave has its sealed secrets opened — for its own image only.
 kms.eu-central-1.amazonaws.com 443
+# The witness of the book (crates/enclave/src/witness.rs): the bucket named in the image.
+tokumai-book-946944821363.s3.eu-central-1.amazonaws.com 443
 
 # Payments
 api.stripe.com 443

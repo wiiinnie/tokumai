@@ -248,6 +248,7 @@ mod tests {
             dev_mode: false,
             stripe: None,
             apple_api: None,
+            witness: None,
         })
         .unwrap();
         Box::leak(Box::new(e))

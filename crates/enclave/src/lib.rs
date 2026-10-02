@@ -36,6 +36,7 @@ pub mod service;
 pub mod state;
 pub mod stripe;
 pub mod subscriptions;
+pub mod witness;
 
 pub use service::{Enclave, Platform};
 

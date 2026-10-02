@@ -39,6 +39,7 @@ fn with_providers(dev: bool, providers: Providers) -> Enclave {
         dev_mode: dev,
         stripe: None,
         apple_api: None,
+            witness: None,
     })
     .unwrap()
 }

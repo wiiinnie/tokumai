@@ -60,6 +60,7 @@ async fn main() {
         dev_mode: true,
         stripe: tokumai_enclave::stripe::Stripe::from_secrets(&EnvSecrets),
         apple_api: tokumai_enclave::apple::AppleApi::from_secrets(&EnvSecrets),
+            witness: None,
     })
     .expect("start the enclave");
     let enclave: &'static Enclave = Box::leak(Box::new(enclave));

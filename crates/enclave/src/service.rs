@@ -59,6 +59,9 @@ pub struct Platform {
     /// The App Store Server API, for the renewal check (App Store plans still verify
     /// without it — from what the app hands over).
     pub apple_api: Option<crate::apple::AppleApi>,
+    /// The witness outside the machine that notices a rewound book (`witness`). None on
+    /// a developer's machine and in the tests.
+    pub witness: Option<crate::witness::Setup>,
 }
 
 pub struct Enclave {
@@ -119,7 +122,7 @@ impl Enclave {
         let mut ledger = match p.db {
             Db::File(path) => Ledger::open(&path, key)?,
             Db::Memory => Ledger::in_memory(key)?,
-            Db::Kept(store) => Ledger::open_sealed(store, key)?,
+            Db::Kept(store) => Ledger::open_sealed(store, key, p.witness)?,
         };
         let replayed = ledger.replayed();
         if replayed > 0 {
