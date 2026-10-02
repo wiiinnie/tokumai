@@ -41,9 +41,9 @@ const RELEASE_MEASUREMENTS: &[&str] = &[
     // tokumai-book — production, the same code without the sandbox feature
     "b2e091ec2144140a4e98209c0a3355819e88c8e6ef6850d6250982f1d7a1588039c76bbf8f54c9ccd18acdb014010da3",
     // tokumai-ops-sandbox — the witness and the operator's console; deployed after the review
-    "05b368ccafbc353973ab793bc2689336c632cee1f47a2a2c955f63108c0f2c719feaa99b41dcbfb7d75745dae3ebbee0",
+    "5261ea2b021564945de741d75223897b2cf1c7f3ada0650b89d8d9fc7e10f9827bda5439724bd21a371fe321e0a56676",
     // tokumai-ops — production, the same code without the sandbox feature
-    "f1b98a99ddf62722c65d5d14c9463463b905b6a4b213e9e56afbea54997bd83ece341fd6a02292ee2ed8f0892729f0a6",
+    "",
 ];
 
 fn dev_data() -> PathBuf {
