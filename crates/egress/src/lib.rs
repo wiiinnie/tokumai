@@ -227,7 +227,11 @@ where
                 (_, "snapshot") => Ok(read_or_empty(&book.join(SNAPSHOT))),
                 (_, "journal") => Ok(read_or_empty(&book.join(JOURNAL))),
                 (_, "put-snapshot") => put_snapshot(&book, &given, &last).map(|()| b"kept".to_vec()),
-                (_, "add-record") => add_record(&book, &given, &last).map(|again| if again { b"kept-again".to_vec() } else { b"kept".to_vec() }),
+                // The first enclaves hand a record over bare; since 2026-10-02 it comes with
+                // its place in front (`add-record-2`). Both are answered, so a host can be
+                // brought up to date without the enclave image changing with it.
+                (_, "add-record") => add_record_bare(&book, &given).map(|()| b"kept".to_vec()),
+                (_, "add-record-2") => add_record(&book, &given, &last).map(|again| if again { b"kept-again".to_vec() } else { b"kept".to_vec() }),
                 (_, other) => Err(format!("the enclave asked for {other:?}, which is not answered here")),
             };
             match answer {
@@ -309,6 +313,23 @@ fn journal_last(bytes: &[u8]) -> Result<Option<u64>, String> {
         at += 12 + len;
     }
     Ok(last)
+}
+
+/// A record in the old form: its length and its bytes, no number, onto a journal in the old
+/// form (or an empty one). An enclave of that generation is still served; the first enclave
+/// of the new one folds what it finds into a snapshot and goes on with numbers.
+fn add_record_bare(dir: &std::path::Path, record: &[u8]) -> Result<(), String> {
+    use std::io::Write;
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let path = dir.join(JOURNAL);
+    let have = std::fs::read(&path).unwrap_or_default();
+    if have.starts_with(JOURNAL_MAGIC) {
+        return Err("the journal carries numbers now; a bare record cannot follow them".into());
+    }
+    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&path).map_err(|e| e.to_string())?;
+    f.write_all(&(record.len() as u32).to_be_bytes()).map_err(|e| e.to_string())?;
+    f.write_all(record).map_err(|e| e.to_string())?;
+    f.sync_data().map_err(|e| e.to_string())
 }
 
 /// One record onto the journal — and not answered before it is safe on the disk. What the
@@ -546,15 +567,19 @@ mod tests {
         assert!(ask_host(&at, "snapshot").await.unwrap().is_empty());
         assert!(ask_host(&at, "journal").await.unwrap().is_empty());
         let placed = |n: u64, r: &[u8]| [&1u64.to_be_bytes()[..], &n.to_be_bytes(), r].concat();
-        assert_eq!(tell_host(&at, "add-record", &placed(1, b"a held request")).await.unwrap(), b"kept");
-        tell_host(&at, "add-record", &placed(2, b"settled")).await.unwrap();
+        assert_eq!(tell_host(&at, "add-record-2", &placed(1, b"a held request")).await.unwrap(), b"kept");
+        tell_host(&at, "add-record-2", &placed(2, b"settled")).await.unwrap();
         // Asked again for a record it has: taken as said, not written twice.
-        assert_eq!(tell_host(&at, "add-record", &placed(2, b"settled")).await.unwrap(), b"kept-again");
-        assert!(tell_host(&at, "add-record", &placed(4, b"gap")).await.is_err());
+        assert_eq!(tell_host(&at, "add-record-2", &placed(2, b"settled")).await.unwrap(), b"kept-again");
+        assert!(tell_host(&at, "add-record-2", &placed(4, b"gap")).await.is_err());
+        assert!(tell_host(&at, "add-record", b"bare").await.is_err(), "no bare record after numbered ones");
         assert_eq!(ask_host(&at, "journal").await.unwrap().len(), JOURNAL_MAGIC.len() + 12 + 14 + 12 + 7);
         tell_host(&at, "put-snapshot", b"the whole book").await.unwrap();
         assert_eq!(ask_host(&at, "snapshot").await.unwrap(), b"the whole book");
         assert!(ask_host(&at, "journal").await.unwrap().is_empty());
+        // An enclave of the first generation, on an empty journal: served as before.
+        assert_eq!(tell_host(&at, "add-record", b"bare").await.unwrap(), b"kept");
+        assert_eq!(ask_host(&at, "journal").await.unwrap(), [&[0u8, 0, 0, 4][..], b"bare"].concat());
         let _ = std::fs::remove_file(&sealed);
         let _ = std::fs::remove_dir_all(&book);
     }

@@ -129,7 +129,7 @@ impl tokumai_enclave::state::Store for HostBook {
         let mut body = generation.to_be_bytes().to_vec();
         body.extend_from_slice(&number.to_be_bytes());
         body.extend_from_slice(record);
-        self.call("add-record", &body).map(|_| ())
+        self.call("add-record-2", &body).map(|_| ())
     }
 }
 

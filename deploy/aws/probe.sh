@@ -21,6 +21,8 @@
 #     deploy/aws/probe.sh ssh
 #     deploy/aws/probe.sh stop      # keeps the disk, so the enclave's book is there tomorrow
 #     deploy/aws/probe.sh start     # and back again (new address; then `deploy`)
+#     deploy/aws/probe.sh host      # the host side only: proxy binary, allow list, the two units —
+#                                   # the enclave image stays (TAG names the one running)
 #     deploy/aws/probe.sh volume    # the book on a disk of its own (survives the instance; see below)
 #     deploy/aws/probe.sh backups   # a snapshot of that disk every day, kept 14 days
 #     deploy/aws/probe.sh terminate # instance, root disk, key pair, security group — gone;
@@ -197,6 +199,10 @@ UD
     remote "set -e
       chmod +x tokumai-egress-host
       printf 'EIF=/home/ec2-user/tokumai-$TAG.eif\nCPUS=$ENCLAVE_CPUS\nMIB=$ENCLAVE_MIB\nFLAGS=\"$DEBUG\"\n' > enclave.conf
+      # The log is turned over, not emptied: what the last enclave said before it was
+      # replaced is exactly what a fault report needs. The five most recent are kept.
+      [ -s egress.log ] && mv egress.log egress.log.\$(date -u +%Y%m%dT%H%M%SZ) || true
+      ls -t egress.log.* 2>/dev/null | tail -n +6 | xargs -r rm -f
       : > egress.log
       sudo systemctl restart tokumai-egress
       sleep 2
@@ -226,6 +232,26 @@ PY
     echo "$ADDRESSES" | sed 's/^/  /' 
     remote "grep -E 'unsealed' egress.log | tail -1; ls -l book 2>/dev/null | tail -2" || true
     echo "dev-data/probe.json written — the app and the dev tools now talk to this enclave"
+    ;;
+  host)
+    # Everything of `deploy` except the image: for a change on the host side (the proxy,
+    # the units, the allow list) while the running image must stay what the apps pin.
+    # The enclave is restarted all the same, under its unit from now on.
+    [ "$(instance_state)" = "running" ] || { echo "the instance is $(instance_state) — 'start' first"; exit 1; }
+    remote "test -f /home/ec2-user/tokumai-$TAG.eif" || { echo "no tokumai-$TAG.eif on the host — TAG must name the image that is deployed"; exit 1; }
+    remote "sudo systemctl stop tokumai-enclave 2>/dev/null || true; sudo nitro-cli terminate-enclave --all >/dev/null 2>&1 || true; sudo systemctl stop tokumai-egress 2>/dev/null || true; pkill -f '[t]okumai-egress-host' || true; sleep 1" || true
+    scp -i "$KEY" -q dev-data/linux-release/tokumai-egress-host deploy/egress.allow ec2-user@"$(public_ip)":/home/ec2-user/
+    install_units
+    remote "set -e
+      chmod +x tokumai-egress-host
+      printf 'EIF=/home/ec2-user/tokumai-$TAG.eif\nCPUS=$ENCLAVE_CPUS\nMIB=$ENCLAVE_MIB\nFLAGS=\"\"\n' > enclave.conf
+      sudo systemctl restart tokumai-egress
+      sleep 2
+      systemctl is-active tokumai-egress
+      sudo systemctl restart tokumai-enclave
+      sleep 3
+      systemctl is-active tokumai-enclave"
+    echo "host updated; the enclave (tokumai-$TAG) is coming back under its unit — 'status' shows its doors"
     ;;
   status)
     ID=$(instance_id); [ -z "$ID" ] && { echo "no probe instance — 'launch' makes one"; exit 0; }
