@@ -15,6 +15,14 @@
 //! it takes to make up the difference, each offset the way ordinary traffic is offset.
 //! Nobody's question is ever held back, so no one waits for this.
 //!
+//! And not only the first question (session cover, 2026-10-02): a person who has just
+//! paid asks several things in a row, and in a thin hour "payment, then an afternoon of
+//! calls" says the payer kept asking even when no single call can be pointed at. So the
+//! account stays armed for the whole window, and every one of its calls in it is held
+//! against the other accounts' calls since its previous one — each stands among six, not
+//! only the first. What that still leaves is the existence of the session itself; only a
+//! crowd hides that, and the pitch says so.
+//!
 //! The cost falls to zero as the service fills up, which is the point: decoys are bought
 //! only while there is nobody to hide among. `tokumai-cover-need` computes the rest: with
 //! 15 questions per user per day the text case pays for itself at about 250 users and the
@@ -54,8 +62,9 @@ pub enum Shape {
 /// than two.
 const ENOUGH: usize = 5;
 
-/// How long a call counts as cover. Longer than any plausible gap between paying and
-/// asking the first question; a payment older than this has stopped being an anchor.
+/// How long a payment keeps its account armed: longer than any plausible gap between
+/// paying and asking the first question, and the session that follows it. Older than this,
+/// the payment has stopped being an anchor.
 const COVER_KEEP_MS: u64 = 6 * 3_600_000;
 
 /// The most calls we remember. A busy enclave needs no more than this to answer "was
@@ -66,8 +75,9 @@ const REMEMBER: usize = 512;
 pub struct Cover {
     /// When each recent provider call happened, and what it looked like.
     seen: Mutex<Vec<(u64, Shape)>>,
-    /// Accounts that have paid and not yet asked anything: when they paid.
-    waiting: Mutex<HashMap<String, u64>>,
+    /// Accounts within the window of a payment: when they paid, and when they last asked
+    /// something (the payment itself, until the first question).
+    waiting: Mutex<HashMap<String, (u64, u64)>>,
 }
 
 impl Cover {
@@ -75,8 +85,8 @@ impl Cover {
     /// is the one that could be tied to the payment.
     pub fn paid(&self, account: &str, now_ms: u64) {
         if let Ok(mut waiting) = self.waiting.lock() {
-            waiting.retain(|_, at| now_ms.saturating_sub(*at) < COVER_KEEP_MS);
-            waiting.insert(account.to_string(), now_ms);
+            waiting.retain(|_, (paid, _)| now_ms.saturating_sub(*paid) < COVER_KEEP_MS);
+            waiting.insert(account.to_string(), (now_ms, now_ms));
         }
     }
 
@@ -92,20 +102,23 @@ impl Cover {
     }
 
     /// How many decoys this account's call needs beside it: enough to bring the calls of
-    /// its shape up to [`ENOUGH`], counting what other people already provided. Asked once
-    /// per account — after the first question the payment has stopped being an anchor,
-    /// whether it was covered by other people's traffic or by our own money.
+    /// its shape since the account's previous call (or its payment) up to [`ENOUGH`],
+    /// counting what other people provided in between. Asked for every call inside the
+    /// window; the account's own earlier calls are not cover for its later ones.
     pub fn decoys_needed(&self, account: &str, shape: Shape, now_ms: u64) -> usize {
         let Ok(mut waiting) = self.waiting.lock() else { return 0 };
-        let Some(paid_at) = waiting.remove(account) else { return 0 };
+        let Some((paid_at, since)) = waiting.get(account).copied() else { return 0 };
         if now_ms.saturating_sub(paid_at) >= COVER_KEEP_MS {
+            waiting.remove(account);
             return 0; // long enough ago that the payment no longer points at anything
         }
+        // Strictly after the previous anchor: that moment's own call is this account's.
         let cover = self
             .seen
             .lock()
-            .map(|seen| seen.iter().filter(|(at, s)| *s == shape && *at >= paid_at).count())
+            .map(|seen| seen.iter().filter(|(at, s)| *s == shape && (*at > since || (*at == since && since == paid_at))).count())
             .unwrap_or(0);
+        waiting.insert(account.to_string(), (paid_at, now_ms));
         ENOUGH.saturating_sub(cover)
     }
 
@@ -127,8 +140,18 @@ mod tests {
         cover.paid("acct", 0);
         // Nothing else happened in between: we buy the whole set.
         assert_eq!(cover.decoys_needed("acct", Shape::Text, 2 * MIN), ENOUGH);
-        // Asked once only: the payment has stopped being an anchor.
-        assert_eq!(cover.decoys_needed("acct", Shape::Text, 3 * MIN), 0);
+        cover.note(Shape::Text, 2 * MIN);
+        // The session goes on in the same empty room: every call is covered, and the
+        // account's own previous call is not its cover.
+        assert_eq!(cover.decoys_needed("acct", Shape::Text, 3 * MIN), ENOUGH);
+        cover.note(Shape::Text, 3 * MIN);
+        // Other people arrive between two of its calls: those count.
+        for i in 1..=5 {
+            cover.note(Shape::Text, 3 * MIN + i * 1_000);
+        }
+        assert_eq!(cover.decoys_needed("acct", Shape::Text, 4 * MIN), 0);
+        // The window closes six hours after the payment, not after the last call.
+        assert_eq!(cover.decoys_needed("acct", Shape::Text, 7 * 60 * MIN), 0);
     }
 
     #[test]

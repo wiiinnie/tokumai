@@ -58,6 +58,11 @@ fn main() {
     let gateways = arg("--gateways", 4.0);
     let gateway_eur = arg("--gateway-eur", 15.0);
     let misc_eur = arg("--misc-eur", 25.0); // domain, mail, backups, the site
+    // Session cover (enclave::cover): every call in the six hours after a payment is held
+    // against other accounts' calls and topped up to five with decoys. In a thin hour that
+    // is five decoys per call; how many calls fall into those hours is this.
+    let cover_questions = arg("--cover-questions", 10.0);
+    let picture_share = arg("--pictures", 0.08);
 
     let fixed_usd = aws_usd + ebs_usd + egress_usd + (gateways * gateway_eur + misc_eur) * eurusd;
 
@@ -133,8 +138,11 @@ fn main() {
         println!("{users:>7} │ {entry:>9.2}$ │ {fixed_each:>9.2}$ │ {:>9.0}$ │ {:>7.0}%", each * users as f64, each / gross_each * 100.0);
     }
 
-    println!("\nA new subscriber's cover costs {:.3}$ once (five text decoys) or {:.2}$ if their", 5.0 * text_decoy, 5.0 * picture_decoy);
-    println!("first question draws a picture — and nothing at all once other people's traffic covers it.");
+    let cover_worst = cover_questions * 5.0 * ((1.0 - picture_share) * text_decoy + picture_share * picture_decoy);
+    println!("\nCover: five decoys per call in the six hours after a payment while nobody else is active.");
+    println!("With {cover_questions:.0} calls in that window ({:.0}% pictures) that is at most {cover_worst:.3}$ per payment —", picture_share * 100.0);
+    println!("{:.3}$ a month per subscriber in the worst case (one payment a month), and nothing once", cover_worst);
+    println!("other people's traffic covers it (tokumai-cover-need: text from ~250 users, pictures from ~2,500).");
     println!("A yearly plan is twelve months less 10 % (€{:.2} at the entry tier), same costs.", yearly_cents(TIERS[0].1) as f64 / 100.0);
 }
 

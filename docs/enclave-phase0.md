@@ -232,6 +232,20 @@ looks, and each is cheap to close now and expensive to explain later.
 4. **Signed images (PCR8) instead of a list of PCR0s**, so an upgrade does not mean editing
    the key policy — and so "whoever can change the policy could name an image of their
    choosing" stops being true.
+4b. **Decide the margin, and the allowance, before real money** (2026-10-02). `policy::MARGIN`
+   is 1.15: a TOKU buys provider output at cost × 1.15, and the €10 plan's 700,000 TOKU
+   are $6.09 of provider cost if drawn in full ($3.65 at the 60 % we assume). What is left
+   per subscriber per month on the App Store rail, at 60 % use, by `tokumai-margin`:
+   MARGIN 1.15 → $4.20, 1.30 → $4.63, 1.40 → $4.86; drawn in full: $1.77, $2.47, $2.86.
+   Two levers, not the same: raising MARGIN changes what every TOKU already held buys
+   (a price rise for existing balances, visible in `pricingVersion`); shrinking the
+   allowance (700,000 → 500,000 TOKU at €10 = $4.35 provider cost at full use, $2.41 →
+   $4.15 left) changes only what a new plan grants, and a TOKU keeps its meaning. The
+   €10 plan today is about 3,400 fast-model answers a month, which is generous. Session
+   cover (`cover.rs`, every call in the six hours after a payment) costs at most $0.19
+   per payment in thin traffic and nothing at scale — in the model, not a reason by
+   itself. **To decide:** a number for MARGIN or for the allowance, in the pitch's cost
+   table and in `pricing.json`/`subscription::TIERS`, before the first real plan.
 5. **TAKE THE SANDBOX IMAGE OUT OF THE KEY POLICY.** On 2026-09-24 the probe key was widened
    to two measurements so an App Store **sandbox** purchase could be tested from a real
    phone: `tokumai-probe-2` (production rules) and `tokumai-sandbox-1`
