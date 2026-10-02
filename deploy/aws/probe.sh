@@ -450,7 +450,7 @@ PY
     # The operator says: this older book is the one to run (a restore from backup). The
     # enclave's refusal in the host log names the generation and record to acknowledge.
     G=${2:?usage: probe.sh accept-rewind <generation> <record>}; N=${3:?usage: probe.sh accept-rewind <generation> <record>}
-    aws s3api put-object --bucket "$WITNESS_BUCKET" --key "accept/$G-$N" --body /dev/null >/dev/null
+    EMPTY=$(mktemp); aws s3api put-object --bucket "$WITNESS_BUCKET" --key "accept/$G-$N" --body "$EMPTY" >/dev/null; rm -f "$EMPTY"
     echo "acknowledged generation $G record $N in $WITNESS_BUCKET — restart the enclave (systemctl restart tokumai-enclave on the host, or 'host'); the acknowledgement counts once"
     ;;
   terminate)
