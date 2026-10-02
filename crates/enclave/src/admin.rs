@@ -56,6 +56,8 @@ pub struct Stats {
     /// Accounts (by their stored name) seen today and yesterday: a count, not a list,
     /// is what leaves here.
     active: Mutex<(u64, HashSet<String>, HashSet<String>)>,
+    /// Redemption-shaped events of the last day: (when, which), for the ghosts' rule.
+    events: Mutex<VecDeque<(u64, crate::ghost::Event)>>,
     pub started: std::time::Instant,
 }
 
@@ -65,6 +67,7 @@ impl Default for Stats {
             hours: Mutex::new(VecDeque::new()),
             pending: Mutex::new(HashMap::new()),
             active: Mutex::new((0, HashSet::new(), HashSet::new())),
+            events: Mutex::new(VecDeque::new()),
             started: std::time::Instant::now(),
         }
     }
@@ -93,6 +96,20 @@ impl Stats {
         if declined {
             self.add(&format!("d:{day}:{model}:{kind}:declined"), 1);
         }
+    }
+
+    /// A redemption happened (real) or was made (a ghost).
+    pub fn event(&self, now_ms: u64, what: crate::ghost::Event) {
+        if let Ok(mut e) = self.events.lock() {
+            e.push_back((now_ms, what));
+            while e.front().map(|(at, _)| now_ms.saturating_sub(*at) > 86_400_000).unwrap_or(false) {
+                e.pop_front();
+            }
+        }
+    }
+
+    pub fn events_since(&self, since_ms: u64, what: crate::ghost::Event) -> usize {
+        self.events.lock().map(|e| e.iter().filter(|(at, w)| *at >= since_ms && *w == what).count()).unwrap_or(0)
     }
 
     /// A count for the book, added at the next flush.
@@ -216,6 +233,9 @@ impl Enclave {
             "replies": { "count": replies, "bytes": reply_bytes },
             "working": self.working.load(std::sync::atomic::Ordering::Relaxed),
             "coverWaiting": self.cover.waiting_count(),
+            "redemptionsLastHour": self.redemption_shaped_last_hour().0,
+            "ghostsLastHour": self.redemption_shaped_last_hour().1,
+            "ghostsToday": self.stats.events_since(now.saturating_sub(86_400_000), crate::ghost::Event::Ghost),
             "strikesToday": strikes_today,
             "stripe": { "configured": self.stripe.is_some(), "pricesReadMs": prices_at, "prices": prices },
             "appleApi": self.apple_api.is_some(),

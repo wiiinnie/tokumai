@@ -318,17 +318,22 @@ impl Enclave {
     /// app gets an error and asks again, which every one of these operations answers the
     /// same way the second time.
     async fn durably(&self, answer: Value) -> Value {
-        let (flushed, mark) = match self.ledger.lock() {
-            Ok(l) => (l.flushed(), l.mark()),
-            Err(_) => return answer,
-        };
-        let Some(flushed) = flushed else { return answer };
-        let confirmed = tokio::task::spawn_blocking(move || flushed.wait(mark, Self::DURABLE_WITHIN)).await.unwrap_or(false);
-        if confirmed {
+        if self.wait_for_host().await {
             answer
         } else {
             error("the book could not be written in time — please try again")
         }
+    }
+
+    /// True once the host has confirmed everything written down so far (or there is no
+    /// host to wait for); false when it took longer than `DURABLE_WITHIN`.
+    pub(crate) async fn wait_for_host(&self) -> bool {
+        let (flushed, mark) = match self.ledger.lock() {
+            Ok(l) => (l.flushed(), l.mark()),
+            Err(_) => return true,
+        };
+        let Some(flushed) = flushed else { return true };
+        tokio::task::spawn_blocking(move || flushed.wait(mark, Self::DURABLE_WITHIN)).await.unwrap_or(false)
     }
 
     async fn dispatch(&self, account: &str, op: &str, body: &str, now: u64) -> Value {

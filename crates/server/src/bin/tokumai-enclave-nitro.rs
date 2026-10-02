@@ -572,6 +572,8 @@ async fn main() {
         panic!("not one of the enclave's doors opened");
     }
     let _ = tokumai_egress::announce(&Endpoint::Vsock(HOST_CID, ANNOUNCE_PORT), &format!("{PROBE} serving on {open} of {} doors", gateways.len())).await;
+    // Redemption-shaped traffic for the thin hours (tokumai_enclave::ghost).
+    tokio::spawn(tokumai_server::mix::ghosts(enclave));
     // The doors' loops hold the process; this task has nothing left to do.
     std::future::pending::<()>().await;
 }

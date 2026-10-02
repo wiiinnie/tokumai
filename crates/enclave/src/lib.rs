@@ -20,6 +20,7 @@ pub mod apple;
 pub mod catalog;
 pub mod cover;
 pub mod gemini;
+pub mod ghost;
 pub mod http;
 pub mod keys;
 pub mod kms;

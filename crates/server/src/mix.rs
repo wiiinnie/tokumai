@@ -43,6 +43,73 @@ fn now_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
+/// Every door that is open: its address and the sender that posts through it. The ghosts
+/// (`tokumai_enclave::ghost`) need one door to send from and another to send to.
+struct Door {
+    address: String,
+    sender: Arc<RwLock<MixnetClientSender>>,
+}
+
+static DOORS: std::sync::Mutex<Vec<Door>> = std::sync::Mutex::new(Vec::new());
+
+/// Redemptions that nobody made, in the hours in which nobody does (`tokumai_enclave::ghost`
+/// has the rule and the shape). Every minute: how many redemption-shaped events the last
+/// hour holds, real and made; the floor less that, spread over the hour, is the chance of
+/// making one now — from a random door to another random door.
+pub async fn ghosts(enclave: &'static Enclave) {
+    use tokumai_enclave::ghost::{request, GHOST_FLOOR};
+    let mut said_alone = false;
+    loop {
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        let wanted = enclave.ghosts_wanted();
+        if wanted == 0 {
+            continue;
+        }
+        // Spread over the hour: with the whole floor wanted, one every 60 / FLOOR minutes.
+        let chance = wanted as f64 / 60.0 * (60.0 / GHOST_FLOOR as f64).min(60.0) / (60.0 / GHOST_FLOOR as f64);
+        if rand::random::<f64>() >= chance {
+            continue;
+        }
+        let pick = {
+            let doors = DOORS.lock().map(|d| d.iter().map(|x| (x.address.clone(), x.sender.clone())).collect::<Vec<_>>()).unwrap_or_default();
+            if doors.len() < 2 {
+                None
+            } else {
+                let a = rand::random::<usize>() % doors.len();
+                let mut b = rand::random::<usize>() % (doors.len() - 1);
+                if b >= a {
+                    b += 1;
+                }
+                Some((doors[a].0.clone(), doors[b].0.clone(), doors[b].1.clone()))
+            }
+        };
+        let Some((to, from, sender)) = pick else {
+            if !said_alone {
+                crate::say("ghosts: one door only — a redemption-shaped packet needs two, none made".to_string());
+                said_alone = true;
+            }
+            continue;
+        };
+        let Ok(recipient) = nym_sdk::mixnet::Recipient::try_from_base58_string(&to) else { continue };
+        let posted = {
+            let guard = sender.read().await;
+            guard.send_plain_message(recipient, request(&from)).await
+        };
+        if let Err(e) = posted {
+            crate::say(format!("ghosts: could not post: {e}"));
+        }
+    }
+}
+
+/// A ghost request arrived at this door: do what a redemption does, then answer the door
+/// it came from with a reply-sized packet.
+async fn answer_ghost(enclave: &'static Enclave, sender: Arc<RwLock<MixnetClientSender>>, reply_to: String) {
+    let _ = enclave.ghost_redemption().await;
+    let Ok(recipient) = nym_sdk::mixnet::Recipient::try_from_base58_string(&reply_to) else { return };
+    let guard = sender.read().await;
+    let _ = guard.send_plain_message(recipient, tokumai_enclave::ghost::reply()).await;
+}
+
 /// The server's traffic shape (see the module notes).
 fn server_config() -> nym_sdk::DebugConfig {
     let mut d = nym_sdk::DebugConfig::default();
@@ -95,6 +162,9 @@ pub async fn serve(enclave: &'static Enclave, mut client: MixnetClient, dir: Pat
     let short: &'static str = Box::leak(gateway.chars().take(8).collect::<String>().into_boxed_str());
     let frames: &'static Frames = Box::leak(Box::new(Frames::default()));
     let sender: Arc<RwLock<MixnetClientSender>> = Arc::new(RwLock::new(client.split_sender()));
+    if let Ok(mut doors) = DOORS.lock() {
+        doors.push(Door { address: address.to_string(), sender: sender.clone() });
+    }
     // When this door last heard anything at all, and the bell that wakes the loop when it
     // has heard nothing for too long (see PING_EVERY).
     let heard = Arc::new(std::sync::atomic::AtomicU64::new(now_ms()));
@@ -129,8 +199,15 @@ pub async fn serve(enclave: &'static Enclave, mut client: MixnetClient, dir: Pat
             let Some(batch) = batch else { break };
             heard.store(now_ms(), std::sync::atomic::Ordering::Relaxed);
             for m in batch {
-                // Our own packet comes back without a tag, having proved the point.
-                let Some(tag) = m.sender_tag else { continue };
+                // Our own packet comes back without a tag, having proved the point — unless
+                // it is a ghost request from another door, which is answered like a
+                // redemption (`tokumai_enclave::ghost`).
+                let Some(tag) = m.sender_tag else {
+                    if let Some(back) = tokumai_enclave::ghost::reply_to(&m.message) {
+                        tokio::spawn(answer_ghost(enclave, sender.clone(), back));
+                    }
+                    continue;
+                };
                 let sender = sender.clone();
                 tokio::spawn(Box::pin(answer(enclave, frames, sender, tag, m.message, address)));
             }

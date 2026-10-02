@@ -806,6 +806,20 @@ impl Ledger {
         Ok((accounts as u64, lots as u64, left as u64))
     }
 
+    /// Records that change nothing, of given sizes (the sealed JSON of the change, before
+    /// the seal's own bytes): what a ghost redemption writes (`ghost`). Replayed, they
+    /// update no row.
+    pub fn ghost_records(&self, sizes: &[usize]) -> Result<(), String> {
+        const SQL: &str = "UPDATE tally SET n = n WHERE key = ?1";
+        for size in sizes {
+            // {"sql":"…","p":["ghost:…"]} — pad the parameter to the size asked for.
+            let base = serde_json::to_vec(&Change { sql: SQL.into(), p: vec![Val::S("ghost:".into())] }).map(|v| v.len()).unwrap_or(0);
+            let pad = size.saturating_sub(base);
+            self.change(SQL, vec![Val::S(format!("ghost:{}", "x".repeat(pad)))])?;
+        }
+        Ok(())
+    }
+
     pub fn holds_open(&self) -> Result<u64, String> {
         self.conn.query_row("SELECT COUNT(*) FROM holds", [], |r| r.get::<_, i64>(0)).map(|n| n as u64).map_err(|e| e.to_string())
     }

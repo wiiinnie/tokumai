@@ -231,6 +231,7 @@ impl Enclave {
                 // From here the account's next question is the one that could be tied to
                 // the payment — `cover` watches for it. With the guard held, as it must be.
                 self.cover.paid(&key, now);
+                self.stats.event(now, crate::ghost::Event::Redeemed);
             }
         }
         json!({ "kind": "note.redeemed", "granted": granted, "again": again, "plan": self.plan_summary(account) })

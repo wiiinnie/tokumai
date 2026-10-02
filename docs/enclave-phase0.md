@@ -162,6 +162,13 @@ witness of item 2 below.
 And the operator's console, `tokumai-admin` (docs/admin.md): counts from the enclave over
 the mixnet, the host over SSH, the alarm from AWS — on the operator's machine, loopback only.
 
+And the ghosts (`crates/enclave/src/ghost.rs`, `server::mix::ghosts`): in any hour with
+fewer than four redemption-shaped events, real and made together, one door sends a
+request-sized packet to another through the mixnet, the receiving door writes a
+redemption's three records as no-ops, waits for the host, and answers with a reply-sized
+packet — so the host sees redemptions arrive in thin hours too. The low-traffic fallback
+of the pitch, built; it needs two open doors.
+
 What a restart still loses: requests in flight (their holds come back), the 30-minute
 reply cache, the strike counter, the cover queue, the hourly usage ring. A planned upgrade is a stop and a start,
 a few minutes without doors; a drain that finishes in-flight requests first is next.
