@@ -354,6 +354,7 @@ mod tests {
                 stripe: None,
                 apple_api: None,
             witness: None,
+            admin: None,
             })
             .unwrap(),
         )

@@ -159,8 +159,11 @@ Also that day: the alarm (`probe.sh alarm <email>` — the host reports the puls
 CloudWatch every minute, a mail when it passes five minutes or stops arriving) and the
 witness of item 2 below.
 
+And the operator's console, `tokumai-admin` (docs/admin.md): counts from the enclave over
+the mixnet, the host over SSH, the alarm from AWS — on the operator's machine, loopback only.
+
 What a restart still loses: requests in flight (their holds come back), the 30-minute
-reply cache, the strike counter, the cover queue. A planned upgrade is a stop and a start,
+reply cache, the strike counter, the cover queue, the hourly usage ring. A planned upgrade is a stop and a start,
 a few minutes without doors; a drain that finishes in-flight requests first is next.
 
 ## Next

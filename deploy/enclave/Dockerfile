@@ -44,4 +44,7 @@ ENV TOKUMAI_GATEWAYS=38zcSsvjXsAX7C28ko2H3Lt55X4TYxfZYkPADxKXZHUj,98FmUvDdQYEeV1
 # The witness of the book's progress (crates/enclave/src/witness.rs): an S3 bucket with
 # Object Lock in compliance mode, named here so that the host cannot substitute one.
 ENV TOKUMAI_WITNESS_BUCKET=tokumai-book-946944821363
+# The operator's account (crates/enclave/src/admin.rs): the one the admin.* operations
+# answer. Its phrase lives in ~/.tokumai-admin on the operator's machine (tokumai-admin whoami).
+ENV TOKUMAI_ADMIN_ACCOUNT=2904a5faacb1f298926e9a4f5cfba01276452894759a2f9a92ca7a60c3e5126c
 ENTRYPOINT ["/tokumai-enclave-nitro"]

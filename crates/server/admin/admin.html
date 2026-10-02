@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>tokumai admin</title>
+<!--
+  The operator console (crates/server/src/bin/tokumai-admin.rs serves it on loopback).
+  Two rules, carried over from the first console:
+
+  1. NOTHING LOADS FROM OUTSIDE. No CDN, no web font, no analytics: a page that fetches
+     from the internet tells a third party when the operator looks at the books.
+  2. Nothing here names a person. The enclave answers with counts; the one lookup by
+     account id is typed in by hand for a support case, and is not kept.
+-->
+<style>
+  :root{
+    --ink:#141210; --surface:#1C1917; --surface-2:#262220; --line:#332E2A;
+    --bone:#ECE6DC; --muted:#9C938A; --dim:#6F675E;
+    --acc:#7A5FFF; --acc2:#B9A3FF; --rust:#C15A43; --ok:#3FC98A; --amber:#D9A441;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--ink);color:var(--bone);font-family:var(--sans);font-size:14px}
+  .wrap{max-width:1320px;margin:0 auto;padding:0 16px 60px}
+  header{display:flex;align-items:center;gap:14px;padding:12px 16px;border-bottom:1px solid var(--line);
+         background:var(--surface-2);font-family:var(--mono);font-size:11.5px;color:var(--dim);flex-wrap:wrap}
+  .brand{font-family:var(--sans);font-size:15px;font-weight:700;color:var(--bone);letter-spacing:-.02em}
+  .brand i{font-style:normal;color:var(--acc)}
+  .grow{flex:1}
+  .clock{color:var(--acc2)}
+  .pill{font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;padding:3px 9px;border-radius:999px;border:1px solid var(--line);color:var(--muted)}
+  .pill.ok{border-color:color-mix(in srgb,var(--ok) 45%,transparent);color:var(--ok)}
+  .pill.bad{border-color:color-mix(in srgb,var(--rust) 60%,transparent);color:var(--rust)}
+  .pill.warn{border-color:color-mix(in srgb,var(--amber) 60%,transparent);color:var(--amber)}
+  h2{font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);margin:22px 0 10px;font-weight:500}
+  .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+  .grid.g3{grid-template-columns:repeat(3,1fr)}
+  .card{border:1px solid var(--line);border-radius:10px;background:var(--surface-2);padding:13px 14px;min-width:0}
+  .card h3{margin:0 0 11px;font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--acc2);font-weight:700}
+  .row{display:flex;justify-content:space-between;align-items:baseline;gap:10px;font-family:var(--mono);font-size:12px;padding:3px 0}
+  .row > span{color:var(--dim);white-space:nowrap}
+  .row > b{font-weight:700;color:var(--bone);font-variant-numeric:tabular-nums;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .row > b.g{color:var(--acc2)} .row > b.s{color:var(--ok)} .row > b.r{color:var(--rust)} .row > b.a{color:var(--amber)}
+  .row.tot{border-top:1px solid var(--line);margin-top:7px;padding-top:7px}
+  .kpis{display:grid;grid-template-columns:repeat(6,1fr);gap:10px}
+  .kpi{border:1px solid var(--line);border-radius:8px;padding:9px 10px;background:var(--surface-2)}
+  .kpi span{display:block;font-family:var(--mono);font-size:10px;color:var(--dim);letter-spacing:.04em}
+  .kpi b{display:block;margin-top:4px;font-family:var(--mono);font-size:18px;font-weight:600;font-variant-numeric:tabular-nums}
+  .kpi b.g{color:var(--acc2)} .kpi b.s{color:var(--ok)} .kpi b.r{color:var(--rust)}
+  .chips{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+  .chip{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;padding:4px 10px;border-radius:999px;border:1px solid var(--line);background:transparent;color:var(--muted);cursor:pointer}
+  .chip.on{border-color:color-mix(in srgb,var(--acc) 55%,var(--line));color:#cdbcff;background:color-mix(in srgb,var(--acc) 14%,transparent)}
+  .tw{overflow-x:auto;margin-top:10px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2)}
+  table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:12px;font-variant-numeric:tabular-nums}
+  th{text-align:right;color:var(--dim);font-weight:400;padding:9px;border-bottom:1px solid var(--line);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;white-space:nowrap}
+  th:first-child,td:first-child{text-align:left}
+  td{text-align:right;padding:7px 9px;border-bottom:1px solid color-mix(in srgb,var(--line) 55%,transparent);white-space:nowrap}
+  tr:last-child td{border-bottom:none}
+  td.g{color:var(--acc2)} td.s{color:var(--ok)} td.r{color:var(--rust)} td.d{color:var(--dim)}
+  .chart{width:100%;height:auto;display:block;margin-top:10px}
+  .chart text{font-family:var(--mono);font-size:9px;fill:var(--dim)}
+  .chart rect.t{fill:var(--acc)} .chart rect.p{fill:var(--amber)}
+  .legend{font-family:var(--mono);font-size:10px;color:var(--dim);margin-top:4px}
+  .legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin:0 5px 0 10px;vertical-align:-1px}
+  .err{font-family:var(--mono);font-size:11.5px;color:var(--rust);border:1px solid color-mix(in srgb,var(--rust) 40%,transparent);border-radius:8px;padding:8px 11px;margin-top:10px}
+  .log{font-family:var(--mono);font-size:11px;color:var(--muted);line-height:1.6;background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:10px 12px;white-space:pre-wrap;word-break:break-all;margin-top:10px}
+  .bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  input[type=text]{flex:1;min-width:280px;font-family:var(--mono);font-size:13px;padding:9px 11px;border-radius:8px;border:1px solid var(--line);background:var(--ink);color:var(--bone)}
+  input[type=text]:focus{outline:none;border-color:var(--acc)}
+  button{font-family:var(--mono);font-size:11.5px;letter-spacing:.04em;padding:8px 13px;border-radius:8px;border:1px solid var(--line);background:var(--surface-2);color:var(--muted);cursor:pointer}
+  button:hover{border-color:var(--muted);color:var(--bone)}
+  button.pri{border-color:color-mix(in srgb,var(--acc) 55%,var(--line));color:#cdbcff;background:color-mix(in srgb,var(--acc) 14%,transparent)}
+  .hint{font-family:var(--mono);font-size:10.5px;color:var(--dim);line-height:1.65;margin:9px 0 0}
+  .muted{color:var(--dim)}
+  @media (max-width:1000px){ .grid,.grid.g3{grid-template-columns:repeat(2,1fr)} .kpis{grid-template-columns:repeat(3,1fr)} }
+  @media (max-width:600px){ .grid,.grid.g3,.kpis{grid-template-columns:1fr} }
+</style>
+</head>
+<body>
+<header>
+  <span class="brand">tokum<i>ai</i></span>
+  <span>admin</span>
+  <span id="hImage" class="muted"></span>
+  <span class="grow"></span>
+  <span id="hAlarm" class="pill">alarm ?</span>
+  <span id="hEnclave" class="pill">enclave ?</span>
+  <span class="clock" id="hClock">connecting…</span>
+</header>
+<div class="wrap">
+  <div id="errs"></div>
+
+  <h2>Health</h2>
+  <div class="grid">
+    <div class="card"><h3>Enclave</h3><div id="cEnclave"></div></div>
+    <div class="card"><h3>Book</h3><div id="cBook"></div></div>
+    <div class="card"><h3>Host</h3><div id="cHost"></div></div>
+    <div class="card"><h3>Alarm · witness</h3><div id="cAlarm"></div></div>
+  </div>
+
+  <h2>Usage</h2>
+  <div class="chips" id="win">
+    <button class="chip on" data-win="today">today</button>
+    <button class="chip" data-win="d7">7 days</button>
+    <button class="chip" data-win="d30">30 days</button>
+  </div>
+  <div class="kpis" id="kpis" style="margin-top:10px"></div>
+  <div class="card" style="margin-top:12px"><h3>Last 48 hours · requests per hour</h3><div id="hours"></div><div class="legend"><i style="background:var(--acc)"></i>text<i style="background:var(--amber)"></i>pictures</div></div>
+  <div class="tw"><table id="models"><thead><tr><th>Model</th><th>Kind</th><th>Requests</th><th>Declined</th><th>TOKU</th><th>≈ provider USD</th></tr></thead><tbody></tbody></table></div>
+
+  <h2>Accounts and plans</h2>
+  <div class="grid g3">
+    <div class="card"><h3>Accounts</h3><div id="cAccounts"></div></div>
+    <div class="card"><h3>Plans</h3><div id="cPlans"></div></div>
+    <div class="card"><h3>Money · estimate</h3><div id="cMoney"></div><p class="hint">From active plans at list price, before store fees. Stripe and App Store Connect are not connected yet; their reports are the real numbers.</p></div>
+  </div>
+  <div class="tw"><table id="tiers"><thead><tr><th>Tier</th><th>App Store</th><th>Notes</th><th>Stripe</th><th>Yearly</th><th>Active</th><th>Ending ≤ 7 d</th><th>Disputed</th></tr></thead><tbody></tbody></table></div>
+  <div class="tw"><table id="notes"><thead><tr><th>Month</th><th>Tier</th><th>Minted</th><th>Spent</th><th>Outstanding</th></tr></thead><tbody></tbody></table></div>
+
+  <h2>Support · one account</h2>
+  <div class="card">
+    <div class="bar"><input type="text" id="acct" placeholder="the account id the person sent in" spellcheck="false"><button class="pri" id="bLook">Look up</button></div>
+    <div id="lookup"></div>
+    <p class="hint">Balance and plan of one account, by its id. Typed in by hand, kept nowhere: the enclave does not list accounts and this page does not either.</p>
+  </div>
+
+  <h2>Host log · the last lines that matter</h2>
+  <div class="log" id="log">…</div>
+</div>
+
+<script>
+(function(){
+  const $ = id => document.getElementById(id);
+  const fmt = n => (n === undefined || n === null || isNaN(n)) ? '–' : Number(n).toLocaleString('en-US');
+  const usd = n => '$' + Number(n).toLocaleString('en-US', {maximumFractionDigits: 2, minimumFractionDigits: 2});
+  const ago = s => s < 90 ? s + ' s' : s < 5400 ? Math.round(s/60) + ' min' : s < 172800 ? (s/3600).toFixed(1) + ' h' : Math.round(s/86400) + ' d';
+  const day = ms => new Date(ms).toISOString().slice(0,10);
+  const row = (k, v, cls) => `<div class="row"><span>${k}</span><b class="${cls||''}">${v}</b></div>`;
+  let data = null, win = 'today';
+
+  function pill(el, text, cls){ el.textContent = text; el.className = 'pill ' + (cls||''); }
+
+  function render(){
+    const d = data; if(!d) return;
+    const errs = [];
+    const h = d.enclave.health, u = d.enclave.usage, p = d.enclave.plans, host = d.host, al = d.alarm;
+    $('hClock').textContent = new Date(d.clock).toUTCString().replace(' GMT',' UTC');
+    $('hImage').textContent = (host.image || '') + '  ' + d.target.pcr0.slice(0,12) + '…';
+    if(h.error){ errs.push('enclave: ' + h.error); pill($('hEnclave'), 'enclave unreachable', 'bad'); }
+    else pill($('hEnclave'), 'enclave ' + (h.working > 0 ? h.working + ' working' : 'idle'), 'ok');
+    if(al.error){ errs.push('alarm: ' + al.error); pill($('hAlarm'), 'alarm ?', 'warn'); }
+    else pill($('hAlarm'), 'alarm ' + al.state.toLowerCase(), al.state === 'OK' ? 'ok' : al.state === 'ALARM' ? 'bad' : 'warn');
+    if(host.error) errs.push('host: ' + host.error);
+    $('errs').innerHTML = errs.map(e => `<div class="err">${esc(e)}</div>`).join('');
+
+    // Enclave card
+    $('cEnclave').innerHTML = h.error ? '' :
+      row('up', ago(h.uptimeS)) + row('working now', fmt(h.working), h.working > 40 ? 'r' : '') +
+      row('replies kept', fmt(h.replies.count) + ' · ' + (h.replies.bytes/1048576).toFixed(1) + ' MiB') +
+      row('cover queue', fmt(h.coverWaiting)) + row('strikes today', fmt(h.strikesToday), h.strikesToday ? 'a' : '') +
+      row('pricing', esc(h.pricingVersion)) + row('stripe', h.stripe.configured ? 'keys · prices ' + (h.stripe.pricesReadMs ? ago((d.clock - h.stripe.pricesReadMs)/1000) + ' old' : 'not read') : 'none', h.stripe.configured ? 's' : '') +
+      row('apple api', h.appleApi ? 'yes' : 'no') + row('mode', h.devMode ? 'DEV' : 'sealed', h.devMode ? 'r' : 's');
+    // Book card
+    $('cBook').innerHTML = h.error ? '' :
+      row('position', 'gen ' + h.book.generation + ' · rec ' + fmt(h.book.record)) +
+      row('on the host', 'gen ' + h.book.flushedGeneration + ' · rec ' + fmt(h.book.flushedRecord), (h.book.flushedGeneration === h.book.generation && h.book.flushedRecord === h.book.record) ? 's' : 'a') +
+      row('since snapshot', fmt(h.book.sinceSnapshot) + ' / 2,000') + row('holds open', fmt(h.book.holdsOpen)) +
+      row('replayed at start', fmt(h.replayed)) +
+      (host.error ? '' : row('journal on disk', (host.journal/1024).toFixed(0) + ' KiB') + row('snapshot', host.snapshot > 0 ? ago(d.clock/1000 - host.snapshot) + ' old' : '–') + row('volume', esc(host.bookvol), host.bookvol === 'root' ? 'r' : 's'));
+    // Host card
+    const svc = (name, v) => row(name, v, v === 'active' ? 's' : 'r');
+    $('cHost').innerHTML = host.error ? '' :
+      svc('egress', host.egress) + svc('enclave unit', host.enclave) + row('enclaves running', host.running, host.running === '1' ? 's' : 'r') +
+      row('pulse age', ago(+host.pulseage), +host.pulseage > 300 ? 'r' : 's') + svc('pulse watch', host.pulsewatch) + svc('pulse timer', host.pulsetimer) +
+      row('host up', ago(+host.uptime)) + row('disk', esc(host.disk)) + row('memory', esc(host.mem)) + row('ip', esc(host.ip));
+    // Alarm card
+    $('cAlarm').innerHTML = (al.error ? '' : row('state', al.state, al.state === 'OK' ? 's' : 'r') + row('since', esc((al.since||'').slice(0,16))) + `<div class="hint">${esc(al.reason||'')}</div>`) +
+      (h.error ? '' : row('notes window', 'months ' + h.notesWindow[0] + '–' + h.notesWindow[1]) + row('door', esc((h.address||'').slice(0,10) + '…')));
+
+    renderUsage(u, h);
+    renderPlans(p, d.clock);
+    $('log').textContent = host.error ? host.error : (host.log || []).join('\n');
+  }
+
+  function renderUsage(u, h){
+    if(u.error){ $('kpis').innerHTML = ''; return; }
+    const today = Math.floor(u.now / 86400000);
+    const from = win === 'today' ? today : win === 'd7' ? today - 6 : today - 29;
+    // Days from the book plus today's pending deltas, so the current day is complete.
+    const by = {};
+    const add = (model, kind, c) => { const k = model + '|' + kind; const r = by[k] || (by[k] = {model, kind, requests:0, declined:0, toku:0}); r.requests += c.requests||0; r.declined += c.declined||0; r.toku += c.toku||0; };
+    for(const r of u.days){ if(r.day >= from) add(r.model, r.kind, r); }
+    for(const pnd of u.pending || []){ const m = /^d:(\d+):([^:]+):([^:]+):(requests|toku|declined)$/.exec(pnd.key); if(!m) continue; const dd = +m[1]; if(dd < from) continue; const c = {}; c[m[4]] = pnd.n; add(m[2], m[3], c); }
+    const rows = Object.values(by).sort((a,b) => b.toku - a.toku);
+    const tot = rows.reduce((t, r) => ({requests: t.requests + r.requests, declined: t.declined + r.declined, toku: t.toku + r.toku}), {requests:0, declined:0, toku:0});
+    const cost = t => t / u.margin / u.tokuPerUsd;
+    $('kpis').innerHTML =
+      `<div class="kpi"><span>requests</span><b>${fmt(tot.requests)}</b></div>` +
+      `<div class="kpi"><span>TOKU spent</span><b class="g">${fmt(tot.toku)}</b></div>` +
+      `<div class="kpi"><span>≈ provider cost</span><b>${usd(cost(tot.toku))}</b></div>` +
+      `<div class="kpi"><span>declined</span><b class="${tot.declined ? 'r' : ''}">${fmt(tot.declined)}</b></div>` +
+      `<div class="kpi"><span>accounts active today</span><b class="s">${fmt(u.activeToday)}</b></div>` +
+      `<div class="kpi"><span>yesterday</span><b>${fmt(u.activeYesterday)}</b></div>`;
+    $('models').querySelector('tbody').innerHTML = rows.length ? rows.map(r =>
+      `<tr><td>${esc(r.model)}</td><td class="d">${r.kind}</td><td>${fmt(r.requests)}</td><td class="${r.declined?'r':'d'}">${fmt(r.declined)}</td><td class="g">${fmt(r.toku)}</td><td>${usd(cost(r.toku))}</td></tr>`).join('')
+      : '<tr><td colspan="6" class="d">nothing in this window</td></tr>';
+    // Hourly bars: the last 48 hours, text and pictures stacked.
+    const nowH = Math.floor(u.now / 3600000);
+    const hrs = Array.from({length: 48}, (_, i) => ({hour: nowH - 47 + i, t: 0, p: 0}));
+    for(const r of u.hours){ const i = r.hour - (nowH - 47); if(i >= 0 && i < 48){ if(r.kind === 'picture') hrs[i].p += r.requests; else hrs[i].t += r.requests; } }
+    const max = Math.max(1, ...hrs.map(x => x.t + x.p));
+    const W = 960, H = 120, bw = W / 48;
+    let svg = `<svg class="chart" viewBox="0 0 ${W} ${H + 18}" role="img" aria-label="requests per hour, last 48 hours">`;
+    hrs.forEach((x, i) => {
+      const ht = Math.round(x.t / max * H), hp = Math.round(x.p / max * H);
+      const X = i * bw + 1, w = bw - 2;
+      if(ht) svg += `<rect class="t" x="${X}" y="${H - ht}" width="${w}" height="${ht}" rx="1"/>`;
+      if(hp) svg += `<rect class="p" x="${X}" y="${H - ht - hp}" width="${w}" height="${hp}" rx="1"/>`;
+      if(i % 6 === 0) svg += `<text x="${X}" y="${H + 13}">${String(x.hour % 24).padStart(2,'0')}h</text>`;
+    });
+    svg += `<text x="${W}" y="10" text-anchor="end">max ${max}/h</text></svg>`;
+    $('hours').innerHTML = svg;
+  }
+
+  function renderPlans(p, clock){
+    if(p.error){ $('cAccounts').innerHTML = $('cPlans').innerHTML = $('cMoney').innerHTML = ''; return; }
+    const plans = p.plans, active = plans.filter(x => x.active);
+    const soon = active.filter(x => x.paidUntil - clock < 7 * 86400000).length;
+    const month = new Date(clock); month.setUTCDate(1); month.setUTCHours(0,0,0,0);
+    const newThisMonth = plans.filter(x => x.periodStart >= month.getTime()).length;
+    $('cAccounts').innerHTML = row('known to the book', fmt(p.accounts)) + row('with a plan', fmt(plans.length)) + row('active plans', fmt(active.length), 's') +
+      row('started this month', fmt(newThisMonth)) + row('prepaid lots', fmt(p.lots.count) + ' · ' + fmt(p.lots.left) + ' TOKU');
+    const byRail = r => active.filter(x => x.rail === r).length;
+    $('cPlans').innerHTML = row('App Store', fmt(byRail('appstore'))) + row('notes', fmt(byRail('note')), 'g') + row('Stripe', fmt(byRail('stripe'))) +
+      row('yearly', fmt(active.filter(x => x.yearly).length)) + row('ending within 7 days', fmt(soon), soon ? 'a' : '') +
+      row('disputed', fmt(plans.filter(x => x.disputed).length), plans.some(x => x.disputed) ? 'r' : '') + row('ended, still in book', fmt(plans.length - active.length), 'd');
+    // Money: list price per active plan per month.
+    let monthly = 0;
+    for(const x of active){ const cents = p.tiers[x.tier] ? p.tiers[x.tier].cents : 0; monthly += x.yearly ? cents * 12 * 0.9 / 12 : cents; }
+    $('cMoney').innerHTML = row('active plans at list', usd(monthly / 100) + ' / month', 'g') + row('per active plan', active.length ? usd(monthly / 100 / active.length) : '–') +
+      row('yearly share', active.length ? Math.round(100 * active.filter(x => x.yearly).length / active.length) + ' %' : '–');
+    // Per tier table
+    const tb = $('tiers').querySelector('tbody'); tb.innerHTML = p.tiers.map((t, i) => {
+      const of = plans.filter(x => x.tier === i), act = of.filter(x => x.active);
+      return `<tr><td>${fmt(t.toku)} TOKU · ${usd(t.cents/100)}</td><td>${fmt(act.filter(x=>x.rail==='appstore').length)}</td><td class="g">${fmt(act.filter(x=>x.rail==='note').length)}</td><td>${fmt(act.filter(x=>x.rail==='stripe').length)}</td><td>${fmt(act.filter(x=>x.yearly).length)}</td><td class="s">${fmt(act.length)}</td><td>${fmt(act.filter(x => x.paidUntil - clock < 7*86400000).length)}</td><td class="${of.some(x=>x.disputed)?'r':'d'}">${fmt(of.filter(x=>x.disputed).length)}</td></tr>`;
+    }).join('');
+    // Notes per month and tier
+    const nm = {};
+    for(const n of p.notes){ const m = /^notes:(minted|spent):(\d+):(\d+)$/.exec(n.key); if(!m) continue; const k = m[2] + '|' + m[3]; const r = nm[k] || (nm[k] = {epoch:+m[2], tier:+m[3], minted:0, spent:0}); r[m[1]] += n.n; }
+    const nrows = Object.values(nm).sort((a,b) => b.epoch - a.epoch || a.tier - b.tier);
+    const monthName = e => { const y = 2026 + Math.floor(e / 12), mo = e % 12; return y + '-' + String(mo + 1).padStart(2,'0'); };
+    $('notes').querySelector('tbody').innerHTML = nrows.length ? nrows.map(r => `<tr><td>${monthName(r.epoch)}</td><td class="d">${fmt(p.tiers[r.tier] ? p.tiers[r.tier].toku : r.tier)} TOKU</td><td>${fmt(r.minted)}</td><td class="g">${fmt(r.spent)}</td><td class="${r.minted - r.spent > 0 ? 'a' : 'd'}">${fmt(r.minted - r.spent)}</td></tr>`).join('')
+      : '<tr><td colspan="5" class="d">no notes minted yet</td></tr>';
+  }
+
+  function esc(s){ return String(s === undefined || s === null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+  async function load(){
+    try{
+      const r = await fetch('/api/state'); data = await r.json(); render();
+    }catch(e){ $('errs').innerHTML = `<div class="err">${esc(e.message || e)}</div>`; }
+  }
+  document.querySelectorAll('#win .chip').forEach(c => c.addEventListener('click', () => {
+    document.querySelectorAll('#win .chip').forEach(x => x.classList.remove('on')); c.classList.add('on'); win = c.dataset.win; render();
+  }));
+  $('bLook').addEventListener('click', async () => {
+    const account = $('acct').value.trim(); if(!account) return;
+    $('lookup').innerHTML = '<p class="hint">asking…</p>';
+    try{
+      const r = await fetch('/api/account', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({account})});
+      const a = await r.json();
+      if(a.error){ $('lookup').innerHTML = `<div class="err">${esc(a.error)}</div>`; return; }
+      const b = a.balance, pl = a.plan;
+      $('lookup').innerHTML = '<div style="margin-top:10px">' +
+        row('balance', fmt(b.total) + ' TOKU', 'g') + row('allowance', fmt(b.allowance) + (b.allowance_ends_ms ? ' · until ' + day(b.allowance_ends_ms) : '')) +
+        row('prepaid lots', b.prepaid.length ? b.prepaid.map(l => fmt(l[0]) + ' until ' + day(l[1])).join(', ') : 'none') +
+        (pl ? row('plan', (pl.active ? 'active' : 'ended') + ' · tier ' + pl.tier + (pl.yearly ? ' yearly' : ' monthly') + ' · ' + pl.rail, pl.active ? 's' : 'r') + row('paid until', day(pl.paidUntil)) + row('disputed', pl.disputed ? 'yes' : 'no', pl.disputed ? 'r' : '') : row('plan', 'none', 'd')) +
+        (a.usage && a.usage.length ? row('past periods', a.usage.map(x => day(x.period * 1000) + ': ' + x.drawn).join(' · ')) : '') + '</div>';
+    }catch(e){ $('lookup').innerHTML = `<div class="err">${esc(e.message || e)}</div>`; }
+  });
+  load(); setInterval(load, 60000);
+})();
+</script>
+</body>
+</html>

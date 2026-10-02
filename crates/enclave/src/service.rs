@@ -62,35 +62,43 @@ pub struct Platform {
     /// The witness outside the machine that notices a rewound book (`witness`). None on
     /// a developer's machine and in the tests.
     pub witness: Option<crate::witness::Setup>,
+    /// The operator's account id: the one `admin.*` answers (`admin`). Named in the image.
+    pub admin: Option<String>,
 }
 
 pub struct Enclave {
     /// How many changes the book replayed at this start (`state`) — said out loud, since
     /// nobody can look inside a running enclave.
-    replayed: usize,
+    pub(crate) replayed: usize,
     keys: EnclaveKeys,
     attester: Box<dyn Attester>,
     /// Behind an Arc so a decoy call can outlive the question it covers (see `cover`).
-    providers: std::sync::Arc<Providers>,
+    pub(crate) providers: std::sync::Arc<Providers>,
     pub(crate) ledger: Mutex<Ledger>,
-    pricing: PricingTable,
-    dev_mode: bool,
+    pub(crate) pricing: PricingTable,
+    pub(crate) dev_mode: bool,
     pub(crate) stripe: Option<crate::stripe::Stripe>,
     pub(crate) apple_api: Option<crate::apple::AppleApi>,
     /// Cover for the first question after a payment (see `cover`).
     pub(crate) cover: crate::cover::Cover,
     /// What the six plans cost at Stripe (cents), and when that was last read.
     pub(crate) plan_prices: Mutex<(Vec<u64>, u64)>,
-    address: Mutex<String>,
-    replies: Mutex<HashMap<String, (Instant, Vec<u8>)>>,
+    pub(crate) address: Mutex<String>,
+    pub(crate) replies: Mutex<HashMap<String, (Instant, Vec<u8>)>>,
     /// Secret behind the per-account pseudonyms sent to providers; derived from the data
     /// key, so it survives restarts and is known only inside.
     safety_salt: [u8; 32],
     /// Declines per (account, UTC day, provider). In memory: a restart forgives, which is
     /// the lenient side.
-    strikes: Mutex<HashMap<(String, u64, &'static str), u32>>,
+    pub(crate) strikes: Mutex<HashMap<(String, u64, &'static str), u32>>,
     /// The blind notes' month keys (`notes`), derived from the data key.
     pub(crate) notes: crate::notes::Mint,
+    /// The operator's account id (`admin`).
+    pub(crate) admin: Option<String>,
+    /// What is counted for the operator (`admin`).
+    pub(crate) stats: crate::admin::Stats,
+    /// Requests being worked on right now.
+    pub(crate) working: std::sync::atomic::AtomicUsize,
 }
 
 #[derive(Deserialize)]
@@ -149,6 +157,9 @@ impl Enclave {
             plan_prices: Mutex::new((Vec::new(), 0)),
             address: Mutex::new(String::new()),
             notes: crate::notes::Mint::new(key),
+            admin: p.admin,
+            stats: crate::admin::Stats::default(),
+            working: std::sync::atomic::AtomicUsize::new(0),
         };
         // This month's keys before the first attestation asks for them.
         enclave.notes.warm(crate::now_ms());
@@ -264,7 +275,10 @@ impl Enclave {
         let op = req.op.clone();
         crate::trace::say(|| format!("req {op} arrived"));
         let started = std::time::Instant::now();
+        self.stats.seen(&self.account_key(&account_id), now);
+        self.working.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let answer = self.dispatch(&account_id, &req.op, &req.body, now).await;
+        self.working.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
         crate::trace::say(|| {
             let kind = answer.get("kind").and_then(|k| k.as_str()).unwrap_or("?");
             format!("req {op} -> {kind} in {} ms", started.elapsed().as_millis())
@@ -356,6 +370,7 @@ impl Enclave {
                 let a = self.note_redeem(account, body, now);
                 self.durably(a).await
             }
+            op if op.starts_with("admin.") => self.admin_dispatch(account, op, body, now),
             "dev.credit" | "dev.allowance" | "dev.bytes" if !self.dev_mode => error("not available on this enclave"),
             // A reply of a given size, to measure what the mixnet does with a big answer
             // without paying a model for a picture. Never on a sealed enclave.
@@ -548,6 +563,7 @@ impl Enclave {
             Ok(k) => k,
             Err(e) => return error(&e),
         };
+        self.stats.request(now, &req.model, charged, matches!(&result, Ok(c) if c.text.starts_with("Declined by")) || matches!(&result, Err(e) if e.starts_with("Declined by")));
         // A decline arrives two ways — as an error (our safety check, OpenAI's policy) and as
         // an answer whose text says so (Google's finish reason). Both are the same event to
         // the person who asked, so both leave here in the same shape: no model prose, a

@@ -501,6 +501,8 @@ async fn main() {
         stripe,
         apple_api,
         witness,
+        // The operator's account, named in the image (`tokumai_enclave::admin`).
+        admin: std::env::var("TOKUMAI_ADMIN_ACCOUNT").ok().filter(|a| !a.is_empty()),
     })
     .expect("start the enclave");
     // What the book came back with, over vsock: a production enclave has no console, and

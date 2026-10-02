@@ -149,6 +149,8 @@ impl Enclave {
                     if let Err(e) = l.minted_put(&reference, &fingerprint) {
                         return error(&e);
                     }
+                    // A count for the operator: how many notes this month, never for whom.
+                    self.stats.add(&format!("notes:minted:{epoch}:{}", proof.tier), 1);
                 }
                 Err(e) => return error(&e),
             }
@@ -221,6 +223,7 @@ impl Enclave {
                     return error(&e);
                 }
                 granted += 1;
+                self.stats.add(&format!("notes:spent:{}:{}", note.epoch, note.tier), 1);
             }
             if granted > 0 {
                 // From here the account's next question is the one that could be tied to
@@ -249,6 +252,7 @@ mod tests {
             stripe: None,
             apple_api: None,
             witness: None,
+            admin: None,
         })
         .unwrap();
         Box::leak(Box::new(e))

@@ -38,6 +38,8 @@ const TABLES: &[(&str, &[&str])] = &[
     ("rails", &["rail", "acct"]),
     ("payments", &["ref", "at_ms"]),
     ("minted", &["ref", "fp"]),
+    // Counts for the operator (`admin`): aggregates under a key, never an account.
+    ("tally", &["key", "n"]),
 ];
 
 /// A value as it travels in a journal record. The book writes nothing else.
@@ -139,6 +141,14 @@ impl Flushed {
             };
         }
         true
+    }
+
+    /// Where the host has got to.
+    pub fn position(&self) -> Mark {
+        match self.at.lock() {
+            Ok(a) => *a,
+            Err(p) => *p.into_inner(),
+        }
     }
 
     fn reached(&self, mark: Mark) {
@@ -288,7 +298,8 @@ impl Ledger {
              CREATE TABLE IF NOT EXISTS plans (acct TEXT PRIMARY KEY, json TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS rails (rail TEXT PRIMARY KEY, acct TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS payments (ref TEXT PRIMARY KEY, at_ms INTEGER NOT NULL);
-             CREATE TABLE IF NOT EXISTS minted (ref TEXT PRIMARY KEY, fp TEXT NOT NULL);",
+             CREATE TABLE IF NOT EXISTS minted (ref TEXT PRIMARY KEY, fp TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS tally (key TEXT PRIMARY KEY, n INTEGER NOT NULL);",
         )
         .map_err(|e| e.to_string())?;
         Ok(Ledger { conn, data_key, kept: None, replayed: 0 })
@@ -755,6 +766,48 @@ impl Ledger {
         tx.commit().map_err(|e| e.to_string())?;
         self.write_down(written)?;
         Ok(open.len())
+    }
+
+    /// How many records the journal holds since the last snapshot.
+    pub fn since_snapshot(&self) -> usize {
+        self.kept.as_ref().and_then(|k| k.lock().ok().map(|k| k.since)).unwrap_or(0)
+    }
+
+    // ---- counts for the operator (see `admin`) ---------------------------------------
+
+    pub fn tally_add(&self, key: &str, n: i64) -> Result<(), String> {
+        self.change("INSERT INTO tally (key, n) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET n = n + excluded.n", vec![Val::S(key.into()), Val::I(n)]).map(|_| ())
+    }
+
+    pub fn tally_read(&self, prefix: &str) -> Result<Vec<(String, i64)>, String> {
+        let mut st = self.conn.prepare("SELECT key, n FROM tally WHERE key >= ?1 AND key < ?2").map_err(|e| e.to_string())?;
+        let end = format!("{prefix}\u{10FFFF}");
+        let rows = st.query_map(params![prefix, end], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))).map_err(|e| e.to_string())?;
+        Ok(rows.flatten().collect())
+    }
+
+    /// Every plan, without the names they are stored under.
+    pub(crate) fn plans_all(&self) -> Result<Vec<crate::plans::Plan>, String> {
+        let mut st = self.conn.prepare("SELECT json FROM plans").map_err(|e| e.to_string())?;
+        let rows = st.query_map([], |r| r.get::<_, String>(0)).map_err(|e| e.to_string())?;
+        Ok(rows.flatten().filter_map(|j| serde_json::from_str(&j).ok()).collect())
+    }
+
+    /// (accounts the book knows, prepaid lots with something left, TOKU left in them).
+    pub fn account_counts(&self) -> Result<(u64, u64, u64), String> {
+        let accounts: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM (SELECT acct FROM allowance UNION SELECT acct FROM plans UNION SELECT acct FROM lots)", [], |r| r.get(0))
+            .map_err(|e| e.to_string())?;
+        let (lots, left): (i64, i64) = self
+            .conn
+            .query_row("SELECT COUNT(*), COALESCE(SUM(left), 0) FROM lots WHERE left > 0", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .map_err(|e| e.to_string())?;
+        Ok((accounts as u64, lots as u64, left as u64))
+    }
+
+    pub fn holds_open(&self) -> Result<u64, String> {
+        self.conn.query_row("SELECT COUNT(*) FROM holds", [], |r| r.get::<_, i64>(0)).map(|n| n as u64).map_err(|e| e.to_string())
     }
 
     /// Record a request nonce. False if it was seen before (a replay, or a resend). In

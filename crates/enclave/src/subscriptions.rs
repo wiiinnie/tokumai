@@ -259,6 +259,7 @@ impl Enclave {
     /// The host calls this every 30 seconds.
     pub async fn tick(&self) {
         let now = crate::now_ms();
+        self.flush_tallies();
         if let Ok(l) = self.ledger.lock() {
             match plans::roll(&l, now) {
                 Ok(0) => {}
@@ -395,6 +396,7 @@ mod tests {
             stripe: None,
             apple_api: None,
             witness: None,
+            admin: None,
         })
         .unwrap();
         Box::leak(Box::new(e))

@@ -61,6 +61,7 @@ async fn main() {
         stripe: tokumai_enclave::stripe::Stripe::from_secrets(&EnvSecrets),
         apple_api: tokumai_enclave::apple::AppleApi::from_secrets(&EnvSecrets),
             witness: None,
+        admin: std::env::var("TOKUMAI_ADMIN_ACCOUNT").ok().filter(|a| !a.is_empty()),
     })
     .expect("start the enclave");
     let enclave: &'static Enclave = Box::leak(Box::new(enclave));

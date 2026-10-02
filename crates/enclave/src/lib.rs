@@ -15,6 +15,7 @@
 //! Everything else — the ledger, the billing, and the wire format (`tokumai-proto`, shared
 //! with the app) — is the same in both.
 
+pub mod admin;
 pub mod apple;
 pub mod catalog;
 pub mod cover;
