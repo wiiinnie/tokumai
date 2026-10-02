@@ -43,7 +43,7 @@ const RELEASE_MEASUREMENTS: &[&str] = &[
     // tokumai-ops-sandbox — the witness and the operator's console; deployed after the review
     "5261ea2b021564945de741d75223897b2cf1c7f3ada0650b89d8d9fc7e10f9827bda5439724bd21a371fe321e0a56676",
     // tokumai-ops — production, the same code without the sandbox feature
-    "",
+    "25ed1a81fd1e2bf2f8cc94023a7fd3bd4b492f24e357b53decc862ccd6929ae12e565eda56d75c2213ab5bd87c8692c8",
 ];
 
 fn dev_data() -> PathBuf {
