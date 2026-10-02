@@ -40,10 +40,10 @@ const RELEASE_MEASUREMENTS: &[&str] = &[
     "03206a368faaa3464b7141be7b238c668144c5b3c8a34b94477f83fedcb4e9a21fd209c11ebd31fac3686cb431f378d6",
     // tokumai-book — production, the same code without the sandbox feature
     "b2e091ec2144140a4e98209c0a3355819e88c8e6ef6850d6250982f1d7a1588039c76bbf8f54c9ccd18acdb014010da3",
-    // tokumai-witness-sandbox — the book's witness (rollback detection); deployed after the review
-    "fa6e1024f977b8599a99ae341867628f44a3576077593aca8e5ab2ca01976a1ec5817bcd439452c012fa24c0d92f7a68",
-    // tokumai-witness — production, the same code without the sandbox feature
-    "bfe53036cde9d3c623023f1f03ec25907e0910404df63e9677755d6e9ba42ea22efee4f0898bcc3c197709e12065117f",
+    // tokumai-ops-sandbox — the witness and the operator's console; deployed after the review
+    "05b368ccafbc353973ab793bc2689336c632cee1f47a2a2c955f63108c0f2c719feaa99b41dcbfb7d75745dae3ebbee0",
+    // tokumai-ops — production, the same code without the sandbox feature
+    "f1b98a99ddf62722c65d5d14c9463463b905b6a4b213e9e56afbea54997bd83ece341fd6a02292ee2ed8f0892729f0a6",
 ];
 
 fn dev_data() -> PathBuf {
