@@ -201,8 +201,11 @@ where
     let credentials = Arc::new(credentials);
     let sealed = Arc::new(sealed);
     let book = Arc::new(book);
+    // The last record taken, so a record offered twice is answered twice and written once.
+    // Read from the journal on first use; forgotten with the journal at every snapshot.
+    let last: Arc<std::sync::Mutex<Option<u64>>> = Arc::new(std::sync::Mutex::new(None));
     accept_loop(&listen, move |mut s| {
-        let (credentials, sealed, book) = (credentials.clone(), sealed.clone(), book.clone());
+        let (credentials, sealed, book, last) = (credentials.clone(), sealed.clone(), book.clone(), last.clone());
         async move {
             let mut line = Vec::new();
             let mut byte = [0u8; 1];
@@ -223,8 +226,8 @@ where
                 (_, "sealed") => std::fs::read(sealed.as_path()).map_err(|e| e.to_string()),
                 (_, "snapshot") => Ok(read_or_empty(&book.join(SNAPSHOT))),
                 (_, "journal") => Ok(read_or_empty(&book.join(JOURNAL))),
-                (_, "put-snapshot") => put_snapshot(&book, &given).map(|()| b"kept".to_vec()),
-                (_, "add-record") => add_record(&book, &given).map(|()| b"kept".to_vec()),
+                (_, "put-snapshot") => put_snapshot(&book, &given, &last).map(|()| b"kept".to_vec()),
+                (_, "add-record") => add_record(&book, &given, &last).map(|again| if again { b"kept-again".to_vec() } else { b"kept".to_vec() }),
                 (_, other) => Err(format!("the enclave asked for {other:?}, which is not answered here")),
             };
             match answer {
@@ -253,29 +256,102 @@ fn read_or_empty(path: &std::path::Path) -> Vec<u8> {
     std::fs::read(path).unwrap_or_default()
 }
 
+/// The first bytes of a journal: the enclave's `state::MAGIC`, repeated here because this
+/// side must know where a journal in the current form begins without reading the enclave's
+/// crate. A journal without them was written by the first enclaves, record by record with
+/// no numbers; it is read whole and replaced, never appended to.
+const JOURNAL_MAGIC: &[u8] = b"tokumai-journal/2\n";
+
 /// A new snapshot takes the place of the old one and the journal goes with it — in that
 /// order, so a stop in between leaves a snapshot with a journal that still belongs to it.
-fn put_snapshot(dir: &std::path::Path, sealed: &[u8]) -> Result<(), String> {
+/// The directory is synced too: a rename that the disk has not seen is a snapshot that a
+/// power cut takes back.
+fn put_snapshot(dir: &std::path::Path, sealed: &[u8], last: &std::sync::Mutex<Option<u64>>) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let tmp = dir.join("book.snapshot.new");
-    std::fs::write(&tmp, sealed).map_err(|e| e.to_string())?;
+    {
+        let mut f = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
+        std::io::Write::write_all(&mut f, sealed).map_err(|e| e.to_string())?;
+        f.sync_all().map_err(|e| e.to_string())?;
+    }
     std::fs::rename(&tmp, dir.join(SNAPSHOT)).map_err(|e| e.to_string())?;
     match std::fs::remove_file(dir.join(JOURNAL)) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e.to_string()),
+        Ok(()) => {}
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.to_string()),
     }
+    if let Ok(d) = std::fs::File::open(dir) {
+        let _ = d.sync_all();
+    }
+    if let Ok(mut l) = last.lock() {
+        *l = None;
+    }
+    Ok(())
 }
 
-/// One record onto the journal, its length first — and not answered before it is safe on
-/// the disk, because the enclave answers its user once this returns.
-fn add_record(dir: &std::path::Path, record: &[u8]) -> Result<(), String> {
+/// The number of the last whole record in a journal in the current form; None for an
+/// empty one; an error for one in the old form.
+fn journal_last(bytes: &[u8]) -> Result<Option<u64>, String> {
+    if bytes.is_empty() {
+        return Ok(None);
+    }
+    if !bytes.starts_with(JOURNAL_MAGIC) {
+        return Err("the journal is in the old form and cannot be appended to".into());
+    }
+    let mut at = JOURNAL_MAGIC.len();
+    let mut last = None;
+    while at + 12 <= bytes.len() {
+        let len = u32::from_be_bytes(bytes[at..at + 4].try_into().expect("four bytes")) as usize;
+        if len == 0 || at + 12 + len > bytes.len() {
+            break;
+        }
+        last = Some(u64::from_be_bytes(bytes[at + 4..at + 12].try_into().expect("eight bytes")));
+        at += 12 + len;
+    }
+    Ok(last)
+}
+
+/// One record onto the journal — and not answered before it is safe on the disk. What the
+/// enclave hands over is the record's generation and number (eight bytes each, in the
+/// clear) and then the sealed record. A number the journal already ends with or passed is
+/// answered without a write (true): the enclave did not hear the first answer and asks
+/// again. A number that would leave a gap is refused.
+fn add_record(dir: &std::path::Path, given: &[u8], last: &std::sync::Mutex<Option<u64>>) -> Result<bool, String> {
     use std::io::Write;
+    if given.len() < 17 {
+        return Err("a record needs its place in front of it".into());
+    }
+    let number = u64::from_be_bytes(given[8..16].try_into().expect("eight bytes"));
+    let record = &given[16..];
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(dir.join(JOURNAL)).map_err(|e| e.to_string())?;
+    let path = dir.join(JOURNAL);
+    let mut l = last.lock().map_err(|_| "the journal's place is unknown".to_string())?;
+    if l.is_none() {
+        *l = journal_last(&std::fs::read(&path).unwrap_or_default())?;
+    }
+    match (*l, number) {
+        (None, 1) => {}
+        (None, n) => return Err(format!("record {n} offered to an empty journal")),
+        (Some(have), n) if n <= have => return Ok(true),
+        (Some(have), n) if n == have + 1 => {}
+        (Some(have), n) => return Err(format!("record {n} offered after {have}: a gap")),
+    }
+    let fresh = l.is_none();
+    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&path).map_err(|e| e.to_string())?;
+    if fresh {
+        f.write_all(JOURNAL_MAGIC).map_err(|e| e.to_string())?;
+    }
     f.write_all(&(record.len() as u32).to_be_bytes()).map_err(|e| e.to_string())?;
+    f.write_all(&number.to_be_bytes()).map_err(|e| e.to_string())?;
     f.write_all(record).map_err(|e| e.to_string())?;
-    f.sync_data().map_err(|e| e.to_string())
+    f.sync_data().map_err(|e| e.to_string())?;
+    if fresh {
+        if let Ok(d) = std::fs::File::open(dir) {
+            let _ = d.sync_all();
+        }
+    }
+    *l = Some(number);
+    Ok(false)
 }
 
 /// Which destinations the host connects to: host names by exact name or by suffix
@@ -469,9 +545,13 @@ mod tests {
         // The book: nothing kept yet, then records, then a snapshot that replaces them.
         assert!(ask_host(&at, "snapshot").await.unwrap().is_empty());
         assert!(ask_host(&at, "journal").await.unwrap().is_empty());
-        assert_eq!(tell_host(&at, "add-record", b"a held request").await.unwrap(), b"kept");
-        tell_host(&at, "add-record", b"settled").await.unwrap();
-        assert_eq!(ask_host(&at, "journal").await.unwrap().len(), 4 + 14 + 4 + 7);
+        let placed = |n: u64, r: &[u8]| [&1u64.to_be_bytes()[..], &n.to_be_bytes(), r].concat();
+        assert_eq!(tell_host(&at, "add-record", &placed(1, b"a held request")).await.unwrap(), b"kept");
+        tell_host(&at, "add-record", &placed(2, b"settled")).await.unwrap();
+        // Asked again for a record it has: taken as said, not written twice.
+        assert_eq!(tell_host(&at, "add-record", &placed(2, b"settled")).await.unwrap(), b"kept-again");
+        assert!(tell_host(&at, "add-record", &placed(4, b"gap")).await.is_err());
+        assert_eq!(ask_host(&at, "journal").await.unwrap().len(), JOURNAL_MAGIC.len() + 12 + 14 + 12 + 7);
         tell_host(&at, "put-snapshot", b"the whole book").await.unwrap();
         assert_eq!(ask_host(&at, "snapshot").await.unwrap(), b"the whole book");
         assert!(ask_host(&at, "journal").await.unwrap().is_empty());

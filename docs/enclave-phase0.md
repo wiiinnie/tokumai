@@ -117,8 +117,11 @@ now says over vsock whether it unsealed and what it measures:
 ## The book, 2026-09-22
 
 The enclave keeps its book in memory and the host keeps a sealed snapshot and a sealed
-journal of it, one record per change, written down before the person is told their request
-went through. At the next start the snapshot is read back and the journal replayed; every
+journal of it, one record per change. (Until 2026-10-02 every record was written before the
+person was told their request went through, under the one lock every request takes; now
+the record is queued and a writer thread carries it, and only a purchase, a note or a plan
+waits for the host's confirmation before it is answered — see below.) At the next start
+the snapshot is read back and the journal replayed; every
 record is sealed to its place in the line, so one dropped from the middle, reordered, or
 kept from an older snapshot does not open. Verified on the probe: 22 changes replayed
 across a restart onto a NEW image, which is also the upgrade path.
@@ -126,6 +129,35 @@ across a restart onto a NEW image, which is also the upgrade path.
 Two things it does not survive, both about where the bytes lie rather than how they are
 sealed, and both on the list below: a host that is replaced, and a host that hands back an
 older pair of files.
+
+## The book written behind, the enclave kept running, 2026-10-02
+
+Three of the things that would have ended real operation, closed together:
+
+1. **Book writes off the request path.** `ledger::Kept` hands every sealed record to a
+   writer thread of its own; a chat's hold and settle never wait for the host's disk. What
+   grants credit (`iap.verify`, `note.mint`, `note.redeem`, `plan.status`, `plan.change`)
+   waits for its mark (`Enclave::durably`, 45 s) so the app's own record — a transaction
+   finished with Apple, a note spent — is never ahead of the book. The writer never gives
+   up on a record; the host log hears about a refusal once a minute. Every record carries
+   its number in the clear, and the host takes a record it already has as said rather than
+   written again (`tokumai_egress::add_record`): before, a confirmation lost on the vsock
+   put the same change on the disk twice and the next start refused the book. Nonces are
+   no longer written down at all — a request is sealed to a key that does not survive a
+   restart, so no replay crosses one — which took two fsyncs off every chat. A journal in
+   the old form is read and folded into a snapshot at the first start on the new image.
+2. **The enclave runs under systemd** (`tokumai-enclave.service`, `probe.sh deploy`):
+   when it exits — the watchdog's exit 70, a panic, a reboot — the host starts it again
+   within ten seconds, and keeps trying. Until then a dead enclave stayed dead until a
+   person noticed.
+3. **The book on a volume of its own** (`probe.sh volume`): `tokumai-book`, encrypted,
+   attached after launch so that EC2 does not delete it with the instance; `launch` starts
+   a new instance beside it. `probe.sh backups` snapshots it daily, fourteen kept. Item 1
+   of the list below, closed.
+
+What a restart still loses: requests in flight (their holds come back), the 30-minute
+reply cache, the strike counter, the cover queue. A planned upgrade is a stop and a start,
+a few minutes without doors; a drain that finishes in-flight requests first is next.
 
 ## Next
 
@@ -147,13 +179,12 @@ older pair of files.
 Preconditions, not nice-to-haves. Each is a way the enclave's promise is weaker than it
 looks, and each is cheap to close now and expensive to explain later.
 
-1. **The book must outlive the machine.** It lies on the instance's root volume today, so
-   replacing the instance takes every balance and plan with it — which is exactly what
-   happened on the morning of 2026-09-23, when a terminated probe took a paid test plan
-   with it. It belongs on a volume of its own (`DeleteOnTermination = false`, so it
-   survives the instance it is attached to) with backups, and the operator's own runbook
-   must say `stop`, never `terminate`. A customer's balance may not depend on which
-   machine it was bought on.
+1. ~~**The book must outlive the machine.**~~ Closed 2026-10-02 (`probe.sh volume`,
+   `probe.sh backups`, see above). It lay on the instance's root volume, so replacing the
+   instance took every balance and plan with it — which is exactly what happened on the
+   morning of 2026-09-23, when a terminated probe took a paid test plan with it. Now on a
+   volume of its own that survives the instance, snapshotted daily. The runbook still says
+   `stop`, never `terminate`, out of habit; `terminate` keeps the volume.
 2. **A rewind must be detectable.** The host can hand back an older snapshot and journal,
    and nothing inside a Nitro enclave survives a restart to notice — no counter, no key.
    Closing it needs a counter the host cannot turn back, kept outside (a small conditional

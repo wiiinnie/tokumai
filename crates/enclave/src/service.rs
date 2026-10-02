@@ -281,6 +281,31 @@ impl Enclave {
         }
     }
 
+    /// How long a purchase waits for the host to confirm the book before it is answered.
+    const DURABLE_WITHIN: std::time::Duration = std::time::Duration::from_secs(45);
+
+    /// Answer only once everything written down so far is on the host's disk. For what
+    /// grants credit — a purchase, a note, a plan — so that the answer the app keeps (a
+    /// transaction finished with Apple, a note spent) is never ahead of the book. A chat
+    /// does not wait: its hold and settle are written behind it (`ledger::Kept`).
+    ///
+    /// If the host is too slow the change stays made and the writer keeps offering it; the
+    /// app gets an error and asks again, which every one of these operations answers the
+    /// same way the second time.
+    async fn durably(&self, answer: Value) -> Value {
+        let (flushed, mark) = match self.ledger.lock() {
+            Ok(l) => (l.flushed(), l.mark()),
+            Err(_) => return answer,
+        };
+        let Some(flushed) = flushed else { return answer };
+        let confirmed = tokio::task::spawn_blocking(move || flushed.wait(mark, Self::DURABLE_WITHIN)).await.unwrap_or(false);
+        if confirmed {
+            answer
+        } else {
+            error("the book could not be written in time — please try again")
+        }
+    }
+
     async fn dispatch(&self, account: &str, op: &str, body: &str, now: u64) -> Value {
         match op {
             "balance" => self.balance(account, now),
@@ -298,13 +323,28 @@ impl Enclave {
             }),
             "plans" => self.plans_op(account, now),
             "plan.create" => self.plan_create(account, body, now).await,
-            "plan.status" => self.plan_status(account, body, now).await,
-            "plan.change" => self.plan_change(account, body, now).await,
-            "iap.verify" => self.iap_verify(account, body, now),
+            "plan.status" => {
+                let a = self.plan_status(account, body, now).await;
+                self.durably(a).await
+            }
+            "plan.change" => {
+                let a = self.plan_change(account, body, now).await;
+                self.durably(a).await
+            }
+            "iap.verify" => {
+                let a = self.iap_verify(account, body, now);
+                self.durably(a).await
+            }
             // The blind notes: minting is not for this account (the key is thrown away);
             // redeeming is.
-            "note.mint" => self.note_mint(body, now).await,
-            "note.redeem" => self.note_redeem(account, body, now),
+            "note.mint" => {
+                let a = self.note_mint(body, now).await;
+                self.durably(a).await
+            }
+            "note.redeem" => {
+                let a = self.note_redeem(account, body, now);
+                self.durably(a).await
+            }
             "dev.credit" | "dev.allowance" | "dev.bytes" if !self.dev_mode => error("not available on this enclave"),
             // A reply of a given size, to measure what the mixnet does with a big answer
             // without paying a model for a picture. Never on a sealed enclave.

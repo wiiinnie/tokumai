@@ -15,8 +15,8 @@
 //! with, and the enclave's Nym identity — so its address survives a restart.
 //!
 //! Without sealed secrets it still starts, with a random data key and the mock model, which
-//! is what the first probe did. The ledger lives in memory either way for now; giving it a
-//! home on the host, sealed, is the next step.
+//! is what the first probe did. With them, the book is kept on the host, sealed, as a
+//! snapshot and a journal (`tokumai_enclave::state`), and written behind the requests.
 
 use std::path::PathBuf;
 use tokumai_attest::nitro::NitroAttester;
@@ -76,9 +76,10 @@ fn write_identity(dir: &std::path::Path, files: &serde_json::Map<String, serde_j
     Ok(())
 }
 
-/// The book, kept on the host and sealed (`enclave::state`). The ledger is ordinary
-/// blocking code, so one thread of its own holds the channel to the host and every call
-/// waits for the host to say the change is on its disk.
+/// The book, kept on the host and sealed (`enclave::state`). Only the ledger's writer
+/// thread calls this (and the start-up reads), so the wait for the host's answer is off
+/// every request's path; what the writer hands over carries its number, and the host
+/// takes a record it already has as said rather than written again.
 struct HostBook {
     ask: std::sync::mpsc::Sender<(String, Vec<u8>, std::sync::mpsc::Sender<Result<Vec<u8>, String>>)>,
 }
@@ -119,12 +120,39 @@ impl tokumai_enclave::state::Store for HostBook {
     fn put_snapshot(&self, sealed: &[u8]) -> Result<(), String> {
         self.call("put-snapshot", sealed).map(|_| ())
     }
-    fn journal(&self) -> Result<Vec<Vec<u8>>, String> {
-        tokumai_enclave::state::split(&self.call("journal", &[])?)
+    fn journal(&self) -> Result<Vec<u8>, String> {
+        self.call("journal", &[])
     }
-    fn append(&self, record: &[u8]) -> Result<(), String> {
-        self.call("add-record", record).map(|_| ())
+    /// The record's place goes in front of it in the clear, so the host can tell a record
+    /// it already has from the next one (`tokumai_egress::add_record`).
+    fn append(&self, generation: u64, number: u64, record: &[u8]) -> Result<(), String> {
+        let mut body = generation.to_be_bytes().to_vec();
+        body.extend_from_slice(&number.to_be_bytes());
+        body.extend_from_slice(record);
+        self.call("add-record", &body).map(|_| ())
     }
+}
+
+/// A voice for threads that have no runtime of their own (the book's writer): the line
+/// goes to a thread that announces it over vsock, as a panic's last words do.
+fn lend_voice() {
+    static LINE: std::sync::OnceLock<std::sync::Mutex<std::sync::mpsc::Sender<String>>> = std::sync::OnceLock::new();
+    let (say, heard) = std::sync::mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("a runtime for the voice");
+        while let Ok(words) = heard.recv() {
+            eprintln!("{words}");
+            let _ = runtime.block_on(tokumai_egress::announce(&Endpoint::Vsock(HOST_CID, ANNOUNCE_PORT), &format!("{PROBE} {words}")));
+        }
+    });
+    let _ = LINE.set(std::sync::Mutex::new(say));
+    tokumai_enclave::voice::speaks(|line| {
+        if let Some(l) = LINE.get() {
+            if let Ok(l) = l.lock() {
+                let _ = l.send(line);
+            }
+        }
+    });
 }
 
 /// Say the last words out loud. An enclave has no console in production, so a panic is
@@ -349,6 +377,7 @@ async fn main() {
     tokumai_server::speaks_to(Endpoint::Vsock(HOST_CID, ANNOUNCE_PORT));
     // …and lends it to the core, which has no way to reach the host on its own.
     tokumai_enclave::trace::speaks(tokumai_server::say);
+    lend_voice();
     announce_panics();
     heartbeat();
     loopback_up().expect("bring up the loopback");

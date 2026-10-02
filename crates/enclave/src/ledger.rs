@@ -16,7 +16,8 @@ use crate::state::{Sealing, Store};
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::Duration;
 
 /// How many changes are written down before the whole book is written out again. Small
 /// enough that a restart replays in an instant, large enough that a chat does not rewrite
@@ -25,11 +26,14 @@ const CHANGES_PER_SNAPSHOT: usize = 2_000;
 
 /// The tables of the book, with the columns a snapshot carries. Everything the enclave
 /// keeps is here: a table missing from this list would not survive a restart.
+///
+/// Not here: `nonces`. A request is sealed to the enclave's own key, which does not survive
+/// a restart, so no request can be replayed across one — and a nonce written to the host's
+/// disk on every request was two fsyncs per chat for nothing (2026-10-02).
 const TABLES: &[(&str, &[&str])] = &[
     ("allowance", &["acct", "period", "ends_ms", "granted", "left"]),
     ("lots", &["id", "acct", "left", "expires_ms", "bought_ms"]),
     ("holds", &["id", "acct", "parts"]),
-    ("nonces", &["nonce", "ts_ms"]),
     ("plans", &["acct", "json"]),
     ("rails", &["rail", "acct"]),
     ("payments", &["ref", "at_ms"]),
@@ -75,14 +79,107 @@ struct Change {
 
 /// What the book is kept in when the enclave has no disk: the host's sealed snapshot and
 /// journal (`state`), and where we are in them.
+///
+/// The change is applied to the book in memory and sealed to its place at once, and then
+/// handed to a thread of its own that carries it to the host. The caller does not wait:
+/// a chat's hold and settle are written behind, and the host's disk is never on the path
+/// of a request. Whoever needs a change to be on the disk before answering — a purchase,
+/// a note, a plan — waits for its [`Mark`] (see `flushed`). Until 2026-10-02 every change
+/// waited for the host under the one lock every request needs, so a slow disk was a
+/// stopped enclave.
 struct Kept {
-    store: Arc<dyn Store>,
     sealing: Sealing,
     generation: u64,
     /// The number the next record gets after the snapshot.
     next: u64,
     /// How many records there are since the snapshot.
     since: usize,
+    /// The line to the thread that writes to the host.
+    queue: std::sync::mpsc::Sender<Job>,
+    flushed: Arc<Flushed>,
+}
+
+/// What the writer carries to the host, in order.
+enum Job {
+    Record { generation: u64, number: u64, sealed: Vec<u8> },
+    Snapshot { generation: u64, sealed: Vec<u8> },
+}
+
+/// A place in the line: (generation, number). Marks compare like the records they name.
+pub type Mark = (u64, u64);
+
+/// How far the host has confirmed the journal, for whoever waits on it.
+pub struct Flushed {
+    at: Mutex<Mark>,
+    changed: Condvar,
+}
+
+impl Flushed {
+    /// True once the host has confirmed every record up to `mark`; false if `within` ran
+    /// out first. The change is still on its way: the writer never gives up on a record.
+    pub fn wait(&self, mark: Mark, within: Duration) -> bool {
+        let deadline = std::time::Instant::now() + within;
+        let mut at = match self.at.lock() {
+            Ok(a) => a,
+            Err(p) => p.into_inner(),
+        };
+        while *at < mark {
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                return false;
+            }
+            at = match self.changed.wait_timeout(at, deadline - now) {
+                Ok((a, _)) => a,
+                Err(p) => p.into_inner().0,
+            };
+        }
+        true
+    }
+
+    fn reached(&self, mark: Mark) {
+        if let Ok(mut at) = self.at.lock() {
+            if *at < mark {
+                *at = mark;
+            }
+        }
+        self.changed.notify_all();
+    }
+}
+
+/// How long the writer waits before offering a record to the host again after a refusal.
+/// It never stops trying: the book in memory is right, and the host will take it when it
+/// can. What it says meanwhile goes to the host log (`crate::voice`), once a minute.
+const RETRY_AFTER: Duration = Duration::from_secs(2);
+
+/// The thread that carries the book to the host. It takes jobs in order and does not move
+/// on from one until the host has confirmed it, so a record never lands before the ones
+/// in front of it — and a record the host already took (the answer was lost) is answered
+/// again instead of written again (`Store::append`).
+fn writer(store: Arc<dyn Store>, jobs: std::sync::mpsc::Receiver<Job>, flushed: Arc<Flushed>) {
+    let mut last_said = std::time::Instant::now() - Duration::from_secs(60);
+    while let Ok(job) = jobs.recv() {
+        let (mark, what) = match &job {
+            Job::Record { generation, number, .. } => ((*generation, *number), "record"),
+            Job::Snapshot { generation, .. } => ((*generation, 0), "snapshot"),
+        };
+        loop {
+            let result = match &job {
+                Job::Record { generation, number, sealed } => store.append(*generation, *number, sealed),
+                Job::Snapshot { sealed, .. } => store.put_snapshot(sealed),
+            };
+            match result {
+                Ok(()) => break,
+                Err(e) => {
+                    if last_said.elapsed() >= Duration::from_secs(60) {
+                        crate::voice::say(format!("book: the host did not take {what} {}/{}: {e} — trying again", mark.0, mark.1));
+                        last_said = std::time::Instant::now();
+                    }
+                    std::thread::sleep(RETRY_AFTER);
+                }
+            }
+        }
+        flushed.reached(mark);
+    }
 }
 
 /// How long a prepaid lot is valid: three years from purchase, by the calendar.
@@ -151,7 +248,7 @@ impl Ledger {
     }
 
     /// The book kept on the host, sealed: the snapshot is read back, the journal replayed,
-    /// and from then on every change is written down before the request is answered.
+    /// and from then on every change is written down behind the request that made it.
     pub fn open_sealed(store: Arc<dyn Store>, data_key: [u8; 32]) -> Result<Ledger, String> {
         let mut ledger = Self::with(Connection::open_in_memory().map_err(|e| e.to_string())?, data_key)?;
         let sealing = Sealing::new(&data_key);
@@ -163,8 +260,8 @@ impl Ledger {
             generation = book["generation"].as_u64().ok_or("the book's snapshot has no generation")?;
             ledger.restore(&book["rows"])?;
         }
-        let journal = store.journal()?;
-        for (i, record) in journal.iter().enumerate() {
+        let journal = crate::state::split(&store.journal()?)?;
+        for (i, record) in journal.records.iter().enumerate() {
             let plain = sealing.open(generation, i as u64 + 1, record)?;
             let change: Change = serde_json::from_slice(&plain).map_err(|e| format!("a record of the book is unreadable: {e}"))?;
             ledger
@@ -172,14 +269,48 @@ impl Ledger {
                 .execute(&change.sql, params_from_iter(change.p.iter()))
                 .map_err(|e| format!("the book's record {} does not apply: {e}", i + 1))?;
         }
-        ledger.replayed = journal.len();
-        ledger.kept = Some(Mutex::new(Kept { store, sealing, generation, next: journal.len() as u64 + 1, since: journal.len() }));
-        if snapshot.is_empty() {
+        let replayed = journal.records.len();
+        ledger.replayed = replayed;
+        let flushed = Arc::new(Flushed { at: Mutex::new((generation, replayed as u64)), changed: Condvar::new() });
+        let (queue, jobs) = std::sync::mpsc::channel();
+        {
+            let flushed = flushed.clone();
+            std::thread::Builder::new().name("book".into()).spawn(move || writer(store, jobs, flushed)).map_err(|e| format!("no thread for the book: {e}"))?;
+        }
+        ledger.kept = Some(Mutex::new(Kept { sealing, generation, next: replayed as u64 + 1, since: replayed, queue, flushed }));
+        if snapshot.is_empty() || journal.legacy {
             // A book that starts from nothing gets its first snapshot at once, so that its
-            // generation is on the host's disk before anything is written down.
+            // generation is on the host's disk before anything is written down. A journal
+            // in the old form is folded for the same reason: what follows carries numbers.
             ledger.write_out()?;
         }
         Ok(ledger)
+    }
+
+    /// The place of the last change written down. Whoever must not answer before it is on
+    /// the host's disk waits for it with [`Ledger::flushed`], outside the ledger's lock.
+    pub fn mark(&self) -> Mark {
+        match &self.kept {
+            Some(kept) => kept.lock().map(|k| (k.generation, k.next - 1)).unwrap_or((0, 0)),
+            None => (0, 0),
+        }
+    }
+
+    /// Where the host has got to, to wait on. None for a book that is not kept on a host:
+    /// such a book is on its own disk (or in memory) the moment the change is made.
+    pub fn flushed(&self) -> Option<Arc<Flushed>> {
+        self.kept.as_ref().and_then(|k| k.lock().ok().map(|k| k.flushed.clone()))
+    }
+
+    /// Wait until everything written down so far is on the host's disk. For the tests and
+    /// for a stop that wants to leave nothing behind.
+    pub fn flush(&self, within: Duration) -> Result<(), String> {
+        let (Some(flushed), mark) = (self.flushed(), self.mark()) else { return Ok(()) };
+        if flushed.wait(mark, within) {
+            Ok(())
+        } else {
+            Err(format!("the host has not confirmed the book up to record {}/{} within {}s", mark.0, mark.1, within.as_secs()))
+        }
     }
 
     /// How many changes were replayed at the last start — what the enclave says out loud,
@@ -188,16 +319,17 @@ impl Ledger {
         self.replayed
     }
 
-    /// Do one change and write it down. The book in memory and the journal on the host say
-    /// the same thing, or the change did not happen.
+    /// Do one change and write it down: applied to the book in memory, sealed to its place,
+    /// and handed to the writer. The journal on the host will say the same thing; a change
+    /// that cannot even be sealed did not happen.
     fn change(&self, sql: &str, p: Vec<Val>) -> Result<usize, String> {
         let n = self.conn.execute(sql, params_from_iter(p.iter())).map_err(|e| e.to_string())?;
         self.write_down(vec![Change { sql: sql.to_string(), p }])?;
         Ok(n)
     }
 
-    /// Write changes down, in order, each sealed to its place in the line. Answered only
-    /// once the host says they are on its disk.
+    /// Write changes down, in order, each sealed to its place in the line and queued for
+    /// the host. Returns at once; `mark` says where the line now ends.
     fn write_down(&self, changes: Vec<Change>) -> Result<(), String> {
         let Some(kept) = &self.kept else { return Ok(()) };
         let mut full = false;
@@ -206,7 +338,9 @@ impl Ledger {
             for change in changes {
                 let record = serde_json::to_vec(&change).map_err(|e| e.to_string())?;
                 let sealed = kept.sealing.seal(kept.generation, kept.next, &record)?;
-                kept.store.append(&sealed)?;
+                kept.queue
+                    .send(Job::Record { generation: kept.generation, number: kept.next, sealed })
+                    .map_err(|_| "the book's writer is gone".to_string())?;
                 kept.next += 1;
                 kept.since += 1;
             }
@@ -219,7 +353,8 @@ impl Ledger {
     }
 
     /// Write the whole book out as one snapshot and start a new generation, so the journal
-    /// stays short and a restart is quick.
+    /// stays short and a restart is quick. Queued behind the records it folds in, so the
+    /// host sees them before it sees the snapshot that replaces them.
     fn write_out(&self) -> Result<(), String> {
         let Some(kept) = &self.kept else { return Ok(()) };
         let rows = self.rows()?;
@@ -227,7 +362,7 @@ impl Ledger {
         let generation = kept.generation + 1;
         let book = serde_json::json!({ "generation": generation, "rows": rows });
         let sealed = kept.sealing.seal(0, 0, &serde_json::to_vec(&book).map_err(|e| e.to_string())?)?;
-        kept.store.put_snapshot(&sealed)?;
+        kept.queue.send(Job::Snapshot { generation, sealed }).map_err(|_| "the book's writer is gone".to_string())?;
         kept.generation = generation;
         kept.next = 1;
         kept.since = 0;
@@ -559,10 +694,16 @@ impl Ledger {
         Ok(open.len())
     }
 
-    /// Record a request nonce. False if it was seen before (a replay, or a resend).
+    /// Record a request nonce. False if it was seen before (a replay, or a resend). In
+    /// memory only: see `TABLES` for why the host never hears of a nonce.
     pub fn first_sight(&self, nonce: &str, now_ms: u64) -> Result<bool, String> {
-        self.change("DELETE FROM nonces WHERE ts_ms < ?1", vec![Val::I(now_ms.saturating_sub(NONCE_KEEP_MS) as i64)])?;
-        let n = self.change("INSERT OR IGNORE INTO nonces (nonce, ts_ms) VALUES (?1, ?2)", vec![Val::S(nonce.into()), Val::I(now_ms as i64)])?;
+        self.conn
+            .execute("DELETE FROM nonces WHERE ts_ms < ?1", params![now_ms.saturating_sub(NONCE_KEEP_MS) as i64])
+            .map_err(|e| e.to_string())?;
+        let n = self
+            .conn
+            .execute("INSERT OR IGNORE INTO nonces (nonce, ts_ms) VALUES (?1, ?2)", params![nonce, now_ms as i64])
+            .map_err(|e| e.to_string())?;
         Ok(n == 1)
     }
 }
@@ -680,6 +821,7 @@ mod tests {
         // One that is still open when the enclave goes away.
         let _open = first.hold("acct", 5_000, now).unwrap();
         let before = first.balance("acct", now).unwrap();
+        first.flush(Duration::from_secs(5)).unwrap();
         drop(first);
 
         // A new enclave, the same host: the snapshot and the journal are all it has.
@@ -694,6 +836,7 @@ mod tests {
 
         // A third time, to be sure the replay of a replay is the same.
         let total = again.balance("acct", now).unwrap().total;
+        again.flush(Duration::from_secs(5)).unwrap();
         drop(again);
         let third = Ledger::open_sealed(store.clone(), [4u8; 32]).unwrap();
         assert_eq!(third.balance("acct", now).unwrap().total, total);
@@ -721,15 +864,119 @@ mod tests {
         let book = Ledger::open_sealed(store.clone(), [6u8; 32]).unwrap();
         book.grant_allowance("acct", now, now + 30 * DAY, 1_000).unwrap();
         for i in 0..CHANGES_PER_SNAPSHOT {
-            assert!(book.first_sight(&format!("nonce-{i}"), now).unwrap());
+            assert!(book.first_payment(&format!("payment-{i}"), now).unwrap());
         }
-        assert!(store.journal().unwrap().len() < CHANGES_PER_SNAPSHOT, "the journal should have been folded in");
+        book.flush(Duration::from_secs(10)).unwrap();
+        assert!(crate::state::split(&store.journal().unwrap()).unwrap().records.len() < CHANGES_PER_SNAPSHOT, "the journal should have been folded in");
         drop(book);
 
         let again = Ledger::open_sealed(store, [6u8; 32]).unwrap();
         assert_eq!(again.balance("acct", now).unwrap().allowance, 1_000);
-        // A request seen before the snapshot is still a request seen before.
-        assert!(!again.first_sight("nonce-7", now).unwrap());
+        // A payment seen before the snapshot is still a payment seen before.
+        assert!(!again.first_payment("payment-7", now).unwrap());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A nonce is a guard against a replay within one life of the enclave, and only that:
+    /// the host is not told about it, so the journal does not grow by two records per chat.
+    #[test]
+    fn a_nonce_is_not_written_down() {
+        let dir = std::env::temp_dir().join(format!("tokumai-nonce-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Arc::new(crate::state::FileStore::new(&dir).unwrap());
+        let book = Ledger::open_sealed(store.clone(), [6u8; 32]).unwrap();
+        assert!(book.first_sight("n", 1_000).unwrap());
+        assert!(!book.first_sight("n", 2_000).unwrap());
+        book.flush(Duration::from_secs(5)).unwrap();
+        assert!(store.journal().unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The host said nothing, or said it late: the record is offered again, and the host,
+    /// which had taken it, does not take it twice. The next start accounts for everything.
+    #[test]
+    fn a_record_the_host_took_but_did_not_confirm_is_not_written_twice() {
+        struct Flaky {
+            inner: crate::state::FileStore,
+            fail_next: std::sync::atomic::AtomicBool,
+        }
+        impl Store for Flaky {
+            fn snapshot(&self) -> Result<Vec<u8>, String> {
+                self.inner.snapshot()
+            }
+            fn put_snapshot(&self, sealed: &[u8]) -> Result<(), String> {
+                self.inner.put_snapshot(sealed)
+            }
+            fn journal(&self) -> Result<Vec<u8>, String> {
+                self.inner.journal()
+            }
+            fn append(&self, generation: u64, number: u64, record: &[u8]) -> Result<(), String> {
+                self.inner.append(generation, number, record)?;
+                if self.fail_next.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                    return Err("the vsock went quiet after the write".into());
+                }
+                Ok(())
+            }
+        }
+        let dir = std::env::temp_dir().join(format!("tokumai-flaky-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Arc::new(Flaky { inner: crate::state::FileStore::new(&dir).unwrap(), fail_next: std::sync::atomic::AtomicBool::new(false) });
+        let now = 1_790_000_000_000;
+        let book = Ledger::open_sealed(store.clone(), [7u8; 32]).unwrap();
+        book.flush(Duration::from_secs(5)).unwrap();
+        store.fail_next.store(true, std::sync::atomic::Ordering::SeqCst);
+        book.credit_prepaid("acct", 1_000, now).unwrap(); // this one lands, unconfirmed
+        book.credit_prepaid("acct", 1_000, now).unwrap();
+        book.flush(Duration::from_secs(10)).unwrap();
+        assert_eq!(crate::state::split(&store.journal().unwrap()).unwrap().records.len(), 2);
+        drop(book);
+        let again = Ledger::open_sealed(store, [7u8; 32]).unwrap();
+        assert_eq!(again.balance("acct", now).unwrap().total, 2_000);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The journals the first enclaves wrote carry no numbers. One is read as before, and
+    /// folded into a snapshot at once, so that the host's journal is in the new form from
+    /// then on.
+    #[test]
+    fn a_journal_in_the_old_form_is_replayed_and_folded() {
+        let dir = std::env::temp_dir().join(format!("tokumai-legacy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let key = [8u8; 32];
+        let sealing = Sealing::new(&key);
+        let now = 1_790_000_000_000;
+        // What such an enclave left behind: a snapshot of generation 3, and two records.
+        let snapshot = serde_json::json!({ "generation": 3, "rows": { "allowance": [[ "k", 1, now + DAY, 500, 500 ]] } });
+        std::fs::write(dir.join("book.snapshot"), sealing.seal(0, 0, &serde_json::to_vec(&snapshot).unwrap()).unwrap()).unwrap();
+        let mut journal = Vec::new();
+        for (i, change) in [
+            Change { sql: "UPDATE allowance SET left = left - ?2 WHERE acct = ?1".into(), p: vec![Val::S("k".into()), Val::I(100)] },
+            Change { sql: "INSERT OR IGNORE INTO nonces (nonce, ts_ms) VALUES (?1, ?2)".into(), p: vec![Val::S("old".into()), Val::I(now as i64)] },
+        ]
+        .iter()
+        .enumerate()
+        {
+            let sealed = sealing.seal(3, i as u64 + 1, &serde_json::to_vec(change).unwrap()).unwrap();
+            journal.extend_from_slice(&(sealed.len() as u32).to_be_bytes());
+            journal.extend_from_slice(&sealed);
+        }
+        std::fs::write(dir.join("book.journal"), &journal).unwrap();
+
+        let store = Arc::new(crate::state::FileStore::new(&dir).unwrap());
+        let book = Ledger::open_sealed(store.clone(), key).unwrap();
+        assert_eq!(book.replayed(), 2);
+        let left: i64 = book.conn.query_row("SELECT left FROM allowance WHERE acct = 'k'", [], |r| r.get(0)).unwrap();
+        assert_eq!(left, 400);
+        book.flush(Duration::from_secs(5)).unwrap();
+        assert!(store.journal().unwrap().is_empty(), "folded: the old journal is gone");
+        assert_eq!(book.mark().0, 4, "a new generation");
+        book.credit_prepaid("acct", 10, now).unwrap();
+        book.flush(Duration::from_secs(5)).unwrap();
+        assert!(store.journal().unwrap().starts_with(crate::state::MAGIC));
+        drop(book);
+        let again = Ledger::open_sealed(store, key).unwrap();
+        assert_eq!(again.balance("acct", now).unwrap().total, 10);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

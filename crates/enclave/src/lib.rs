@@ -74,6 +74,29 @@ pub mod trace {
     }
 }
 
+/// What the enclave says about itself to whoever runs it: a line for the host log, with
+/// nothing of a person in it. The book's writer uses it when the host will not take a
+/// record. Unlike `trace`, always compiled in: these are the lines an operator needs in
+/// order to understand a silence, not a trace of use.
+pub mod voice {
+    use std::sync::OnceLock;
+
+    static VOICE: OnceLock<fn(String)> = OnceLock::new();
+
+    /// The enclave has no console of its own; the binary lends it one. The function must
+    /// be safe to call from any thread, inside a runtime or not.
+    pub fn speaks(f: fn(String)) {
+        let _ = VOICE.set(f);
+    }
+
+    pub fn say(line: String) {
+        match VOICE.get() {
+            Some(f) => f(line),
+            None => eprintln!("{line}"),
+        }
+    }
+}
+
 /// Milliseconds since the epoch. The one clock the enclave reads.
 pub fn now_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
