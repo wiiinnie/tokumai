@@ -83,6 +83,21 @@ instance_id() {
 }
 public_ip() { aws ec2 describe-instances --instance-ids "$(instance_id)" --query 'Reservations[].Instances[].PublicIpAddress' --output text; }
 remote() { ssh -i "$KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 ec2-user@"$(public_ip)" "$@"; }
+
+# SSH is allowed from one address: this machine's, as of now. The operator is on a line
+# whose address changes, so every command that talks to the host first puts the current
+# address in and takes the old ones out (an address we no longer hold is someone else's).
+allow_ssh_from_here() {
+  SG=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=$NAME" --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null)
+  [ -z "$SG" ] || [ "$SG" = "None" ] && return 0
+  MY_IP=$(curl -s --max-time 10 https://checkip.amazonaws.com | tr -d '[:space:]')
+  [ -n "$MY_IP" ] || return 0
+  for old in $(aws ec2 describe-security-groups --group-ids "$SG" --query 'SecurityGroups[0].IpPermissions[?ToPort==`22`].IpRanges[].CidrIp' --output text); do
+    [ "$old" = "$MY_IP/32" ] && continue
+    aws ec2 revoke-security-group-ingress --group-id "$SG" --protocol tcp --port 22 --cidr "$old" >/dev/null 2>&1 || true
+  done
+  aws ec2 authorize-security-group-ingress --group-id "$SG" --protocol tcp --port 22 --cidr "$MY_IP/32" >/dev/null 2>&1 || true
+}
 book_volume_id() {
   aws ec2 describe-volumes --filters "Name=tag:Name,Values=$BOOK_VOLUME" "Name=status,Values=available,in-use" \
     --query 'Volumes[0].VolumeId' --output text 2>/dev/null | grep -v None || true
@@ -211,6 +226,9 @@ UNIT
     sudo systemctl restart tokumai-pulse-watch tokumai-pulse.timer"
 }
 
+case "${1:-}" in
+  deploy | debug | host | status | ssh | volume | stop) allow_ssh_from_here ;;
+esac
 case "${1:-}" in
   launch)
     [ -n "$(instance_id)" ] && { echo "already up: $(instance_id)"; exit 0; }
@@ -364,9 +382,7 @@ PY
     aws ec2 wait instance-running --instance-ids "$ID"
     # A stopped instance comes back with a new address, and SSH is allowed from this
     # machine's address only — both are settled here.
-    SG=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=$NAME" --query 'SecurityGroups[0].GroupId' --output text)
-    MY_IP=$(curl -s https://checkip.amazonaws.com | tr -d '[:space:]')
-    aws ec2 authorize-security-group-ingress --group-id "$SG" --protocol tcp --port 22 --cidr "$MY_IP/32" >/dev/null 2>&1 || true
+    allow_ssh_from_here
     echo "running at $(public_ip) — 'deploy' puts the enclave back on the mixnet (the book is still there)"
     ;;
   volume)
