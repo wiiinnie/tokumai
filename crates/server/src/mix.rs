@@ -144,8 +144,20 @@ pub async fn serve(enclave: &'static Enclave, mut client: MixnetClient, dir: Pat
     }
 }
 
+/// How many requests the enclave works on at once, all doors together. Every mixnet
+/// message used to become a task with no ceiling: a burst of pictures was a burst of
+/// provider calls and of megabytes held until each came back. Beyond this, requests wait
+/// their turn, in memory, with nothing started for them yet.
+const INFLIGHT: usize = 48;
+static WORKING: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(INFLIGHT);
+
 async fn answer(enclave: &'static Enclave, frames: &'static Frames, sender: Arc<RwLock<MixnetClientSender>>, tag: AnonymousSenderTag, frame: Vec<u8>, at: &'static str) {
-    let reply = frames.handle(&frame, |message| async move { enclave.handle_at(&message, at).await }).await;
+    let reply = frames
+        .handle(&frame, |message| async move {
+            let _turn = WORKING.acquire().await;
+            enclave.handle_at(&message, at).await
+        })
+        .await;
     if let Some(reply) = reply {
         let n = reply.len();
         if tokumai_enclave::trace::ON {

@@ -32,6 +32,9 @@ pub const CLOCK_SKEW_MS: u64 = 5 * 60 * 1000;
 /// How long an answer is kept for a resend.
 pub const REPLY_KEEP: Duration = Duration::from_secs(30 * 60);
 const REPLY_KEEP_MAX: usize = 20_000;
+/// And at most this many bytes of them: a picture's reply is megabytes, and twenty thousand
+/// of those would be the enclave's whole memory. The oldest go first.
+const REPLY_KEEP_BYTES: usize = 64 * 1024 * 1024;
 
 pub enum Db {
     File(PathBuf),
@@ -270,11 +273,16 @@ impl Enclave {
     }
 
     fn remember(&self, nonce: &str, out: &[u8]) {
+        if out.len() > REPLY_KEEP_BYTES / 4 {
+            return; // one reply that would evict most of the others is not worth keeping
+        }
         if let Ok(mut r) = self.replies.lock() {
             r.retain(|_, (at, _)| at.elapsed() < REPLY_KEEP);
-            if r.len() >= REPLY_KEEP_MAX {
-                if let Some(oldest) = r.iter().min_by_key(|(_, (at, _))| *at).map(|(k, _)| k.clone()) {
-                    r.remove(&oldest);
+            let mut bytes: usize = r.values().map(|(_, b)| b.len()).sum::<usize>() + out.len();
+            while r.len() >= REPLY_KEEP_MAX || bytes > REPLY_KEEP_BYTES {
+                let Some(oldest) = r.iter().min_by_key(|(_, (at, _))| *at).map(|(k, _)| k.clone()) else { break };
+                if let Some((_, gone)) = r.remove(&oldest) {
+                    bytes -= gone.len();
                 }
             }
             r.insert(nonce.to_string(), (Instant::now(), out.to_vec()));
