@@ -350,13 +350,11 @@ PY
     # A snapshot of the book volume every day at 03:00 UTC, the last 14 kept — by Data
     # Lifecycle Manager, so no credential on the host can touch it. The snapshots are
     # sealed bytes like the volume; they restore a book, they do not open one.
+    # The role DLM runs as. The probe's IAM user may neither read nor make roles, so it is
+    # made once by an administrator (console: IAM → Roles → Create role → "Data Lifecycle
+    # Manager", name AWSDataLifecycleManagerDefaultRole) and named here by its ARN.
     ROLE=AWSDataLifecycleManagerDefaultRole
-    if ! aws iam get-role --role-name $ROLE >/dev/null 2>&1; then
-      aws iam create-role --role-name $ROLE --assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"dlm.amazonaws.com"},"Action":"sts:AssumeRole"}]}' >/dev/null
-      aws iam attach-role-policy --role-name $ROLE --policy-arn arn:aws:iam::aws:policy/service-role/AWSDataLifecycleManagerServiceRole
-      echo "made the $ROLE role"; sleep 10
-    fi
-    ARN=$(aws iam get-role --role-name $ROLE --query Role.Arn --output text)
+    ARN="arn:aws:iam::$(aws sts get-caller-identity --query Account --output text):role/$ROLE"
     EXISTING=$(aws dlm get-lifecycle-policies --query "Policies[?Description=='$BOOK_VOLUME daily'].PolicyId" --output text)
     if [ -n "$EXISTING" ] && [ "$EXISTING" != "None" ]; then echo "backups are on: policy $EXISTING"; exit 0; fi
     aws dlm create-lifecycle-policy --description "$BOOK_VOLUME daily" --state ENABLED --execution-role-arn "$ARN" \
