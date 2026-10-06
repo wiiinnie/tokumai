@@ -40,6 +40,7 @@ cargo run -p tokumai-server --bin tokumai-enclave-dev [-- --mix]   # the enclave
 cargo run -p tokumai-server --bin tokumai-dev-client -- [--mix] "a question" [model]
 cd app && npm install && npm run dev                         # the app (first run installs the Tauri CLI)
 cargo test                                                   # everything
+deploy/audit.sh                                              # the dependency audit (cargo-audit, .cargo/audit.toml)
 ```
 
 A release build of the app refuses the simulator outright: its policy carries no simulator

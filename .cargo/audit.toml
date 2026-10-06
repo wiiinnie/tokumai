@@ -1,0 +1,26 @@
+# cargo-audit: the advisories that are known and accepted, each with why, so that
+# `deploy/audit.sh` fails on anything new and on nothing old (audit M19, 2026-10-06).
+# Take an entry out as soon as the fix lands; `cargo audit` then says if it is still there.
+[advisories]
+ignore = [
+    # h2 0.3 (unbounded empty DATA frames, a DoS on a server): reached only through
+    # nym-sdk → cosmrs → tendermint-rpc → reqwest 0.11, used for the enclave's OUTBOUND
+    # calls to Nym's API; the enclave serves no HTTP. Goes with the nym-sdk bump.
+    "RUSTSEC-2026-0258",
+    # rustls-webpki 0.101 (name-constraint bypasses, a CRL parsing panic): the same
+    # reqwest 0.11 path, i.e. the TLS of the enclave's calls to Nym's API. Providers, KMS
+    # and the witness go through reqwest 0.12 / rustls 0.23, which are not affected. Goes
+    # with the nym-sdk bump.
+    "RUSTSEC-2026-0098",
+    "RUSTSEC-2026-0099",
+    "RUSTSEC-2026-0104",
+    # rsa 0.9 (Marvin, a timing side channel on private operations): used for the KMS
+    # recipient envelope (a fresh key per start, one decryption, no remote caller to time
+    # it) and the blind signatures' raw modpow (audit L10, to be blinded). rsa 0.10 when
+    # it is released without the rc.
+    "RUSTSEC-2023-0071",
+    # lopdf 0.36 (stack overflow on deeply nested objects): the app's local PDF text
+    # extraction (pdf-extract), of a file the person chose, on their own device. Follow
+    # pdf-extract upstream.
+    "RUSTSEC-2026-0187",
+]
