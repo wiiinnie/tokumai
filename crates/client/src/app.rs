@@ -27,6 +27,13 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 /// Makes a transport to the enclave.
 pub trait Connector: Send + Sync {
     fn connect(&self) -> BoxFuture<'_, Result<Box<dyn Transport>, String>>;
+    /// A transport beside the one in use, for one exchange that must not share a sender
+    /// with the account's own calls (`Connection::call_aside`): a fresh mixnet identity,
+    /// quietly — the interface's connection steps and the route display belong to the
+    /// main transport.
+    fn connect_aside(&self) -> BoxFuture<'_, Result<Box<dyn Transport>, String>> {
+        self.connect()
+    }
     /// The last transport this handed out led nowhere — the enclave never answered on it.
     /// A connector with several ways in takes that as "not this one" and offers another.
     fn led_nowhere(&self) {}
@@ -125,38 +132,51 @@ impl Connector for MixConnector {
     }
 
     fn connect(&self) -> BoxFuture<'_, Result<Box<dyn Transport>, String>> {
-        Box::pin(async move {
-            let say = |step: &str| {
-                if let Some(s) = &self.steps {
-                    s(step);
-                }
-            };
-            // Every door in turn: one that does not open is a gateway that is down, not
-            // an enclave that is gone.
-            let mut last = String::new();
-            for door in self.order() {
-                match MixTransport::connect(&door, &self.entry, self.traffic, &say).await {
-                    Ok(mut t) => {
-                        t.on_progress = self.progress.clone();
-                        if let Ok(mut e) = self.last_entry.lock() {
-                            *e = Some(t.entry_gateway.clone());
-                        }
-                        if let Ok(mut d) = self.last_door.lock() {
-                            *d = Some(door.clone());
-                        }
-                        if !last.is_empty() {
-                            log::info!("[enclave] came in through another door after: {last}");
-                        }
+        Box::pin(self.connect_doors(false))
+    }
+
+    fn connect_aside(&self) -> BoxFuture<'_, Result<Box<dyn Transport>, String>> {
+        Box::pin(self.connect_doors(true))
+    }
+}
+
+impl MixConnector {
+    /// Every door in turn: one that does not open is a gateway that is down, not an
+    /// enclave that is gone. `aside`: a transport for one exchange beside the main one —
+    /// no steps said, no progress, and the door and entry it used are not remembered as
+    /// the connection's.
+    async fn connect_doors(&self, aside: bool) -> Result<Box<dyn Transport>, String> {
+        let say = |step: &str| {
+            if let (false, Some(s)) = (aside, &self.steps) {
+                s(step);
+            }
+        };
+        let mut last = String::new();
+        for door in self.order() {
+            match MixTransport::connect(&door, &self.entry, self.traffic, &say).await {
+                Ok(mut t) => {
+                    if aside {
                         return Ok(Box::new(t) as Box<dyn Transport>);
                     }
-                    Err(e) => {
-                        log::info!("[enclave] the door at {} did not open: {e}", crate::gateways::gateway_of(&door).unwrap_or("?"));
-                        last = e;
+                    t.on_progress = self.progress.clone();
+                    if let Ok(mut e) = self.last_entry.lock() {
+                        *e = Some(t.entry_gateway.clone());
                     }
+                    if let Ok(mut d) = self.last_door.lock() {
+                        *d = Some(door.clone());
+                    }
+                    if !last.is_empty() {
+                        log::info!("[enclave] came in through another door after: {last}");
+                    }
+                    return Ok(Box::new(t) as Box<dyn Transport>);
+                }
+                Err(e) => {
+                    log::info!("[enclave] the door at {} did not open: {e}", crate::gateways::gateway_of(&door).unwrap_or("?"));
+                    last = e;
                 }
             }
-            Err(if last.is_empty() { "the enclave has no address to reach it at".into() } else { last })
-        })
+        }
+        Err(if last.is_empty() { "the enclave has no address to reach it at".into() } else { last })
     }
 }
 
@@ -260,6 +280,35 @@ impl Connection {
     /// One operation, signed by `account`.
     pub async fn call(&mut self, account: &Account, op: &str, body: &Value) -> Result<Value, String> {
         Box::pin(self.call_inner(account, op, body)).await
+    }
+
+    /// One operation over a transport of its own — a fresh mixnet identity, used for this
+    /// exchange and dropped — so that nothing at the enclave's end ties it to the account's
+    /// own calls. For the minting of a blind note: the request carries the payment's
+    /// receipt, which names the payer to Apple or Stripe, and every message of one mixnet
+    /// client reaches the enclave under the same sender tag. Over the account's connection
+    /// the tag alone paired receipt and account, whatever the blind signature hid (audit
+    /// M11, 2026-10-05). The session (the attested enclave) is the main connection's; the
+    /// sealed bytes do not say who carries them.
+    pub async fn call_aside(&mut self, account: &Account, op: &str, body: &Value) -> Result<Value, String> {
+        for attempt in 0..2 {
+            self.ready().await?;
+            let session = self.session.as_ref().ok_or("not attested")?;
+            let (pending, bytes) = session.request(account, op, body, tokumai_proto::now_ms());
+            let t0 = Instant::now();
+            let mut aside = self.connector.connect_aside().await?;
+            log::info!("[enclave] a transport of its own in {} ms", t0.elapsed().as_millis());
+            let reply = aside.roundtrip(&bytes).await;
+            drop(aside);
+            match reply.and_then(|r| pending.open(&r)) {
+                Err(e) if e.contains("attest again") && attempt == 0 => {
+                    self.session = None;
+                    continue;
+                }
+                answer => return answer,
+            }
+        }
+        Err("the enclave keeps changing — try again in a moment".into())
     }
 
     async fn call_inner(&mut self, account: &Account, op: &str, body: &Value) -> Result<Value, String> {
@@ -392,6 +441,31 @@ mod tests {
             self.connects.fetch_add(1, Ordering::SeqCst);
             Box::pin(async move { Ok(Box::new(Local { to: self.to.clone(), fail_next: self.fail_next.clone() }) as Box<dyn Transport>) })
         }
+        /// Counted apart (a thousand at a time), so a test can tell the two kinds of connect.
+        fn connect_aside(&self) -> BoxFuture<'_, Result<Box<dyn Transport>, String>> {
+            self.connects.fetch_add(1000, Ordering::SeqCst);
+            Box::pin(async move { Ok(Box::new(Local { to: self.to.clone(), fail_next: self.fail_next.clone() }) as Box<dyn Transport>) })
+        }
+    }
+
+    /// A call aside goes over a transport of its own, made for it and dropped after it;
+    /// the main transport and the session stay what they were (audit M11).
+    #[tokio::test]
+    async fn a_call_aside_uses_a_transport_of_its_own_and_keeps_the_main_one() {
+        let to = Arc::new(Mutex::new(enclave()));
+        let connects = Arc::new(AtomicUsize::new(0));
+        let mut c = Connection::new(Box::new(LocalConnector { to: to.clone(), fail_next: Arc::new(AtomicUsize::new(0)), connects: connects.clone() }), policy());
+        let a = tokumai_core::account::from_mnemonic(PHRASE).unwrap();
+        c.call(&a, "dev.credit", &json!({ "toku": 100_000 })).await.unwrap();
+        assert_eq!(connects.load(Ordering::SeqCst), 1);
+        let stranger = tokumai_core::account::create_account();
+        let b = c.call_aside(&stranger, "balance", &json!({})).await.unwrap();
+        assert_eq!(b["balance"]["total"].as_u64().unwrap(), 0, "answered as the stranger, over its own transport");
+        assert_eq!(connects.load(Ordering::SeqCst), 1001, "one transport aside, the main one untouched");
+        assert!(c.has_transport());
+        let b = c.call(&a, "balance", &json!({})).await.unwrap();
+        assert_eq!(b["balance"]["total"].as_u64().unwrap(), 100_000);
+        assert_eq!(connects.load(Ordering::SeqCst), 1001, "the main transport served the account's call");
     }
 
     fn policy() -> Policy {

@@ -118,6 +118,12 @@ impl Connector for Reporting {
         self.inner.led_nowhere();
     }
 
+    /// Beside the main one, for the minting of a note: nothing of it reaches the interface
+    /// or the route display — it is not the connection the person is on.
+    fn connect_aside(&self) -> BoxFuture<'_, Result<Box<dyn Transport>, String>> {
+        self.inner.connect_aside()
+    }
+
     fn connect(&self) -> BoxFuture<'_, Result<Box<dyn Transport>, String>> {
         Box::pin(async move {
             let st = self.app.state::<AppState>();
@@ -185,9 +191,20 @@ async fn call(app: &AppHandle, op: &str, body: Value) -> Result<Value, String> {
     call_as(app, &account, op, body).await
 }
 
-/// The same, signed by a given account — the blind notes are minted under a key made for
-/// that one request and thrown away, so the minting names nobody (`notes`).
+/// The same, signed by a given account.
 async fn call_as(app: &AppHandle, account: &Account, op: &str, body: Value) -> Result<Value, String> {
+    call_as_how(app, account, op, body, false).await
+}
+
+/// The same, over a mixnet client of its own that is dropped afterwards — the blind notes
+/// are minted under a key made for that one request and thrown away, so the minting names
+/// nobody (`notes`), and over a transport the account's own calls never used, so the
+/// enclave's end cannot pair the two by their sender (`Connection::call_aside`).
+async fn call_aside_as(app: &AppHandle, account: &Account, op: &str, body: Value) -> Result<Value, String> {
+    call_as_how(app, account, op, body, true).await
+}
+
+async fn call_as_how(app: &AppHandle, account: &Account, op: &str, body: Value, aside: bool) -> Result<Value, String> {
     let st = app.state::<AppState>();
     let mut guard = st.conn.lock().await;
     if guard.is_none() {
@@ -201,7 +218,8 @@ async fn call_as(app: &AppHandle, account: &Account, op: &str, body: Value) -> R
         })?);
     }
     let conn = guard.as_mut().ok_or("no connection")?;
-    let answer = match conn.call(account, op, &body).await {
+    let called = if aside { conn.call_aside(account, op, &body).await } else { conn.call(account, op, &body).await };
+    let answer = match called {
         Ok(a) => {
             // An answer is also the best proof the enclave is there: whatever the chip
             // said while it was silent, it is wrong now.
@@ -1053,7 +1071,7 @@ async fn mint_note(app: &AppHandle, paid: &Paid, epoch: u16, redeem_after_ms: u6
     let note = core_notes::note_for(&seed, paid.tier, epoch);
     let (blinded, secret) = core_notes::blind(&pk, &note, &seed)?;
     let throwaway = account::create_account();
-    let r = call_as(app, &throwaway, "note.mint", json!({ "proof": paid.proof, "epoch": epoch, "blinded": B64.encode(&blinded) })).await?;
+    let r = call_aside_as(app, &throwaway, "note.mint", json!({ "proof": paid.proof, "epoch": epoch, "blinded": B64.encode(&blinded) })).await?;
     let blind_sig = r["sig"].as_str().and_then(|x| B64.decode(x).ok()).ok_or("the enclave sent no signature")?;
     let sig = core_notes::finalize(&pk, &blind_sig, &secret, &note)?;
     Ok(profile::WalletNote {
