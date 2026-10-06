@@ -119,8 +119,7 @@ impl Note {
     }
 }
 
-/// 32 bytes from a secret, a label and an epoch — the one derivation both the note's nonce
-/// and its blinding use, so a restored phone makes the same note again.
+/// 32 bytes from a secret, a label and an epoch: the month keys' derivation.
 pub fn derive(secret: &[u8; 32], label: &str, epoch: u16) -> [u8; 32] {
     let hk = Hkdf::<Sha256>::new(Some(b"tokumai/notes/v1"), secret);
     let mut out = [0u8; 32];
@@ -130,9 +129,24 @@ pub fn derive(secret: &[u8; 32], label: &str, epoch: u16) -> [u8; 32] {
     out
 }
 
+/// 32 bytes from a seed, a label, an epoch AND a tier — the one derivation both a note's
+/// nonce and its blinding use, so a restored phone makes the same note again, and so two
+/// notes of one month at different tiers are two notes: their own nonces (both can be
+/// spent) and their own blinding factors (the signer cannot pair their blinded messages by
+/// a shared factor once one is redeemed — audit M7, 2026-10-05).
+pub fn derive_note(seed: &[u8; 32], label: &str, epoch: u16, tier: u8) -> [u8; 32] {
+    let hk = Hkdf::<Sha256>::new(Some(b"tokumai/notes/v2"), seed);
+    let mut out = [0u8; 32];
+    let mut info = label.as_bytes().to_vec();
+    info.extend_from_slice(&epoch.to_be_bytes());
+    info.push(tier);
+    hk.expand(&info, &mut out).expect("32 bytes is a valid HKDF length");
+    out
+}
+
 /// The note an account makes for an epoch and a tier: its nonce comes from the seed.
 pub fn note_for(seed: &[u8; 32], tier: u8, epoch: u16) -> Note {
-    Note { tier, epoch, nonce: derive(seed, "nonce", epoch) }
+    Note { tier, epoch, nonce: derive_note(seed, "nonce", epoch, tier) }
 }
 
 // ---- keys --------------------------------------------------------------------------------
@@ -241,7 +255,7 @@ pub fn blind(pk: &RsaPublicKey, note: &Note, seed: &[u8; 32]) -> Result<(Vec<u8>
     if &m >= n {
         return Err("the encoded note is not below the modulus".into());
     }
-    let mut rng = ChaCha20Rng::from_seed(derive(seed, "blind", note.epoch));
+    let mut rng = ChaCha20Rng::from_seed(derive_note(seed, "blind", note.epoch, note.tier));
     let mut buf = vec![0u8; k];
     let r = loop {
         rng.fill_bytes(&mut buf);
@@ -351,6 +365,8 @@ mod tests {
         assert!(Note::parse(&other).is_err());
         assert_ne!(note_for(&[7u8; 32], 2, 10).nonce, n.nonce);
         assert_eq!(note_for(&[7u8; 32], 2, 9).nonce, n.nonce);
+        // Another tier the same month is another note, not the same nonce again (M7).
+        assert_ne!(note_for(&[7u8; 32], 1, 9).nonce, n.nonce);
     }
 
     #[test]
