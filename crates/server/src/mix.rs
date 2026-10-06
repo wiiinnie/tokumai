@@ -57,7 +57,7 @@ static DOORS: std::sync::Mutex<Vec<Door>> = std::sync::Mutex::new(Vec::new());
 /// hour holds, real and made; the floor less that, spread over the hour, is the chance of
 /// making one now — from a random door to another random door.
 pub async fn ghosts(enclave: &'static Enclave) {
-    use tokumai_enclave::ghost::{request, GHOST_FLOOR};
+    use tokumai_enclave::ghost::GHOST_FLOOR;
     let mut said_alone = false;
     loop {
         tokio::time::sleep(Duration::from_secs(60)).await;
@@ -93,7 +93,7 @@ pub async fn ghosts(enclave: &'static Enclave) {
         let Ok(recipient) = nym_sdk::mixnet::Recipient::try_from_base58_string(&to) else { continue };
         let posted = {
             let guard = sender.read().await;
-            guard.send_plain_message(recipient, request(&from)).await
+            guard.send_plain_message(recipient, enclave.ghost_request(&from)).await
         };
         if let Err(e) = posted {
             crate::say(format!("ghosts: could not post: {e}"));
@@ -203,7 +203,7 @@ pub async fn serve(enclave: &'static Enclave, mut client: MixnetClient, dir: Pat
                 // it is a ghost request from another door, which is answered like a
                 // redemption (`tokumai_enclave::ghost`).
                 let Some(tag) = m.sender_tag else {
-                    if let Some(back) = tokumai_enclave::ghost::reply_to(&m.message) {
+                    if let Some(back) = enclave.ghost_reply_to(&m.message) {
                         tokio::spawn(answer_ghost(enclave, sender.clone(), back));
                     }
                     continue;

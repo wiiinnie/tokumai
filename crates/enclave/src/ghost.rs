@@ -9,10 +9,18 @@
 //! So in thin hours the enclave makes that shape itself. One door sends a request-sized
 //! packet to another door through the mixnet (out at the sender, in at the receiver — the
 //! sender's side looks like the self-ping every door posts every two minutes anyway); the
-//! receiving door writes three records of a redemption's sizes that change nothing, waits
+//! receiving door writes four records of a redemption's sizes that change nothing, waits
 //! for the host as a real redemption would, and sends a reply-sized packet back. The host
-//! sees a redemption arrive. The book grows by three sealed no-ops; no row changes, no
+//! sees a redemption arrive. The book grows by four sealed no-ops; no row changes, no
 //! count moves, nothing is charged.
+//!
+//! The packet carries a MAC under a key only the enclave has, over the door to answer and
+//! the minute: a ghost is answered only when it is ours and of this moment. Without that
+//! (until 2026-10-06, audit M4) anyone on the mixnet could make a door write records and
+//! count a ghost — four an hour, and the enclave's own ghosts switched themselves off,
+//! leaving every redemption-shaped event in the hour a real one. And the ghost wrote three
+//! records where a redemption writes four (it had no rails row), so the two were told
+//! apart by counting.
 //!
 //! The rule: in any hour with fewer than [`GHOST_FLOOR`] redemptions, real and made
 //! together, the scheduler (`server::mix::ghosts`) fires one with the probability that
@@ -36,9 +44,23 @@ pub const GHOST_FLOOR: usize = 4;
 pub const GHOST_REQUEST_BYTES: usize = 900;
 pub const GHOST_REPLY_BYTES: usize = 400;
 
-/// The three records a redemption writes, as the journal sees them (sealed JSON of the
-/// change): the spent-note row, the plan, the allowance.
-pub const GHOST_RECORD_BYTES: [usize; 3] = [165, 520, 300];
+/// The four records a redemption writes, as the journal sees them (sealed JSON of the
+/// change, measured 2026-10-06): the spent-note row, the rails row, the allowance, the
+/// plan (which grows a little with each period's usage step).
+pub const GHOST_RECORD_BYTES: [usize; 4] = [156, 249, 379, 520];
+
+/// How far a ghost's minute may be from the receiving door's clock: the mixnet's delay,
+/// and a little.
+const GHOST_MINUTES: u64 = 3;
+
+fn mac(key: &[u8; 32], reply_to: &str, minute: u64) -> String {
+    use hmac::{Hmac, Mac};
+    let mut m = <Hmac<sha2::Sha256>>::new_from_slice(key).expect("hmac takes any key length");
+    m.update(reply_to.as_bytes());
+    m.update(b"\n");
+    m.update(&minute.to_be_bytes());
+    hex::encode(&m.finalize().into_bytes()[..16])
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Event {
@@ -47,6 +69,16 @@ pub enum Event {
 }
 
 impl Enclave {
+    /// A ghost request for `reply_to`, signed for the doors of this enclave.
+    pub fn ghost_request(&self, reply_to: &str) -> Vec<u8> {
+        request(&self.ghost_key, reply_to, crate::now_ms())
+    }
+
+    /// Where an arriving ghost request wants its reply, if it is ours and of this moment.
+    pub fn ghost_reply_to(&self, message: &[u8]) -> Option<String> {
+        reply_to(&self.ghost_key, message, crate::now_ms())
+    }
+
     /// Write what a redemption writes, change nothing, wait as a redemption waits.
     pub async fn ghost_redemption(&self) -> Result<(), String> {
         {
@@ -72,18 +104,31 @@ impl Enclave {
     }
 }
 
-/// The bytes a ghost request carries: the marker, the address to answer to, padding.
-pub fn request(reply_to: &str) -> Vec<u8> {
-    let mut out = format!("tokumai/ghost/req {reply_to}\n").into_bytes();
+/// The bytes a ghost request carries: the marker, the address to answer to, the minute,
+/// a MAC over both under `key`, padding.
+pub fn request(key: &[u8; 32], reply_to: &str, now_ms: u64) -> Vec<u8> {
+    let minute = now_ms / 60_000;
+    let mut out = format!("tokumai/ghost/req {reply_to} {minute} {}\n", mac(key, reply_to, minute)).into_bytes();
     out.resize(GHOST_REQUEST_BYTES.max(out.len()), 0);
     out
 }
 
-/// Where a ghost request wants its reply, if the bytes are one.
-pub fn reply_to(message: &[u8]) -> Option<String> {
+/// Where a ghost request wants its reply — if the bytes are one, of this moment, and ours.
+pub fn reply_to(key: &[u8; 32], message: &[u8], now_ms: u64) -> Option<String> {
     let text = message.strip_prefix(b"tokumai/ghost/req ")?;
     let end = text.iter().position(|b| *b == b'\n')?;
-    std::str::from_utf8(&text[..end]).ok().map(str::to_string)
+    let line = std::str::from_utf8(&text[..end]).ok()?;
+    let mut parts = line.split(' ');
+    let (reply_to, minute, tag) = (parts.next()?, parts.next()?.parse::<u64>().ok()?, parts.next()?);
+    if parts.next().is_some() || (now_ms / 60_000).abs_diff(minute) > GHOST_MINUTES {
+        return None;
+    }
+    let want = mac(key, reply_to, minute);
+    // Every byte compared, whatever the first said.
+    if want.len() != tag.len() || want.bytes().zip(tag.bytes()).fold(0u8, |acc, (a, b)| acc | (a ^ b)) != 0 {
+        return None;
+    }
+    Some(reply_to.to_string())
 }
 
 pub fn reply() -> Vec<u8> {
@@ -123,7 +168,7 @@ mod tests {
         e.ghost_redemption().await.unwrap();
         e.ledger.lock().unwrap().flush(std::time::Duration::from_secs(5)).unwrap();
         let journal = crate::state::split(&store.journal().unwrap()).unwrap().records;
-        assert_eq!(journal.len(), before + 3, "three records, like a redemption");
+        assert_eq!(journal.len(), before + 4, "four records, like a redemption");
         // Sealed sizes track the sizes a redemption's records have (plus the seal's 28 bytes).
         let sizes: Vec<usize> = journal[before..].iter().map(|r| r.len()).collect();
         for (got, want) in sizes.iter().zip(GHOST_RECORD_BYTES.iter()) {
@@ -140,11 +185,20 @@ mod tests {
     }
 
     #[test]
-    fn the_wire_shape_round_trips() {
-        let req = request("DoorB.address@gateway");
+    fn the_wire_shape_round_trips_only_for_our_own_of_this_moment() {
+        let key = [3u8; 32];
+        let now = 1_790_000_000_000;
+        let req = request(&key, "DoorB.address@gateway", now);
         assert_eq!(req.len(), GHOST_REQUEST_BYTES);
-        assert_eq!(reply_to(&req).as_deref(), Some("DoorB.address@gateway"));
-        assert_eq!(reply_to(b"tokumai/still-there"), None);
+        assert_eq!(reply_to(&key, &req, now).as_deref(), Some("DoorB.address@gateway"));
+        assert_eq!(reply_to(&key, &req, now + 2 * 60_000).as_deref(), Some("DoorB.address@gateway"), "the mixnet takes a moment");
+        assert_eq!(reply_to(&key, &req, now + 10 * 60_000), None, "not an old one again");
+        assert_eq!(reply_to(&[4u8; 32], &req, now), None, "not under another key");
+        assert_eq!(reply_to(&key, b"tokumai/still-there", now), None);
+        assert_eq!(reply_to(&key, b"tokumai/ghost/req DoorB.address@gateway\n", now), None, "the old, unsigned form");
+        let mut bent = req.clone();
+        bent[40] ^= 1;
+        assert_eq!(reply_to(&key, &bent, now), None);
         assert_eq!(reply().len(), GHOST_REPLY_BYTES);
     }
 }

@@ -93,6 +93,9 @@ pub struct Enclave {
     pub(crate) strikes: Mutex<HashMap<(String, u64, &'static str), u32>>,
     /// The blind notes' month keys (`notes`), derived from the data key.
     pub(crate) notes: crate::notes::Mint,
+    /// What a ghost request is signed with between the doors (`ghost`): derived from the
+    /// data key, so every door of this enclave has it and nobody else does.
+    pub(crate) ghost_key: [u8; 32],
     /// The operator's account id (`admin`).
     pub(crate) admin: Option<String>,
     /// What is counted for the operator (`admin`).
@@ -109,6 +112,25 @@ struct Inner {
     ts: u64,
     sig: String,
     body: String,
+}
+
+/// How many pages a PDF has, by counting its page objects — a heuristic (the trailer may
+/// lie, pages may be in object streams), never less than one, used only to size the hold.
+fn pdf_pages(b64: &str) -> u64 {
+    let Ok(bytes) = B64.decode(b64.trim()) else { return 1 };
+    let mut n = 0u64;
+    for needle in [&b"/Type /Page"[..], &b"/Type/Page"[..]] {
+        let mut at = 0;
+        while let Some(i) = bytes[at..].windows(needle.len()).position(|w| w == needle) {
+            let end = at + i + needle.len();
+            // "/Type /Pages" is the tree, not a page.
+            if bytes.get(end) != Some(&b's') {
+                n += 1;
+            }
+            at = end;
+        }
+    }
+    n.max(1)
 }
 
 pub(crate) fn error(msg: &str) -> Value {
@@ -157,6 +179,7 @@ impl Enclave {
             plan_prices: Mutex::new((Vec::new(), 0)),
             address: Mutex::new(String::new()),
             notes: crate::notes::Mint::new(key),
+            ghost_key: tokumai_core::account::sha256(&[b"tokumai/ghost/v1", &key]),
             admin: p.admin,
             stats: crate::admin::Stats::default(),
             working: std::sync::atomic::AtomicUsize::new(0),
@@ -476,6 +499,8 @@ impl Enclave {
         // Worst-case input: bytes of text (a token is at least a byte) plus what each
         // attachment can cost. Only types the providers read are passed on.
         let mut in_tokens: u64 = 0;
+        let mut attachments = 0usize;
+        let mut pages = 0u64;
         for m in messages {
             in_tokens += m.get("content").and_then(|c| c.as_str()).map(|c| c.len() as u64).unwrap_or(0);
             for att in m.get("attachments").and_then(|a| a.as_array()).map(Vec::as_slice).unwrap_or(&[]) {
@@ -484,12 +509,26 @@ impl Enclave {
                 if !policy::ATTACHMENT_TYPES.contains(&mime) {
                     return error(&format!("attachments of type {mime:?} are not supported — pictures and PDFs are"));
                 }
+                attachments += 1;
+                if attachments > policy::MAX_ATTACHMENTS {
+                    return error(&format!("at most {} attachments in one request", policy::MAX_ATTACHMENTS));
+                }
                 let bytes = b64.len() / 4 * 3;
                 if bytes > policy::MAX_ATTACHMENT_BYTES {
                     return error("an attachment is larger than 10 MB");
                 }
-                // A PDF is read page by page; reserve as if every 40 bytes were a token.
-                in_tokens += if mime == "application/pdf" { (bytes as u64 / 40).max(4096) } else { policy::IMAGE_INPUT_TOKENS };
+                // A PDF is read page by page, and charged by the page: reserve for every
+                // page it has (and for its bytes, whichever is more).
+                in_tokens += if mime == "application/pdf" {
+                    let n = pdf_pages(b64);
+                    pages += n;
+                    if pages > policy::MAX_PDF_PAGES {
+                        return error(&format!("at most {} PDF pages in one request", policy::MAX_PDF_PAGES));
+                    }
+                    (n * policy::PDF_PAGE_TOKENS).max(bytes as u64 / 40).max(4096)
+                } else {
+                    policy::IMAGE_INPUT_TOKENS
+                };
             }
         }
         if !crate::catalog::offered(&req.model, &self.pricing, self.dev_mode) {
@@ -601,6 +640,12 @@ impl Enclave {
             }
             Err(_) => 0, // a refused or failed answer costs nothing
         };
+        // The answer cost more than was held: the account pays what was held, we pay the
+        // rest — and count it, so a reserve that is too small is seen, not absorbed.
+        if cost > hold.amount {
+            self.stats.add("billing:over-hold", 1);
+            crate::trace::say(|| format!("req chat cost {cost} over a hold of {}", hold.amount));
+        }
         let charged = match self.ledger.lock().map_err(|_| "ledger unavailable".to_string()).and_then(|mut l| l.settle(hold, cost)) {
             Ok(k) => k,
             Err(e) => return error(&e),

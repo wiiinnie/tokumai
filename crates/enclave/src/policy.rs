@@ -36,6 +36,14 @@ pub const ATTACHMENT_TYPES: &[&str] = &["image/png", "image/jpeg", "image/webp",
 pub const MAX_ATTACHMENT_BYTES: usize = 10 * 1024 * 1024;
 /// Input tokens an image can cost at most (a high-detail picture on either provider).
 pub const IMAGE_INPUT_TOKENS: u64 = 1_600;
+/// What a page of a PDF costs in input tokens, at the provider that charges most per page
+/// (Gemini: 258 a page, whatever is on it), rounded up. The reserve is per page, not per
+/// byte: a thousand near-empty pages weigh fifty kilobytes and cost a quarter million
+/// tokens (audit M5).
+pub const PDF_PAGE_TOKENS: u64 = 300;
+/// The most pages one request may carry, over all its PDFs, and the most attachments.
+pub const MAX_PDF_PAGES: u64 = 400;
+pub const MAX_ATTACHMENTS: usize = 16;
 
 /// Web search while answering ("live"): at most this many queries per turn are reserved,
 /// each at the provider's price.
