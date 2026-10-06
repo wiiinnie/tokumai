@@ -121,9 +121,11 @@ The first one decides a design, not only a sentence.
 - Every model provider has to appear in the published text **before** it serves a single
   request. (Rule carried over from the first version, where it was broken once.)
 - Egress logs: the production host keeps **no per-call record** — counts per destination per
-  hour, nothing that pairs a call with a moment. A line per tunnel exists for development
-  and is switched on explicitly (`TOKUMAI_EGRESS_LOG=lines`), which the probe does and a
-  production host does not. Pending question 1 to the lawyer.
+  hour, nothing that pairs a call with a moment. A line per tunnel exists for chasing a
+  fault and is switched on explicitly (`LINES=1 probe.sh deploy`), which the script allows
+  only for a sandbox image. (Until 2026-10-06 the unit set it always — audit H5; the
+  rotated logs on the host from before are to be deleted with the next deploy.) Pending
+  question 1 to the lawyer.
 - The pricing table is compiled into the enclave image and therefore attested: we cannot
   reprice a question after the fact, and the text may say so.
 - A plan runs in months counted from the day it was bought, on both rails, and the text

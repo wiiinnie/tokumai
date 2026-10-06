@@ -3,10 +3,12 @@
 # egress proxy beside it. Everything the probe creates is tagged tokumai-probe, and `down`
 # removes all of it again — an instance left running costs about €4 a day.
 #
-# The probe writes a line per tunnel (TOKUMAI_EGRESS_LOG=lines in the unit below): it is a
-# development machine, and that log is how a fault is found. A production host does NOT set
-# it — there the proxy counts by the hour and keeps no per-call timing, because we hold the
-# payment records and a log of when each call went out is the other half of a join.
+# The proxy counts by the hour and keeps no per-call timing: we hold the payment records,
+# and a log of when each call went out is the other half of a join between a named
+# customer and a question. A line per tunnel (TOKUMAI_EGRESS_LOG=lines) is for chasing a
+# fault on a machine with no users on it, and is set only with LINES=1 — which `deploy`
+# refuses for an image that is not a sandbox one. Until 2026-10-06 the unit set it always,
+# on the host behind the published doors (audit H5).
 #
 # The words are EC2's own, so that what the script does and what the console shows are the
 # same thing: launch · start · stop · terminate. A stopped instance keeps its disk (and the
@@ -66,6 +68,15 @@ export AWS_PROFILE=${AWS_PROFILE:-tokumai} AWS_REGION=eu-central-1 AWS_PAGER=""
 NAME=tokumai-probe
 TYPE=${TYPE:-c7g.xlarge}
 TAG=${TAG:-probe-1}
+# LINES=1: a line per tunnel in the proxy's log (see the top of this file). Never on an
+# image that honours real receipts: the log would pair paying customers with moments.
+EGRESS_LINES=""
+if [ "${LINES:-}" = 1 ]; then
+  case "$TAG" in
+    *sandbox*) EGRESS_LINES="Environment=TOKUMAI_EGRESS_LOG=lines" ;;
+    *) echo "LINES=1 is for a sandbox image; tokumai-$TAG is not one — the host keeps no per-call log"; exit 1 ;;
+  esac
+fi
 KEY=~/.ssh/$NAME.pem
 # The enclave's share of the instance: 2 of 4 vCPUs, 3 GiB of 8.
 ENCLAVE_CPUS=2
@@ -126,7 +137,7 @@ After=network-online.target
 [Service]
 User=ec2-user
 WorkingDirectory=/home/ec2-user
-Environment=TOKUMAI_EGRESS_LOG=lines
+${EGRESS_LINES}
 ExecStart=/home/ec2-user/tokumai-egress-host vsock:4294967295:8080 egress.allow vsock:4294967295:8081 vsock:4294967295:8082 sealed.json book
 Restart=always
 RestartSec=2
