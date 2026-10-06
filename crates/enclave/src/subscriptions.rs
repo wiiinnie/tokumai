@@ -90,7 +90,7 @@ impl Enclave {
             Err(e) => return error(&e),
         }
         let reference = format!("plan{}", hex::encode(rand::random::<[u8; 12]>()));
-        match stripe.create_subscription(tier, yearly, &reference, version).await {
+        match stripe.create_subscription(tier, yearly, &reference, &self.order_tag(account), version).await {
             Ok((session, checkout, expires)) => json!({ "kind": "plan.open", "session": session, "checkout": checkout, "expiresAt": expires }),
             Err(e) => error(&e),
         }
@@ -99,8 +99,12 @@ impl Enclave {
     pub(crate) async fn plan_status(&self, account: &str, body: &str, now: u64) -> Value {
         let Some(stripe) = &self.stripe else { return error("plans are not sold by card here") };
         let session = body_of(body).get("session").and_then(|s| s.as_str()).unwrap_or("").to_string();
+        // Only the account that opened the checkout may claim it: the session id travels
+        // through a browser, and whoever else learned it would otherwise bind the plan to
+        // themselves the moment it was paid (audit M2).
         let sub = match stripe.checkout_subscription(&session).await {
-            Ok(Some(sub)) => sub,
+            Ok(Some((sub, tag))) if tag == self.order_tag(account) => sub,
+            Ok(Some(_)) => return json!({ "kind": "error", "error": "this checkout was not started by this account", "final": true }),
             Ok(None) => return json!({ "kind": "plan.pending" }),
             Err(e) => return error(&e),
         };

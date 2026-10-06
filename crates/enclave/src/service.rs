@@ -443,6 +443,15 @@ impl Enclave {
         hex::encode(tokumai_core::account::sha256(&[&self.safety_salt, day.to_string().as_bytes(), account.as_bytes()]))[..24].to_string()
     }
 
+    /// The name an account's card checkouts carry at Stripe (`client_reference_id`): a
+    /// keyed hash, the same for every checkout of the account, so that the account that
+    /// opened a checkout is the only one that can claim what it paid for (audit M2). It
+    /// names no account to Stripe — what Stripe can tell from it is that two checkouts
+    /// were the same person's, which the card already told it.
+    pub(crate) fn order_tag(&self, account: &str) -> String {
+        hex::encode(tokumai_core::account::sha256(&[b"tokumai/stripe/order/v1", &self.safety_salt, account.as_bytes()]))[..32].to_string()
+    }
+
     fn strike_count(&self, key: &(String, u64, &'static str)) -> u32 {
         self.strikes.lock().ok().and_then(|s| s.get(key).copied()).unwrap_or(0)
     }
@@ -545,34 +554,40 @@ impl Enclave {
             Ok(h) => h,
             Err(e) => return error(&e),
         };
+        // What this call looks like from outside our machine, and whether this account is
+        // inside the window after a payment. If it is, and nobody else's traffic of this
+        // shape has been through since its last call, decoys go out with it — to the same
+        // provider, in the same spread of seconds, the real call at a random place among
+        // them (see `cover`). Everything the host can see of the real call, the moderation
+        // call included, happens after the hold.
+        let shape = if crate::gemini::is_image_model(&req.model) { crate::cover::Shape::Picture } else { crate::cover::Shape::Text };
+        let needed = self.cover.decoys_needed(&self.account_key(account), shape, now);
+        if needed > 0 {
+            let (mine, theirs) = crate::cover::moments(needed);
+            for wait in theirs {
+                let providers = self.providers.clone();
+                let like = req.model.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(wait)).await;
+                    providers.decoy(&like).await;
+                });
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(mine)).await;
+        }
         // The moderation check runs before the model is asked; a flagged turn costs nothing.
         // Only in front of OpenAI's own models: Google filters its traffic itself
         // (`policy::GEMINI_SAFETY`), and having OpenAI read a Gemini user's question would
         // be a second provider seeing it for no gain to the person who asked.
         let flagged = if crate::openai::is_openai_model(&req.model) { self.providers.moderate(&req.messages).await } else { Ok(None) };
-        // What this call looks like from outside our machine, and whether it is the first
-        // one since this account paid for something. If it is, and nobody else's traffic
-        // has been through since, one decoy of the same shape goes out beside it — the
-        // cover our own users would otherwise have provided (see `cover`).
-        let shape = if crate::gemini::is_image_model(&req.model) { crate::cover::Shape::Picture } else { crate::cover::Shape::Text };
-        let picture = shape == crate::cover::Shape::Picture;
-        for _ in 0..self.cover.decoys_needed(&self.account_key(account), shape, now) {
-            let providers = self.providers.clone();
-            tokio::spawn(async move {
-                // Each on its own, and none at the same instant as the real call: calls to
-                // the millisecond look arranged, which would defeat the point.
-                let wait = 500 + (rand::random::<u64>() % 20_000);
-                tokio::time::sleep(std::time::Duration::from_millis(wait)).await;
-                providers.decoy(picture).await;
-            });
-        }
-        self.cover.note(shape, now);
         let result = match flagged {
             Ok(Some(cats)) => Err(format!(
                 "Declined by the safety check ({}). The question was not sent to the model and nothing was charged.",
                 crate::openai::plain_categories(&cats)
             )),
             _ => {
+                // A call went out: cover for everyone else's. (A turn the safety check
+                // stopped went nowhere, and counts for nobody.)
+                self.cover.note(shape, now);
                 let call = Call { req: &req, safety_id: Some(self.safety_id(account, day)), image_size };
                 provider.complete(&call).await
             }

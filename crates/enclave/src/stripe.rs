@@ -156,7 +156,11 @@ impl Stripe {
     /// A checkout for a plan. Billing starts the day it is paid and renews on that day.
     /// `consent` is the version of the withdrawal confirmations the person gave (§ 356 BGB),
     /// kept with the subscription so the sale can show it.
-    pub async fn create_subscription(&self, tier: usize, yearly: bool, reference: &str, consent: &str) -> Result<(String, String, u64), String> {
+    ///
+    /// `reference` is this checkout's own name (the idempotency key, so a retry opens no
+    /// second one); `tag` is the account's, the same on every checkout it opens, by which
+    /// the account claims the session once paid (`checkout_subscription`).
+    pub async fn create_subscription(&self, tier: usize, yearly: bool, reference: &str, tag: &str, consent: &str) -> Result<(String, String, u64), String> {
         let price = self.price_for(tier, yearly).ok_or("this plan is not sold by card")?.to_string();
         let expires = crate::now_ms() / 1000 + CHECKOUT_MINUTES * 60;
         let expires_s = expires.to_string();
@@ -164,7 +168,7 @@ impl Stripe {
             ("mode", "subscription"),
             ("line_items[0][price]", &price),
             ("line_items[0][quantity]", "1"),
-            ("client_reference_id", reference),
+            ("client_reference_id", tag),
             ("metadata[orderId]", reference),
             ("subscription_data[metadata][orderId]", reference),
             ("subscription_data[metadata][consent]", consent),
@@ -180,8 +184,9 @@ impl Stripe {
         Ok((id.to_string(), url.to_string(), expires * 1000))
     }
 
-    /// The subscription a checkout created, once it is complete AND paid; None before.
-    pub async fn checkout_subscription(&self, session: &str) -> Result<Option<String>, String> {
+    /// The subscription a checkout created, once it is complete AND paid, with the tag of
+    /// the account that opened it (`client_reference_id`); None before.
+    pub async fn checkout_subscription(&self, session: &str) -> Result<Option<(String, String)>, String> {
         if !safe_id(session, "cs_") {
             return Err("not a checkout session".into());
         }
@@ -193,7 +198,8 @@ impl Stripe {
         if v.get("status").and_then(|s| s.as_str()) != Some("complete") || v.get("payment_status").and_then(|s| s.as_str()) != Some("paid") {
             return Ok(None);
         }
-        Ok(v.get("subscription").and_then(|x| x.as_str()).filter(|s| safe_id(s, "sub_")).map(str::to_string))
+        let tag = v.get("client_reference_id").and_then(|t| t.as_str()).unwrap_or("").to_string();
+        Ok(v.get("subscription").and_then(|x| x.as_str()).filter(|s| safe_id(s, "sub_")).map(|s| (s.to_string(), tag)))
     }
 
     /// The subscription as Stripe has it now — tier and period read from Stripe's own record,
