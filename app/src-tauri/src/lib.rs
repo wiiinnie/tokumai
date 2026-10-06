@@ -74,7 +74,22 @@ struct AppState {
     /// The catalogue and the plan ladder, read once per start.
     models: Mutex<Option<Value>>,
     ladder: Mutex<Option<Value>>,
+    /// The three-word check in flight: the positions Rust drew, and the wrong answers of
+    /// late (`phrase_check_verify`).
+    phrase_check: std::sync::Mutex<PhraseCheck>,
 }
+
+#[derive(Default)]
+struct PhraseCheck {
+    /// The positions handed out by the last `phrase_check_start`, spent by one verify.
+    challenge: Option<Vec<u32>>,
+    /// When each wrong answer came, within `PHRASE_CHECK_WINDOW`.
+    wrong: Vec<std::time::Instant>,
+}
+
+/// Wrong answers allowed before the check pauses, and for how long.
+const PHRASE_CHECK_TRIES: usize = 5;
+const PHRASE_CHECK_WINDOW: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
 impl Default for AppState {
     fn default() -> Self {
@@ -85,6 +100,7 @@ impl Default for AppState {
             directory: Mutex::new(None),
             models: Mutex::new(None),
             ladder: Mutex::new(None),
+            phrase_check: std::sync::Mutex::new(PhraseCheck::default()),
         }
     }
 }
@@ -470,8 +486,14 @@ fn account_migrate_qr(app: AppHandle) -> Result<Value, String> {
 
 /// The three-word check, step one: three positions, fresh on every call. The words never
 /// go to the interface — it gets numbers, sends back what was typed, and hears yes or no.
+///
+/// Rust keeps the positions it drew: a verify answers only for them, once, and five wrong
+/// answers pause the check for a while. Without that the check was a word-by-word oracle
+/// for whatever ran in the webview — ask about one position at a time, 2048 words each,
+/// and the whole phrase falls out in seconds, on iOS past the native screen that exists so
+/// the words never enter the webview at all (audit H6, 2026-10-05).
 #[tauri::command]
-fn phrase_check_start(app: AppHandle) -> Result<Value, String> {
+fn phrase_check_start(app: AppHandle, state: State<'_, AppState>) -> Result<Value, String> {
     let p = profile::load(&data_dir(&app)?);
     let n = p.mnemonic.as_deref().map(|m| m.split_whitespace().count()).ok_or("no account")?;
     use rand::seq::SliceRandom;
@@ -479,23 +501,39 @@ fn phrase_check_start(app: AppHandle) -> Result<Value, String> {
     all.shuffle(&mut rand::rngs::OsRng);
     let mut pick: Vec<u32> = all.into_iter().take(3).collect();
     pick.sort_unstable();
+    state.phrase_check.lock().map_err(|_| "busy")?.challenge = Some(pick.clone());
     Ok(json!({ "positions": pick, "total": n, "verified": p.phrase_verified }))
 }
 
 /// Step two. Case and surrounding space are forgiven; which word was wrong is not said.
 #[tauri::command]
-fn phrase_check_verify(app: AppHandle, positions: Vec<u32>, words: Vec<String>) -> Result<Value, String> {
+fn phrase_check_verify(app: AppHandle, state: State<'_, AppState>, positions: Vec<u32>, words: Vec<String>) -> Result<Value, String> {
     let dir = data_dir(&app)?;
     let mut p = profile::load(&dir);
     let m = p.mnemonic.clone().ok_or("no account")?;
     let all: Vec<&str> = m.split_whitespace().collect();
-    if positions.len() != 3 || words.len() != 3 {
-        return Err("three positions and three words".into());
+    let mut check = state.phrase_check.lock().map_err(|_| "busy")?;
+    check.wrong.retain(|at| at.elapsed() < PHRASE_CHECK_WINDOW);
+    if check.wrong.len() >= PHRASE_CHECK_TRIES {
+        return Err("too many wrong answers — the check pauses for a quarter of an hour".into());
     }
-    let ok = positions.iter().zip(words.iter()).all(|(pos, typed)| {
+    // One challenge, one answer: the positions must be the ones drawn, and are spent now,
+    // right or wrong — a wrong answer draws three new ones (the interface asks).
+    let Some(drawn) = check.challenge.take() else { return Err("the check was not started — three new words".into()) };
+    if positions != drawn || words.len() != 3 {
+        return Err("those are not the words asked for — three new words".into());
+    }
+    // Every word is compared, whatever the first said: no early answer to time.
+    let ok = positions.iter().zip(words.iter()).fold(true, |ok, (pos, typed)| {
         let idx = (*pos as usize).wrapping_sub(1);
-        all.get(idx).is_some_and(|real| real.eq_ignore_ascii_case(typed.trim()))
+        all.get(idx).is_some_and(|real| real.eq_ignore_ascii_case(typed.trim())) & ok
     });
+    if ok {
+        check.wrong.clear();
+    } else {
+        check.wrong.push(std::time::Instant::now());
+    }
+    drop(check);
     if ok && !p.phrase_verified {
         p.phrase_verified = true;
         profile::save(&dir, &p)?;
