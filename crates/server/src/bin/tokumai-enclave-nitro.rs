@@ -22,9 +22,14 @@
 //! kept on the host sealed under that key (`doors`). Until 2026-10-05 both were typed into
 //! the sealed file by the operator, so the operator could open any copy of the book.
 //!
-//! Without sealed secrets it still starts, with a random data key and the mock model, which
-//! is what the first probe did. With them, the book is kept on the host, sealed, as a
-//! snapshot and a journal (`tokumai_enclave::state`), and written behind the requests.
+//! Without sealed secrets it does not serve: it says so to the host and stops. (A probe
+//! image may say otherwise with TOKUMAI_UNSEALED_OK=1 in its own Dockerfile, which is
+//! measured — then it runs on a random data key and the mock model, with test credit, as
+//! the first probe did. Until 2026-10-06 every image did that whenever the host withheld
+//! the secrets, under the same PCR0 as the real service, so the host could choose which of
+//! the two the apps got, and purchases credited into the memory-only book were gone at the
+//! next start — audit M1.) With them, the book is kept on the host, sealed, as a snapshot
+//! and a journal (`tokumai_enclave::state`), and written behind the requests.
 
 use std::path::PathBuf;
 use tokumai_attest::nitro::NitroAttester;
@@ -464,6 +469,12 @@ async fn main() {
     };
     if sealed.is_some() {
         let _ = tokumai_egress::announce(&Endpoint::Vsock(HOST_CID, ANNOUNCE_PORT), &format!("{PROBE} unsealed its secrets")).await;
+    } else if std::env::var("TOKUMAI_UNSEALED_OK").ok().as_deref() != Some("1") {
+        // Not a probe image: an enclave that would serve the mock model with test credit
+        // under the published measurement is one the host can swap in at will.
+        let _ = tokumai_egress::announce(&Endpoint::Vsock(HOST_CID, ANNOUNCE_PORT), &format!("{PROBE} no sealed secrets — this image serves nothing without them; stopping")).await;
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        panic!("no sealed secrets: this image does not serve without them");
     }
     // The data key: the enclave's own, never the operator's. A sealed enclave that cannot
     // have it does not run on a random one instead — that would be a book written for

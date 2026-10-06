@@ -324,7 +324,7 @@ UD
     # Stop first: a running proxy binary cannot be overwritten ("text file busy").
     remote "sudo systemctl stop tokumai-enclave 2>/dev/null || true; sudo nitro-cli terminate-enclave --all >/dev/null 2>&1 || true; sudo systemctl stop tokumai-egress 2>/dev/null || true; pkill -f '[t]okumai-egress-host' || true; sleep 1" || true
     # The sealed secrets travel with it: the host cannot read them, and without them the
-    # enclave would run on the mock model (deploy/aws/kms.sh secrets writes the file).
+    # enclave serves nothing (deploy/aws/kms.sh secrets writes the file).
     SEALED=dev-data/sealed/sealed.json
     [ -f "$SEALED" ] || { echo "no $SEALED — 'deploy/aws/kms.sh secrets <secrets.json>' first"; exit 1; }
     scp -i "$KEY" -q dev-data/eif/tokumai-$TAG.eif dev-data/linux-release/tokumai-egress-host deploy/egress.allow "$SEALED" ec2-user@"$(public_ip)":/home/ec2-user/
