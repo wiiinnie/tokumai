@@ -2643,7 +2643,10 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     // sent. It is the number that was missing on 2026-09-19, when 44 of 53 seconds were
     // spent before a single packet went out and the server looked slow.
     const sent = Number(a.sent)||0;
-    const t = (a.size ? ` · ${a.size}` : "")
+    // `size` came from the server's usage report: a size token or nothing, never markup
+    // (audit M14 — it went into innerHTML as it came).
+    const size = /^\d{1,2}K$/.test(String(a.size||"")) ? a.size : "";
+    const t = (size ? ` · ${size}` : "")
       + (a.ms ? ` · ⏱ ${secs(a.ms)}${a.net?` (first byte ${secs(a.net)}${sent>2000?`, left after ${secs(sent)}`:''})`:''}` : "");
     const cost=+a.cost||0, charge=+a.charge||0;
     if(cost<=0) return `<div class="costaudit">⚙ provider free · charged ${usd(charge)}${t}</div>`;
@@ -5233,17 +5236,20 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     try{ const r = await Backend.phraseBackupGet(); phraseBackup = { available: !!(r&&r.available), on: !!(r&&r.on), error: String((r&&r.error)||"").slice(0,200) }; }
     catch(_){ phraseBackup = { available:false, on:false, error:"" }; }
   }
-  function openAccount(){ acctPhrase=null; acctView=null; acctPage=null; renderAccount(); openScrim("acctScrim"); }
+  function openAccount(){ acctPhrase=null; migrateData=null; acctView=null; acctPage=null; renderAccount(); openScrim("acctScrim"); }
   // Account drill-in: rows navigate into a sub-page, the back arrow returns to the landing.
   function acctNav(el){
     // The check page needs its three positions from Rust first — navigating straight to it
     // rendered a page with no inputs (2026-09-11).
     if(el.dataset.page==="check"){ startPhraseCheck(); return; }
     acctPage=el.dataset.page; acctView=null; acctPhrase=null; renderAccount(); const mb=$("acctScrim").querySelector(".mb"); if(mb) mb.scrollTop=0; }
-  function acctBack(){ acctPage=null; acctView=null; acctPhrase=null; renderAccount(); const mb=$("acctScrim").querySelector(".mb"); if(mb) mb.scrollTop=0; }
+  function acctBack(){ acctPage=null; acctView=null; acctPhrase=null; migrateData=null; renderAccount(); const mb=$("acctScrim").querySelector(".mb"); if(mb) mb.scrollTop=0; }
   // M-fe-2: don't leave the revealed mnemonic sitting in a JS variable after the modal is
   // dismissed.
-  function closeAccount(){ acctPhrase=null; acctView=null; acctPage=null; credResult=""; $("acctScrim").classList.remove("open"); }
+  // The words and the QR of them live in these two variables only while their page is
+  // open: every way out of that page drops them (audit M15 — `migrateData` stayed for the
+  // life of the page before).
+  function closeAccount(){ acctPhrase=null; migrateData=null; acctView=null; acctPage=null; credResult=""; $("acctScrim").classList.remove("open"); }
   // ONE status line for the whole sheet, in the header — outside the body that scrolls, so
   // it is never below the fold on a phone (tester, 2026-09-07).
   function acctStatus(m, kind){
@@ -5519,7 +5525,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
 
   function showRestore(){ acctView="restore"; acctPhrase=null; renderAccount(); }
   function askNew(){ acctView="confirmNew"; acctPhrase=null; renderAccount(); }
-  function cancelAcctView(){ acctView=null; renderAccount(); }
+  function cancelAcctView(){ acctView=null; migrateData=null; renderAccount(); }
   // The restore form's Cancel: from a confirm sub-view → back to the form; from the form
   // itself (a full drill-in page where acctView is null) → back to the account list.
   function backFromRestore(){ if(acctView){ acctView=null; renderAccount(); } else { acctBack(); } }
@@ -6036,6 +6042,9 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   //   data-stop    = stopPropagation (click)   data-prevent = preventDefault
   //   data-click="__backdrop__" + data-close="fn"  → close only when the backdrop itself is clicked
   //   data-keydown="__enter__"  + data-fn="fn"      → run fn on the Enter key
+  const PRIVILEGED = new Set(['sendMsg','doAccountNew','doAccountDelete','doAccountReveal','copyPhrase','doMigrate',
+    'doAccountRestore','decryptImport','acceptTerms','subscribePlan','changeWebPlan','selectPlan','restorePurchases',
+    'exportSession','deleteSession','downloadHandover','checkCredit','submitPhraseCheck','startQrScan','supSend','supSendReply']);
   function actArgs(el){
     if (el.dataset.args == null) return [];
     try { return JSON.parse('[' + el.dataset.args + ']'); } catch (_) { return []; }
@@ -6050,6 +6059,9 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     if (key === '__enter__'){ if (e.key === 'Enter'){ const f = window[el.dataset.fn]; if (typeof f === 'function') f(); } return; }
     const fn = window[key];
     if (typeof fn !== 'function') return;
+    // The thread shows what the model said. It is escaped on the way in, and even so:
+    // nothing inside it may reach the actions that spend, reveal or remove (audit M14).
+    if (PRIVILEGED.has(key) && el.closest('#thread')) return;
     // pass is per event type (data-<type>-pass) so one element can carry several
     // handlers (e.g. a textarea with both data-input and data-keydown).
     const pass = el.dataset[type + 'Pass'];
