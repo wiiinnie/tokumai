@@ -36,6 +36,31 @@ pub struct Plan {
     pub disputed_at_ms: u64,
     #[serde(default)]
     pub usage: Vec<PeriodUsage>,
+    /// The highest tier whose allowance this period has received, and which period that
+    /// is (`Allowance::period_key`). An upgrade adds only the step above this, so a period
+    /// reaches a tier once however the plan moves up and down inside it (audit H3,
+    /// 2026-10-05: without it, up–down–up re-added the upgrade's pro rata every time, while
+    /// Stripe replayed the first charge for free).
+    #[serde(default)]
+    pub granted_tier: usize,
+    #[serde(default)]
+    pub granted_period: u32,
+}
+
+impl Plan {
+    /// The tier this period's allowance already stands at: what was recorded for it, or —
+    /// for a plan from before the record existed — the tier the plan is on.
+    fn granted_base(&self, period_start_ms: u64) -> usize {
+        if self.granted_period == Allowance::period_key(period_start_ms) {
+            self.granted_tier
+        } else {
+            self.tier
+        }
+    }
+    fn record_granted(&mut self, period_start_ms: u64, tier: usize) {
+        self.granted_tier = tier;
+        self.granted_period = Allowance::period_key(period_start_ms);
+    }
 }
 
 impl Plan {
@@ -203,10 +228,18 @@ fn renew_key(l: &Ledger, key: &str, tier: usize, yearly: bool, rail: &str, now_m
         Some((s, e)) if grant => {
             close_period(l, &key, &mut plan)?;
             l.allowance_set(&key, s, e, TIERS[tier].0)?;
+            plan.record_granted(s, tier);
         }
-        Some((s, e)) if was_known && tier > old_tier => {
-            let step = TIERS[tier].0 - TIERS[old_tier].0;
-            l.allowance_add(&key, prorata_toku(step, e.saturating_sub(now_ms), e - s))?;
+        // The rail reports a higher tier inside a period already granted: the step above
+        // what this period has had, once — `old_tier` alone would re-add it after a
+        // downgrade and a second report.
+        Some((s, e)) if was_known => {
+            let base = { let before = Plan { tier: old_tier, ..plan.clone() }; before.granted_base(s) };
+            if tier > base {
+                let step = TIERS[tier].0 - TIERS[base].0;
+                l.allowance_add(&key, prorata_toku(step, e.saturating_sub(now_ms), e - s))?;
+                plan.record_granted(s, tier);
+            }
         }
         _ => {}
     }
@@ -220,15 +253,21 @@ pub fn change_tier(l: &Ledger, account: &str, tier: usize, now_ms: u64) -> Resul
     let key = l.acct_key(account);
     let Some(mut plan) = l.plan_get(&key)? else { return Ok(0) };
     let tier = tier.min(TIERS.len() - 1);
-    let (old, new) = (TIERS[plan.tier].0, TIERS[tier].0);
+    let slice = slice_at(plan.period_start_ms, plan.paid_until_ms, plan.yearly, now_ms);
+    // The step is counted from what this period has already been granted, not from the
+    // tier the plan happens to be on: down and up again adds nothing the second time.
+    let base = slice.map(|(s, _)| plan.granted_base(s)).unwrap_or(plan.tier);
     plan.tier = tier;
+    let extra = match slice {
+        Some((s, e)) if tier > base => {
+            let extra = prorata_toku(TIERS[tier].0 - TIERS[base].0, e.saturating_sub(now_ms), e - s);
+            l.allowance_add(&key, extra)?;
+            plan.record_granted(s, tier);
+            extra
+        }
+        _ => 0,
+    };
     l.plan_put(&key, &plan)?;
-    if new <= old {
-        return Ok(0);
-    }
-    let Some((s, e)) = slice_at(plan.period_start_ms, plan.paid_until_ms, plan.yearly, now_ms) else { return Ok(0) };
-    let extra = prorata_toku(new - old, e.saturating_sub(now_ms), e - s);
-    l.allowance_add(&key, extra)?;
     Ok(extra)
 }
 
@@ -439,8 +478,21 @@ mod tests {
         assert_eq!(change_tier(&l, "a", 1, ms(2026, 9, 19)).unwrap(), 320_000);
         assert_eq!(left(&l, "a", ms(2026, 9, 19)), 1_020_000);
         assert_eq!(change_tier(&l, "a", 0, ms(2026, 9, 20)).unwrap(), 0);
+        // Up again inside the same period: that tier was granted already (audit H3) — by
+        // the change itself, and by the rail reporting it again.
+        assert_eq!(change_tier(&l, "a", 1, ms(2026, 9, 21)).unwrap(), 0);
+        assert_eq!(left(&l, "a", ms(2026, 9, 21)), 1_020_000);
+        assert_eq!(change_tier(&l, "a", 0, ms(2026, 9, 22)).unwrap(), 0);
+        assert!(!monthly(&l, "a", 1, "stripe:sub_a", ms(2026, 9, 1), ms(2026, 9, 23)).unwrap());
+        assert_eq!(left(&l, "a", ms(2026, 9, 23)), 1_020_000);
+        // Higher still: only the step above what the period has had.
+        let step_up = change_tier(&l, "a", 2, ms(2026, 9, 24)).unwrap();
+        assert!(step_up > 0 && step_up < prorata_toku(TIERS[2].0 - TIERS[0].0, ms(2026, 10, 1) - ms(2026, 9, 24), ms(2026, 10, 1) - ms(2026, 9, 1)), "{step_up}");
+        assert_eq!(change_tier(&l, "a", 2, ms(2026, 9, 25)).unwrap(), 0);
+        // A new period starts over at the plan's tier.
         assert!(monthly(&l, "a", 0, "stripe:sub_a", ms(2026, 10, 1), ms(2026, 10, 1)).unwrap());
         assert_eq!(left(&l, "a", ms(2026, 10, 1)), 700_000);
+        assert_eq!(change_tier(&l, "a", 1, ms(2026, 10, 2)).unwrap(), prorata_toku(TIERS[1].0 - TIERS[0].0, ms(2026, 11, 1) - ms(2026, 10, 2), ms(2026, 11, 1) - ms(2026, 10, 1)));
     }
 
     #[test]

@@ -220,6 +220,14 @@ impl Stripe {
     /// Change a running subscription to another tier of the same interval. An upgrade is
     /// charged at once, pro rata, and refused whole if the charge fails or needs the bank's
     /// confirmation; a downgrade takes effect with the next period.
+    ///
+    /// `reference` is the idempotency key's stem: a retry after a lost answer is the same
+    /// request to Stripe, never a second charge. The subscription's latest invoice goes
+    /// into the key too, so that the SAME change asked for again after it was undone
+    /// (up, down, up) is a new request — Stripe would otherwise replay the first answer
+    /// for a day and charge nothing while the ledger took it as applied (audit H3). And
+    /// what Stripe applied is read back fresh, never from the answer to the POST, which a
+    /// replay repeats verbatim.
     pub async fn change_subscription(&self, sub_id: &str, tier: usize, yearly: bool, upgrade: bool, reference: &str) -> Result<usize, String> {
         if !safe_id(sub_id, "sub_") {
             return Err("not a subscription id".into());
@@ -227,20 +235,22 @@ impl Stripe {
         let price = self.price_for(tier, yearly).ok_or("that plan is not sold by card")?.to_string();
         let cur = self.call(crate::http::client().get(format!("{API}/subscriptions/{sub_id}"))).await?;
         let item = cur.pointer("/items/data/0/id").and_then(|i| i.as_str()).filter(|i| safe_id(i, "si_")).ok_or("the subscription names no item")?.to_string();
+        let invoice = cur.get("latest_invoice").and_then(|i| i.as_str()).filter(|i| safe_id(i, "in_")).unwrap_or("none");
+        let reference = format!("{reference}-{invoice}");
         let form: Vec<(&str, &str)> = vec![
             ("items[0][id]", &item),
             ("items[0][price]", &price),
             ("proration_behavior", if upgrade { "always_invoice" } else { "none" }),
             ("payment_behavior", if upgrade { "error_if_incomplete" } else { "allow_incomplete" }),
         ];
-        let v = self
-            .call(crate::http::client().post(format!("{API}/subscriptions/{sub_id}")).header("Idempotency-Key", reference).form(&form))
+        self.call(crate::http::client().post(format!("{API}/subscriptions/{sub_id}")).header("Idempotency-Key", &reference).form(&form))
             .await
             .map_err(|e| match e {
                 Fail::Other(m) if upgrade => format!("the upgrade could not be charged, so nothing changed ({m})"),
                 e => e.into(),
             })?;
-        let now = v.pointer("/items/data/0/price/id").and_then(|p| p.as_str()).unwrap_or("");
+        let applied = self.call(crate::http::client().get(format!("{API}/subscriptions/{sub_id}"))).await?;
+        let now = applied.pointer("/items/data/0/price/id").and_then(|p| p.as_str()).unwrap_or("");
         match self.tier_of_price(now) {
             Some((t, y)) if (t, y) == (tier, yearly) => Ok(t),
             _ => Err("the card processor did not apply the change".into()),
