@@ -32,6 +32,7 @@ use tokumai_client::gateways::EntryChoice;
 use tokumai_core::account::Account;
 
 const PAGE: &str = include_str!("../../admin/admin.html");
+const SCRIPT: &str = include_str!("../../admin/admin.js");
 const DEFAULT_PORT: u16 = 8791;
 const MAX_BODY: usize = 8 * 1024;
 
@@ -99,6 +100,15 @@ struct State {
     conn: tokio::sync::Mutex<Connection>,
     target: (String, String),
     host: tokio::sync::Mutex<Option<(String, std::time::Instant)>>,
+    /// The port this process listens on: the only Host it answers to.
+    port: u16,
+    /// A token for this run, served in the page and required on every /api call.
+    token: String,
+}
+
+/// Equal, with every byte looked at whatever the first said.
+fn same(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 #[tokio::main]
@@ -124,13 +134,15 @@ async fn main() {
     } else {
         Policy { measurements: vec![pcr0.trim().to_lowercase()], simulated_root: None, simulated_any_measurement: false }
     };
+    let port: u16 = std::env::var("ADMIN_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(DEFAULT_PORT);
     let state = Arc::new(State {
         account,
         conn: tokio::sync::Mutex::new(Connection::new(connector, policy)),
         target: (address.clone(), pcr0.clone()),
         host: tokio::sync::Mutex::new(None),
+        port,
+        token: hex::encode(rand::random::<[u8; 16]>()),
     });
-    let port: u16 = std::env::var("ADMIN_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(DEFAULT_PORT);
     let listener = TcpListener::bind(("127.0.0.1", port)).await.expect("bind loopback");
     println!("tokumai-admin: http://127.0.0.1:{port}  (operator {}…, enclave {}…)", state.account.account_id.chars().take(12).collect::<String>(), address.chars().take(16).collect::<String>());
     println!("tokumai-admin: loopback only — this page is for the machine it runs on");
@@ -150,6 +162,10 @@ struct Req {
     method: String,
     path: String,
     body: Vec<u8>,
+    /// The Host header, lower-cased: this process answers only its own name.
+    host: String,
+    /// The page's token, when the request carries it (`X-Admin-Token`).
+    token: String,
 }
 
 async fn read_req(sock: &mut tokio::net::TcpStream) -> Option<Req> {
@@ -167,7 +183,11 @@ async fn read_req(sock: &mut tokio::net::TcpStream) -> Option<Req> {
             let mut first = lines.next()?.split_whitespace();
             let method = first.next()?.to_string();
             let path = first.next()?.to_string();
-            let len: usize = lines.filter_map(|l| l.split_once(':')).find(|(k, _)| k.eq_ignore_ascii_case("content-length")).and_then(|(_, v)| v.trim().parse().ok()).unwrap_or(0);
+            let headers: Vec<(String, String)> = lines.filter_map(|l| l.split_once(':')).map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_string())).collect();
+            let header = |name: &str| headers.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone()).unwrap_or_default();
+            let len: usize = header("content-length").parse().unwrap_or(0);
+            let host = header("host").to_ascii_lowercase();
+            let token = header("x-admin-token");
             if len > MAX_BODY {
                 return None;
             }
@@ -180,7 +200,7 @@ async fn read_req(sock: &mut tokio::net::TcpStream) -> Option<Req> {
                 body.extend_from_slice(&chunk[..n]);
             }
             body.truncate(len);
-            return Some(Req { method, path, body });
+            return Some(Req { method, path, body, host, token });
         }
         if buf.len() > 64 * 1024 {
             return None;
@@ -211,8 +231,20 @@ async fn reply(sock: &mut tokio::net::TcpStream, v: &Value) {
 }
 
 async fn route(sock: &mut tokio::net::TcpStream, req: &Req, state: &Arc<State>) {
+    // Loopback is not enough against a browser on this machine: a page from anywhere can
+    // be pointed at 127.0.0.1 by its own name (DNS rebinding) or POST here cross-site. So:
+    // only requests addressed to this process's own name, and nothing from /api without
+    // the token the page was served with (audit M10, 2026-10-06).
+    let own = [format!("127.0.0.1:{}", state.port), format!("localhost:{}", state.port)];
+    if !own.contains(&req.host) {
+        return send(sock, 404, "text/plain", b"not here").await;
+    }
+    if req.path.starts_with("/api/") && !same(req.token.as_bytes(), state.token.as_bytes()) {
+        return send(sock, 404, "text/plain", b"not here").await;
+    }
     match (req.method.as_str(), req.path.as_str()) {
-        ("GET", "/") => send(sock, 200, "text/html; charset=utf-8", PAGE.as_bytes()).await,
+        ("GET", "/") => send(sock, 200, "text/html; charset=utf-8", PAGE.replace("{{TOKEN}}", &state.token).as_bytes()).await,
+        ("GET", "/admin.js") => send(sock, 200, "text/javascript; charset=utf-8", SCRIPT.as_bytes()).await,
         ("GET", "/api/state") => reply(sock, &state_json(state).await).await,
         ("POST", "/api/account") => {
             let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
