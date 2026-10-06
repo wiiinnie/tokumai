@@ -161,14 +161,42 @@ impl Stats {
     }
 }
 
-/// The plan as the operator sees it: no account, no rail id — tier, rail kind, state, dates.
+/// The plan as the operator sees it: no account, no rail id — tier, rail kind, state, dates
+/// to the day. Not to the millisecond: a period's start IS the moment Stripe or Apple
+/// recorded a named person's payment, and a row with it joins to the merchant dashboard
+/// by that number alone (audit M6). The day is what support needs.
 fn plan_row(p: &crate::plans::Plan, now: u64) -> Value {
     json!({
         "tier": p.tier, "yearly": p.yearly,
         "rail": if p.is_note() { "note" } else if p.is_app_store() { "appstore" } else { "stripe" },
-        "active": p.paid_at(now), "periodStart": p.period_start_ms, "paidUntil": p.paid_until_ms,
+        "active": p.paid_at(now), "periodStart": day_of(p.period_start_ms), "paidUntil": day_of(p.paid_until_ms),
         "disputed": p.disputed_at_ms > 0,
     })
+}
+
+/// A moment, to the day (UTC, milliseconds at midnight).
+fn day_of(ms: u64) -> u64 {
+    ms / 86_400_000 * 86_400_000
+}
+
+/// Every moment in an answer for the operator, to the day: any field named for
+/// milliseconds that holds one. The lots' expiry is a purchase date plus three years, which
+/// is the purchase to the millisecond with a constant added.
+fn to_the_day(v: &mut Value) {
+    match v {
+        Value::Object(map) => {
+            for (k, val) in map.iter_mut() {
+                let is_moment = (k.ends_with("Ms") || k.ends_with("_ms")) && val.as_u64().is_some_and(|n| n > 1_000_000_000_000);
+                if is_moment {
+                    *val = json!(day_of(val.as_u64().unwrap_or(0)));
+                } else {
+                    to_the_day(val);
+                }
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(to_the_day),
+        _ => {}
+    }
 }
 
 impl Enclave {
@@ -322,12 +350,14 @@ impl Enclave {
             Err(e) => return error(&e),
         };
         let plan = l.plan_get(&l.acct_key(account)).ok().flatten();
-        json!({
+        let mut out = json!({
             "kind": "admin.account",
             "balance": balance,
             "plan": plan.as_ref().map(|p| plan_row(p, now)),
             "usage": plan.as_ref().map(|p| p.usage.clone()).unwrap_or_default(),
-        })
+        });
+        to_the_day(&mut out);
+        out
     }
 }
 
