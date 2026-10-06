@@ -123,8 +123,9 @@ pub async fn hear(listen: Endpoint) -> io::Result<()> {
 /// What the enclave may ask its host for, on a channel of its own: the instance's
 /// temporary AWS credentials (so it can call KMS itself — they open nothing on their own,
 /// the key's policy demands an attestation as well), the sealed secrets, which only an
-/// attested enclave can open, and the book the host keeps for it (sealed too: `snapshot`
-/// and `journal`).
+/// attested enclave can open, the book the host keeps for it (sealed too: `snapshot` and
+/// `journal`), its data key as KMS wrapped it (`datakey`), and its doors' identities,
+/// sealed under that key (`doors`).
 pub async fn ask_host(host: &Endpoint, what: &str) -> Result<Vec<u8>, String> {
     within(hand_over(host, what, &[]), what).await
 }
@@ -227,6 +228,13 @@ where
                 (_, "snapshot") => Ok(read_or_empty(&book.join(SNAPSHOT))),
                 (_, "journal") => Ok(read_or_empty(&book.join(JOURNAL))),
                 (_, "put-snapshot") => put_snapshot(&book, &given, &last).map(|()| b"kept".to_vec()),
+                // The enclave's own: the KMS-wrapped data key, written once and never
+                // replaced (a second key would be a second book), and the sealed doors,
+                // replaced whenever the enclave hands over a newer set.
+                (_, "datakey") => Ok(read_or_empty(&book.join(DATA_KEY))),
+                (_, "put-datakey") => put_once(&book.join(DATA_KEY), &given).map(|()| b"kept".to_vec()),
+                (_, "doors") => Ok(read_or_empty(&book.join(DOORS))),
+                (_, "put-doors") => put_whole(&book.join(DOORS), &given).map(|()| b"kept".to_vec()),
                 // The first enclaves hand a record over bare; since 2026-10-02 it comes with
                 // its place in front (`add-record-2`). Both are answered, so a host can be
                 // brought up to date without the enclave image changing with it.
@@ -240,7 +248,7 @@ where
                     let _ = s.write_all(&bytes).await;
                     let _ = s.flush().await;
                     // The book is written to all day; saying so every time would drown the log.
-                    if !matches!(what, "add-record" | "put-snapshot" | "snapshot" | "journal") {
+                    if !matches!(what, "add-record" | "add-record-2" | "put-snapshot" | "snapshot" | "journal") {
                         println!("host: answered {what}");
                     }
                 }
@@ -255,6 +263,48 @@ where
 /// The two files the host keeps of the enclave's book. Sealed: this side never reads them.
 pub const SNAPSHOT: &str = "book.snapshot";
 pub const JOURNAL: &str = "book.journal";
+/// Beside them, in the same directory (the book's own volume, which outlives the
+/// instance): the data key as KMS wrapped it, and the doors' identities sealed under it.
+/// This side can read neither; without the data key the book and the doors are noise.
+pub const DATA_KEY: &str = "data.key.kms";
+pub const DOORS: &str = "doors.sealed";
+
+/// A file written once: the same bytes again are fine (an enclave asking twice), different
+/// ones are refused — a host that could swap the data key could point the enclave at a book
+/// of its own, or make it write a new one beside the real one.
+fn put_once(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+    if bytes.is_empty() {
+        return Err("nothing to keep".into());
+    }
+    match std::fs::read(path) {
+        Ok(have) if have == bytes => return Ok(()),
+        Ok(_) => return Err(format!("{} is already kept and differs — it is not replaced", path.display())),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.to_string()),
+    }
+    put_whole(path, bytes)
+}
+
+/// A file written whole and synced, by way of a rename, so a stop in between leaves the
+/// old one rather than half of the new one.
+fn put_whole(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+    if bytes.is_empty() {
+        return Err("nothing to keep".into());
+    }
+    let dir = path.parent().ok_or("no directory")?;
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let tmp = path.with_extension("new");
+    {
+        let mut f = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
+        std::io::Write::write_all(&mut f, bytes).map_err(|e| e.to_string())?;
+        f.sync_all().map_err(|e| e.to_string())?;
+    }
+    std::fs::rename(&tmp, path).map_err(|e| e.to_string())?;
+    if let Ok(d) = std::fs::File::open(dir) {
+        let _ = d.sync_all();
+    }
+    Ok(())
+}
 
 fn read_or_empty(path: &std::path::Path) -> Vec<u8> {
     std::fs::read(path).unwrap_or_default()
@@ -580,6 +630,20 @@ mod tests {
         // An enclave of the first generation, on an empty journal: served as before.
         assert_eq!(tell_host(&at, "add-record", b"bare").await.unwrap(), b"kept");
         assert_eq!(ask_host(&at, "journal").await.unwrap(), [&[0u8, 0, 0, 4][..], b"bare"].concat());
+
+        // The data key: none, then one, then the same one again, never another.
+        assert!(ask_host(&at, "datakey").await.unwrap().is_empty());
+        assert!(tell_host(&at, "put-datakey", b"").await.is_err());
+        assert_eq!(tell_host(&at, "put-datakey", b"wrapped-1").await.unwrap(), b"kept");
+        assert_eq!(ask_host(&at, "datakey").await.unwrap(), b"wrapped-1");
+        assert_eq!(tell_host(&at, "put-datakey", b"wrapped-1").await.unwrap(), b"kept");
+        assert!(tell_host(&at, "put-datakey", b"wrapped-2").await.is_err(), "a second data key is a second book");
+        assert_eq!(ask_host(&at, "datakey").await.unwrap(), b"wrapped-1");
+        // The doors: replaced whole whenever the enclave has a newer set.
+        assert!(ask_host(&at, "doors").await.unwrap().is_empty());
+        tell_host(&at, "put-doors", b"doors-1").await.unwrap();
+        tell_host(&at, "put-doors", b"doors-2").await.unwrap();
+        assert_eq!(ask_host(&at, "doors").await.unwrap(), b"doors-2");
         let _ = std::fs::remove_file(&sealed);
         let _ = std::fs::remove_dir_all(&book);
     }

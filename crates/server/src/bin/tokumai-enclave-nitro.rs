@@ -11,8 +11,16 @@
 //! Its secrets come from AWS KMS and nowhere else: the host hands over a sealed file and
 //! the instance's credentials, the enclave asks KMS to open the file for THIS image, and
 //! KMS answers with a copy encrypted to a key that exists only in here (`enclave::kms`).
-//! Inside are the provider keys, the Stripe keys, the data key everything at rest is keyed
-//! with, and the enclave's Nym identity — so its address survives a restart.
+//! Inside are the provider keys and the Stripe keys — the operator's, which the operator
+//! knows anyway.
+//!
+//! What the operator must not know is made here. The data key everything at rest is keyed
+//! with is born in the enclave: on a host that keeps none, KMS generates one to this
+//! enclave's attestation and the host keeps the wrapped copy (`datakey`); on every start
+//! after that, KMS opens that copy for an attested image and nobody else. The doors' Nym
+//! identities — each one an address the apps pin — are made by the clients in here and
+//! kept on the host sealed under that key (`doors`). Until 2026-10-05 both were typed into
+//! the sealed file by the operator, so the operator could open any copy of the book.
 //!
 //! Without sealed secrets it still starts, with a random data key and the mock model, which
 //! is what the first probe did. With them, the book is kept on the host, sealed, as a
@@ -37,43 +45,86 @@ const HOST_SERVICE_PORT: u32 = 8082;
 const REGION: &str = "eu-central-1";
 const LOOPBACK_PROXY: &str = "127.0.0.1:1080";
 
-/// Ask the host for the sealed secrets and the instance's credentials, and have KMS open
-/// them for this image. The credentials alone open nothing: the key's policy wants an
-/// attestation of a published image, which only this enclave can produce.
-async fn unseal(attester: &NitroAttester) -> Result<tokumai_enclave::secrets_sealed::Sealed, String> {
+/// What one start needs to talk to KMS: the instance's credentials from the host (they
+/// open nothing on their own — the key's policy wants an attestation as well) and one
+/// request key with its attestation document, used for every KMS call of this start. The
+/// private half never leaves here and is gone when the start is over.
+struct KmsAccess {
+    credentials: tokumai_enclave::kms::Credentials,
+    document: Vec<u8>,
+    private: tokumai_enclave::kms::RsaPrivateKey,
+}
+
+impl KmsAccess {
+    async fn open(attester: &NitroAttester) -> Result<KmsAccess, String> {
+        let host = Endpoint::Vsock(HOST_CID, HOST_SERVICE_PORT);
+        let credentials = tokumai_egress::ask_host(&host, "credentials").await?;
+        let credentials: tokumai_enclave::kms::Credentials = serde_json::from_slice(&credentials).map_err(|e| format!("the host's credentials are unreadable: {e}"))?;
+        // A key for this start; its public half goes into the attestation, so KMS can
+        // encrypt its answers to an enclave running exactly this image.
+        let (private, public) = tokumai_enclave::kms::request_key()?;
+        let document = attester.attest_for_kms(&public)?;
+        Ok(KmsAccess { credentials, document, private })
+    }
+}
+
+/// Ask the host for the sealed secrets and have KMS open them for this image.
+async fn unseal(kms: &KmsAccess) -> Result<tokumai_enclave::secrets_sealed::Sealed, String> {
     let host = Endpoint::Vsock(HOST_CID, HOST_SERVICE_PORT);
     let envelope = tokumai_enclave::secrets_sealed::Envelope::parse(&tokumai_egress::ask_host(&host, "sealed").await?)?;
     let wrapped = base64_decode(envelope.kms_key.as_bytes())?;
-    let credentials = tokumai_egress::ask_host(&host, "credentials").await?;
-    let credentials: tokumai_enclave::kms::Credentials = serde_json::from_slice(&credentials).map_err(|e| format!("the host's credentials are unreadable: {e}"))?;
-    // A key for this one request; its public half goes into the attestation, so KMS can
-    // encrypt its answer to an enclave running exactly this image.
-    let (private, public) = tokumai_enclave::kms::request_key()?;
-    let document = attester.attest_for_kms(&public)?;
-    let key = tokumai_enclave::kms::decrypt_to_enclave(&credentials, REGION, &wrapped, &document, &private, tokumai_proto::now_ms()).await?;
-    envelope.open(&key)
+    let key = tokumai_enclave::kms::decrypt_to_enclave(&kms.credentials, REGION, &wrapped, &kms.document, &kms.private, tokumai_proto::now_ms()).await?;
+    let sealed = envelope.open(&key)?;
+    // Refused outright, not migrated: a key the operator chose is a book the operator
+    // can read, and an enclave that took it "just this once" would have taken it for good.
+    sealed.check()?;
+    Ok(sealed)
+}
+
+/// The data key, from the host's wrapped copy — or, on a host that has none, born now.
+///
+/// Born means: KMS makes it for this attestation (`GenerateDataKey` with a recipient), so
+/// the plaintext exists in KMS's memory for the call and in here, nowhere else; the host
+/// gets the wrapped copy to keep beside the book, and that copy opens only for an attested
+/// image on the key's allow list. The key's name comes from the image (`TOKUMAI_KMS_KEY`),
+/// so the host cannot point the enclave at a key of its own.
+///
+/// Returns the key and whether it was born on this start — a new key is a new, empty book,
+/// which is right once (the first start) and a loss any other time (a host that lost the
+/// wrapped copy has lost the book with it; the enclave says so and goes on, because an
+/// empty book that serves is better than none, and the witness and the host log make the
+/// loss visible).
+async fn own_data_key(kms: &KmsAccess) -> Result<([u8; 32], bool), String> {
+    let host = Endpoint::Vsock(HOST_CID, HOST_SERVICE_PORT);
+    let wrapped = tokumai_egress::ask_host(&host, "datakey").await?;
+    let context = Some(tokumai_enclave::kms::DATA_KEY_CONTEXT);
+    if !wrapped.is_empty() {
+        let key = tokumai_enclave::kms::decrypt_to_enclave_in(&kms.credentials, REGION, &wrapped, context, &kms.document, &kms.private, tokumai_proto::now_ms()).await?;
+        let key: [u8; 32] = key.try_into().map_err(|_| "the host's data key is not 32 bytes once open".to_string())?;
+        return Ok((key, false));
+    }
+    let key_id = std::env::var("TOKUMAI_KMS_KEY").ok().filter(|k| !k.is_empty()).ok_or("no data key on the host and no TOKUMAI_KMS_KEY in the image to make one")?;
+    let (wrapped, key) = tokumai_enclave::kms::generate_data_key_to_enclave(&kms.credentials, REGION, &key_id, &kms.document, &kms.private, tokumai_proto::now_ms()).await?;
+    // Kept before it is used: a key the host never got is a book nobody can open after
+    // the next restart. The host refuses to replace one it has — if it answers so, another
+    // start got here first, and this one must take that one's key instead.
+    match tokumai_egress::tell_host(&host, "put-datakey", &wrapped).await {
+        Ok(_) => Ok((key, true)),
+        Err(e) => {
+            let again = tokumai_egress::ask_host(&host, "datakey").await?;
+            if again.is_empty() || again == wrapped {
+                return Err(format!("the host did not keep the data key: {e}"));
+            }
+            let key = tokumai_enclave::kms::decrypt_to_enclave_in(&kms.credentials, REGION, &again, context, &kms.document, &kms.private, tokumai_proto::now_ms()).await?;
+            Ok((key.try_into().map_err(|_| "the host's data key is not 32 bytes once open".to_string())?, false))
+        }
+    }
 }
 
 /// base64, as the sealed pieces travel.
 fn base64_decode(text: &[u8]) -> Result<Vec<u8>, String> {
     use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
     B64.decode(String::from_utf8_lossy(text).trim()).map_err(|e| format!("the sealed file is not base64: {e}"))
-}
-
-/// Lay the sealed Nym identity out as files, where its client expects them.
-fn write_identity(dir: &std::path::Path, files: &serde_json::Map<String, serde_json::Value>) -> std::io::Result<()> {
-    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
-    std::fs::create_dir_all(dir)?;
-    for (name, content) in files {
-        // Names come from the sealed file, which only we write — still, no paths.
-        let name = name.rsplit('/').next().unwrap_or_default();
-        if name.is_empty() || name.starts_with('.') {
-            continue;
-        }
-        let Some(bytes) = content.as_str().and_then(|c| B64.decode(c).ok()) else { continue };
-        std::fs::write(dir.join(name), bytes)?;
-    }
-    Ok(())
 }
 
 /// The book, kept on the host and sealed (`enclave::state`). Only the ledger's writer
@@ -395,7 +446,12 @@ async fn main() {
     let attester = NitroAttester::open().expect("the Nitro Secure Module");
     // What the host keeps for us, sealed: only an enclave running a published image can
     // have KMS open it. A probe without sealed secrets still runs, on the mock model.
-    let sealed = match unseal(&attester).await {
+    let kms = KmsAccess::open(&attester).await;
+    let sealed = match &kms {
+        Ok(kms) => unseal(kms).await,
+        Err(e) => Err(e.clone()),
+    };
+    let sealed = match sealed {
         Ok(s) => Some(s),
         Err(e) => {
             // Said out loud on the host's side too: a production enclave has no console, and
@@ -409,16 +465,36 @@ async fn main() {
     if sealed.is_some() {
         let _ = tokumai_egress::announce(&Endpoint::Vsock(HOST_CID, ANNOUNCE_PORT), &format!("{PROBE} unsealed its secrets")).await;
     }
-    let (keys, providers, stripe, apple_api, dev_mode) = match &sealed {
-        Some(s) => (
-            Box::new(FixedKeyProvider(s.data_key().expect("the sealed data key"))) as Box<dyn tokumai_enclave::seal::KeyProvider>,
+    // The data key: the enclave's own, never the operator's. A sealed enclave that cannot
+    // have it does not run on a random one instead — that would be a book written for
+    // nobody, and purchases credited into it would be gone at the next start.
+    let data_key: Option<[u8; 32]> = match (&sealed, &kms) {
+        (Some(_), Ok(kms)) => match own_data_key(kms).await {
+            Ok((key, born)) => {
+                let _ = tokumai_egress::announce(
+                    &Endpoint::Vsock(HOST_CID, ANNOUNCE_PORT),
+                    &if born { format!("{PROBE} data key: born in this enclave, the wrapped copy is with the host — a new book begins") } else { format!("{PROBE} data key: the host's copy, opened by KMS for this image") },
+                )
+                .await;
+                Some(key)
+            }
+            Err(e) => {
+                let _ = tokumai_egress::announce(&Endpoint::Vsock(HOST_CID, ANNOUNCE_PORT), &format!("{PROBE} no data key: {e}")).await;
+                panic!("the data key cannot be had: {e}");
+            }
+        },
+        _ => None,
+    };
+    let (keys, providers, stripe, apple_api, dev_mode) = match (&sealed, data_key) {
+        (Some(s), Some(key)) => (
+            Box::new(FixedKeyProvider(key)) as Box<dyn tokumai_enclave::seal::KeyProvider>,
             Providers::from_secrets(s),
             tokumai_enclave::stripe::Stripe::from_secrets(s),
             tokumai_enclave::apple::AppleApi::from_secrets(s),
             false,
         ),
         // Nothing sealed: a random key for the run, the mock model, test credit.
-        None => (Box::new(FixedKeyProvider(rand::random())) as Box<dyn tokumai_enclave::seal::KeyProvider>, Providers::mock(), None, None, true),
+        _ => (Box::new(FixedKeyProvider(rand::random())) as Box<dyn tokumai_enclave::seal::KeyProvider>, Providers::mock(), None, None, true),
     };
     // The book lives on the host, so the host service has to be there. It may still be
     // starting (a reboot brings both up at once), and an enclave that gives up on the
@@ -524,6 +600,39 @@ async fn main() {
     // Each client's identity is laid out in its own directory at every start, so every
     // address survives a restart; without a sealed identity a door comes up under a new
     // address, which an app pinned to the old one will not find.
+    //
+    // The identities are the enclave's own: kept on the host sealed under the data key
+    // (`doors`), and handed back to the host after the doors are open, so that a door the
+    // Nym client made on this start is there on the next. An enclave that finds none on
+    // the host takes, once, what the operator sealed in the old form — and says so, because
+    // an identity the operator has held is an address the operator could stand up elsewhere.
+    let host = Endpoint::Vsock(HOST_CID, HOST_SERVICE_PORT);
+    let doors: tokumai_enclave::doors::Doors = match data_key {
+        Some(key) => match tokumai_egress::ask_host(&host, "doors").await {
+            Ok(bytes) if !bytes.is_empty() => match tokumai_enclave::doors::open(&key, &bytes) {
+                Ok(d) => d,
+                Err(e) => {
+                    let _ = tokumai_egress::announce(&Endpoint::Vsock(HOST_CID, ANNOUNCE_PORT), &format!("{PROBE} the host's sealed doors do not open ({e}) — the doors come up under new addresses")).await;
+                    Default::default()
+                }
+            },
+            Ok(_) => match sealed.as_ref().and_then(|s| s.operator_held_doors()) {
+                Some(d) => {
+                    let _ = tokumai_egress::announce(&Endpoint::Vsock(HOST_CID, ANNOUNCE_PORT), &format!("{PROBE} doors: none sealed by this enclave yet — taking the {} the operator sealed, once; rotate them before launch (take nymIdentities out of the secrets and seal again)", d.len())).await;
+                    d
+                }
+                None => {
+                    let _ = tokumai_egress::announce(&Endpoint::Vsock(HOST_CID, ANNOUNCE_PORT), &format!("{PROBE} doors: none kept yet — the doors come up under new addresses, which this enclave keeps from now on")).await;
+                    Default::default()
+                }
+            },
+            Err(e) => {
+                let _ = tokumai_egress::announce(&Endpoint::Vsock(HOST_CID, ANNOUNCE_PORT), &format!("{PROBE} the host did not answer about the doors: {e}")).await;
+                Default::default()
+            }
+        },
+        None => Default::default(),
+    };
     let gateways: Vec<String> = std::env::var("TOKUMAI_GATEWAYS")
         .or_else(|_| std::env::var("TOKUMAI_GATEWAY"))
         .unwrap_or_default()
@@ -540,8 +649,8 @@ async fn main() {
     let mut opening = tokio::task::JoinSet::new();
     for gateway in gateways.clone() {
         let nym = PathBuf::from("/tmp/nym").join(&gateway);
-        if let Some(files) = sealed.as_ref().and_then(|s| s.nym_identity_for(&gateway)) {
-            if let Err(e) = write_identity(&nym, files) {
+        if let Some(files) = doors.get(&gateway).or_else(|| doors.get("*")).and_then(|d| d.as_object()) {
+            if let Err(e) = tokumai_enclave::doors::lay_out(&nym, files) {
                 eprintln!("tokumai enclave: could not lay out the sealed identity for {gateway}: {e}");
             }
         }
@@ -572,6 +681,30 @@ async fn main() {
         panic!("not one of the enclave's doors opened");
     }
     let _ = tokumai_egress::announce(&Endpoint::Vsock(HOST_CID, ANNOUNCE_PORT), &format!("{PROBE} serving on {open} of {} doors", gateways.len())).await;
+    // The doors as they are now, sealed, to the host — every start, so an identity made on
+    // this one is kept, and one the operator sealed in the old form is from now on the
+    // enclave's own.
+    if let Some(key) = data_key {
+        let mut now = tokumai_enclave::doors::Doors::new();
+        for gateway in &gateways {
+            let files = tokumai_enclave::doors::read_dir(&PathBuf::from("/tmp/nym").join(gateway));
+            if !files.is_empty() {
+                now.insert(gateway.clone(), serde_json::Value::Object(files));
+            }
+        }
+        let kept = match tokumai_enclave::doors::seal(&key, &now) {
+            Ok(sealed) => tokumai_egress::tell_host(&host, "put-doors", &sealed).await.map(|_| ()),
+            Err(e) => Err(e),
+        };
+        let _ = tokumai_egress::announce(
+            &Endpoint::Vsock(HOST_CID, ANNOUNCE_PORT),
+            &match kept {
+                Ok(()) => format!("{PROBE} doors: {} identit{} sealed to the host", now.len(), if now.len() == 1 { "y" } else { "ies" }),
+                Err(e) => format!("{PROBE} doors: could not be sealed to the host ({e}) — their addresses will not survive a restart"),
+            },
+        )
+        .await;
+    }
     // Redemption-shaped traffic for the thin hours (tokumai_enclave::ghost).
     tokio::spawn(tokumai_server::mix::ghosts(enclave));
     // The doors' loops hold the process; this task has nothing left to do.

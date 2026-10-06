@@ -40,13 +40,30 @@ the system, and only the second is worth anything to somebody who does not know 
 4. **The root of trust is Amazon.** The proof that the published code is what runs ends at
    an AWS certificate, and the secrets are released by AWS KMS. A compelled or compromised
    AWS breaks the guarantee, and no check in the app would notice.
+
+   Said plainly, because it is the question a careful reader asks (and we asked ourselves
+   on 2026-10-06): did the enclave only move the trust from us to Amazon? Not quite, and
+   the difference is worth stating. The first server had every question in the clear, by
+   default, with no effort and no trace — as did its hoster and anyone who broke in.
+   Amazon holds ciphertext and encrypted memory; to read a question it would have to
+   subvert KMS or the attestation for one customer, deliberately, which is a different
+   kind of act from "it was there anyway". There is no architecture without a root of
+   trust while the model providers see the question regardless: every enclave has a
+   maker behind it. What would take Amazon out of the position alone is a second,
+   independent key holder, so that compulsion needs two parties — on the list, not built.
+   The wording that holds: not "nobody can", but "we cannot, and whoever could would
+   have to force Amazon".
 5. **A seized book says when each account spent, and how much.** Not what was asked — the
    enclave keeps no question anywhere. But the book is a snapshot plus an append-only
    journal of single changes, the host may keep every record it was handed, and the same key
    opens an old one. An amount says whether it was a picture, and a timestamp lines up with
-   a model provider's own logs. Who can have that key released: we can, by naming an image
-   in the KMS key policy — which is the honest answer to "who could compel this", because it
-   makes us the short path, not AWS. (On the list to close before launch.)
+   a model provider's own logs. Who can have that key released: one named identity of ours
+   can, by naming an image in the KMS key policy, with a second factor and a mail to us
+   for every such change — which is the honest answer to "who could compel this", because
+   it makes us the short path, not AWS. The key itself exists only inside KMS and attested
+   enclaves: it is made there, and nobody at tokumai has ever seen it (since 2026-10-05;
+   before that the operator typed it in, which would have made this paragraph untrue).
+   (A journal that old keys cannot open is on the list to close before launch.)
 6. **The book can be rewound by whoever holds the machine.** Balances live in a sealed file
    on the host; an older copy could be put back. Spent credit would return. Nothing inside
    the enclave survives a restart to notice. (On the list to close before launch.)
@@ -65,6 +82,8 @@ the system, and only the second is worth anything to somebody who does not know 
   the question — that is the whole point of attesting it.
 - No claim about traffic analysis. The mixnet raises its cost; the enclave does nothing for
   it at all.
+- Not "nobody can read it". We cannot; Amazon could, by a deliberate act against one
+  customer (item 4). The honest sentence names both.
 
 ## Questions for the lawyer
 

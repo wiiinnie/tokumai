@@ -1,10 +1,19 @@
 //! Getting a secret out of AWS KMS, into the enclave and nowhere else.
 //!
-//! The key's policy allows `kms:Decrypt` only for a request that carries an attestation
-//! document of the published image (`kms:RecipientAttestation:PCR0`). AWS checks that
-//! document itself, and answers not with the plaintext but with a copy encrypted to a
-//! public key that appears IN that document — a key whose private half exists only inside
-//! this enclave, for this request. So the host it runs on relays ciphertext both ways.
+//! The key's policy allows `kms:Decrypt` and `kms:GenerateDataKey` only for a request that
+//! carries an attestation document of the published image (`kms:RecipientAttestation:PCR0`).
+//! AWS checks that document itself, and answers not with the plaintext but with a copy
+//! encrypted to a public key that appears IN that document — a key whose private half
+//! exists only inside this enclave, for this request. So the host it runs on relays
+//! ciphertext both ways.
+//!
+//! Two things come this way. The operator's secrets (provider keys, Stripe), which the
+//! operator sealed and therefore knows. And the enclave's own data key, which the operator
+//! must NOT know: it is born here, by `GenerateDataKey` — KMS makes it, hands this enclave
+//! the plaintext under the request key and the host a KMS-wrapped copy to keep. No one
+//! outside an attested enclave ever holds it in the clear (until 2026-10-05 it was typed
+//! into the sealed file by the operator, which made the KMS gate a formality against the
+//! one party it exists for).
 //!
 //! The request is one signed POST (SigV4, signed here rather than by the AWS SDK: the SDK
 //! brings its own HTTP stack, and everything the enclave sends has to go through the
@@ -15,6 +24,9 @@ use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use hmac::{Hmac, Mac};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+
+/// The request key's type, for the binary that holds one across its KMS calls.
+pub use rsa::RsaPrivateKey;
 
 /// Temporary credentials of the instance role, as the host hands them over.
 #[derive(Clone, serde::Deserialize)]
@@ -90,6 +102,10 @@ async fn call(creds: &Credentials, region: &str, target: &str, body: &Value, now
     serde_json::from_str(&text).map_err(|e| format!("KMS answered unreadably: {e}"))
 }
 
+/// The encryption context the data key is wrapped under: a KMS blob made for one purpose
+/// does not open as another (a sealed-secrets key handed over as "the data key", say).
+pub const DATA_KEY_CONTEXT: (&str, &str) = ("tokumai", "data-key");
+
 /// Decrypt `ciphertext` (a KMS blob) so that only this enclave can read the result.
 ///
 /// `attestation` is a document over `recipient_public_key` (the NSM's `public_key` field),
@@ -103,11 +119,65 @@ pub async fn decrypt_to_enclave(
     private: &rsa::RsaPrivateKey,
     now_ms: u64,
 ) -> Result<Vec<u8>, String> {
-    let body = json!({
+    decrypt_to_enclave_in(creds, region, ciphertext, None, attestation, private, now_ms).await
+}
+
+/// The same, for a blob that was made under an encryption context (`DATA_KEY_CONTEXT`):
+/// KMS refuses to open it under any other.
+pub async fn decrypt_to_enclave_in(
+    creds: &Credentials,
+    region: &str,
+    ciphertext: &[u8],
+    context: Option<(&str, &str)>,
+    attestation: &[u8],
+    private: &rsa::RsaPrivateKey,
+    now_ms: u64,
+) -> Result<Vec<u8>, String> {
+    let mut body = json!({
         "CiphertextBlob": B64.encode(ciphertext),
         "Recipient": { "AttestationDocument": B64.encode(attestation), "KeyEncryptionAlgorithm": "RSAES_OAEP_SHA_256" },
     });
+    if let Some((k, v)) = context {
+        body["EncryptionContext"] = json!({ k: v });
+    }
     let answer = call(creds, region, "TrentService.Decrypt", &body, now_ms).await?;
+    for_this_enclave(&answer, private)
+}
+
+/// A fresh 256-bit data key, made by KMS under `key_id` (`alias/…` or an ARN, part of the
+/// image), that the enclave alone sees in the clear. Returns the KMS-wrapped copy for the
+/// host to keep — it opens only by `decrypt_to_enclave_in` with `DATA_KEY_CONTEXT`, and
+/// only for an attested image on the key's allow list — and the key itself.
+pub async fn generate_data_key_to_enclave(
+    creds: &Credentials,
+    region: &str,
+    key_id: &str,
+    attestation: &[u8],
+    private: &rsa::RsaPrivateKey,
+    now_ms: u64,
+) -> Result<(Vec<u8>, [u8; 32]), String> {
+    let body = json!({
+        "KeyId": key_id,
+        "KeySpec": "AES_256",
+        "EncryptionContext": { DATA_KEY_CONTEXT.0: DATA_KEY_CONTEXT.1 },
+        "Recipient": { "AttestationDocument": B64.encode(attestation), "KeyEncryptionAlgorithm": "RSAES_OAEP_SHA_256" },
+    });
+    let answer = call(creds, region, "TrentService.GenerateDataKey", &body, now_ms).await?;
+    // With a Recipient, KMS leaves `Plaintext` out of its answer. Were it present, the key
+    // would have crossed the host's proxy in the clear (TLS ends in here, but the point of
+    // the recipient copy is that KMS itself never says the key to anyone but this enclave).
+    if answer.get("Plaintext").is_some_and(|p| !p.is_null()) {
+        return Err("KMS answered with the data key in the clear — refused".into());
+    }
+    let wrapped = answer["CiphertextBlob"].as_str().ok_or("KMS answered without a wrapped copy of the data key")?;
+    let wrapped = B64.decode(wrapped).map_err(|e| format!("KMS answer is not base64: {e}"))?;
+    let key = for_this_enclave(&answer, private)?;
+    let key: [u8; 32] = key.try_into().map_err(|_| "KMS made a data key that is not 32 bytes".to_string())?;
+    Ok((wrapped, key))
+}
+
+/// The part of a KMS answer that only this enclave can read.
+fn for_this_enclave(answer: &Value, private: &rsa::RsaPrivateKey) -> Result<Vec<u8>, String> {
     let sealed = answer["CiphertextForRecipient"]
         .as_str()
         .ok_or("KMS answered without a copy for this enclave — the key policy may allow plaintext instead")?;

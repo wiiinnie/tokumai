@@ -19,6 +19,7 @@ pub mod admin;
 pub mod apple;
 pub mod catalog;
 pub mod cover;
+pub mod doors;
 pub mod gemini;
 pub mod ghost;
 pub mod http;

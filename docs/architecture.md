@@ -64,9 +64,9 @@ acknowledged parts, and big replies (pictures) kept in the enclave and fetched c
 chunk. Every frame is retryable, and a question still being answered is never answered
 twice.
 
-Open for phase 0: in production the Nym identity keys must not lie on the host's disk
-(whoever holds them can take over the address). They belong under the sealed data key,
-like the ledger.
+The Nym identity keys lie nowhere in the clear: the enclave's clients make them, and the
+host keeps them sealed under the data key (`doors.sealed`), like the ledger. The data key
+itself is made by KMS for an attested enclave and is never seen outside one (2026-10-05).
 
 ## What the operator can still do
 

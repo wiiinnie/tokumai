@@ -2,8 +2,16 @@
 //!
 //! The file on the host is a KMS blob; only an enclave whose attestation shows an allowed
 //! image can have it decrypted (`kms`). What is inside is a small JSON object — the
-//! provider keys, the Stripe keys, the enclave's data key and its Nym identity — and it
-//! never touches the host's disk in the clear.
+//! provider keys and the Stripe keys, which the operator knows anyway — and it never
+//! touches the host's disk in the clear.
+//!
+//! What is NOT in it, since 2026-10-05: the data key and the doors' Nym identities. Those
+//! are the enclave's own and the operator must never hold them (the data key names every
+//! account and every payment in the book; a door's identity is its address). The data key
+//! is born in the enclave (`kms::generate_data_key_to_enclave`), the identities are made by
+//! the Nym client and kept sealed under that key (`doors`). A sealed file that still carries
+//! a `dataKey` is refused outright — see `Sealed::check` — because an enclave that would
+//! accept a key the operator chose is an enclave the operator can read.
 
 use serde_json::Value;
 
@@ -53,26 +61,35 @@ impl Sealed {
         Ok(Sealed(v))
     }
 
-    /// The enclave's data key (`dataKey`, 32 bytes hex): what the ledger and everything
-    /// else at rest is keyed with.
-    pub fn data_key(&self) -> Result<[u8; 32], String> {
-        let hex = self.0["dataKey"].as_str().ok_or("the sealed secrets carry no dataKey")?;
-        let bytes = hex::decode(hex.trim()).map_err(|e| format!("dataKey is not hex: {e}"))?;
-        bytes.try_into().map_err(|_| "dataKey is not 32 bytes".to_string())
+    /// Refuse what must not come from outside. A `dataKey` in the sealed file is the
+    /// operator naming the key the book is written under — the one thing the whole
+    /// arrangement exists to prevent — so it is not read, not even to migrate.
+    pub fn check(&self) -> Result<(), String> {
+        if self.0.get("dataKey").is_some() {
+            return Err("the sealed secrets carry a dataKey — the data key is born in the enclave since 2026-10-05 and must not be chosen outside it; remove it and seal again (deploy/aws/kms.sh secrets refuses it)".into());
+        }
+        Ok(())
     }
 
-    /// The enclave's Nym identity, if one was sealed with it: the files of its client
-    /// store, base64 by name — so the enclave keeps its address across restarts.
-    pub fn nym_identity(&self) -> Option<&serde_json::Map<String, Value>> {
-        self.0["nymIdentity"].as_object()
-    }
-
-    /// One identity per front door, kept under the gateway it belongs to
-    /// (`nymIdentities: { "<gateway>": { "<file>": "<base64>" } }`). An enclave with
-    /// several doors keeps every one of its addresses across restarts; without an entry
-    /// for a gateway, that door gets a fresh identity and a new address.
-    pub fn nym_identity_for(&self, gateway: &str) -> Option<&serde_json::Map<String, Value>> {
-        self.0["nymIdentities"].get(gateway).and_then(|v| v.as_object()).or_else(|| self.nym_identity())
+    /// The doors' identities the operator sealed, if any: `nymIdentities: { "<gateway>":
+    /// { "<file>": "<base64>" } }` (or one `nymIdentity` for every door). Read ONCE, by an
+    /// enclave that finds no sealed doors of its own on the host, so that the addresses the
+    /// apps pin survive the move; from then on the enclave keeps them itself (`doors`) and
+    /// the operator takes them out of the file. An identity the operator has held is an
+    /// address the operator could stand up elsewhere, so each of these should be rotated
+    /// before launch — the enclave says so out loud when it takes one.
+    pub fn operator_held_doors(&self) -> Option<serde_json::Map<String, Value>> {
+        let all = self.0["nymIdentities"].as_object().cloned();
+        let one = self.0["nymIdentity"].as_object().cloned();
+        match (all, one) {
+            (Some(all), _) if !all.is_empty() => Some(all),
+            (_, Some(one)) if !one.is_empty() => {
+                let mut m = serde_json::Map::new();
+                m.insert("*".to_string(), Value::Object(one));
+                Some(m)
+            }
+            _ => None,
+        }
     }
 }
 
@@ -89,12 +106,29 @@ mod tests {
 
     #[test]
     fn what_was_sealed_comes_back_named() {
-        let s = Sealed::open(br#"{"dataKey":"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff","OPENAI_API_KEY":"sk-x","empty":""}"#).unwrap();
-        assert_eq!(s.data_key().unwrap()[..4], [0x00, 0x11, 0x22, 0x33]);
+        let s = Sealed::open(br#"{"OPENAI_API_KEY":"sk-x","empty":""}"#).unwrap();
+        s.check().unwrap();
         assert_eq!(s.get("OPENAI_API_KEY").as_deref(), Some("sk-x"));
         assert_eq!(s.get("empty"), None);
         assert_eq!(s.get("GEMINI_API_KEY"), None);
-        assert!(Sealed::open(br#"{"dataKey":"tooshort"}"#).unwrap().data_key().is_err());
         assert!(Sealed::open(b"[]").is_err());
+    }
+
+    /// The operator does not get to choose the key the book is written under.
+    #[test]
+    fn a_data_key_from_outside_is_refused() {
+        let s = Sealed::open(br#"{"dataKey":"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff","OPENAI_API_KEY":"sk-x"}"#).unwrap();
+        assert!(s.check().unwrap_err().contains("dataKey"));
+    }
+
+    #[test]
+    fn operator_held_doors_are_read_once_in_either_form() {
+        let s = Sealed::open(br#"{"nymIdentities":{"gw1":{"private_identity.pem":"AA=="}}}"#).unwrap();
+        assert_eq!(s.operator_held_doors().unwrap().len(), 1);
+        let s = Sealed::open(br#"{"nymIdentity":{"private_identity.pem":"AA=="}}"#).unwrap();
+        assert!(s.operator_held_doors().unwrap().contains_key("*"));
+        let s = Sealed::open(br#"{"nymIdentities":{}}"#).unwrap();
+        assert!(s.operator_held_doors().is_none());
+        assert!(Sealed::open(b"{}").unwrap().operator_held_doors().is_none());
     }
 }

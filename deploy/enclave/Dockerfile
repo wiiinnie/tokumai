@@ -47,4 +47,8 @@ ENV TOKUMAI_WITNESS_BUCKET=tokumai-book-946944821363
 # The operator's account (crates/enclave/src/admin.rs): the one the admin.* operations
 # answer. Its phrase lives in ~/.tokumai-admin on the operator's machine (tokumai-admin whoami).
 ENV TOKUMAI_ADMIN_ACCOUNT=2904a5faacb1f298926e9a4f5cfba01276452894759a2f9a92ca7a60c3e5126c
+# The KMS key the enclave has its data key made under, on a host that keeps none yet
+# (kms::generate_data_key_to_enclave). Named in the image so the host cannot point the
+# enclave at a key of its own; the key's policy says which images may ask (deploy/aws/kms.sh).
+ENV TOKUMAI_KMS_KEY=alias/tokumai-enclave
 ENTRYPOINT ["/tokumai-enclave-nitro"]

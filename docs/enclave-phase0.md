@@ -86,18 +86,20 @@ The enclave now runs on real keys, released by AWS KMS to this image and nothing
   secrets), not opening them. Honest about the limit: whoever can change the policy could
   grant themselves decryption later — the way out is signed images (PCR8) instead of a
   list of PCR0s, still on the list for before launch.
-- **What is sealed** (`kms.sh secrets`): the data key, the OpenAI and Gemini keys, the
-  Stripe keys, and the enclave's Nym identity — about 78 KB, so they travel under a fresh
-  ChaCha20-Poly1305 key of their own and only that key goes to KMS (which encrypts at most
-  4 KiB). The host keeps the sealed file and cannot read a byte of it.
+- **What is sealed** (`kms.sh secrets`): the OpenAI and Gemini keys and the Stripe keys —
+  the operator's own. They travel under a fresh ChaCha20-Poly1305 key and only that key
+  goes to KMS (which encrypts at most 4 KiB). The host keeps the sealed file and cannot
+  read a byte of it. ~~And the data key and the enclave's Nym identity.~~ Not since
+  2026-10-05, see "The data key is the enclave's own" below.
 - **How it gets in**: the host answers two questions on a vsock channel of its own
   (`ask_host`): the sealed file, and the instance's temporary credentials — which open
   nothing on their own. The enclave asks KMS itself, over the egress proxy, with a signed
   request it builds by hand (`enclave::kms`: no AWS SDK, which would bring its own network
   stack). KMS answers not with the key but with a copy encrypted to a public key inside
   the attestation, whose private half exists only in that enclave, for that one request.
-- **Its address survives.** The sealed Nym identity is laid out at every start, so the
-  enclave comes back as `nbnWr8Cu…` after a restart instead of as a stranger.
+- **Its address survives.** The doors' Nym identities are laid out at every start, so the
+  enclave comes back as `nbnWr8Cu…` after a restart instead of as a stranger. (Kept by
+  the enclave itself since 2026-10-05, sealed under its data key, `doors.sealed` on the host.)
 - Verified from the Mac over the mixnet: attested `AwsNitro image 5ef2c8c4…`, real
   provider keys, Stripe plans on offer (`byCard: true`), and `dev.credit` refused — a
   sealed enclave hands out no test credit.
@@ -113,6 +115,56 @@ now says over vsock whether it unsealed and what it measures:
    read by hand now (`cms_parts`, tested against both forms and against content in pieces).
 
 ~~Still in memory: the ledger.~~ Done — see below.
+
+## The data key is the enclave's own, 2026-10-05
+
+Found by the audit of 2026-10-05 (H4): the data key — the one secret that names every
+account and every payment in the book (`ledger::acct_key`, `rail_key` are keyed hashes
+under it; the snapshot and the journal are sealed under it) — was typed into
+`secrets.json` by the operator and sealed from the laptop. The KMS gate guarded the copy
+the host held; the operator, the one party the enclave exists to exclude, held the key in
+the clear, with the three doors' private Nym identities beside it. Against a seized book
+plus that file, the privacy promise was "we do not", never "we cannot".
+
+Now:
+
+- **The data key is born in the enclave.** On a host that keeps none, the enclave calls
+  KMS `GenerateDataKey` with its attestation as recipient: KMS makes the key, hands this
+  enclave the plaintext under the request key (`kms::generate_data_key_to_enclave`), and
+  the host the wrapped copy, which it keeps beside the book (`data.key.kms`, written once,
+  never replaced). Every later start opens that copy with `Decrypt` under the same
+  attestation gate, with an encryption context so no other blob passes as it. The key's
+  name is in the image (`TOKUMAI_KMS_KEY`); the policy grants `GenerateDataKey` to the
+  same attested images as `Decrypt`. The plaintext exists in KMS's memory for one call
+  and in attested enclaves — nowhere else, ever.
+- **A `dataKey` in the sealed secrets is refused** (`Sealed::check`, `tokumai-seal`,
+  `kms.sh secrets`), not migrated: an enclave that would take a key the operator chose,
+  even once, is an enclave the operator can read. (`nymIdentities` only warns: see next.)
+- **The doors' identities are the enclave's own too.** The Nym clients make them; after
+  the doors are open the enclave seals the identity files under the data key and hands
+  them to the host (`doors.sealed`, replaced on every start). An enclave that finds none
+  on the host takes the operator-sealed set from the old form once, and says so in the
+  host log — those addresses were held by the operator and should be rotated before
+  launch (take `nymIdentities` out of the secrets, seal again, `book-aside`).
+- **A new key is a new book.** The account names in the book are hashes under the key,
+  so there is no re-keying a book: `probe.sh book-aside` moves what the host keeps into
+  `book/aside-<date>/` and the next start begins afresh — which the witness refuses as a
+  rewind, correctly, until `probe.sh accept-rewind` acknowledges it once. Done once,
+  before real money.
+- **Who may widen the gate** is no longer the everyday user. The key policy names one
+  principal for `PutKeyPolicy` and `ScheduleKeyDeletion`, the key admin
+  (`user/tokumai-key-admin`), only with MFA; the account's root statement no longer
+  delegates those, so no IAM policy can hand them out. `kms.sh watch` mails the alarm
+  topic on every such call (EventBridge on CloudTrail). The honest limit stands — the
+  key admin can still allow an image of their own — but it is one named identity, a
+  second factor, and a mail, instead of a file on a laptop. Signed images (item 4) are
+  the next step; a second key holder outside the company would be the last.
+
+What to do on the laptop, once: delete `dev-data/sealed/secrets.json`,
+`dev-data/sealed/envelope.json` and `.env` after moving the provider keys to a password
+manager; seal the secrets again without `dataKey`/`nymIdentities`; the sealed file is
+`chmod 600`. The old data key is still the one the running `book-sandbox` enclave uses
+until the next image is deployed on a fresh book.
 
 ## The book, 2026-09-22
 
@@ -272,7 +324,9 @@ looks, and each is cheap to close now and expensive to explain later.
    naming an image in the key policy; AWS, by holding the root of trust) therefore gets a
    per-account spending history with timestamps, and an amount says whether it was a
    picture. It is the log we deliberately stopped keeping at the proxy, sealed and in
-   another place. The fix is a journal key per generation, bound to the monotonic counter of
+   another place. (Since 2026-10-05 "us" means the key admin, with MFA and a mail, and no
+   longer a file on the laptop — see "The data key is the enclave's own".) The fix is a
+   journal key per generation, bound to the monotonic counter of
    item 2 — the same missing building block — so that moving on makes the old journals
    unreadable. **To decide later**, with it: whether the per-day `safety_salt` stops being
    derived from a stored secret (`service.rs:137`), which today lets anyone with that key

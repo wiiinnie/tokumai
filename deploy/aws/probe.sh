@@ -27,6 +27,7 @@
 #     deploy/aws/probe.sh backups   # a snapshot of that disk every day, kept 14 days
 #     deploy/aws/probe.sh alarm <email>      # mail when the enclave's pulse stops (CloudWatch + SNS)
 #     deploy/aws/probe.sh accept-rewind <g> <n>  # acknowledge a restore from backup (see below)
+#     deploy/aws/probe.sh book-aside # move the host's book out of the way (a new book begins; see below)
 #     deploy/aws/probe.sh terminate # instance, root disk, key pair, security group — gone;
 #                                   # the book's own volume is kept (asks first)
 #
@@ -49,6 +50,14 @@
 # older by definition and must be acknowledged with `accept-rewind <generation> <record>` —
 # the numbers are in the enclave's refusal in the host log. Only the operator's identity
 # may write that acknowledgement (bucket policy), never the host's role.
+#
+# Beside the book, on the same volume, the host keeps two things it cannot read either:
+# the enclave's data key as KMS wrapped it (data.key.kms) and the doors' identities sealed
+# under it (doors.sealed). Both are the enclave's own since 2026-10-05 — made inside it on
+# its first start on a host that has none. A book written under an older, operator-chosen
+# key does not open with the new one: `book-aside` moves everything the host keeps into
+# book/aside-<date>/ (kept, not deleted) so the next start begins a new book with a key
+# born in the enclave. Done once, before the first real money.
 #
 # Uses the CLI profile `tokumai` (the IAM user tokumai-probe), region eu-central-1.
 set -euo pipefail
@@ -461,6 +470,22 @@ PY
       --threshold 300 --comparison-operator GreaterThanThreshold --treat-missing-data breaching \
       --alarm-actions "$TOPIC" --ok-actions "$TOPIC"
     echo "alarm tokumai-enclave-silent is set: PulseAge > 300 s for 5 minutes, or no data, mails $EMAIL (and again when it recovers)"
+    ;;
+  book-aside)
+    # Everything the host keeps for the enclave, moved out of the way and kept: the next
+    # enclave start finds nothing, has KMS make it a data key of its own, and begins a
+    # new book. For the move from an operator-held data key to an enclave-born one, and
+    # never for anything else — a book with money in it is not put aside.
+    [ "$(instance_state)" = "running" ] || { echo "the instance is $(instance_state) — 'start' first"; exit 1; }
+    remote "ls book/ 2>/dev/null" || { echo "nothing in book/ on the host"; exit 0; }
+    echo "the enclave is stopped first, and what is in book/ is moved (not deleted) to book/aside-<date>/."
+    read -r -p "a NEW book begins at the next start — balances in the old one are not carried over. Type 'aside' to go on: " ANSWER
+    [ "$ANSWER" = aside ] || { echo "nothing done"; exit 1; }
+    remote 'set -e
+      sudo systemctl stop tokumai-enclave 2>/dev/null || true; sudo nitro-cli terminate-enclave --all >/dev/null 2>&1 || true
+      cd book && D=aside-$(date -u +%Y%m%dT%H%M%SZ) && mkdir "$D" && for f in book.snapshot book.journal data.key.kms doors.sealed; do [ -e "$f" ] && mv "$f" "$D"/ || true; done && ls -l "$D"'
+    echo "moved — 'deploy' (or 'host') starts the enclave again on an empty book; it will say 'data key: born in this enclave' in the host log."
+    echo "The witness will then refuse the empty book as older than its last mark (it is): acknowledge it once with 'accept-rewind <g> <n>', the numbers are in that refusal."
     ;;
   accept-rewind)
     # The operator says: this older book is the one to run (a restore from backup). The

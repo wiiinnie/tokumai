@@ -1,7 +1,7 @@
 # AWS: what only an administrator can set up
 
 The scripts run as the IAM user `tokumai-probe` (CLI profile `tokumai`), which may touch EC2
-and KMS and nothing else, on purpose. The things below need the account's administrator,
+and KMS (not the key policy, see 5) and nothing else, on purpose. The things below need the account's administrator,
 once each, in the console. Account `946944821363`, region `eu-central-1`.
 
 ## 1. The witness bucket (rollback detection, `crates/enclave/src/witness.rs`)
@@ -115,6 +115,59 @@ Done in the console on 2026-10-02: a Data Lifecycle Manager policy "tokumai-book
 volumes tagged `Name=tokumai-book`, every 24 h at 03:00 UTC, 14 kept. The role
 `AWSDataLifecycleManagerDefaultRole` exists. `probe.sh backups` would make the same policy
 if the user were allowed `dlm:*` and `iam:PassRole` on that role.
+
+## 5. The key admin: the one identity that may change who opens the book
+
+Since 2026-10-05 the key policy (`deploy/aws/kms.sh`) names one principal for
+`kms:PutKeyPolicy` and `kms:ScheduleKeyDeletion`, with MFA, and delegates neither to the
+account — so `tokumai-probe` can deploy and seal but cannot widen the gate, and no IAM
+policy can give that right to anyone. The principal must exist before the policy names it
+(KMS refuses a policy with an unknown principal).
+
+IAM → Users → Create user `tokumai-key-admin`:
+- no console access needed; an access key for the CLI;
+- Security credentials → assign an MFA device (a hardware key or an authenticator app);
+- no permissions policy is needed for the key itself (the key policy names the user
+  directly, and `sts:GetSessionToken` needs none). Add an inline policy `tokumai-key-admin`
+  so the user can read the key, and nothing else:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {"Effect": "Allow", "Action": ["kms:DescribeKey", "kms:GetKeyPolicy", "kms:ListAliases"], "Resource": "*"}
+  ]
+}
+```
+
+On the laptop, a CLI profile `tokumai-key-admin` with that access key. An MFA session,
+when a policy change is due:
+
+```sh
+aws --profile tokumai-key-admin sts get-session-token --serial-number arn:aws:iam::946944821363:mfa/<device> --token-code 123456
+# → AccessKeyId / SecretAccessKey / SessionToken, valid 12 h; export them as
+#   AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN and AWS_PROFILE unset, then:
+deploy/aws/kms.sh allow <pcr0>
+```
+
+Then take `kms:PutKeyPolicy` and `kms:ScheduleKeyDeletion` out of `tokumai-probe`'s own
+IAM policy as well (belt and braces: the key policy already refuses it).
+
+The first `kms.sh allow` after the change is the one that installs the new shape; it may
+still be run as `tokumai-probe` (the old policy allows it) and is the last that can.
+
+Also once, with an administrator's rights (`cloudtrail:*`, `s3:*` on the new bucket,
+`events:PutRule`, `events:PutTargets`, `sns:SetTopicAttributes` on `tokumai-alarms`):
+
+```sh
+AWS_PROFILE=tokumai-admin deploy/aws/kms.sh watch   # a mail for every PutKeyPolicy / ScheduleKeyDeletion / CreateGrant on the key
+```
+
+It makes the trail `tokumai` (bucket `tokumai-trail-<account>`, writing management
+events, all regions, kept 400 days) — EventBridge sees CloudTrail events only through a
+trail that is logging, and a new account has none — and the EventBridge rule on it. A
+mail arrives a few minutes after the call. Test it with a no-op `kms.sh allow` as the key
+admin.
 
 ## After the three above
 
