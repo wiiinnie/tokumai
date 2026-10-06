@@ -91,7 +91,7 @@ impl Session {
             "sig": account.sign(op, &signed), "body": body,
         });
         let (ex, ct) = ClientExchange::seal(&self.kx, inner.to_string().as_bytes());
-        let outer = json!({ "kind": "sealed", "epk": hex::encode(ex.epk), "ct": B64.encode(ct) });
+        let outer = json!({ "kind": "sealed", "v": crate::wire::VERSION, "epk": hex::encode(ex.epk), "ct": B64.encode(ct) });
         (Pending { ex }, serde_json::to_vec(&outer).unwrap_or_default())
     }
 }

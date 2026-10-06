@@ -233,19 +233,34 @@ impl Enclave {
         }
     }
 
+    /// One sealed request: opened, checked, answered — and SEALED ONCE. The response key
+    /// is derived from the request's ephemeral key, so every byte sealed under it must be
+    /// the one answer: `seal` below consumes the exchange, and a request that was seen
+    /// before is answered from the cache or with a plain error, never with a second seal
+    /// (until 2026-10-06 a resend past the cache got a second message under the same key
+    /// and, in v1, the same nonce — audit H1).
     async fn sealed(&self, v: &Value) -> Vec<u8> {
         let plain_err = |m: &str| serde_json::to_vec(&error(m)).unwrap_or_default();
         let epk: Option<[u8; 32]> = v.get("epk").and_then(|e| e.as_str()).and_then(|e| hex::decode(e).ok()).and_then(|b| b.try_into().ok());
         let ct = v.get("ct").and_then(|c| c.as_str()).and_then(|c| B64.decode(c).ok());
+        let version = v.get("v").and_then(|v| v.as_u64()).unwrap_or(1);
         let (Some(epk), Some(ct)) = (epk, ct) else { return plain_err("malformed sealed request") };
+        // The same bytes again — a reply lost in the mixnet — get the same reply, before
+        // anything is opened: the ciphertext names the request better than any nonce in
+        // it could (and a buggy client's repeated nonce cannot claim another's answer).
+        let seen = hex::encode(tokumai_core::account::sha256(&[&ct]));
+        if let Some(cached) = self.replies.lock().ok().and_then(|r| r.get(&seen).map(|(_, b)| b.clone())) {
+            return cached;
+        }
         // Nothing is said about WHY a request does not open: it is either not for this
         // enclave (another start, other keys — the app re-attests) or it was tampered with.
-        let Ok((exchange, plain)) = ServerExchange::open(&self.keys.kx, &epk, &ct) else {
+        let Ok((exchange, plain)) = ServerExchange::open(&self.keys.kx, &epk, &ct, version) else {
             return plain_err("this request is not sealed to this enclave — attest again");
         };
-        let seal = |value: Value| -> Vec<u8> {
+        // FnOnce: the exchange goes into the one answer, whichever branch gives it.
+        let seal = move |value: Value| -> Vec<u8> {
             let ct = exchange.seal_response(&serde_json::to_vec(&value).unwrap_or_default());
-            serde_json::to_vec(&json!({ "kind": "sealed", "ct": B64.encode(ct) })).unwrap_or_default()
+            serde_json::to_vec(&json!({ "kind": "sealed", "v": version, "ct": B64.encode(ct) })).unwrap_or_default()
         };
         let Ok(req) = serde_json::from_slice::<Inner>(&plain) else { return seal(error("malformed request")) };
         let now = crate::now_ms();
@@ -257,17 +272,15 @@ impl Enclave {
         let Some(account_id) = tokumai_core::account::account_owns(&req.account, &req.op, &signed, &req.sig) else {
             return seal(error("the account signature does not check out"));
         };
-        // A resend of a request already answered gets that answer again.
+        // A nonce seen before, with its reply no longer cached (or under other bytes): the
+        // request is not carried out again, and not answered under its key again either.
         let first = match self.ledger.lock() {
             Ok(l) => l.first_sight(&req.nonce, now),
             Err(_) => Err("ledger unavailable".into()),
         };
         match first {
             Ok(true) => {}
-            Ok(false) => {
-                let cached = self.replies.lock().ok().and_then(|r| r.get(&req.nonce).map(|(_, b)| b.clone()));
-                return cached.unwrap_or_else(|| seal(error("this request was already made")));
-            }
+            Ok(false) => return plain_err("this request was already made, and its answer is no longer kept"),
             Err(e) => return seal(error(&e)),
         }
         // Three lines, because "it hangs" has three causes that look alike from outside.
@@ -284,12 +297,21 @@ impl Enclave {
             format!("req {op} -> {kind} in {} ms", started.elapsed().as_millis())
         });
         let out = seal(answer);
-        self.remember(&req.nonce, &out);
+        self.remember(&seen, &out);
         crate::trace::say(|| format!("req {op} sealed, {} bytes to send", out.len()));
         out
     }
 
-    fn remember(&self, nonce: &str, out: &[u8]) {
+    /// Drop every kept reply, as the cache's own limits would in time. For the tests of
+    /// what a resend gets once its answer is gone.
+    pub fn forget_kept_replies(&self) {
+        if let Ok(mut r) = self.replies.lock() {
+            r.clear();
+        }
+    }
+
+    /// Keep a reply under the hash of the request's ciphertext, for a resend.
+    fn remember(&self, seen: &str, out: &[u8]) {
         if out.len() > REPLY_KEEP_BYTES / 4 {
             return; // one reply that would evict most of the others is not worth keeping
         }
@@ -302,7 +324,7 @@ impl Enclave {
                     bytes -= gone.len();
                 }
             }
-            r.insert(nonce.to_string(), (Instant::now(), out.to_vec()));
+            r.insert(seen.to_string(), (Instant::now(), out.to_vec()));
         }
     }
 

@@ -87,6 +87,15 @@ async fn an_account_pays_for_a_question_exactly_once_and_only_what_it_cost() {
     assert_eq!(again, first);
     let balance = call(&e, &s, &a, "balance", json!({})).await;
     assert_eq!(balance["balance"]["total"].as_u64().unwrap(), 100_000 - cost);
+
+    // The same bytes once more, after the kept answer is gone: refused in the clear. Never
+    // a second message sealed under that request's key (audit H1, 2026-10-05).
+    e.forget_kept_replies();
+    let later: Value = serde_json::from_slice(&e.handle(&bytes).await).unwrap();
+    assert_eq!(later["kind"], "error");
+    assert!(later["error"].as_str().unwrap().contains("already made"));
+    let balance = call(&e, &s, &a, "balance", json!({})).await;
+    assert_eq!(balance["balance"]["total"].as_u64().unwrap(), 100_000 - cost);
 }
 
 #[tokio::test]
