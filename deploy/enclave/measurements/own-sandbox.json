@@ -1,0 +1,19 @@
+{
+  "tag": "own-sandbox",
+  "commit": "f2365ba49d46308e7c8925d044eaeca1f7db2950",
+  "dirty": false,
+  "built": "2026-10-06T13:21:15Z",
+  "features": "nitro,apple-sandbox",
+  "strip": "symbols",
+  "debuginfo": "0",
+  "platform": "linux/arm64",
+  "base_images": [
+    "rust@sha256:2775a09d208ff0d7c1f50490c45b62db929e87ba1dcbc3f2132ac71a704bcdd3",
+    "gcr.io/distroless/cc-debian12@sha256:e5d81ddde149641e2a9ba55be4545bc125c67de07508b03ba4c22e6eb0ded5aa"
+  ],
+  "nitro_cli": "1.5.0",
+  "nitro_cli_host": "amazonlinux@sha256:74c545e3e04db388b00bd31d7cc5640d4e9c12058a6d72af938d113da3c82893",
+  "pcr0": "cdbe17eabbb3c0d6a117c885695a964a4e75007d68619824d96d5c898563cfc9e71959ece0e7febeaf44dad41ca28e03",
+  "pcr1": "3b4a7e1b5f13c5a1000b3ed32ef8995ee13e9876329f9bc72650b918329ef9cf4e2e4d1e1e37375dab0ba56ba0974d03",
+  "pcr2": "e55f596032ba91e7e31ed218d5dcc24ae9a8028e6181e484d5334520d9b0ef3f749a6952f286f086b944177f5ccf87e2"
+}

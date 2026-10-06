@@ -44,11 +44,12 @@ const RELEASE_MEASUREMENTS: &[&str] = &[
     "5261ea2b021564945de741d75223897b2cf1c7f3ada0650b89d8d9fc7e10f9827bda5439724bd21a371fe321e0a56676",
     // tokumai-ops — production, the same code without the sandbox feature
     "25ed1a81fd1e2bf2f8cc94023a7fd3bd4b492f24e357b53decc862ccd6929ae12e565eda56d75c2213ab5bd87c8692c8",
-    // tokumai-own-sandbox — the data key born in the enclave, the doors kept by it
-    // (2026-10-06, audit H4); deployed after the review, on a fresh book
-    "cb2bae336283480d558d0bcdb26531ceee9eee9ee2e7bb41601d11416bf71d0e5d6bf908a063add0fb156bbf2e1e146f",
+    // tokumai-own-sandbox — the data key born in the enclave, the doors kept by it, and
+    // the audit's fixes of 2026-10-05/06 (deploy/enclave/measurements/own-sandbox.json);
+    // deployed after the review, on a fresh book
+    "cdbe17eabbb3c0d6a117c885695a964a4e75007d68619824d96d5c898563cfc9e71959ece0e7febeaf44dad41ca28e03",
     // tokumai-own — production, the same code without the sandbox feature
-    "4358e6982d778e059f1651e175690c9736f35f4115075d1e2b17a9aac8589bd174d4fb84180e7ee0e3dbaf9b482fc3bf",
+    "a0a583e37baf95e486c2961ae44521e781c0a8988cb995e3abb97b76531ae2913b45d680c39683ca54085817b001c0f3",
 ];
 
 fn dev_data() -> PathBuf {

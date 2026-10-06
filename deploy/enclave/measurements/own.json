@@ -1,0 +1,19 @@
+{
+  "tag": "own",
+  "commit": "f2365ba49d46308e7c8925d044eaeca1f7db2950",
+  "dirty": false,
+  "built": "2026-10-06T13:29:03Z",
+  "features": "nitro",
+  "strip": "symbols",
+  "debuginfo": "0",
+  "platform": "linux/arm64",
+  "base_images": [
+    "rust@sha256:2775a09d208ff0d7c1f50490c45b62db929e87ba1dcbc3f2132ac71a704bcdd3",
+    "gcr.io/distroless/cc-debian12@sha256:e5d81ddde149641e2a9ba55be4545bc125c67de07508b03ba4c22e6eb0ded5aa"
+  ],
+  "nitro_cli": "1.5.0",
+  "nitro_cli_host": "amazonlinux@sha256:74c545e3e04db388b00bd31d7cc5640d4e9c12058a6d72af938d113da3c82893",
+  "pcr0": "a0a583e37baf95e486c2961ae44521e781c0a8988cb995e3abb97b76531ae2913b45d680c39683ca54085817b001c0f3",
+  "pcr1": "3b4a7e1b5f13c5a1000b3ed32ef8995ee13e9876329f9bc72650b918329ef9cf4e2e4d1e1e37375dab0ba56ba0974d03",
+  "pcr2": "03fdd74d017afb53e16d211ddee2d75e0a88272c2a640f0db7d61b9a10e10012de89a21c3feaa87b073eebb7b089d3ce"
+}
