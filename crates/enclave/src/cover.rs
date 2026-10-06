@@ -12,8 +12,16 @@
 //! doing. Every unrelated call in between breaks the "first call after the payment" tell.
 //! When the new person finally asks something, the enclave counts the cover of the same
 //! shape that piled up — a text call does not hide a picture — and buys as many decoys as
-//! it takes to make up the difference, each offset the way ordinary traffic is offset.
-//! Nobody's question is ever held back, so no one waits for this.
+//! it takes to make up the difference.
+//!
+//! The decoys and the real call share one spread of a few seconds (`SPREAD_MS`), and the
+//! real call takes a random place in it: so it is first among them no more often than any
+//! other, goes to the same provider (an OpenAI question's decoys go to OpenAI, with the
+//! moderation call in front, as the real one has), and is of the same shape. That holds a
+//! covered question back by a second or two on average, only while decoys are bought —
+//! an uncovered one is never held. (Until 2026-10-06 every decoy was scheduled strictly
+//! after the real call, and to Google whatever the real call's provider: the first egress
+//! after a payment was the payer's, every time — audit M3.)
 //!
 //! And not only the first question (session cover, 2026-10-02): a person who has just
 //! paid asks several things in a row, and in a thin hour "payment, then an afternoon of
@@ -70,6 +78,20 @@ const COVER_KEEP_MS: u64 = 6 * 3_600_000;
 /// The most calls we remember. A busy enclave needs no more than this to answer "was
 /// there cover", and the list is only ever read backwards.
 const REMEMBER: usize = 512;
+
+/// The spread, in milliseconds, within which a covered call and its decoys all go out,
+/// each at a moment of its own. Three seconds: a fraction of a round trip over the mixnet,
+/// and wide enough that calls a few hundred milliseconds apart look like what they are
+/// meant to look like — several people, not one arrangement.
+pub const SPREAD_MS: u64 = 3_000;
+
+/// The moments for one covered call and `decoys` decoys: the first is the real call's,
+/// the rest the decoys', all drawn alike — so nothing about the order says which is which.
+pub fn moments(decoys: usize) -> (u64, Vec<u64>) {
+    let mut all: Vec<u64> = (0..=decoys).map(|_| rand::random::<u64>() % SPREAD_MS).collect();
+    let mine = all.swap_remove(rand::random::<usize>() % all.len());
+    (mine, all)
+}
 
 #[derive(Default)]
 pub struct Cover {
@@ -193,6 +215,23 @@ mod tests {
         }
         cover.paid("acct", 6 * MIN);
         assert_eq!(cover.decoys_needed("acct", Shape::Text, 7 * MIN), ENOUGH);
+    }
+
+    /// The real call is first among its decoys about as often as any of them is — never
+    /// always, which is what gave the first question away.
+    #[test]
+    fn the_real_call_takes_a_random_place_among_the_decoys() {
+        let mut first = 0;
+        for _ in 0..600 {
+            let (mine, decoys) = moments(ENOUGH);
+            assert_eq!(decoys.len(), ENOUGH);
+            assert!(mine < SPREAD_MS && decoys.iter().all(|d| *d < SPREAD_MS));
+            if decoys.iter().all(|d| *d >= mine) {
+                first += 1;
+            }
+        }
+        // One in six on average (100 of 600); far from six hundred, and not none.
+        assert!((40..=200).contains(&first), "first {first} times of 600");
     }
 
     #[test]
