@@ -1709,10 +1709,11 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   let current = null;                    // active full session {id,title,model,created,messages}
   let messages = [];                     // === current.messages
 
-  // How many messages a conversation keeps after it ends. The full transcript is
-  // downloaded on the way out; only this tail is retained, so re-opening it costs
-  // far fewer tokens than resending the whole history every turn.
-  const PRUNE_KEEP = 6;
+  // A conversation keeps every message, in the encrypted vault, for as long as it lives
+  // on this device. What goes to the model each turn is trimmed by smart pruning
+  // (pruneMessages); nothing is written anywhere in the clear. (Until 2026-10-06 leaving
+  // a chat downloaded the whole transcript as plain Markdown and cut the vault to its last
+  // six messages — audit H7.)
 
   const $ = id => document.getElementById(id);
   // Exactly one modal at a time: opening a scrim closes every other one and
@@ -3025,11 +3026,10 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     // it isn't truly running elsewhere yet). Switching now would orphan its reply and lose
     // the conversation — block until it lands. See also updateSendEnabled's `busy` gate.
     if(busy){ setStatus("wait for the current answer to finish before starting a new chat"); return; }
-    await endSession(current); clearImage(); editTarget=null; current=newSession(); messages=current.messages; pinQuestion=false; followStream=true; renderSessions(); renderThread(); $("input").focus();
+    clearImage(); editTarget=null; current=newSession(); messages=current.messages; pinQuestion=false; followStream=true; renderSessions(); renderThread(); $("input").focus();
   }
   async function openSession(id){
     if(busy){ setStatus("wait for the current answer to finish before switching chats"); return; }
-    if(current && current.id!==id) await endSession(current);
     const s = await Vault.load(id); if(!s) return;
     clearImage();   // an un-sent attachment belongs to the chat you're leaving — drop it
     editTarget=null;
@@ -4258,35 +4258,6 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     messages=current.messages;
     await Vault.save(current); await refreshSessions(); renderThread();
     setStatus("imported ✓");
-  }
-
-  // ---------- session end: export + prune ----------
-  function toHandoverSession(sess){
-    return { id:sess.id, title:sess.title, model:sess.model, created:sess.created,
-      messages:(sess.messages||[]).filter(m=>m.role==="you"||m.role==="ai") };
-  }
-  function downloadBlob(blob, name){
-    const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=name; a.click();
-    URL.revokeObjectURL(a.href);
-  }
-  function sessionFilename(sess){
-    const t=(sess.title||"chat").replace(/[^a-z0-9]+/gi,"-").replace(/^-+|-+$/g,"").slice(0,40)||"chat";
-    return `${t}-${(sess.created||new Date().toISOString()).slice(0,10)}.md`;
-  }
-  // When a conversation ends, download the FULL transcript and keep only its tail,
-  // so re-opening it later resends far fewer tokens. Fires only when there is
-  // enough history that pruning actually drops something.
-  async function endSession(sess){
-    if(!sess) return;
-    // Phones: no silent downloads exist and popping a share sheet uninvited
-    // would be hostile — keep the full session in the encrypted vault instead
-    // of export+prune. Manual export stays available any time.
-    if(onPhone()) return;
-    const turns=(sess.messages||[]).filter(m=>m.role==="you"||m.role==="ai");
-    if(turns.length<=PRUNE_KEEP) return;
-    try{ downloadBlob(new Blob([Handover.serialize(toHandoverSession(sess))],{type:"text/markdown"}), sessionFilename(sess)); }catch(_){}
-    sess.messages = sess.messages.slice(-PRUNE_KEEP);
-    if(vaultOk){ try{ await Vault.save(sess); await refreshSessions(); }catch(_){} }
   }
 
   // ---------- settings (smart pruning) ----------
