@@ -127,6 +127,39 @@ instance_az() { aws ec2 describe-instances --instance-ids "$(instance_id)" --que
 
 # The two units on the host, and the script the enclave unit runs. Written at every deploy,
 # so a change here reaches the host with the next one.
+# A sandbox image (apple-sandbox: free receipts) must never run beside a production image
+# on one book: whoever can reach the sandbox doors mints real balance (audit C1). So a
+# deploy of one refuses while the key policy also names an image that is not one. The
+# policy's PCR0s are matched to the images built here (dev-data/eif/*.pcrs.json); one
+# that is not known here counts as production.
+refuse_sandbox_beside_production() {
+  case "$TAG" in *sandbox*) ;; *) return 0 ;; esac
+  [ "${FORCE:-}" = 1 ] && { echo "FORCE=1: deploying a sandbox image beside production images in the key policy"; return 0; }
+  local policy; policy=$(aws kms get-key-policy --key-id "$(aws kms describe-key --key-id alias/tokumai-enclave --query KeyMetadata.KeyId --output text)" --policy-name default --query Policy --output text 2>/dev/null) || return 0
+  local bad; bad=$(python3 - "$policy" <<'PY'
+import glob, json, sys
+policy = json.loads(sys.argv[1])
+known = {}
+for f in glob.glob("dev-data/eif/tokumai-*.pcrs.json"):
+    try:
+        known[json.load(open(f))["Measurements"]["PCR0"].lower()] = f.split("tokumai-")[-1].removesuffix(".pcrs.json")
+    except Exception:
+        pass
+for st in policy["Statement"]:
+    for pcr in st.get("Condition", {}).get("StringEqualsIgnoreCase", {}).get("kms:RecipientAttestation:PCR0", []):
+        tag = known.get(pcr.lower(), "unknown")
+        if "sandbox" not in tag:
+            print(f"  {tag} ({pcr[:12]}…)")
+PY
+)
+  if [ -n "$bad" ]; then
+    echo "tokumai-$TAG is a sandbox image, and the key policy also lets these open the book:"
+    echo "$bad"
+    echo "a sandbox image beside a production one is a mint for anyone with a free sandbox account. 'deploy/aws/kms.sh allow <this image's pcr0>' first (as the key admin), or FORCE=1 if this is meant."
+    exit 1
+  fi
+}
+
 install_units() {
   remote "set -e
     sudo tee /etc/systemd/system/tokumai-egress.service >/dev/null <<'UNIT'
@@ -287,6 +320,7 @@ UD
     ;;
   deploy|debug)
     remote 'test -f /var/tmp/tokumai-host-ready' || { echo "the host is not ready yet (user data still running)"; exit 1; }
+    refuse_sandbox_beside_production
     # Stop first: a running proxy binary cannot be overwritten ("text file busy").
     remote "sudo systemctl stop tokumai-enclave 2>/dev/null || true; sudo nitro-cli terminate-enclave --all >/dev/null 2>&1 || true; sudo systemctl stop tokumai-egress 2>/dev/null || true; pkill -f '[t]okumai-egress-host' || true; sleep 1" || true
     # The sealed secrets travel with it: the host cannot read them, and without them the

@@ -314,6 +314,13 @@ looks, and each is cheap to close now and expensive to explain later.
      paying customers in it;
    - and this belongs in the release notes, not only here: it is a thing that was
      deliberately loosened, and the loosening has to be undone by hand.
+
+   Since 2026-10-06 the scripts hold the line (audit C1): `kms.sh allow` takes one PCR0
+   unless `FORCE=1` says an upgrade is in flight, and `probe.sh deploy` of a sandbox image
+   refuses while the policy names a production one. What stays by hand: the sandbox
+   entries in `RELEASE_MEASUREMENTS` (`app/src-tauri/src/target.rs`) must be gone from
+   the app build that goes live with real receipts — the app accepts what it pins, and a
+   pinned sandbox image is the same mint from the other side.
 5. **The journal is a usage history, and the host may keep every record of it.** Found on
    2026-09-24 while tracing what a seized book would actually reveal. The book is a snapshot
    plus an append-only journal of single SQL changes with their parameters

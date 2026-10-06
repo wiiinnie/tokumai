@@ -108,6 +108,14 @@ case "${1:-}" in
     # MFA: AWS_PROFILE=tokumai-key-admin and an MFA session (docs/aws-admin.md, 5).
     : "${2:?usage: kms.sh allow <pcr0> [<pcr0> …]}"
     shift
+    # One image opens the book. More than one is every one of them opening it — a sandbox
+    # image beside the production one is a mint for anyone with a free sandbox account
+    # (audit C1). An upgrade in flight, where the apps still pin the old image, is the one
+    # reason to name two, and it says so: FORCE=1.
+    if [ $# -gt 1 ] && [ "${FORCE:-}" != 1 ]; then
+      echo "$# images would open the book, and every one of them could. One at a time; FORCE=1 for an upgrade in flight (old and new image, both production), and swap back to one when the apps have moved."
+      exit 1
+    fi
     WHO=$(aws sts get-caller-identity --query Arn --output text)
     case "$WHO" in *"${KEY_ADMIN#arn:aws:iam::$ACCOUNT:}"*) ;; *) echo "note: running as $WHO, not the key admin ($KEY_ADMIN) — allowed only until the policy is in its new shape" ;; esac
     # KMS refuses a policy that takes PutKeyPolicy away from the caller, unless told that
