@@ -76,6 +76,33 @@ fn epochs_of(p: &Proof) -> Vec<u16> {
     core_notes::epochs_covered(p.start_ms, p.until_ms, p.yearly)
 }
 
+/// The `minted` table's name for one payment's month. Kept here, and used by `plans`
+/// too: a payment pays ONE way, as a note or as a plan bound to an account, never both.
+pub(crate) fn mint_reference(rail: &str, epoch: u16) -> String {
+    format!("note:mint:{rail}:{epoch}")
+}
+
+/// May this payment's month be minted into the note `fingerprint`? Records it if so.
+/// Refused (with the reason, final for the app) when the payment already pays a plan on
+/// an account directly — `iap.verify` or `plan.status` bound its rail — or when a
+/// DIFFERENT note was minted for it before. The same note again is fine (a restored
+/// phone asks for what it already had). Audit H2 (2026-10-05): without the first check one
+/// payment bought a month twice, once through each path, on two accounts.
+pub(crate) fn mint_admission(l: &crate::ledger::Ledger, rail: &str, epoch: u16, fingerprint: &str) -> Result<bool, String> {
+    if l.rail_owner(rail)?.is_some() {
+        return Err("this payment already pays a plan on an account directly; it cannot also become a note".into());
+    }
+    let reference = mint_reference(rail, epoch);
+    match l.minted_get(&reference)? {
+        Some(seen) if seen != fingerprint => Err("a note for this month was already minted for this payment".into()),
+        Some(_) => Ok(false),
+        None => {
+            l.minted_put(&reference, fingerprint)?;
+            Ok(true)
+        }
+    }
+}
+
 fn body_of(body: &str) -> Value {
     serde_json::from_str(body).unwrap_or(Value::Null)
 }
@@ -138,22 +165,16 @@ impl Enclave {
         if epoch < from || epoch > to {
             return error("that month is not open for minting yet, or not any more");
         }
-        let reference = format!("note:mint:{}:{epoch}", proof.rail);
         let fingerprint = core_notes::blinded_fingerprint(&blinded);
         {
             let Ok(l) = self.ledger.lock() else { return error("ledger unavailable") };
-            match l.minted_get(&reference) {
-                Ok(Some(seen)) if seen != fingerprint => {
-                    return json!({ "kind": "error", "error": "a note for this month was already minted for this payment", "final": true })
-                }
-                Ok(Some(_)) => {}
-                Ok(None) => {
-                    if let Err(e) = l.minted_put(&reference, &fingerprint) {
-                        return error(&e);
-                    }
-                    // A count for the operator: how many notes this month, never for whom.
-                    self.stats.add(&format!("notes:minted:{epoch}:{}{}", proof.tier, if proof.sandbox { ":sandbox" } else { "" }), 1);
-                }
+            match mint_admission(&l, &proof.rail, epoch, &fingerprint) {
+                // A count for the operator: how many notes this month, never for whom.
+                Ok(true) => self.stats.add(&format!("notes:minted:{epoch}:{}{}", proof.tier, if proof.sandbox { ":sandbox" } else { "" }), 1),
+                Ok(false) => {}
+                // Both refusals are about the payment, not the moment: final, so the app
+                // stops asking.
+                Err(e) if e.contains("already") => return json!({ "kind": "error", "error": e, "final": true }),
                 Err(e) => return error(&e),
             }
         }
@@ -356,6 +377,36 @@ mod tests {
         let r = restored.note_redeem("acct-a", &body, now + 2);
         assert_eq!((r["granted"].as_u64(), r["plan"]["active"].as_bool()), (Some(1), Some(true)), "{r}");
         assert_eq!(restored.note_redeem("acct-a", &body, now + 3)["again"], 1);
+    }
+
+    /// One payment, one way: a rail that pays a plan on an account directly mints no
+    /// note, and a rail that was minted into a note pays no plan directly — on any
+    /// account, for any month the payment covers (audit H2).
+    #[test]
+    fn a_payment_pays_as_a_note_or_as_a_plan_but_never_both() {
+        let e = enclave();
+        let now = tokumai_core::subscription::ms_from_civil(2026, 10, 5);
+        let l = e.ledger.lock().unwrap();
+        // Bound directly first (iap.verify / plan.status): minting is refused.
+        let (start, until) = (now - 10 * 86_400_000, now + 20 * 86_400_000);
+        plans::subscribe_or_renew(&l, "acct-a", 1, false, "iap:3000000111", now, start, until).unwrap();
+        let month = core_notes::epochs_covered(start, until, false)[0];
+        assert!(mint_admission(&l, "iap:3000000111", month, "fp-1").unwrap_err().contains("already pays a plan"));
+        // Minted first: the direct path is refused for that payment, on another account
+        // too, and the same note may be asked for again.
+        assert!(mint_admission(&l, "iap:3000000222", month, "fp-2").unwrap());
+        assert!(!mint_admission(&l, "iap:3000000222", month, "fp-2").unwrap());
+        assert!(mint_admission(&l, "iap:3000000222", month, "fp-3").is_err());
+        let refused = plans::subscribe_or_renew(&l, "acct-b", 1, false, "iap:3000000222", now, start, until).unwrap_err();
+        assert_eq!(refused, plans::PLAN_MINTED);
+        assert!(l.rail_owner("iap:3000000222").unwrap().is_none(), "nothing was bound by the refusal");
+        // A yearly payment minted for one of its months is refused as a whole.
+        let year_end = tokumai_core::subscription::add_months_ms(start, 12);
+        let months = core_notes::epochs_covered(start, year_end, true);
+        assert!(mint_admission(&l, "iap:3000000333", months[7], "fp-4").unwrap());
+        assert_eq!(plans::subscribe_or_renew(&l, "acct-c", 1, true, "iap:3000000333", now, start, year_end).unwrap_err(), plans::PLAN_MINTED);
+        // The renewal check's way in finds no owner for a minted rail and does nothing.
+        assert!(!plans::renew_by_rail(&l, "iap:3000000333", 1, true, now, start, year_end).unwrap());
     }
 
     #[tokio::test]

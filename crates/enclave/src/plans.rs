@@ -158,10 +158,23 @@ pub fn renew_by_rail(l: &Ledger, rail: &str, tier: usize, yearly: bool, now_ms: 
     }
 }
 
+/// A payment that was minted into a note pays that way and no other (`notes::mint_admission`
+/// refuses the other direction).
+pub const PLAN_MINTED: &str = "this payment was turned into a note and pays as one; it cannot also pay a plan directly";
+
 #[allow(clippy::too_many_arguments)]
 fn renew_key(l: &Ledger, key: &str, tier: usize, yearly: bool, rail: &str, now_ms: u64, start_ms: u64, until_ms: u64) -> Result<bool, String> {
     if let Some(why) = attach_refusal_key(l, key, rail, now_ms)? {
         return Err(why.into());
+    }
+    // One payment, one way (audit H2): a rail any of whose months was minted into a note
+    // binds no plan — on this account or any other.
+    if !rail.starts_with("note:") {
+        for epoch in tokumai_core::notes::epochs_covered(start_ms, until_ms, yearly) {
+            if l.minted_get(&crate::notes::mint_reference(rail, epoch))?.is_some() {
+                return Err(PLAN_MINTED.into());
+            }
+        }
     }
     let key = key.to_string();
     let tier = tier.min(TIERS.len() - 1);
