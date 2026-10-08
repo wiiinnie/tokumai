@@ -5,10 +5,10 @@
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />
 
-    <!-- No Auto Backup. The app's private storage holds the wallet — recovery phrase and
-         bearer coins — as plaintext files, and Android would ship that to Google Drive by
-         default. Same rule as iOS: secrets never enter a backup the platform vendor holds.
-         Restore is by recovery phrase, not by device backup. -->
+    <!-- No Auto Backup. The app's private storage holds the recovery phrase and the chat
+         history (sealed under a key the Android Keystore wraps, Keystore.kt), and Android
+         would ship the files to Google Drive by default. Same rule as iOS: nothing of the
+         app enters a backup the platform vendor holds. Restore is by recovery phrase. -->
     <application
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"

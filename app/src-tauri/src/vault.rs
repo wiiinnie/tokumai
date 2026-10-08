@@ -13,11 +13,9 @@
 // sessions over IPC: the key never enters JS, neither on disk nor in memory, so an XSS
 // in the webview can read what the user is looking at but cannot exfiltrate the key.
 //
-// iOS / Android: no keychain (see keystore::use_keychain — the keyring backend is unreliable
-// on iOS dev builds and absent on Android); the files sit in the app-private container,
-// which the OS encrypts at rest (Data Protection / file-based encryption). That is the
-// same protection the wallet gets there. Vault files are then stored in the clear inside
-// that container — honest, and no weaker than "key next to ciphertext" was.
+// iOS: the keychain, as an item that is this device's only; Android: a key wrapped by the
+// Android Keystore (both in `keystore`, since 2026-10-08 — before that Android kept the
+// vault in the clear inside the app's private storage, and the iOS item went into backups).
 //
 // Writes are atomic (temp + fsync + rename) so a crash never truncates a session.
 

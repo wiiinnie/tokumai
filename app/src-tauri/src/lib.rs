@@ -1521,8 +1521,20 @@ pub fn run() {
         .manage(AppState::default())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            // Where the data lives, told to the keystore (a phone keeps what goes with its
+            // key beside the data); on iOS, out of every backup.
+            match data_dir(app.handle()) {
+                Ok(dir) => {
+                    keystore::set_data_dir(dir.clone());
+                    #[cfg(target_os = "ios")]
+                    if let Err(e) = ios_native::exclude_from_backup(&dir) {
+                        log::error!("[data] {e}");
+                    }
+                }
+                Err(e) => log::error!("[data] no data directory: {e}"),
+            }
             // Android: the TLS verifier needs the Activity's JNI env before the first
-            // directory fetch (see init_android_tls_verifier).
+            // directory fetch (see init_android_tls_verifier), and the keystore the VM.
             #[cfg(target_os = "android")]
             init_android_tls_verifier();
             app.handle().plugin(
@@ -1598,6 +1610,8 @@ fn init_android_tls_verifier() {
             }
         };
         let raw_ctx = activity.as_raw();
+        // The same VM serves the keystore (keystore::android), for as long as the process lives.
+        keystore::android::set_vm(raw_vm.cast());
         let vm = unsafe { jni::JavaVM::from_raw(raw_vm.cast()) };
         let res: Result<(), jni::errors::Error> = vm.attach_current_thread(|env22| {
             let context = unsafe { jni::objects::JObject::from_raw(env22, raw_ctx.cast()) };

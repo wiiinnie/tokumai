@@ -2,6 +2,16 @@
 //! the chat vault): AES-256-GCM under a random 32-byte key that lives only in the OS
 //! keychain, so a file copied off the disk or out of a backup is worthless without it.
 //!
+//! Where the key lives, by platform (audit M12/M13, 2026-10-08):
+//! - macOS, Windows, Linux: the OS keychain / credential store, through `keyring`.
+//! - iOS: the keychain, as an item that is **this device's only** — it goes into no iCloud
+//!   or Finder backup and migrates to no other phone. (Through `keyring` it was the
+//!   default class, backed up: an iCloud backup held the key and the files both.) The
+//!   data directory is excluded from backups as well (`ios_native::exclude_from_backup`).
+//! - Android: the Android Keystore wraps it — the hardware-backed key never leaves the
+//!   keystore, and what is on disk is the 32 bytes under it (`Keystore.kt`). Before, the
+//!   files lay in the clear in the app's private storage.
+//!
 //! The key is lost with the keychain (an OS reinstall without keychain migration). The
 //! phrase then has to be typed in again — which is why the app insists it is written down.
 
@@ -51,6 +61,18 @@ fn dev_key(account: &str, what: &str) -> Result<[u8; 32], String> {
     Ok(key)
 }
 
+/// The app's data directory, told once at start: where a phone keeps what goes with its
+/// key (the wrapped key on Android, the migration marks on iOS).
+static DATA_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+pub(crate) fn set_data_dir(dir: std::path::PathBuf) {
+    let _ = DATA_DIR.set(dir);
+}
+
+fn data_dir() -> Result<&'static Path, String> {
+    DATA_DIR.get().map(|p| p.as_path()).ok_or_else(|| "the data directory is not known yet".to_string())
+}
+
 /// Fetch or create the key stored under `account` in the OS keychain.
 pub(crate) fn keychain_key(account: &str, what: &str) -> Result<[u8; 32], String> {
     use rand::RngCore;
@@ -63,6 +85,15 @@ pub(crate) fn keychain_key(account: &str, what: &str) -> Result<[u8; 32], String
     if cfg!(debug_assertions) && !cfg!(any(target_os = "ios", target_os = "android")) {
         return dev_key(account, what);
     }
+    #[cfg(target_os = "ios")]
+    {
+        return ios::device_only_key(account, what);
+    }
+    #[cfg(target_os = "android")]
+    {
+        return android::wrapped_key(account, what);
+    }
+    #[allow(unreachable_code)]
     let entry = keyring::Entry::new(KEYCHAIN_SERVICE, account).map_err(|e| e.to_string())?;
     match entry.get_password() {
         Ok(b64) => {
@@ -80,10 +111,148 @@ pub(crate) fn keychain_key(account: &str, what: &str) -> Result<[u8; 32], String
     }
 }
 
-/// Whether files are encrypted under a keychain key. Android has no keychain backend in
-/// `keyring`; there the app sandbox (with Auto Backup off) is the protection.
+/// Whether files are encrypted under a keychain key: everywhere, since 2026-10-08 (Android
+/// through the Keystore, see the module note). A file written before that, in the clear,
+/// is still read, and written back sealed the next time it is saved.
 pub(crate) fn use_keychain() -> bool {
-    !cfg!(target_os = "android")
+    true
+}
+
+/// iOS: the keychain item is this device's only — `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`
+/// — so no backup carries it and no other phone receives it. `keyring` offers no way to
+/// say so; this goes to the Security framework directly, under the same service and
+/// account, so an item made before is found, read, and made over as this device's only.
+#[cfg(target_os = "ios")]
+mod ios {
+    use super::{data_dir, KEYCHAIN_SERVICE};
+    use core_foundation::base::TCFType;
+    use core_foundation::string::CFString;
+    use security_framework::passwords::{delete_generic_password, get_generic_password, set_generic_password_options, PasswordOptions};
+    use security_framework_sys::access_control::kSecAttrAccessibleWhenUnlockedThisDeviceOnly;
+
+    // Not in security-framework-sys: the attribute key itself.
+    #[link(name = "Security", kind = "framework")]
+    extern "C" {
+        static kSecAttrAccessible: core_foundation::string::CFStringRef;
+    }
+
+    fn device_only(account: &str) -> PasswordOptions {
+        let mut options = PasswordOptions::new_generic_password(KEYCHAIN_SERVICE, account);
+        #[allow(deprecated)]
+        options.query.push((
+            unsafe { CFString::wrap_under_get_rule(kSecAttrAccessible) },
+            unsafe { CFString::wrap_under_get_rule(kSecAttrAccessibleWhenUnlockedThisDeviceOnly) }.into_CFType(),
+        ));
+        options
+    }
+
+    /// A mark beside the data that this account's item has been made over; the keychain
+    /// does not say which class an item has, and making it over every start would be a
+    /// delete-and-add of the one secret for nothing.
+    fn mark(account: &str) -> Result<std::path::PathBuf, String> {
+        Ok(data_dir()?.join(format!(".keychain-device-only.{account}")))
+    }
+
+    pub(super) fn device_only_key(account: &str, what: &str) -> Result<[u8; 32], String> {
+        use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+        use rand::RngCore;
+        let made_over = mark(account).map(|m| m.exists()).unwrap_or(false);
+        match get_generic_password(KEYCHAIN_SERVICE, account) {
+            Ok(b64) => {
+                let bytes = B64.decode(String::from_utf8_lossy(&b64).trim()).map_err(|e| e.to_string())?;
+                let key: [u8; 32] = bytes.try_into().map_err(|_| format!("the {what} key in the keychain has the wrong length"))?;
+                if !made_over {
+                    // Made under the default class, by keyring: delete and add it again as
+                    // this device's only. The bytes are in hand, so a failure in between
+                    // puts them back under the old class rather than losing them.
+                    let _ = delete_generic_password(KEYCHAIN_SERVICE, account);
+                    if let Err(e) = set_generic_password_options(B64.encode(key).as_bytes(), device_only(account)) {
+                        let _ = set_generic_password_options(B64.encode(key).as_bytes(), PasswordOptions::new_generic_password(KEYCHAIN_SERVICE, account));
+                        return Err(format!("the {what} key could not be made this device's only: {e}"));
+                    }
+                    if let Ok(m) = mark(account) {
+                        let _ = std::fs::write(m, b"1");
+                    }
+                    log::info!("[{what}] the {what} key is this device's only now");
+                }
+                Ok(key)
+            }
+            Err(e) if e.code() == security_framework_sys::base::errSecItemNotFound => {
+                let mut key = [0u8; 32];
+                rand::rngs::OsRng.fill_bytes(&mut key);
+                set_generic_password_options(B64.encode(key).as_bytes(), device_only(account)).map_err(|e| e.to_string())?;
+                if let Ok(m) = mark(account) {
+                    let _ = std::fs::write(m, b"1");
+                }
+                log::info!("[{what}] generated a fresh {what} key in the keychain, this device's only");
+                Ok(key)
+            }
+            Err(e) => Err(format!("keychain error: {e}")),
+        }
+    }
+}
+
+/// Android: the key is wrapped by a key in the Android Keystore (`Keystore.kt`), which
+/// never leaves it; the wrapped bytes lie beside the data. Reached over JNI, with the
+/// JavaVM the activity handed over at start (`set_vm`).
+#[cfg(target_os = "android")]
+pub(crate) mod android {
+    use super::data_dir;
+    use std::sync::atomic::{AtomicPtr, Ordering};
+
+    static VM: AtomicPtr<jni::sys::JavaVM> = AtomicPtr::new(std::ptr::null_mut());
+
+    /// The activity's JavaVM, from the one place Tauri hands it out (lib.rs, at start).
+    pub(crate) fn set_vm(raw: *mut jni::sys::JavaVM) {
+        VM.store(raw, Ordering::SeqCst);
+    }
+
+    /// The VM, waiting a little for the start to hand it over: the first read of the
+    /// profile can come before the main thread has run the closure that sets it.
+    fn vm() -> Result<jni::JavaVM, String> {
+        for _ in 0..100 {
+            let raw = VM.load(Ordering::SeqCst);
+            if !raw.is_null() {
+                return Ok(unsafe { jni::JavaVM::from_raw(raw) });
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        Err("the Android Keystore is not reachable yet (no JavaVM)".into())
+    }
+
+    /// `Keystore.wrap` / `Keystore.unwrap` in Kotlin: AES-GCM under the keystore key.
+    fn through(method: &str, bytes: &[u8]) -> Result<Vec<u8>, String> {
+        let vm = vm()?;
+        vm.attach_current_thread(|env| -> Result<Vec<u8>, jni::errors::Error> {
+            let input = env.byte_array_from_slice(bytes)?;
+            let sig = jni::signature::RuntimeMethodSignature::from_str("([B)[B")?;
+            let out = env
+                .call_static_method(jni::strings::JNIString::from("com/tokumai/app/Keystore"), jni::strings::JNIString::from(method), jni::signature::MethodSignature::from(&sig), &[jni::objects::JValue::Object(&input)])?
+                .l()?;
+            let out = env.cast_local::<jni::objects::JByteArray>(out)?;
+            env.convert_byte_array(&out)
+        })
+        .map_err(|e| format!("Android Keystore ({method}): {e}"))
+    }
+
+    pub(super) fn wrapped_key(account: &str, what: &str) -> Result<[u8; 32], String> {
+        use rand::RngCore;
+        let dir = data_dir()?.join("keys");
+        let path = dir.join(format!("{account}.wrapped"));
+        if let Ok(wrapped) = std::fs::read(&path) {
+            let key = through("unwrap", &wrapped)?;
+            return key.try_into().map_err(|_| format!("the {what} key is not 32 bytes once unwrapped"));
+        }
+        let mut key = [0u8; 32];
+        rand::rngs::OsRng.fill_bytes(&mut key);
+        let wrapped = through("wrap", &key)?;
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let tmp = path.with_extension("wrapped.new");
+        std::fs::write(&tmp, &wrapped).map_err(|e| e.to_string())?;
+        std::fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
+        log::info!("[{what}] generated a fresh {what} key, wrapped by the Android Keystore");
+        Ok(key)
+    }
 }
 
 pub(crate) fn encrypt(key: &[u8; 32], plaintext: &str) -> Result<String, String> {

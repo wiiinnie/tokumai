@@ -95,3 +95,21 @@ Emulator: `emulator -avd scrai` (Pixel 7, API 34 arm64), `adb install -r <apk>`,
 - `MainActivity.kt` calls `enableEdgeToEdge()`, which makes the window ignore the IME: the keyboard covered
   the composer. Fix: `android:windowSoftInputMode="adjustResize"` in the manifest **and** an
   `OnApplyWindowInsetsListener` on `android.R.id.content` that applies the IME inset as bottom padding.
+
+## What the app keeps on the phone, and how (2026-10-08)
+
+- The profile (the recovery phrase, the wallet of notes) and the chat vault are
+  AES-256-GCM files in the app's private storage, under a 32-byte key that the **Android
+  Keystore** wraps (`gen/android/app/src/main/java/com/tokumai/app/Keystore.kt`, reached
+  from `keystore.rs` over JNI). The keystore key never leaves the keystore — hardware-backed
+  where the phone has it — and what lies beside the files is the wrapped form. A copy of
+  the storage is worthless without this phone. (Before: the files lay in the clear, with
+  the sandbox and `allowBackup=false` as the only protection — audit M13.)
+- A file written before that, in the clear, is still read, and sealed the next time it is
+  saved; the first start after the update seals the profile.
+- `allowBackup=false` stays: nothing of the app goes into a Google backup. Restore is by
+  the recovery phrase; the chat history stays with the phone it was on.
+- The window carries `FLAG_SECURE` (`MainActivity.kt`): no screenshots, no screen
+  recording, a blank recents thumbnail — the phrase is shown in it, and so is every
+  conversation. The cost is that a person cannot screenshot an answer; to be revisited
+  if that turns out to matter more.

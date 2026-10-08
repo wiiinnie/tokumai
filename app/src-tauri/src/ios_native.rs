@@ -10,6 +10,18 @@
 //! * **opening a link**, because the opener plugin's Swift package is never linked into
 //!   the generated Xcode project, so its command fails at runtime on iOS and nowhere else.
 
+/// The data directory — the sealed profile, the vault, the wrapped key's marks — is this
+/// device's only: no iCloud backup, no Finder backup (audit M12, 2026-10-08). Restore is by
+/// the recovery phrase; the chat history stays with the phone it was on.
+pub fn exclude_from_backup(dir: &std::path::Path) -> Result<(), String> {
+    use objc2_foundation::{NSNumber, NSString, NSURL, NSURLIsExcludedFromBackupKey};
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let path = NSString::from_str(&dir.to_string_lossy());
+    let url = unsafe { NSURL::fileURLWithPath_isDirectory(&path, true) };
+    let yes = NSNumber::numberWithBool(true);
+    unsafe { url.setResourceValue_forKey_error(Some(&yes), NSURLIsExcludedFromBackupKey) }.map_err(|e| format!("could not exclude the data directory from backups: {}", e.localizedDescription()))
+}
+
 pub mod share {
     use block2::RcBlock;
     use objc2::rc::Retained;

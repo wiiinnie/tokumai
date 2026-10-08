@@ -57,6 +57,11 @@ rfd = "0.15"
 
 # --- iOS: what a phone has and a desktop does not ---
 [target.'cfg(target_os = "ios")'.dependencies]
+# The keychain item for the at-rest key as this device's only (keystore::ios): keyring
+# cannot say so, the Security framework can.
+security-framework = "3"
+security-framework-sys = "2"
+core-foundation = "0.10"
 objc2-ui-kit = { version = "0.3", features = [
   "UIImage", "UIImagePickerController", "UIActivityViewController",
   "UIViewController", "UIResponder", "UIView", "UIWindow", "UIApplication",
@@ -75,7 +80,7 @@ objc2-photos = { version = "0.3", features = ["PHPhotoLibrary", "PHAssetChangeRe
 # bundled Tesseract.
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSData", "NSString", "NSArray", "NSDictionary", "NSURL", "NSDate", "NSValue", "NSError"] }
+objc2-foundation = { version = "0.3", features = ["NSData", "NSString", "NSArray", "NSDictionary", "NSURL", "NSDate", "NSValue", "NSError", "NSObject"] }
 objc2-vision = { version = "0.3", features = ["VNRequest", "VNRecognizeTextRequest", "VNRequestHandler", "VNObservation", "VNTypes", "VNError", "alloc", "std", "objc2-image-io"] }
 objc2-image-io = { version = "0.3", features = ["CGImageProperties"] }
 objc2-core-graphics = { version = "0.3", features = ["CGDataProvider", "CGPDFDocument", "CGPDFPage", "CGContext", "CGColorSpace", "CGImage", "CGBitmapContext"] }
