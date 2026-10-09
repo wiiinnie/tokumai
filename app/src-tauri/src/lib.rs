@@ -16,6 +16,7 @@ mod iap_ios;
 mod ios_native;
 mod keystore;
 mod ocr;
+mod owner;
 mod profile;
 mod target;
 mod vault;
@@ -200,6 +201,7 @@ async fn call_as(app: &AppHandle, account: &Account, op: &str, body: Value) -> R
 /// are minted under a key made for that one request and thrown away, so the minting names
 /// nobody (`notes`), and over a transport the account's own calls never used, so the
 /// enclave's end cannot pair the two by their sender (`Connection::call_aside`).
+#[cfg_attr(not(target_os = "ios"), allow(dead_code))]
 async fn call_aside_as(app: &AppHandle, account: &Account, op: &str, body: Value) -> Result<Value, String> {
     call_as_how(app, account, op, body, true).await
 }
@@ -455,7 +457,7 @@ async fn forget_account_caches(app: &AppHandle) {
 }
 
 #[tauri::command]
-fn account_reveal(app: AppHandle) -> Result<Value, String> {
+async fn account_reveal(app: AppHandle) -> Result<Value, String> {
     // iOS: the words are drawn by UIKit behind Face ID and never cross into the webview.
     // Nothing is returned here but the fact that the native sheet was raised.
     #[cfg(target_os = "ios")]
@@ -471,13 +473,16 @@ fn account_reveal(app: AppHandle) -> Result<Value, String> {
     #[cfg(not(target_os = "ios"))]
     {
         let p = profile::load(&data_dir(&app)?);
-        Ok(json!({ "mnemonic": p.mnemonic.ok_or("no account")? }))
+        let m = p.mnemonic.ok_or("no account")?;
+        // The person at the device, not whoever found it unlocked (owner.rs).
+        owner::confirm(&app, "Show your recovery phrase").await?;
+        Ok(json!({ "mnemonic": m }))
     }
 }
 
 /// The phrase and a QR code of it, to set up another device.
 #[tauri::command]
-fn account_migrate_qr(app: AppHandle) -> Result<Value, String> {
+async fn account_migrate_qr(app: AppHandle) -> Result<Value, String> {
     // iOS: no QR. A QR of the phrase IS the phrase — drawing it in the page would put the
     // words there in another costume. The native sheet shows them instead, and the other
     // device is set up by typing or by pasting from it.
@@ -495,6 +500,7 @@ fn account_migrate_qr(app: AppHandle) -> Result<Value, String> {
     {
     let p = profile::load(&data_dir(&app)?);
     let m = p.mnemonic.ok_or("no account")?;
+    owner::confirm(&app, "Show your recovery phrase to move it to another device").await?;
     let qr = qrcode::QrCode::new(m.as_bytes())
         .map(|c| c.render::<qrcode::render::svg::Color>().min_dimensions(200, 200).quiet_zone(true).build())
         .unwrap_or_default();
@@ -1615,6 +1621,8 @@ fn init_android_tls_verifier() {
         let vm = unsafe { jni::JavaVM::from_raw(raw_vm.cast()) };
         let res: Result<(), jni::errors::Error> = vm.attach_current_thread(|env22| {
             let context = unsafe { jni::objects::JObject::from_raw(env22, raw_ctx.cast()) };
+            // Kept for the owner check (owner.rs), which needs the activity for its prompt.
+            keystore::android::set_activity(env22.new_global_ref(&context)?);
             rustls_platform_verifier::android::init_with_env(env22, context)
         });
         match res {

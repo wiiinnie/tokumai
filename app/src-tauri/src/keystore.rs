@@ -69,6 +69,7 @@ pub(crate) fn set_data_dir(dir: std::path::PathBuf) {
     let _ = DATA_DIR.set(dir);
 }
 
+#[cfg_attr(not(any(target_os = "ios", target_os = "android")), allow(dead_code))]
 fn data_dir() -> Result<&'static Path, String> {
     DATA_DIR.get().map(|p| p.as_path()).ok_or_else(|| "the data directory is not known yet".to_string())
 }
@@ -201,15 +202,25 @@ pub(crate) mod android {
     use std::sync::atomic::{AtomicPtr, Ordering};
 
     static VM: AtomicPtr<jni::sys::JavaVM> = AtomicPtr::new(std::ptr::null_mut());
+    static ACTIVITY: std::sync::OnceLock<jni::objects::Global<jni::objects::JObject<'static>>> = std::sync::OnceLock::new();
 
     /// The activity's JavaVM, from the one place Tauri hands it out (lib.rs, at start).
     pub(crate) fn set_vm(raw: *mut jni::sys::JavaVM) {
         VM.store(raw, Ordering::SeqCst);
     }
 
+    /// The activity itself, as a global reference, for what needs a window (`owner`).
+    pub(crate) fn set_activity(activity: jni::objects::Global<jni::objects::JObject<'static>>) {
+        let _ = ACTIVITY.set(activity);
+    }
+
+    pub(crate) fn activity() -> Result<&'static jni::objects::Global<jni::objects::JObject<'static>>, String> {
+        ACTIVITY.get().ok_or_else(|| "the activity is not known yet".to_string())
+    }
+
     /// The VM, waiting a little for the start to hand it over: the first read of the
     /// profile can come before the main thread has run the closure that sets it.
-    fn vm() -> Result<jni::JavaVM, String> {
+    pub(crate) fn vm() -> Result<jni::JavaVM, String> {
         for _ in 0..100 {
             let raw = VM.load(Ordering::SeqCst);
             if !raw.is_null() {
