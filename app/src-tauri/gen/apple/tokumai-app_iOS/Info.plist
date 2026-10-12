@@ -15,9 +15,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.8.1</string>
+	<string>0.1.0</string>
 	<key>CFBundleVersion</key>
-	<string>0.8.1</string>
+	<string>0.1.0</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>LSRequiresIPhoneOS</key>
@@ -25,11 +25,15 @@
 	<key>NSCameraUsageDescription</key>
 	<string>Scans a migration QR code to move your account to this device. The camera is used only while you scan; nothing is recorded or sent.</string>
 	<key>NSFaceIDUsageDescription</key>
-	<string>Face ID confirms it&apos;s you before your 24-word recovery phrase is shown on this device.</string>
+	<string>Face ID confirms it's you before your 24-word recovery phrase is shown on this device.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Development builds load the UI from the dev server on your Mac. Release builds never use the local network.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Lets you speak a question instead of typing it. Your voice is transcribed on this iPhone and never leaves it — only the text is sent, exactly as if you had typed it.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Saves AI-generated images from your chats to your photo library. Nothing is ever read from it.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Transcribes what you say, on this iPhone only (on-device recognition). The audio is not sent to Apple or to tokumai.</string>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIRequiredDeviceCapabilities</key>

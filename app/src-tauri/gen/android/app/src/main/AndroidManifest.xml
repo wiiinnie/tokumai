@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Speaking a question instead of typing it. Transcribed by Android's on-device
+         recogniser (Voice.kt); the audio never leaves the phone, only the text goes on. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />

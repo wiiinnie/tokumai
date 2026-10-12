@@ -67,6 +67,15 @@ export const Backend = {
   // "Restore purchases" and never on a launch.
   iapSync: (restore) => invoke("iap_sync", { restore: !!restore }),
 
+  // ---- speech to text, on this device only (voice.rs). The audio never leaves the
+  // phone: Apple's / Android's on-device recogniser, forced; where there is none, the
+  // microphone is not offered. What comes back is text, sent exactly as if typed.
+  voiceAvailable: () => invoke("voice_available"),
+  voiceStart: (lang) => invoke("voice_start", { lang: lang || "" }),
+  voicePoll: () => invoke("voice_poll"),
+  voiceStop: () => invoke("voice_stop"),
+  voiceCancel: () => invoke("voice_cancel"),
+
   // ---- the route (entry gateway: never one of tokumai's — rule A1)
   mixnetRoute: () => invoke("mixnet_route"),
   listEntryGateways: () => invoke("list_entry_gateways"),

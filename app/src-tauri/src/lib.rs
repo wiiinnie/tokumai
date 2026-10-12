@@ -20,6 +20,7 @@ mod owner;
 mod profile;
 mod target;
 mod vault;
+mod voice;
 
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -1623,6 +1624,7 @@ pub fn run() {
             vault_list, vault_load, vault_save, vault_remove, vault_purge_webdata,
             save_file, save_image, pick_image, open_external,
             ocr_scan, pdf_text, pdf_ocr, pdf_pages, smart_available, smart_detect,
+            voice::voice_available, voice::voice_start, voice::voice_poll, voice::voice_stop, voice::voice_cancel,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

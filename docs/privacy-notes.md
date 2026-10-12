@@ -20,6 +20,7 @@ the system, and only the second is worth anything to somebody who does not know 
 | The enclave | Everything, for as long as it takes to answer: the question, the account, the balance. It keeps the question nowhere. |
 | The model provider | The question and the answer, from our egress, with a per-account-per-day safety identifier and no user identity. |
 | Stripe / Apple | Who paid, when, and how much. Never what was asked. |
+| Apple's / Google's speech recogniser | Nothing. A spoken question is transcribed on the phone (iOS: `requiresOnDeviceRecognition`; Android 12+: the on-device recogniser), and only the text goes on, as if typed. Where the phone has no on-device model, the microphone is not offered. The audio is never stored. |
 
 ## What we must disclose, because it is true
 

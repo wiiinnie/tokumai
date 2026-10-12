@@ -16,6 +16,7 @@
 		737561AC96B017379ADADA4C /* WebKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 02EC1930E5AA421732ECD5C5 /* WebKit.framework */; };
 		8604684B584E2B7C851D51A0 /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F7D0D2D5E2952E15D9C2A83C /* Metal.framework */; };
 		B2D0B0872534387BCD342F60 /* Vision.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F9C815566B9FE0914482F968 /* Vision.framework */; };
+		B394FD4E71F101213EB68C97 /* Voice.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40BB46D18D04E17966966ECC /* Voice.swift */; };
 		BB5F3BF1E2A7D2A91B0948C1 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = FE03EA758095C5F259B7CE42 /* Assets.xcassets */; };
 		C489F7A738C91D16CA3A0656 /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8FD47D4248F1543809C2BD7A /* CoreGraphics.framework */; };
 		C513948BB8D8AC9FB47B538C /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = EC7D2D5296432993878EBA7B /* LaunchScreen.storyboard */; };
@@ -35,7 +36,9 @@
 		3492AABD36FAAE185BD8AFCA /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
 		3A6E16640543CD218B03410B /* main.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = main.mm; sourceTree = "<group>"; };
 		3CC4980D2AE3B0E058F01266 /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
+		40BB46D18D04E17966966ECC /* Voice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Voice.swift; sourceTree = "<group>"; };
 		480D60AD544933A2378A28E1 /* StoreKitShim.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreKitShim.swift; sourceTree = "<group>"; };
+		4DE5D91AA12742375DA831AE /* voice.rs */ = {isa = PBXFileReference; path = voice.rs; sourceTree = "<group>"; };
 		50AE670FCC6D9F1FB5773DB2 /* bindings.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = bindings.h; sourceTree = "<group>"; };
 		57AE51A4FBDDFC377F434147 /* CoreFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreFoundation.framework; path = System/Library/Frameworks/CoreFoundation.framework; sourceTree = SDKROOT; };
 		586A431F3ADC8A04DE382FB8 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
@@ -49,9 +52,11 @@
 		9BAC6A7E86A0E9F80BB09B29 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
 		A785BFB16B7065F800C7396B /* tokumai-app_iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "tokumai-app_iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		A7C0A6D2ED537D7471E44544 /* StoreKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = StoreKit.framework; path = System/Library/Frameworks/StoreKit.framework; sourceTree = SDKROOT; };
+		B16D9D5CBC8799816733C4A4 /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
 		BEC651B5AACAEF269119DC24 /* lib.rs */ = {isa = PBXFileReference; path = lib.rs; sourceTree = "<group>"; };
 		CF82CB202654629FDD2E0978 /* keystore.rs */ = {isa = PBXFileReference; path = keystore.rs; sourceTree = "<group>"; };
 		D0846225E8C7001D5AF25577 /* iap_ios.rs */ = {isa = PBXFileReference; path = iap_ios.rs; sourceTree = "<group>"; };
+		D8F7F4E02B4196BBD8D4A81E /* owner.rs */ = {isa = PBXFileReference; path = owner.rs; sourceTree = "<group>"; };
 		E5BD13F1DECDB2930546F481 /* ios_native.rs */ = {isa = PBXFileReference; path = ios_native.rs; sourceTree = "<group>"; };
 		EC7D2D5296432993878EBA7B /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
 		ED2FBCFBFA3EA203BBA3E577 /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
@@ -94,9 +99,11 @@
 				BEC651B5AACAEF269119DC24 /* lib.rs */,
 				FB56BA9C4243A14EF38FBBBD /* main.rs */,
 				8B7D493AC2B818CEA37791D3 /* ocr.rs */,
+				D8F7F4E02B4196BBD8D4A81E /* owner.rs */,
 				143814C548890C9635D0C00C /* profile.rs */,
 				2A1F039B5A3E1E2804F52F5A /* target.rs */,
 				8AAFDB686C858C6AB93EEF2E /* vault.rs */,
+				4DE5D91AA12742375DA831AE /* voice.rs */,
 			);
 			name = src;
 			path = ../../src;
@@ -181,6 +188,7 @@
 			isa = PBXGroup;
 			children = (
 				3560F081F20882D82ED0F5C2 /* debug */,
+				A63BBC0AFC3F9910F21BE7BD /* release */,
 			);
 			path = arm64;
 			sourceTree = "<group>";
@@ -198,12 +206,21 @@
 			children = (
 				3A6E16640543CD218B03410B /* main.mm */,
 				480D60AD544933A2378A28E1 /* StoreKitShim.swift */,
+				40BB46D18D04E17966966ECC /* Voice.swift */,
 				5C7D495EE37FD913AC5E2A45 /* bindings */,
 			);
 			path = "tokumai-app";
 			sourceTree = "<group>";
 		};
-		"TEMP_3A80C499-4992-4B69-B458-626984B08CA1" /* x86_64 */ = {
+		A63BBC0AFC3F9910F21BE7BD /* release */ = {
+			isa = PBXGroup;
+			children = (
+				B16D9D5CBC8799816733C4A4 /* libapp.a */,
+			);
+			path = release;
+			sourceTree = "<group>";
+		};
+		"TEMP_89546331-DE6E-4688-ACDA-67BD14638C8B" /* x86_64 */ = {
 			isa = PBXGroup;
 			children = (
 			);
@@ -310,6 +327,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				2F4AE9261B135B3D61102E67 /* StoreKitShim.swift in Sources */,
+				B394FD4E71F101213EB68C97 /* Voice.swift in Sources */,
 				244D5067DE0025BF9504BFEE /* main.mm in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -391,7 +409,7 @@
 				CODE_SIGN_ENTITLEMENTS = "tokumai-app_iOS/tokumai-app_iOS.entitlements";
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = "T23Z4LDMGV";
+				DEVELOPMENT_TEAM = T23Z4LDMGV;
 				ENABLE_BITCODE = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
@@ -407,7 +425,7 @@
 				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				PRODUCT_BUNDLE_IDENTIFIER = com.tokumai.app;
-				PRODUCT_NAME = "tokumai";
+				PRODUCT_NAME = tokumai;
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 1;
@@ -426,7 +444,7 @@
 				CODE_SIGN_ENTITLEMENTS = "tokumai-app_iOS/tokumai-app_iOS.entitlements";
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = "T23Z4LDMGV";
+				DEVELOPMENT_TEAM = T23Z4LDMGV;
 				ENABLE_BITCODE = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
@@ -442,7 +460,7 @@
 				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				PRODUCT_BUNDLE_IDENTIFIER = com.tokumai.app;
-				PRODUCT_NAME = "tokumai";
+				PRODUCT_NAME = tokumai;
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 1;

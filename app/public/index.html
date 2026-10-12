@@ -670,6 +670,24 @@
     background:var(--surface-2);color:var(--muted);font-size:20px;line-height:1;display:grid;place-items:center;transition:.12s}
   .attach:hover{color:var(--mix);border-color:var(--mix)}
   .attach:disabled{opacity:.4;cursor:not-allowed}
+  /* speak instead of type: the microphone beside send; while listening the row turns
+     into the recording bar (discard · waveform · stop · send), the ChatGPT shape in
+     tokumai's colours. Transcribed on the device — the title says so. */
+  .mic{flex:0 0 auto;width:38px;height:38px;border-radius:10px;border:1px solid var(--line);cursor:pointer;
+    background:var(--surface-2);color:var(--muted);display:grid;place-items:center;transition:.12s}
+  .mic:hover{color:var(--mix);border-color:var(--mix)}
+  .mic:disabled{opacity:.4;cursor:not-allowed}
+  .inputrow.voice>*:not(.voicebar){display:none!important}
+  .voicebar{display:flex;flex:1 1 auto;align-items:center;gap:8px;min-height:38px}
+  .voicebar .vx{flex:0 0 auto;width:38px;height:38px;border-radius:50%;border:1px solid var(--line);background:var(--surface-2);color:var(--muted);font-size:15px;cursor:pointer;display:grid;place-items:center}
+  .voicebar .vx:hover{color:var(--rust);border-color:var(--rust)}
+  .voicebar .vwave{flex:1 1 auto;height:38px;min-width:0;display:block}
+  .voicebar .vhint{flex:1 1 auto;font-family:var(--mono);font-size:11.5px;color:var(--muted);text-align:center;min-width:0}
+  .voicebar .vstop{flex:0 0 auto;width:38px;height:38px;border-radius:50%;border:none;background:var(--surface-2);color:var(--bone);font-size:13px;cursor:pointer;display:grid;place-items:center;border:1px solid var(--line)}
+  .voicebar .vstop:hover{border-color:var(--mix)}
+  .voicebar .vstop:disabled{opacity:.4;cursor:not-allowed}
+  .voicebar .vsend{border-radius:50%}
+  .inputrow.voice{border-color:var(--mix)}
   /* attach action menu (iOS native picker chooser) */
   .attachscrim{position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.35);display:flex;align-items:flex-end;justify-content:flex-start}
   .attachmenu{margin:0 0 96px 16px;display:flex;flex-direction:column;gap:2px;background:var(--surface);border:1px solid var(--line);
@@ -947,7 +965,9 @@
     .empty .mark,.empty .scramble{font-size:32px}
     .composer{padding:10px 12px calc(env(safe-area-inset-bottom,0px) + 12px)}
     .scrolldn{right:12px}
-    .attach,.send,.attachwrap{width:44px;height:44px}
+    .attach,.send,.mic,.attachwrap{width:40px;height:40px}
+    .inputrow{gap:8px;padding:8px 8px 8px 12px}
+    .voicebar .vx,.voicebar .vstop,.voicebar .vwave{height:40px}.voicebar .vx,.voicebar .vstop{width:40px}
     .menu{position:fixed;left:10px;right:10px;top:calc(env(safe-area-inset-top,0px) + 100px);
       min-width:0;max-width:none;width:auto;max-height:64vh}
     .scrim{align-items:flex-end;padding:0}
@@ -1154,7 +1174,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
             <button class="nbtn" data-click="liveNudgeSkip">Answer as-is</button>
           </span>
         </div>
-        <div class="inputrow">
+        <div class="inputrow" id="inputrow">
           <button class="attach" id="attachBtn" data-click="attachTap" title="Attach a file — image, PDF or text (max 10 MB)">+</button>
           <input type="file" id="imgFile" accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,text/plain,text/markdown,text/csv,application/json,.pdf,.md,.markdown,.csv,.txt,.json" style="display:none" data-change="onImagePicked" data-change-pass="event">
           <div class="attachscrim" id="attachMenu" style="display:none" data-click="__backdrop__" data-close="closeAttachMenu">
@@ -1165,7 +1185,15 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
             </div>
           </div>
           <textarea id="input" rows="1" placeholder="Ask anything…" autocorrect="on" autocapitalize="sentences" spellcheck="true" data-input="autogrow" data-input-pass="this" data-keydown="onKey" data-keydown-pass="event"></textarea>
+          <button class="mic" id="micBtn" data-click="voiceTap" title="Speak your question — transcribed on this device, your voice never leaves it" aria-label="Speak your question" style="display:none"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg></button>
           <button class="send" id="send" data-click="sendMsg" disabled>↑</button>
+          <div class="voicebar" id="voiceBar" style="display:none">
+            <button class="vx" data-click="voiceCancelTap" title="Discard" aria-label="Discard the recording">✕</button>
+            <canvas id="voiceWave" class="vwave"></canvas>
+            <span class="vhint" id="voiceHint" style="display:none"></span>
+            <button class="vstop" id="voiceStop" data-click="voiceStopTap" title="Stop and put the words in the box" aria-label="Stop listening">■</button>
+            <button class="send vsend" id="voiceSend" data-click="voiceSendTap" title="Stop and send" aria-label="Stop and send">↑</button>
+          </div>
         </div>
         <div class="foot">
           <div class="l">
@@ -1750,6 +1778,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   async function refreshLocal(){
     if(!isTauri()) return;
     try{
+      voiceProbe();
       const l = await Backend.localState();
       server = l.server || null; account = l.account || null;
       localKnown = true;
@@ -6012,6 +6041,101 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // Pick a model row: select it and close the menu (was an inline two-call handler).
   function pickModel(i){ selectModelIdx(i); toggleMenu(); }
 
+  // ---------- speak instead of type ----------
+  // The microphone feeds the phone's own speech recogniser (voice.rs): the words come
+  // back as text and go into the box, or straight out, exactly as if typed. The audio
+  // never leaves the device and is never stored; where the phone has no on-device model
+  // the button is not shown at all. Polled, not streamed: a dozen reads a second of
+  // {state, text, level} drive the waveform and catch the end.
+  let voice = null;   // { levels, sendAfter, stopping, stopAt }
+  const vSleep = (ms) => new Promise(r => setTimeout(r, ms));
+  async function voiceProbe(){
+    if(!isTauri()) return;
+    try{ const r = await Backend.voiceAvailable(); if(r && r.available) $("micBtn").style.display=""; }
+    catch(_){}
+  }
+  async function voiceTap(){
+    if(busy || voice) return;
+    try{ await Backend.voiceStart(""); }
+    catch(e){ setStatus(String((e && e.message) || e || "could not listen")); return; }
+    voice = { levels: [], sendAfter: false, stopping: false, stopAt: 0 };
+    $("inputrow").classList.add("voice");
+    $("voiceBar").style.display = "flex";
+    $("voiceWave").style.display = ""; $("voiceHint").style.display = "none";
+    $("voiceStop").disabled = false; $("voiceSend").disabled = false;
+    voiceLoop();
+  }
+  async function voiceLoop(){
+    const mine = voice;
+    while(voice === mine){
+      let r;
+      try{ r = await Backend.voicePoll(); }
+      catch(e){ voiceEnd(); setStatus(String((e && e.message) || e || "could not listen")); return; }
+      mine.levels.push(Number(r && r.level) || 0);
+      if(mine.levels.length > 120) mine.levels.shift();
+      if(!mine.stopping) drawWave();
+      const st = r && r.state;
+      if(st === "error"){ voiceEnd(); setStatus((r && r.error) || "could not listen"); return; }
+      if(st === "final"){ voiceFinish((r && r.text) || ""); return; }
+      // A recogniser that never says "final" after the stop: take what it had.
+      if(mine.stopping && Date.now() - mine.stopAt > 8000){
+        const t = (r && r.text) || "";
+        try{ await Backend.voiceCancel(); }catch(_){}
+        voiceFinish(t); return;
+      }
+      await vSleep(80);
+    }
+  }
+  function voiceFinish(text){
+    if(!voice) return;
+    const send = voice.sendAfter;
+    voiceEnd();
+    const el = $("input"), t = String(text || "").trim();
+    if(!t){ setStatus("nothing heard — try again, a little closer to the microphone"); return; }
+    el.value = el.value.trim() ? el.value.replace(/\s+$/, "") + " " + t : t;
+    autogrow(el);
+    if(send) sendMsg(); else el.focus();
+  }
+  async function voiceStopTap(){
+    if(!voice || voice.stopping) return;
+    voice.stopping = true; voice.stopAt = Date.now();
+    $("voiceWave").style.display = "none";
+    const h = $("voiceHint"); h.textContent = "transcribing on this device…"; h.style.display = "";
+    $("voiceStop").disabled = true; $("voiceSend").disabled = true;
+    try{ await Backend.voiceStop(); }
+    catch(e){ voiceEnd(); setStatus(String((e && e.message) || e || "could not listen")); }
+  }
+  function voiceSendTap(){ if(!voice) return; voice.sendAfter = true; voiceStopTap(); }
+  async function voiceCancelTap(){
+    if(!voice) return;
+    voiceEnd();
+    try{ await Backend.voiceCancel(); }catch(_){}
+  }
+  function voiceEnd(){
+    voice = null;
+    $("inputrow").classList.remove("voice");
+    $("voiceBar").style.display = "none";
+  }
+  // The waveform: one bar per level sample, newest at the right, scrolling left. A bar
+  // above the silence floor is in tokumai's violet, the rest are the dotted baseline.
+  function drawWave(){
+    const c = $("voiceWave"); if(!c || !voice) return;
+    const dpr = window.devicePixelRatio || 1, W = c.clientWidth, H = c.clientHeight;
+    if(!W || !H) return;
+    if(c.width !== Math.round(W*dpr) || c.height !== Math.round(H*dpr)){ c.width = Math.round(W*dpr); c.height = Math.round(H*dpr); }
+    const ctx = c.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
+    const cs = getComputedStyle(document.documentElement);
+    const mix = cs.getPropertyValue("--mix").trim() || "#7A5FFF", line = cs.getPropertyValue("--line").trim() || "#332E2A";
+    const bw = 3, gap = 3, n = Math.max(1, Math.floor(W / (bw + gap)));
+    const lv = voice.levels.slice(-n), off = n - lv.length;
+    for(let i = 0; i < n; i++){
+      const v = i >= off ? lv[i - off] : 0;
+      const h = Math.max(3, Math.round(v * (H - 6))), x = i * (bw + gap), y = (H - h) / 2;
+      ctx.fillStyle = v > 0.04 ? mix : line;
+      if(ctx.roundRect){ ctx.beginPath(); ctx.roundRect(x, y, bw, h, 1.5); ctx.fill(); } else ctx.fillRect(x, y, bw, h);
+    }
+  }
+
   // expose for inline handlers
   Object.assign(window,{
     toggleGwRandom, tapVersion, hideDev, openPlans, closePlans, loadPlans, selectPlan, planPeriod,
@@ -6031,7 +6155,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     imgSettled, closeImport, decryptImport, openSettings, closeSettings, navPage, navBack, acctNav, acctBack,
     backFromRestore, confirmGuard, closeGuardModal, guardImgKeep, guardImgRemove, closeGuardImg, giZoom,
     giZoomReset, giToggleFull, giProcess, giBack, giApprove, tutShow, tutNext, tutBack, tutSkip,
-    cancelUpload });
+    cancelUpload, voiceTap, voiceStopTap, voiceSendTap, voiceCancelTap });
 
   // ---- CSP-safe event delegation (H7) ---------------------------------------
   // Inline on*= handlers are being replaced by data-* attributes so a strict CSP

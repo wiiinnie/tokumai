@@ -1,5 +1,6 @@
 package com.tokumai.app
 
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.view.View
 import android.view.WindowManager
@@ -25,5 +26,11 @@ class MainActivity : TauriActivity() {
       v.updatePadding(bottom = ime.bottom)
       insets
     }
+  }
+
+  // The system's microphone prompt (Voice.kt asks for it before the first listen).
+  override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+    super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+    Voice.onPermission(requestCode, grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED)
   }
 }
