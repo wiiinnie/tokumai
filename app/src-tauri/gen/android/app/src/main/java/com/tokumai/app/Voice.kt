@@ -56,8 +56,16 @@ object Voice {
     @JvmStatic
     fun available(activity: Activity): ByteArray {
         val why = onDevice(activity)
-        return if (why == null) json("available" to true, "lang" to Locale.getDefault().toLanguageTag())
-        else json("available" to false, "why" to why)
+        if (why != null) return json("available" to false, "why" to why)
+        // The languages on offer for the "Speak in" setting. Which of them have a model on
+        // this phone only the recogniser knows, at start; a missing one is said then.
+        val tags = linkedSetOf(Locale.getDefault().toLanguageTag(), "de-DE", "en-US", "en-GB", "fr-FR", "es-ES", "it-IT", "pt-BR", "nl-NL", "pl-PL", "tr-TR", "ru-RU", "ja-JP", "ko-KR", "zh-CN")
+        val list = org.json.JSONArray()
+        for (t in tags) {
+            val l = Locale.forLanguageTag(t)
+            list.put(JSONObject().put("tag", t).put("name", l.getDisplayName(Locale.getDefault())))
+        }
+        return json("available" to true, "lang" to Locale.getDefault().toLanguageTag(), "languages" to list)
     }
 
     @JvmStatic

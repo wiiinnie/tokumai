@@ -838,6 +838,7 @@
   .poval.memo{color:#b9a3ff;border-color:#7A5FFF;font-size:15px;letter-spacing:.06em}
   .memowarn{margin-top:10px;font-size:11.5px;line-height:1.4;color:var(--signal);background:color-mix(in srgb,var(--signal) 10%,transparent);border-radius:8px;padding:8px 10px}
   .setrow{display:flex;gap:14px;align-items:center;justify-content:space-between;padding:12px 13px;border:1px solid var(--line);border-radius:12px;margin-bottom:9px;cursor:pointer;background:var(--surface-2)}
+  .setrow select{flex:0 0 auto;max-width:46%;font:600 13px var(--body);color:var(--bone);background:var(--surface);border:1px solid var(--line);border-radius:9px;padding:7px 9px;outline:none}
   .setrow > span{display:flex;flex-direction:column;gap:3px;min-width:0;order:1}
   /* The enclave's front doors: flag, country and key left-aligned, the chosen one marked
      by its border and a tick. The radio stays in the markup (keyboard, screen readers) and
@@ -1392,6 +1393,9 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       <div class="grouplbl" style="margin-top:2px">Tutorial</div>
       <label class="setrow"><input type="checkbox" id="tutChk"><span><b>Show the tutorial on start</b><small>The quick 5-step intro to getting set up. Shows once on first start — tick this to see it again on the next start.</small></span></label>
       <button class="btn" data-click="tutShow" style="margin-top:4px">Replay tutorial now</button>
+
+      <div class="grouplbl" id="voiceGroup" style="display:none">Speaking</div>
+      <label class="setrow" id="voiceRow" style="display:none"><span><b>Speak in</b><small>The language the microphone listens for. Transcribed on this device by its own speech model — your voice never leaves it; only the words are sent, as if typed.</small></span><select id="voiceLang" class="sel"></select></label>
 
       <div class="grouplbl">Typing</div>
       <label class="setrow"><input type="checkbox" id="inpAssist"><span><b>Autocorrect &amp; predictive text</b><small>Keyboard autocorrect, capitalisation and spell-check in the message box (the iOS &amp; Mac default). Turn off for exact, untouched typing. Your recovery phrase and server address always stay off, regardless.</small></span></label>
@@ -6049,14 +6053,27 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   // {state, text, level} drive the waveform and catch the end.
   let voice = null;   // { levels, sendAfter, stopping, stopAt }
   const vSleep = (ms) => new Promise(r => setTimeout(r, ms));
+  function voiceLangPref(){ try{ return localStorage.getItem("scrai.voiceLang") || ""; }catch(_){ return ""; } }
   async function voiceProbe(){
     if(!isTauri()) return;
-    try{ const r = await Backend.voiceAvailable(); if(r && r.available) $("micBtn").style.display=""; }
-    catch(_){}
+    let r;
+    try{ r = await Backend.voiceAvailable(); }
+    catch(e){ console.log("[voice] probe failed:", e); return; }
+    if(!(r && r.available)){ console.log("[voice] not offered:", r && r.why); return; }
+    $("micBtn").style.display = "";
+    // The "Speak in" setting: the phone's language unless chosen otherwise.
+    const sel = $("voiceLang"), langs = Array.isArray(r.languages) ? r.languages : [];
+    if(sel && langs.length){
+      const pref = voiceLangPref();
+      sel.innerHTML = `<option value="">Device language${r.lang ? " ("+esc(String(r.lang))+")" : ""}</option>` +
+        langs.map(l => `<option value="${esc(String(l.tag))}"${String(l.tag)===pref ? " selected" : ""}>${esc(String(l.name||l.tag))}</option>`).join("");
+      sel.onchange = () => { try{ localStorage.setItem("scrai.voiceLang", sel.value); }catch(_){} };
+      $("voiceGroup").style.display = ""; $("voiceRow").style.display = "";
+    }
   }
   async function voiceTap(){
     if(busy || voice) return;
-    try{ await Backend.voiceStart(""); }
+    try{ await Backend.voiceStart(voiceLangPref()); }
     catch(e){ setStatus(String((e && e.message) || e || "could not listen")); return; }
     voice = { levels: [], sendAfter: false, stopping: false, stopAt: 0 };
     $("inputrow").classList.add("voice");
@@ -6075,6 +6092,15 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       if(mine.levels.length > 120) mine.levels.shift();
       if(!mine.stopping) drawWave();
       const st = r && r.state;
+      // iOS 26 fetches its on-device speech model on first use: a download from Apple of
+      // the model, never an upload of the voice. Said while it lasts.
+      if(st === "installing" && !mine.stopping){
+        const pct = Math.round((Number(r.progress) || 0) * 100);
+        $("voiceWave").style.display = "none";
+        const h = $("voiceHint"); h.textContent = `fetching the on-device speech model… ${pct} %`; h.style.display = "";
+      } else if(st === "listening" && !mine.stopping && $("voiceHint").style.display !== "none"){
+        $("voiceHint").style.display = "none"; $("voiceWave").style.display = "";
+      }
       if(st === "error"){ voiceEnd(); setStatus((r && r.error) || "could not listen"); return; }
       if(st === "final"){ voiceFinish((r && r.text) || ""); return; }
       // A recogniser that never says "final" after the stop: take what it had.
