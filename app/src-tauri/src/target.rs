@@ -36,20 +36,13 @@ const RELEASE_ENCLAVE: Option<&str> = Some(concat!(
     "GPscM2poKqpkHdDD3JPGEHiLHufBNRtQyLsvjrMUHQ3o.FhmyxZfn6dHvxASzcR44foa2TjMrCHmm8sQJziAQD3ds@6KZ96sPW6BBcgmghYb7c7BtCXgAEr1nmwnJzzRsszyhe"
 ));
 const RELEASE_MEASUREMENTS: &[&str] = &[
-    // tokumai-book-sandbox — the image under App Review with 1.0 (0.8.0); sandbox receipts
-    "03206a368faaa3464b7141be7b238c668144c5b3c8a34b94477f83fedcb4e9a21fd209c11ebd31fac3686cb431f378d6",
-    // tokumai-book — production, the same code without the sandbox feature
-    "b2e091ec2144140a4e98209c0a3355819e88c8e6ef6850d6250982f1d7a1588039c76bbf8f54c9ccd18acdb014010da3",
-    // tokumai-ops-sandbox — the witness and the operator's console; deployed after the review
-    "5261ea2b021564945de741d75223897b2cf1c7f3ada0650b89d8d9fc7e10f9827bda5439724bd21a371fe321e0a56676",
-    // tokumai-ops — production, the same code without the sandbox feature
-    "25ed1a81fd1e2bf2f8cc94023a7fd3bd4b492f24e357b53decc862ccd6929ae12e565eda56d75c2213ab5bd87c8692c8",
-    // tokumai-own-sandbox — the data key born in the enclave, the doors kept by it, and
-    // the audit's fixes of 2026-10-05/06 (deploy/enclave/measurements/own-sandbox.json);
-    // deployed after the review, on a fresh book
-    "cdbe17eabbb3c0d6a117c885695a964a4e75007d68619824d96d5c898563cfc9e71959ece0e7febeaf44dad41ca28e03",
-    // tokumai-own — production, the same code without the sandbox feature
-    "a0a583e37baf95e486c2961ae44521e781c0a8988cb995e3abb97b76531ae2913b45d680c39683ca54085817b001c0f3",
+    // tokumai-mark-sandbox — the image under App Review with 1.0 (0.8.1): the data key
+    // born in the enclave, the doors kept by it, the audit's fixes, and the witness mark
+    // that S3 accepts (deploy/enclave/measurements/mark-sandbox.json); sandbox receipts
+    "0a301171580f9ae607ef4b09ffb76889eab597ed2af5b858990b3540566486daeeb7f35d51206f8ab6a67eefffcbfeb6",
+    // tokumai-mark — production, the same code without the sandbox feature; deployed at
+    // the same doors once the app is approved
+    "7b4c5c142144fbcbcee73c0a7d3379da93ada7c98514b96e2f4bc9b5f4453836938f745796110b660af79c761add8958",
 ];
 
 fn dev_data() -> PathBuf {
