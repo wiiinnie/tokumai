@@ -1,0 +1,19 @@
+{
+  "tag": "mark-sandbox",
+  "commit": "2607fe0725851be6bda9a76001c58c662b04cc7a",
+  "dirty": false,
+  "built": "2026-10-12T08:38:03Z",
+  "features": "nitro,apple-sandbox",
+  "strip": "symbols",
+  "debuginfo": "0",
+  "platform": "linux/arm64",
+  "base_images": [
+    "rust@sha256:2775a09d208ff0d7c1f50490c45b62db929e87ba1dcbc3f2132ac71a704bcdd3",
+    "gcr.io/distroless/cc-debian12@sha256:e5d81ddde149641e2a9ba55be4545bc125c67de07508b03ba4c22e6eb0ded5aa"
+  ],
+  "nitro_cli": "1.5.0",
+  "nitro_cli_host": "amazonlinux@sha256:74c545e3e04db388b00bd31d7cc5640d4e9c12058a6d72af938d113da3c82893",
+  "pcr0": "0a301171580f9ae607ef4b09ffb76889eab597ed2af5b858990b3540566486daeeb7f35d51206f8ab6a67eefffcbfeb6",
+  "pcr1": "3b4a7e1b5f13c5a1000b3ed32ef8995ee13e9876329f9bc72650b918329ef9cf4e2e4d1e1e37375dab0ba56ba0974d03",
+  "pcr2": "f5ca5e2aed34fcd2da0e98194182d96482d246a6654a360b915e51f31672d810f18523445f96d0f80d6791916b5cd434"
+}
