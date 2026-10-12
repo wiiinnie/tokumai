@@ -133,7 +133,11 @@ async fn call(bucket: &Bucket, creds: &Credentials, method: &str, path: &str, qu
 /// Write the mark. The bucket's default retention locks it; nothing more to say.
 pub async fn record(bucket: &Bucket, creds: &Credentials, mark: Mark, now_ms: u64) -> Result<(), String> {
     let path = format!("/mark/{}-{}", mark.0, mark.1);
-    let (status, text) = call(bucket, creds, "PUT", &path, "", b"", now_ms).await?;
+    // The mark is its own body. An EMPTY body goes out without a Content-Length header
+    // (reqwest 0.12 sends none for an empty PUT), and S3 refuses that with 411 — every
+    // mark of the first deploy with a witness was refused this way (2026-10-12).
+    let body = format!("{}-{}\n", mark.0, mark.1);
+    let (status, text) = call(bucket, creds, "PUT", &path, "", body.as_bytes(), now_ms).await?;
     if status / 100 != 2 {
         return Err(format!("the witness refused the mark ({status}): {}", text.trim().chars().take(200).collect::<String>()));
     }
