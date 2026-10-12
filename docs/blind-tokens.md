@@ -234,6 +234,12 @@ So the policy in the app:
    appears, redeem at a random moment inside the grace after the period boundary. The
    old allowance covers the gap.
 3. A note about to leave its window is redeemed now, jitter or not.
+4. **What the meter says.** The enclave's `periodEnd` for a note-paid plan is the
+   note's month plus the grace — the deadline by which the next note must have come,
+   not the day the plan renews; it cannot know that day, by design. The app shows the
+   renewal instead, counted in months from the purchase date in the App Store's own
+   transaction (`next_reset`, kept as `plan_renews_ms`). App Review rejected 1.0 (0.8.0)
+   on 2026-10-11 for exactly this: bought on the 11th, the meter said "resets Nov 7".
 
 ## Cost of building it
 

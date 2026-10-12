@@ -318,12 +318,33 @@ fn ui_ladder(l: &Value) -> Value {
 }
 
 /// The plan as the sheet reads it (`toku_per_month` is its older name for the allowance).
+/// The App Store plan's next renewal, as last read from the signed transactions
+/// (`plan_renews_ms` in the profile). Kept here so `ui_plan` — called wherever a plan
+/// summary passes to the interface — needs no profile and no await.
+static PLAN_RENEWS_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn remember_renewal(p: &profile::Profile) {
+    PLAN_RENEWS_MS.store(p.plan_renews_ms, std::sync::atomic::Ordering::Relaxed);
+}
+
 fn ui_plan(p: &Value) -> Value {
     if !p.is_object() {
         return Value::Null;
     }
     let mut p = p.clone();
     p["toku_per_month"] = p["tokuPerMonth"].clone();
+    // A plan paid by note: the enclave knows only the MONTH the note bought, never the
+    // day the plan was taken out, so its `periodEnd` is the month's end plus the grace in
+    // which the next note may arrive — a deadline, not the renewal. The interface shows
+    // the renewal, which this device knows from the App Store's own transaction. (App
+    // Review 2026-10-11: "the date purchased does not reflect the reset date" — bought on
+    // the 11th, the meter said "resets Nov 7".)
+    if p["rail"] == "note" && p["active"] == true {
+        let renews = PLAN_RENEWS_MS.load(std::sync::atomic::Ordering::Relaxed);
+        if renews > 0 {
+            p["periodEnd"] = json!(renews);
+        }
+    }
     p
 }
 
@@ -339,6 +360,7 @@ fn account_json(p: &profile::Profile) -> Value {
 #[tauri::command]
 fn local_state(app: AppHandle) -> Result<Value, String> {
     let p = profile::load(&data_dir(&app)?);
+    remember_renewal(&p);
     Ok(json!({ "account": account_json(&p), "server": target::enclave_door().ok() }))
 }
 
@@ -1058,6 +1080,19 @@ fn paid_from_jws(jws: &str) -> Option<Paid> {
     })
 }
 
+/// When this paid period's allowance next resets: the plan's months are counted from the
+/// day it was bought (core `slice_at`), so a monthly plan taken out on the 11th resets on
+/// the 11th, and a yearly one on the 11th of every month. Counted from the purchase date
+/// rather than read from `expiresDate`, which Apple's sandbox sets minutes ahead: the
+/// product says a month, and a month is what the meter shows. None once the period is
+/// over.
+#[cfg(target_os = "ios")]
+fn next_reset(paid: &Paid, now: u64) -> Option<u64> {
+    use tokumai_core::subscription::add_months_ms;
+    let months = if paid.yearly { 12 } else { 1 };
+    (1..=months).map(|k| add_months_ms(paid.start_ms, k)).find(|&t| t > now)
+}
+
 /// The enclave's published key for a month, from the attested session.
 async fn note_key(app: &AppHandle, epoch: u16) -> Result<Vec<u8>, String> {
     ensure_ready(app).await?;
@@ -1195,6 +1230,22 @@ async fn notes_sync(app: &AppHandle) -> Result<Value, String> {
     let period_end = balance["plan"]["periodEnd"].as_u64().unwrap_or(0);
     let mut all = iap_ios::entitlements().await.unwrap_or_default();
     all.extend(iap_ios::unfinished().await.unwrap_or_default());
+    // The next renewal, for the meter: the latest one any live transaction promises.
+    // Nothing promised (no plan, or StoreKit did not answer) leaves the enclave's date.
+    let renews = all
+        .iter()
+        .filter_map(|t| paid_from_jws(t["jws"].as_str().unwrap_or("")))
+        .filter_map(|paid| next_reset(&paid, now))
+        .max()
+        .unwrap_or(0);
+    {
+        let mut p = profile::load(&dir);
+        if p.plan_renews_ms != renews {
+            p.plan_renews_ms = renews;
+            profile::save(&dir, &p)?;
+        }
+        remember_renewal(&p);
+    }
     let mut minted = 0u32;
     let mut trouble: Option<String> = None;
     let mut seen: Vec<String> = Vec::new();

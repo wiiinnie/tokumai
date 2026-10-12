@@ -14,6 +14,11 @@ const FILE: &str = "profile.json";
 pub struct Profile {
     /// The recovery phrase. The account, and so the balance, is derived from it.
     pub mnemonic: Option<String>,
+    /// When the App Store plan next renews — the date the allowance meter shows. Read
+    /// from the signed transactions at every sync (`notes_sync`) and kept here so the
+    /// first screen after launch already shows it. 0: not known, the enclave's date is
+    /// shown instead.
+    pub plan_renews_ms: u64,
     /// The three-word check passed (or the phrase was typed in, which is the same proof).
     pub phrase_verified: bool,
     /// An entry gateway the user picked; `None` = a random allowed one on each connect.
