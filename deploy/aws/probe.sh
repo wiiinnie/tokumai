@@ -146,7 +146,12 @@ for f in glob.glob("dev-data/eif/tokumai-*.pcrs.json"):
     except Exception:
         pass
 for st in policy["Statement"]:
-    for pcr in st.get("Condition", {}).get("StringEqualsIgnoreCase", {}).get("kms:RecipientAttestation:PCR0", []):
+    pcrs = st.get("Condition", {}).get("StringEqualsIgnoreCase", {}).get("kms:RecipientAttestation:PCR0", [])
+    # KMS writes a single value as a string, not a one-element list (2026-10-12: one
+    # allowed image came out as 96 "unknown" characters).
+    if isinstance(pcrs, str):
+        pcrs = [pcrs]
+    for pcr in pcrs:
         tag = known.get(pcr.lower(), "unknown")
         if "sandbox" not in tag:
             print(f"  {tag} ({pcr[:12]}…)")
