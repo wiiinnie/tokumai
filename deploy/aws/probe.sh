@@ -386,7 +386,9 @@ PY
     [ "$(instance_state)" = "running" ] || { echo "the instance is $(instance_state) — 'start' first"; exit 1; }
     remote "test -f /home/ec2-user/tokumai-$TAG.eif" || { echo "no tokumai-$TAG.eif on the host — TAG must name the image that is deployed"; exit 1; }
     remote "sudo systemctl stop tokumai-enclave 2>/dev/null || true; sudo nitro-cli terminate-enclave --all >/dev/null 2>&1 || true; sudo systemctl stop tokumai-egress 2>/dev/null || true; pkill -f '[t]okumai-egress-host' || true; sleep 1" || true
-    scp -i "$KEY" -q dev-data/linux-release/tokumai-egress-host deploy/egress.allow ec2-user@"$(public_ip)":/home/ec2-user/
+    # The sealed secrets too: a re-sealed file (the doors taken out once the enclave keeps
+    # them) reaches the host this way, without touching the image.
+    scp -i "$KEY" -q dev-data/linux-release/tokumai-egress-host deploy/egress.allow dev-data/sealed/sealed.json ec2-user@"$(public_ip)":/home/ec2-user/
     install_units
     remote "set -e
       chmod +x tokumai-egress-host
