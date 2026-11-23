@@ -1445,7 +1445,7 @@ fn palace_status_json(app: &AppHandle) -> Value {
     let syncing = app.state::<AppState>().palace_syncing.load(std::sync::atomic::Ordering::Relaxed);
     json!({
         "state": palace::state(&cfg, keys.is_some(), syncing, &l),
-        "enabled": cfg.enabled, "localOnly": cfg.local_only,
+        "enabled": cfg.enabled, "localOnly": cfg.local_only, "wipePending": cfg.wipe_pending,
         "files": l.manifest.files.iter().filter(|f| !f.deleted).count(),
         "pending": l.dirty.len() + l.gone.len(),
         "dueMs": l.due_ms, "lastSync": l.last_sync_ms, "lastError": l.last_error, "attempts": l.attempts,
@@ -1506,7 +1506,7 @@ async fn palace_burst(app: &AppHandle, upload: bool) -> Result<usize, String> {
     use tokumai_core::palace::MANIFEST_ID;
     let dir = data_dir(app)?;
     let cfg = palace::config(&dir);
-    if cfg.enabled != Some(true) || cfg.local_only {
+    if cfg.enabled != Some(true) || cfg.local_only || cfg.wipe_pending {
         return Ok(0);
     }
     let keys = palace_keys(app)?;
@@ -1674,6 +1674,13 @@ async fn palace_loop(app: AppHandle) {
         if since < palace::SPEND_GAP_MS {
             continue;
         }
+        if cfg.wipe_pending {
+            if let Err(e) = palace_wipe_remote(&app).await {
+                log::warn!("[palace] the enclave's copy is not deleted yet: {e}");
+                tokio::time::sleep(std::time::Duration::from_secs(25)).await;
+            }
+            continue;
+        }
         let (due, pending) = with_palace(&app, |l| (l.due_ms, !l.dirty.is_empty() || !l.gone.is_empty())).unwrap_or((0, false));
         let now = palace::now_ms();
         if first {
@@ -1696,7 +1703,8 @@ fn palace_status(app: AppHandle) -> Value {
 #[tauri::command]
 fn palace_set_config(app: AppHandle, enabled: bool, local_only: bool) -> Result<Value, String> {
     let dir = data_dir(&app)?;
-    palace::set_config(&dir, &palace::Config { enabled: Some(enabled), local_only })?;
+    let wipe_pending = palace::config(&dir).wipe_pending;
+    palace::set_config(&dir, &palace::Config { enabled: Some(enabled), local_only, wipe_pending })?;
     palace_emit(&app, json!({}));
     Ok(palace_status_json(&app))
 }
@@ -1735,16 +1743,13 @@ async fn palace_sync(app: AppHandle, upload: Option<bool>) -> Result<Value, Stri
 #[tauri::command]
 async fn palace_wipe(app: AppHandle) -> Result<Value, String> {
     let dir = data_dir(&app)?;
-    let cfg = palace::config(&dir);
+    // This device's copy goes at once; the enclave's is marked to go, and the loop sends
+    // the request until it is answered — over the mixnet, possibly waiting out the gap
+    // after a payment note, so not something to hold the screen for.
+    let mut cfg = palace::config(&dir);
     if cfg.enabled == Some(true) && !cfg.local_only {
-        let keys = palace_keys(&app)?;
-        let st = app.state::<AppState>();
-        let mut net = st.palace_net.lock().await;
-        let mut conn = palace_connection(&app)?;
-        let (op, body) = palace::body(&keys, "wipe", "", &[], 0, b"");
-        let r = palace_request(&mut conn, &op, &body).await;
-        *net = None;
-        r.map_err(|(e, _)| e)?;
+        cfg.wipe_pending = true;
+        palace::set_config(&dir, &cfg)?;
     }
     {
         let st = app.state::<AppState>();
@@ -1752,7 +1757,37 @@ async fn palace_wipe(app: AppHandle) -> Result<Value, String> {
         palace::forget(&dir);
     }
     palace_emit(&app, json!({}));
+    if cfg.wipe_pending {
+        let h = app.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = palace_wipe_remote(&h).await {
+                log::warn!("[palace] the enclave's copy is not deleted yet, tried again shortly: {e}");
+            }
+        });
+    }
     Ok(palace_status_json(&app))
+}
+
+/// The enclave's copy of the palace, deleted; the mark cleared once it is.
+async fn palace_wipe_remote(app: &AppHandle) -> Result<(), String> {
+    let dir = data_dir(app)?;
+    let keys = palace_keys(app)?;
+    let st = app.state::<AppState>();
+    let mut net = st.palace_net.lock().await;
+    if !palace::config(&dir).wipe_pending {
+        return Ok(()); // done meanwhile
+    }
+    let mut conn = palace_connection(app)?;
+    let (op, body) = palace::body(&keys, "wipe", "", &[], 0, b"");
+    let r = palace_request(&mut conn, &op, &body).await;
+    *net = None;
+    r.map_err(|(e, _)| e)?;
+    let mut cfg = palace::config(&dir);
+    cfg.wipe_pending = false;
+    palace::set_config(&dir, &cfg)?;
+    log::info!("[palace] the enclave's copy is deleted");
+    palace_emit(app, json!({}));
+    Ok(())
 }
 
 /// Everything in plain JSON, for the person to keep (the interface warns first).

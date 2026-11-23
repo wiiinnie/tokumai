@@ -92,7 +92,7 @@ const STRINGS = {
     "palace.screen.imported": "Imported {n} facts",
     "palace.screen.wipe": "Delete entire Memory Palace",
     "palace.screen.wipe_warn": "This deletes the server copy and the copy on this device. It cannot be undone. Other devices keep their copy until they delete it too.",
-    "palace.screen.wipe_done": "Memory Palace deleted",
+    "palace.screen.wipe_done": "Memory Palace deleted on this device. The server copy follows in the background.",
     "palace.screen.confirm": "Yes, continue",
     "palace.screen.cancel": "Cancel",
     // opt-in (§9a)
@@ -200,7 +200,7 @@ const STRINGS = {
     "palace.screen.imported": "{n} Fakten importiert",
     "palace.screen.wipe": "Gesamten Gedächtnispalast löschen",
     "palace.screen.wipe_warn": "Löscht die Kopie auf dem Server und die auf diesem Gerät. Das lässt sich nicht rückgängig machen. Andere Geräte behalten ihre Kopie, bis sie sie auch löschen.",
-    "palace.screen.wipe_done": "Gedächtnispalast gelöscht",
+    "palace.screen.wipe_done": "Gedächtnispalast auf diesem Gerät gelöscht. Die Server-Kopie folgt im Hintergrund.",
     "palace.screen.confirm": "Ja, weiter",
     "palace.screen.cancel": "Abbrechen",
     "palace.optin.title": "Gedächtnispalast einschalten?",

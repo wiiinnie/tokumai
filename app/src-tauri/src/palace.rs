@@ -54,6 +54,11 @@ pub struct Config {
     pub enabled: Option<bool>,
     #[serde(default, rename = "localOnly")]
     pub local_only: bool,
+    /// "Delete entire Memory Palace" was chosen and the enclave's copy is not gone yet:
+    /// tried again until it is, and nothing is synced meanwhile — or the old palace would
+    /// come back from the server. Kept here so it survives a restart.
+    #[serde(default, rename = "wipePending")]
+    pub wipe_pending: bool,
 }
 
 pub fn config(dir: &Path) -> Config {
@@ -511,7 +516,7 @@ mod tests {
 
     #[test]
     fn the_indicator_says_what_is_true() {
-        let on = Config { enabled: Some(true), local_only: false };
+        let on = Config { enabled: Some(true), local_only: false, wipe_pending: false };
         let mut l = Local::default();
         assert_eq!(state(&on, false, false, &l), "locked");
         assert_eq!(state(&Config::default(), true, false, &l), "off");

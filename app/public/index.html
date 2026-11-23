@@ -6725,7 +6725,8 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   function palaceWipeTap(){
     palConfirm(t("palace.screen.wipe"), t("palace.screen.wipe_warn"), async ()=>{
       try{ palStatus = await Backend.palaceWipe(); palData = { files:[], placeholders:[] }; renderPalInd(); palToast(t("palace.screen.wipe_done")); }
-      catch(e){ setStatus("memory: "+((e&&e.message)||e)); }
+      // Said where the person is looking: the status line is behind the palace sheet.
+      catch(e){ palToast(String((e&&e.message)||e)); }
       renderPalace();
     });
   }
