@@ -790,12 +790,27 @@ async fn iap_buy(app: AppHandle, product_id: String) -> Result<Value, String> {
     // takes, so a crash between paying and minting costs nobody anything: Apple keeps
     // offering the transaction until it is finished, and the sync finishes it once minted.
     let r = notes_sync(&app).await?;
-    if let Some(t) = r["trouble"].as_str() {
-        if r["sent"].as_u64().unwrap_or(0) == 0 {
-            return Err(t.trim_start_matches("final: ").to_string());
-        }
+    // Judged by THIS purchase's own payment, not by whatever else Apple still holds: an
+    // old, long-expired sandbox transaction refused on the way must not turn a good
+    // purchase into "this subscription has ended", nor hide that this one bought nothing.
+    let rail = paid_from_jws(&jws).map(|p| p.rail);
+    let mine: Vec<&Value> = r["outcomes"].as_array().map(|o| o.iter().filter(|x| rail.as_deref().is_some_and(|rl| x["rail"] == rl)).collect()).unwrap_or_default();
+    let active = r["plan"]["active"] == true || call(&app, "balance", json!({})).await.map(|b| b["plan"]["active"] == true).unwrap_or(false);
+    if active || mine.iter().any(|x| x["result"] == "minted") {
+        return Ok(json!({ "status": "ok", "plan": r["plan"] }));
     }
-    Ok(json!({ "status": "ok", "plan": r["plan"] }))
+    // The month of this payment went to another phrase: the note was made before (on this
+    // device, for the account that was here then) or the enclave has one for it already.
+    let elsewhere = mine.iter().any(|x| {
+        x["result"] == "done" || x["error"].as_str().is_some_and(|e| e.contains("already minted") || e.contains("already pays a plan"))
+    });
+    if elsewhere {
+        return Err("This subscription has already paid for this month on another account. From next month on, it pays for this one.".into());
+    }
+    if let Some(e) = mine.iter().find_map(|x| x["error"].as_str()) {
+        return Err(e.trim_start_matches("final: ").to_string());
+    }
+    Err("Apple took the payment, but no month has been credited yet. It is tried again the next time the app starts.".into())
 }
 
 /// Every transaction Apple still holds for this Apple ID, handed to the enclave.
@@ -1276,6 +1291,8 @@ async fn notes_sync(app: &AppHandle) -> Result<Value, String> {
     let mut minted = 0u32;
     let mut trouble: Option<String> = None;
     let mut seen: Vec<String> = Vec::new();
+    // What became of each payment and month, for `iap_buy` and the log.
+    let mut outcomes: Vec<Value> = Vec::new();
     for t in all {
         let jws = t["jws"].as_str().unwrap_or("").to_string();
         let tx = t["transactionId"].as_str().unwrap_or("").to_string();
@@ -1286,7 +1303,12 @@ async fn notes_sync(app: &AppHandle) -> Result<Value, String> {
             }
             let key = format!("{}:{}", paid.rail, epoch);
             let p = profile::load(&dir);
-            if seen.contains(&key) || p.notes_done.contains(&key) || p.notes.iter().any(|n| n.rail == paid.rail && n.epoch == epoch) {
+            if seen.contains(&key) {
+                continue;
+            }
+            if p.notes_done.contains(&key) || p.notes.iter().any(|n| n.rail == paid.rail && n.epoch == epoch) {
+                log::info!("[notes] {key}: already made on this device");
+                outcomes.push(json!({ "rail": paid.rail, "epoch": epoch, "result": "done" }));
                 continue;
             }
             seen.push(key.clone());
@@ -1300,6 +1322,8 @@ async fn notes_sync(app: &AppHandle) -> Result<Value, String> {
             };
             match mint_note(app, &paid, epoch, redeem_after).await {
                 Ok(note) => {
+                    log::info!("[notes] {key}: minted");
+                    outcomes.push(json!({ "rail": paid.rail, "epoch": epoch, "result": "minted" }));
                     let mut p = profile::load(&dir);
                     p.notes.push(note);
                     profile::save(&dir, &p)?;
@@ -1309,6 +1333,8 @@ async fn notes_sync(app: &AppHandle) -> Result<Value, String> {
                     }
                 }
                 Err(e) => {
+                    log::warn!("[notes] {key}: {e}");
+                    outcomes.push(json!({ "rail": paid.rail, "epoch": epoch, "result": "error", "error": e }));
                     if e.starts_with("final: ") {
                         // Never mintable: say so once in the done list, and acknowledge
                         // the transaction so Apple stops offering it.
@@ -1330,7 +1356,7 @@ async fn notes_sync(app: &AppHandle) -> Result<Value, String> {
             plan = call(app, "balance", json!({})).await.map(|b| ui_plan(&b["plan"])).unwrap_or(Value::Null);
         }
     }
-    Ok(json!({ "sent": minted, "plan": plan, "trouble": trouble }))
+    Ok(json!({ "sent": minted, "plan": plan, "trouble": trouble, "outcomes": outcomes }))
 }
 
 // ---- the Memory Palace ----------------------------------------------------------------

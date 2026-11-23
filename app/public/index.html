@@ -1160,7 +1160,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       <div class="meta"><span class="d"></span> <span id="acctLine">no account</span></div>
       <button class="refill" id="buyBtn" data-click="openBuy">+ Get credit</button>
       <button class="refill" id="acctBtn" data-click="openAccount" style="margin-top:6px">Account &amp; recovery</button>
-      <button class="refill" id="palBtn" data-click="openPalace" style="margin-top:6px">🏛 <span id="palBtnText">Memory Palace</span></button>
+      <button class="refill" id="palBtn" data-click="openPalace" style="margin-top:6px"><span id="palBtnText">Memory Palace</span></button>
       <button class="refill" id="setBtn" data-click="openSettings" style="margin-top:6px">Settings</button>
     </div>
   </aside>
@@ -1260,7 +1260,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
 <!-- The Memory Palace (§9): files, lines, settings, sync. Built by renderPalace(). -->
 <div class="scrim" id="palScrim" data-click="__backdrop__" data-close="closePalace">
   <div class="modal">
-    <div class="mh"><span class="ttl">🏛 <b id="palTitle">Memory Palace</b></span><span class="x" data-click="closePalace">✕</span></div>
+    <div class="mh"><span class="ttl"><b id="palTitle">Memory Palace</b></span><span class="x" data-click="closePalace">✕</span></div>
     <div class="mb" id="palBody"></div>
   </div>
 </div>
@@ -1268,7 +1268,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
 <!-- "Memory updated · View" and "Ask before saving" (§6.4): the changes, grouped by file. -->
 <div class="scrim" id="palDiffScrim" data-click="__backdrop__" data-close="closePalDiff">
   <div class="modal">
-    <div class="mh"><span class="ttl">🏛 <b id="palDiffTitle"></b></span><span class="x" data-click="closePalDiff">✕</span></div>
+    <div class="mh"><span class="ttl"><b id="palDiffTitle"></b></span><span class="x" data-click="closePalDiff">✕</span></div>
     <div class="mb" id="palDiffBody"></div>
     <div class="mf" id="palDiffFoot"></div>
   </div>
@@ -1277,7 +1277,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
 <!-- Opt-in at first start (§9a): what it is, and the trade-off. -->
 <div class="scrim" id="palOptScrim">
   <div class="modal">
-    <div class="mh"><span class="ttl">🏛 <b id="palOptTitle"></b></span></div>
+    <div class="mh"><span class="ttl"><b id="palOptTitle"></b></span></div>
     <div class="mb" id="palOptBody"></div>
     <div class="mf">
       <button class="btn" data-click="palaceOptIn" data-args="&quot;no&quot;" id="palOptNo"></button>
@@ -2305,11 +2305,11 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     el.innerHTML = sessions.map(s=>`
       <div class="swipe">
         <button class="swipeact swipedel" data-click="deleteSession" data-id="${escAttr(s.id)}" data-click-pass="id">Delete</button>
-        <button class="swipeact swipeexp" data-click="rememberSession" data-id="${escAttr(s.id)}" data-click-pass="id">🏛 ${esc(t("palace.name"))}</button>
+        <button class="swipeact swipeexp" data-click="rememberSession" data-id="${escAttr(s.id)}" data-click-pass="id">${esc(t("palace.name"))}</button>
         <div class="session ${current&&s.id===current.id?'active':''}" data-click="openSession" data-id="${escAttr(s.id)}" data-click-pass="id">
           <span class="t">${esc(s.title)}</span>
           <span class="m"><span class="lock">◆</span> ${s.count} msgs</span>
-          <span class="exp" title="${escAttr(t("palace.menu.save"))}" data-click="rememberSession" data-id="${escAttr(s.id)}" data-click-pass="id" data-stop="1">🏛</span>
+          <span class="exp" title="${escAttr(t("palace.menu.save"))}" data-click="rememberSession" data-id="${escAttr(s.id)}" data-click-pass="id" data-stop="1"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M3 10l9-6 9 6"/><path d="M5 10v8M9.5 10v8M14.5 10v8M19 10v8"/><path d="M3 20h18"/></svg></span>
           <span class="del" title="Delete" data-click="deleteSession" data-id="${escAttr(s.id)}" data-click-pass="id" data-stop="1">✕</span>
         </div>
       </div>`).join("");
@@ -2638,9 +2638,9 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       ? mdHtml(shown, (m.streaming&&m.text)?cursor:'') + ((m.streaming&&!m.text)?mixphase:'')
       : linkify(esc(shown)) + (m.streaming?(m.text?cursor:mixphase):'');
     const memUsed = (m.role==='ai' && Array.isArray(m.memUsed) && m.memUsed.length)
-      ? `<details class="memused"><summary>🏛 ${esc(t("palace.used"))}</summary>${m.memUsed.map(x=>esc(x)).join(" · ")}</details>` : '';
+      ? `<details class="memused"><summary>${esc(t("palace.used"))}</summary>${m.memUsed.map(x=>esc(x)).join(" · ")}</details>` : '';
     const memCost = (m.role==='ai' && typeof m.memToku==="number" && m.memToku>0)
-      ? `<div class="sizenote">🏛 ${esc(t("palace.diff.cost"))} · ${esc(formatToku(m.memToku))} TOKU</div>` : '';
+      ? `<div class="sizenote">${esc(t("palace.diff.cost"))} · ${esc(formatToku(m.memToku))} TOKU</div>` : '';
     return text + memUsed + memCost
       + (m.att?attHtml(m.att,m.uploading):(m.uploading?uploadHtml(m.uploading):''))
       + (m.images&&m.images.length?imagesHtml(m.images,mi):'')
@@ -6309,7 +6309,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     const el = $("palLine"); if(!el) return;
     clearTimeout(palLineTimer);
     if(!text || (messages && messages.length && !action)){ el.style.display = "none"; return; }
-    el.innerHTML = `<span>🏛 ${esc(text)}</span>` + (action ? ` <span class="pl-act" data-click="${escAttr(action)}">${esc(actionLabel||t("palace.sync.view"))}</span>` : "");
+    el.innerHTML = `<span>${esc(text)}</span>` + (action ? ` <span class="pl-act" data-click="${escAttr(action)}">${esc(actionLabel||t("palace.sync.view"))}</span>` : "");
     el.style.display = "";
     if(hideAfter) palLineTimer = setTimeout(()=>{ el.style.display = "none"; }, hideAfter);
   }
@@ -6319,7 +6319,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   function palToast(text, actions = []){
     const el = $("palToast"); if(!el) return;
     clearTimeout(toastTimer);
-    el.innerHTML = `<span>🏛 ${esc(text)}</span>` + actions.map(a=>`<button class="ta" data-click="${escAttr(a.fn)}">${esc(a.label)}</button>`).join("");
+    el.innerHTML = `<span>${esc(text)}</span>` + actions.map(a=>`<button class="ta" data-click="${escAttr(a.fn)}">${esc(a.label)}</button>`).join("");
     el.classList.add("show");
     toastTimer = setTimeout(()=>el.classList.remove("show"), 10_000);
   }
@@ -6443,7 +6443,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     palExtracting = true;
     if(manual) palToast(t("palace.menu.saving"));
     showPalLine(t("palace.status.palace_update"), { action: null });
-    const el = $("palLine"); if(el && messages.length){ el.innerHTML = `<span>🏛 ${esc(t("palace.status.palace_update"))}</span>`; el.style.display=""; }
+    const el = $("palLine"); if(el && messages.length){ el.innerHTML = `<span>${esc(t("palace.status.palace_update"))}</span>`; el.style.display=""; }
     try{
       await palaceRefresh();
       const anon = palAnonymizer(sess);

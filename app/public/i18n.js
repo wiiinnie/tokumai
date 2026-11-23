@@ -229,12 +229,10 @@ const STRINGS = {
 };
 
 export function lang() {
-  try {
-    const l = (typeof navigator !== "undefined" && (navigator.language || "")) || "";
-    return /^de\b/i.test(l) ? "de" : "en";
-  } catch (_) {
-    return "en";
-  }
+  // English everywhere for now: the rest of the app is English, and a phone set to German
+  // must not get these screens alone in German. The German table stays for when the whole
+  // app is translated.
+  return "en";
 }
 
 /** The string for `key` in the device's language, `{name}` filled from `vars`. */
