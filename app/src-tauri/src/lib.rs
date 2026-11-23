@@ -17,6 +17,7 @@ mod ios_native;
 mod keystore;
 mod ocr;
 mod owner;
+mod palace;
 mod profile;
 mod target;
 mod vault;
@@ -79,6 +80,12 @@ struct AppState {
     /// The three-word check in flight: the positions Rust drew, and the wrong answers of
     /// late (`phrase_check_verify`).
     phrase_check: std::sync::Mutex<PhraseCheck>,
+    /// The Memory Palace's own mixnet client, for one burst of requests and dropped after
+    /// it: never the account's (`palace`).
+    palace_net: Mutex<Option<Connection>>,
+    /// One change of the palace file at a time (load → change → save).
+    palace_local: std::sync::Mutex<()>,
+    palace_syncing: std::sync::atomic::AtomicBool,
 }
 
 #[derive(Default)]
@@ -103,6 +110,9 @@ impl Default for AppState {
             models: Mutex::new(None),
             ladder: Mutex::new(None),
             phrase_check: std::sync::Mutex::new(PhraseCheck::default()),
+            palace_net: Mutex::new(None),
+            palace_local: std::sync::Mutex::new(()),
+            palace_syncing: std::sync::atomic::AtomicBool::new(false),
         }
     }
 }
@@ -221,6 +231,11 @@ async fn call_as_how(app: &AppHandle, account: &Account, op: &str, body: Value, 
         })?);
     }
     let conn = guard.as_mut().ok_or("no connection")?;
+    // A blind note minted or spent: the Memory Palace keeps its requests away from this
+    // moment, so the two never go out in one burst (`palace::SPEND_GAP_MS`).
+    if op.starts_with("note.") {
+        palace::LAST_SPEND_MS.store(palace::now_ms(), std::sync::atomic::Ordering::Relaxed);
+    }
     let called = if aside { conn.call_aside(account, op, &body).await } else { conn.call(account, op, &body).await };
     let answer = match called {
         Ok(a) => {
@@ -443,6 +458,8 @@ async fn account_new(app: AppHandle, force: Option<bool>) -> Result<Value, Strin
     p.pending_plan_session = None;
     profile::save(&dir, &p)?;
     forget_account_caches(&app).await;
+    // A new phrase, a new palace: the old one's cache would not open under it anyway.
+    palace::forget(&dir);
     Ok(json!({ "mnemonic": a.mnemonic, "fingerprint": fingerprint(&a.account_id) }))
 }
 
@@ -471,6 +488,9 @@ async fn account_delete(app: AppHandle) -> Result<Value, String> {
     p.pending_plan_session = None;
     profile::save(&dir, &p)?;
     forget_account_caches(&app).await;
+    // The palace's copy here goes with the phrase; the phrase brings it back from the
+    // other devices' uploads.
+    palace::forget(&dir);
     Ok(json!({ "ok": true }))
 }
 
@@ -609,11 +629,17 @@ async fn chat(
     thinking_budget: Option<u64>,
     image_size: Option<String>,
     lossless: Option<bool>,
+    memory: Option<Value>,
 ) -> Result<Value, String> {
-    let body = json!({
+    let mut body = json!({
         "model": model, "messages": messages, "maxTokens": max_tokens, "live": live.unwrap_or(false),
         "thinkingBudget": thinking_budget, "imageSize": image_size, "lossless": lossless.unwrap_or(false),
     });
+    // The Memory Palace's index (titles and descriptions, anonymised by the interface):
+    // the model may then ask for a file with `read_memory` (the answer's `toolCalls`).
+    if let Some(m) = memory.filter(|m| m["index"].as_array().is_some_and(|a| !a.is_empty())) {
+        body["memory"] = m;
+    }
     let _ = app.emit("chat-sent", ());
     let st = app.state::<AppState>();
     let mut answer = tokio::select! {
@@ -1307,6 +1333,396 @@ async fn notes_sync(app: &AppHandle) -> Result<Value, String> {
     Ok(json!({ "sent": minted, "plan": plan, "trouble": trouble }))
 }
 
+// ---- the Memory Palace ----------------------------------------------------------------
+//
+// The copy here, the queue and the sync live in `palace`; this is the part that needs the
+// app: the phrase, the mixnet, the interface's events, the background loop.
+
+/// The palace's keys for the phrase on this device. Derived once per phrase (the BIP39
+/// seed is 2048 rounds of PBKDF2) and kept in memory only, under a hash of the phrase so
+/// another account's phrase never gets them.
+fn palace_keys(app: &AppHandle) -> Result<std::sync::Arc<tokumai_core::palace::PalaceKeys>, String> {
+    static KEPT: std::sync::Mutex<Option<([u8; 32], std::sync::Arc<tokumai_core::palace::PalaceKeys>)>> = std::sync::Mutex::new(None);
+    let p = profile::load(&data_dir(app)?);
+    let phrase = p.mnemonic.as_deref().ok_or("no account on this device yet")?;
+    let tag = tokumai_core::account::sha256(&[b"tokumai/palace/keys-cache", phrase.as_bytes()]);
+    let mut kept = KEPT.lock().map_err(|_| "the palace keys are in an unknown state")?;
+    if let Some((t, k)) = kept.as_ref() {
+        if *t == tag {
+            return Ok(k.clone());
+        }
+    }
+    let k = std::sync::Arc::new(tokumai_core::palace::PalaceKeys::from_mnemonic(phrase)?);
+    *kept = Some((tag, k.clone()));
+    Ok(k)
+}
+
+/// Load, change, save — one at a time.
+fn with_palace<T>(app: &AppHandle, f: impl FnOnce(&mut palace::Local) -> T) -> Result<T, String> {
+    let keys = palace_keys(app)?;
+    let dir = data_dir(app)?;
+    let st = app.state::<AppState>();
+    let _one = st.palace_local.lock().map_err(|_| "the palace is in an unknown state")?;
+    let mut l = palace::load(&dir, &keys);
+    let out = f(&mut l);
+    palace::save(&dir, &keys, &l)?;
+    Ok(out)
+}
+
+fn palace_status_json(app: &AppHandle) -> Value {
+    let Ok(dir) = data_dir(app) else { return json!({ "state": "locked" }) };
+    let cfg = palace::config(&dir);
+    let keys = palace_keys(app).ok();
+    let l = keys.as_ref().map(|k| palace::load(&dir, k)).unwrap_or_default();
+    let syncing = app.state::<AppState>().palace_syncing.load(std::sync::atomic::Ordering::Relaxed);
+    json!({
+        "state": palace::state(&cfg, keys.is_some(), syncing, &l),
+        "enabled": cfg.enabled, "localOnly": cfg.local_only,
+        "files": l.manifest.files.iter().filter(|f| !f.deleted).count(),
+        "pending": l.dirty.len() + l.gone.len(),
+        "dueMs": l.due_ms, "lastSync": l.last_sync_ms, "lastError": l.last_error, "attempts": l.attempts,
+    })
+}
+
+fn palace_emit(app: &AppHandle, extra: Value) {
+    let mut s = palace_status_json(app);
+    if let (Some(o), Some(e)) = (s.as_object_mut(), extra.as_object()) {
+        for (k, v) in e {
+            o.insert(k.clone(), v.clone());
+        }
+    }
+    let _ = app.emit("palace-status", s);
+}
+
+/// A connection of the palace's own: no steps for the interface, no progress — it is not
+/// the route the person is on, and the account's client never carries its requests.
+fn palace_connection(app: &AppHandle) -> Result<Connection, String> {
+    let p = profile::load(&data_dir(app)?);
+    let address = target::enclave_address()?;
+    let mut inner = MixConnector::new(&address, entry_choice(&p));
+    inner.choose(p.enclave_door.clone());
+    inner.traffic = p.traffic.map(|(cover_ms, mix_ms, send_ms, continuous)| tokumai_client::mix::Traffic { cover_ms, mix_ms, send_ms, continuous });
+    Ok(Connection::new(Box::new(inner), target::policy()?))
+}
+
+/// Errors that say the request never got an answer (the route), as opposed to the
+/// enclave refusing it.
+fn is_route_error(e: &str) -> bool {
+    let e = e.to_lowercase();
+    ["mixnet", "no reply", "not answering", "no answer", "timed out", "timeout", "gateway", "connect", "stream ended", "not connected", "directory"].iter().any(|w| e.contains(w))
+}
+
+/// One palace request over the palace's connection, in a throwaway envelope.
+async fn palace_request(conn: &mut Connection, op: &str, body: &Value) -> Result<Value, (String, bool)> {
+    // Never within the gap of a note being minted or spent; a burst that runs into one
+    // stops here and is tried again later.
+    let since = palace::now_ms().saturating_sub(palace::LAST_SPEND_MS.load(std::sync::atomic::Ordering::Relaxed));
+    if since < palace::SPEND_GAP_MS {
+        return Err(("waiting: a payment note was just used".into(), true));
+    }
+    let throwaway = account::create_account();
+    match conn.call(&throwaway, op, body).await {
+        Ok(a) if a["kind"] == "error" => Err((a["error"].as_str().unwrap_or("the enclave refused").to_string(), false)),
+        Ok(a) => Ok(a),
+        Err(e) => {
+            let route = is_route_error(&e);
+            Err((e, route))
+        }
+    }
+}
+
+/// One burst: list, fetch what changed, merge; then, if asked, upload the queue. Returns
+/// how many facts arrived from other devices.
+async fn palace_burst(app: &AppHandle, upload: bool) -> Result<usize, String> {
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+    use tokumai_core::palace::MANIFEST_ID;
+    let dir = data_dir(app)?;
+    let cfg = palace::config(&dir);
+    if cfg.enabled != Some(true) || cfg.local_only {
+        return Ok(0);
+    }
+    let keys = palace_keys(app)?;
+    let st = app.state::<AppState>();
+    let mut net = st.palace_net.lock().await;
+    st.palace_syncing.store(true, std::sync::atomic::Ordering::Relaxed);
+    palace_emit(app, json!({ "phase": "start" }));
+    let result: Result<usize, (String, bool)> = async {
+        if net.is_none() {
+            *net = Some(palace_connection(app).map_err(|e| (e, true))?);
+        }
+        let conn = net.as_mut().ok_or(("no connection".to_string(), true))?;
+        // 1. What the enclave has.
+        let (op, body) = palace::body(&keys, "list", "", &[], 0, b"");
+        let list = palace_request(conn, &op, &body).await?;
+        let remote: std::collections::BTreeMap<String, u64> = list["blobs"].as_array().map(|a| a.iter().filter_map(|b| Some((b["blobId"].as_str()?.to_string(), b["version"].as_u64()?))).collect()).unwrap_or_default();
+        let mut changes = 0usize;
+        // 2. The index first (it names the files), then every file that changed.
+        for round in 0..2 {
+            let (want, ids): (Vec<String>, std::collections::BTreeMap<String, String>) = with_palace(app, |l| {
+                let ids: std::collections::BTreeMap<String, String> = palace::known_ids(l).into_iter().map(|id| (keys.blob_id(&id), id)).collect();
+                let want = ids
+                    .iter()
+                    .filter(|(_, id)| if round == 0 { id.as_str() == MANIFEST_ID } else { id.as_str() != MANIFEST_ID })
+                    .filter(|(blob, id)| remote.get(*blob).copied().unwrap_or(0) > l.remote.get(*id).copied().unwrap_or(0))
+                    .map(|(blob, _)| blob.clone())
+                    .collect();
+                // Blobs the enclave no longer has (wiped elsewhere): start from nothing there.
+                for (blob, id) in &ids {
+                    if !remote.contains_key(blob) {
+                        l.remote.remove(id);
+                    }
+                }
+                (want, ids)
+            })
+            .map_err(|e| (e, false))?;
+            for chunk in want.chunks(64) {
+                let (op, body) = palace::body(&keys, "get", "", chunk, 0, b"");
+                let got = palace_request(conn, &op, &body).await?;
+                let blobs = got["blobs"].as_array().cloned().unwrap_or_default();
+                changes += with_palace(app, |l| {
+                    let mut n = 0;
+                    for b in &blobs {
+                        let (Some(blob), Some(v), Some(ct)) = (b["blobId"].as_str(), b["version"].as_u64(), b["ct"].as_str()) else { continue };
+                        let Some(id) = ids.get(blob) else { continue };
+                        let Ok(plain) = B64.decode(ct).map_err(|e| e.to_string()).and_then(|c| keys.open(blob, v, &c)) else { continue };
+                        if let Ok(k) = palace::merge_remote(l, id, &plain) {
+                            n += k;
+                            l.remote.insert(id.clone(), v);
+                        }
+                    }
+                    n
+                })
+                .map_err(|e| (e, false))?;
+            }
+        }
+        if !upload {
+            return Ok(changes);
+        }
+        // 3. The queue: files first, the index last, so the index never names a file the
+        // enclave does not have yet. A stale version is fetched, merged, and written again.
+        let queue: Vec<(String, u64)> = with_palace(app, |l| {
+            let mut q: Vec<(String, u64)> = l.dirty.iter().filter(|(id, _)| id.as_str() != MANIFEST_ID).map(|(k, v)| (k.clone(), *v)).collect();
+            if let Some(r) = l.dirty.get(MANIFEST_ID) {
+                q.push((MANIFEST_ID.to_string(), *r));
+            }
+            q
+        })
+        .map_err(|e| (e, false))?;
+        for (id, _) in queue {
+            let blob = keys.blob_id(&id);
+            for _try in 0..3 {
+                let (rev, expected, ct) = with_palace(app, |l| {
+                    let expected = l.remote.get(&id).copied().unwrap_or(0);
+                    (l.dirty.get(&id).copied(), expected, keys.seal(&blob, expected + 1, &palace::plaintext(l, &id)))
+                })
+                .map_err(|e| (e, false))?;
+                let Some(rev) = rev else { break };
+                let (op, body) = palace::body(&keys, "put", &blob, &[], expected, &ct);
+                let a = palace_request(conn, &op, &body).await?;
+                if a["kind"] == "palace.conflict" {
+                    let (op, body) = palace::body(&keys, "get", "", std::slice::from_ref(&blob), 0, b"");
+                    let got = palace_request(conn, &op, &body).await?;
+                    with_palace(app, |l| {
+                        if let Some(b) = got["blobs"].as_array().and_then(|a| a.first()) {
+                            if let (Some(v), Some(ct)) = (b["version"].as_u64(), b["ct"].as_str()) {
+                                if let Ok(plain) = B64.decode(ct).map_err(|e| e.to_string()).and_then(|c| keys.open(&blob, v, &c)) {
+                                    let _ = palace::merge_remote(l, &id, &plain);
+                                }
+                                l.remote.insert(id.clone(), v);
+                            }
+                        }
+                    })
+                    .map_err(|e| (e, false))?;
+                    continue;
+                }
+                let v = a["version"].as_u64().unwrap_or(expected + 1);
+                with_palace(app, |l| {
+                    l.remote.insert(id.clone(), v);
+                    if l.dirty.get(&id) == Some(&rev) {
+                        l.dirty.remove(&id);
+                    }
+                })
+                .map_err(|e| (e, false))?;
+                break;
+            }
+        }
+        let gone: Vec<String> = with_palace(app, |l| l.gone.iter().cloned().collect()).map_err(|e| (e, false))?;
+        for id in gone {
+            let blob = keys.blob_id(&id);
+            let mut expected = with_palace(app, |l| l.remote.get(&id).copied().unwrap_or(0)).map_err(|e| (e, false))?;
+            for _try in 0..3 {
+                let (op, body) = palace::body(&keys, "delete", &blob, &[], expected, b"");
+                let a = palace_request(conn, &op, &body).await?;
+                if a["kind"] == "palace.conflict" {
+                    expected = a["version"].as_u64().unwrap_or(0);
+                    continue;
+                }
+                with_palace(app, |l| {
+                    l.gone.remove(&id);
+                    l.remote.remove(&id);
+                })
+                .map_err(|e| (e, false))?;
+                break;
+            }
+        }
+        Ok(changes)
+    }
+    .await;
+    // The palace's client goes with the burst: a second mixnet client is not kept alive
+    // beside the account's.
+    *net = None;
+    drop(net);
+    let now = palace::now_ms();
+    let out = match result {
+        Ok(n) => {
+            let _ = with_palace(app, |l| palace::succeeded(l, now));
+            Ok(n)
+        }
+        Err((e, route)) => {
+            let _ = with_palace(app, |l| palace::failed(l, &e, route, now));
+            Err(e)
+        }
+    };
+    st.palace_syncing.store(false, std::sync::atomic::Ordering::Relaxed);
+    match &out {
+        Ok(n) => palace_emit(app, json!({ "phase": "done", "changes": n })),
+        Err(e) => palace_emit(app, json!({ "phase": "failed", "error": e })),
+    }
+    out
+}
+
+/// The loop that keeps the palace in step: a sync at start, then the queue whenever its
+/// moment has come.
+async fn palace_loop(app: AppHandle) {
+    let mut first = true;
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(if first { 3 } else { 5 })).await;
+        let Ok(dir) = data_dir(&app) else { continue };
+        let cfg = palace::config(&dir);
+        if cfg.enabled != Some(true) || cfg.local_only || palace_keys(&app).is_err() {
+            continue;
+        }
+        let since = palace::now_ms().saturating_sub(palace::LAST_SPEND_MS.load(std::sync::atomic::Ordering::Relaxed));
+        if since < palace::SPEND_GAP_MS {
+            continue;
+        }
+        let (due, pending) = with_palace(&app, |l| (l.due_ms, !l.dirty.is_empty() || !l.gone.is_empty())).unwrap_or((0, false));
+        let now = palace::now_ms();
+        if first {
+            first = false;
+            let _ = palace_burst(&app, pending && due <= now).await;
+            continue;
+        }
+        if pending && due <= now {
+            let _ = palace_burst(&app, true).await;
+        }
+    }
+}
+
+#[tauri::command]
+fn palace_status(app: AppHandle) -> Value {
+    palace_status_json(&app)
+}
+
+/// On / off (opt-in) and "this device only".
+#[tauri::command]
+fn palace_set_config(app: AppHandle, enabled: bool, local_only: bool) -> Result<Value, String> {
+    let dir = data_dir(&app)?;
+    palace::set_config(&dir, &palace::Config { enabled: Some(enabled), local_only })?;
+    palace_emit(&app, json!({}));
+    Ok(palace_status_json(&app))
+}
+
+#[tauri::command]
+fn palace_get(app: AppHandle) -> Result<Value, String> {
+    if palace_keys(&app).is_err() {
+        return Ok(json!({ "files": [], "placeholders": [] }));
+    }
+    with_palace(&app, |l| l.view())
+}
+
+/// Changes from the interface or the extraction: saved here at once, queued for upload.
+#[tauri::command]
+fn palace_apply(app: AppHandle, ops: Vec<palace::Op>) -> Result<Value, String> {
+    let now = palace::now_ms();
+    let (done, view) = with_palace(&app, |l| {
+        let done = palace::apply(l, &ops, now);
+        (done, l.view())
+    })?;
+    palace_emit(&app, json!({}));
+    Ok(json!({ "applied": done, "palace": view }))
+}
+
+/// "Sync now": fetch, merge and upload whatever is queued, at once.
+#[tauri::command]
+async fn palace_sync(app: AppHandle, upload: Option<bool>) -> Result<Value, String> {
+    let changes = palace_burst(&app, upload.unwrap_or(true)).await?;
+    let mut s = palace_status_json(&app);
+    s["changes"] = json!(changes);
+    Ok(s)
+}
+
+/// "Delete entire Memory Palace": the enclave's copy (unless it never had one) and this
+/// device's. Other devices keep theirs until they delete it too.
+#[tauri::command]
+async fn palace_wipe(app: AppHandle) -> Result<Value, String> {
+    let dir = data_dir(&app)?;
+    let cfg = palace::config(&dir);
+    if cfg.enabled == Some(true) && !cfg.local_only {
+        let keys = palace_keys(&app)?;
+        let st = app.state::<AppState>();
+        let mut net = st.palace_net.lock().await;
+        let mut conn = palace_connection(&app)?;
+        let (op, body) = palace::body(&keys, "wipe", "", &[], 0, b"");
+        let r = palace_request(&mut conn, &op, &body).await;
+        *net = None;
+        r.map_err(|(e, _)| e)?;
+    }
+    {
+        let st = app.state::<AppState>();
+        let _one = st.palace_local.lock().map_err(|_| "the palace is in an unknown state")?;
+        palace::forget(&dir);
+    }
+    palace_emit(&app, json!({}));
+    Ok(palace_status_json(&app))
+}
+
+/// Everything in plain JSON, for the person to keep (the interface warns first).
+#[tauri::command]
+fn palace_export(app: AppHandle) -> Result<Value, String> {
+    with_palace(&app, |l| l.export())
+}
+
+/// An export brought back: merged into what is here, and queued.
+#[tauri::command]
+fn palace_import(app: AppHandle, data: Value) -> Result<Value, String> {
+    use tokumai_core::palace::{MANIFEST_ID, PLACEHOLDERS_ID};
+    if data["schema"] != "tokumai/palace-export@1" {
+        return Err("this is not a Memory Palace export".into());
+    }
+    let now = palace::now_ms();
+    let n = with_palace(&app, |l| -> Result<usize, String> {
+        let mut n = palace::merge_remote(l, MANIFEST_ID, data["manifest"].to_string().as_bytes())?;
+        for f in data["files"].as_array().map(Vec::as_slice).unwrap_or(&[]) {
+            let id = f["id"].as_str().unwrap_or("").to_string();
+            if id.is_empty() || id == MANIFEST_ID || id == PLACEHOLDERS_ID {
+                continue;
+            }
+            n += palace::merge_remote(l, &id, f.to_string().as_bytes())?;
+        }
+        palace::merge_remote(l, PLACEHOLDERS_ID, data["placeholders"].to_string().as_bytes())?;
+        let ids = palace::known_ids(l);
+        l.rev += 1;
+        for id in ids {
+            l.dirty.insert(id, l.rev);
+        }
+        l.due_ms = now + 5_000;
+        Ok(n)
+    })??;
+    palace_emit(&app, json!({}));
+    Ok(json!({ "imported": n }))
+}
+
 // ---- support (not in the enclave yet) --------------------------------------------------
 
 #[tauri::command]
@@ -1608,6 +2024,8 @@ pub fn run() {
                 }
                 let _ = directory(&h).await;
             });
+            // The Memory Palace: a sync at start, then the upload queue (`palace`).
+            tauri::async_runtime::spawn(palace_loop(app.handle().clone()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1625,6 +2043,7 @@ pub fn run() {
             save_file, save_image, pick_image, open_external,
             ocr_scan, pdf_text, pdf_ocr, pdf_pages, smart_available, smart_detect,
             voice::voice_available, voice::voice_start, voice::voice_poll, voice::voice_stop, voice::voice_cancel,
+            palace_status, palace_set_config, palace_get, palace_apply, palace_sync, palace_wipe, palace_export, palace_import,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

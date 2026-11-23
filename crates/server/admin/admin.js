@@ -47,6 +47,8 @@
       row('on the host', 'gen ' + h.book.flushedGeneration + ' · rec ' + fmt(h.book.flushedRecord), (h.book.flushedGeneration === h.book.generation && h.book.flushedRecord === h.book.record) ? 's' : 'a') +
       row('since snapshot', fmt(h.book.sinceSnapshot) + ' / 2,000') + row('holds open', fmt(h.book.holdsOpen)) +
       row('replayed at start', fmt(h.replayed)) +
+      // The Memory Palace: totals only — the enclave never names a namespace to anyone.
+      (h.palace ? row('memory palaces', fmt(h.palace.namespaces) + ' · ' + fmt(h.palace.blobs) + ' blobs · ' + (h.palace.bytes/1048576).toFixed(2) + ' MiB') : '') +
       (host.error ? '' : row('journal on disk', (host.journal/1024).toFixed(0) + ' KiB') + row('snapshot', host.snapshot > 0 ? ago(d.clock/1000 - host.snapshot) + ' old' : '–') + row('volume', host.bookvol, host.bookvol === 'root' ? 'r' : 's'));
     // Host card
     const svc = (name, v) => row(name, v, v === 'active' ? 's' : 'r');

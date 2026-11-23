@@ -77,3 +77,9 @@ itself is made by KMS for an attested enclave and is never seen outside one (202
   come).
 - See the provider-bound traffic leave: that a request went out, when, and how large. The
   one signal left, weak, and it fades with every other user.
+
+## The Memory Palace
+
+Memory across chats and devices, end-to-end encrypted under keys from the phrase and
+unlinkable to the account: opaque blobs in the enclave's book, read by the model one file at
+a time through `read_memory`, the device's copy first. `docs/memory-palace.md`.

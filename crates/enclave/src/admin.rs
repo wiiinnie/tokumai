@@ -248,6 +248,8 @@ impl Enclave {
             }
             Err(_) => ((0, 0), (0, 0), 0, 0),
         };
+        // The Memory Palace in totals only: never a namespace, never a blob.
+        let (palace_ns, palace_blobs, palace_bytes) = self.ledger.lock().ok().and_then(|l| l.palace_totals().ok()).unwrap_or((0, 0, 0));
         let (prices_at, prices) = self.plan_prices.lock().map(|p| (p.1, p.0.clone())).unwrap_or((0, Vec::new()));
         json!({
             "kind": "admin.health",
@@ -270,6 +272,7 @@ impl Enclave {
             "pricingVersion": self.pricing.version(),
             "models": crate::catalog::models(&self.pricing, &self.providers, self.dev_mode),
             "notesWindow": crate::notes::Mint::window(now),
+            "palace": { "namespaces": palace_ns, "blobs": palace_blobs, "bytes": palace_bytes },
         })
     }
 

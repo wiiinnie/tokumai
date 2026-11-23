@@ -14,5 +14,8 @@ ed25519-dalek.workspace = true
 bip39.workspace = true
 rand_chacha = "0.3"
 hkdf = "0.12"
+# The Memory Palace (`palace`): blobs sealed with AES-256-GCM, named by HMAC.
+aes-gcm = "0.10"
+hmac = "0.12"
 rsa = "0.9"
 num-bigint-dig = "0.8"

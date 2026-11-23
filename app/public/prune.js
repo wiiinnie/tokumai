@@ -20,7 +20,6 @@ export const PRUNE_DEFAULTS = Object.freeze({
   topicShift: true, // drop older turns unrelated to the new question
   whitespace: true, // collapse redundant whitespace (lossless)
   requestTrim: true, // strip leading/trailing filler from the user's prompt
-  handover: true, // prune the same way when exporting a handover
   ctxPairs: 4, // GUARANTEED memory floor: always send the last N complete Q&A pairs
   //             verbatim, whatever topic-shift decides. 999 ≈ "keep everything".
 });
@@ -178,24 +177,4 @@ export function pruneMessages(messages, opts = PRUNE_DEFAULTS, cfg = {}) {
   }
 
   return [...kept, prompt];
-}
-
-/**
- * Prune a whole session's message list for a handover EXPORT.
- *
- * Deliberately LOSSLESS: an export is the artefact itself, so dropping a turn
- * would lose content for good — exactly what the user said not to do. So here we
- * only tidy (collapse whitespace, strip request filler) and keep every turn.
- * Topic-shift dropping is reserved for the send path, where the local session
- * still holds the full history.
- */
-export function pruneForHandover(messages, opts = PRUNE_DEFAULTS) {
-  if (!Array.isArray(messages)) return [];
-  if (!opts.handover) return messages.map((m) => ({ ...m }));
-  return messages.map((m) => {
-    let c = String(m.content ?? "");
-    if (opts.whitespace) c = normalizeWhitespace(c);
-    if (opts.requestTrim && m.role === "user") c = trimRequest(c);
-    return { ...m, content: c };
-  });
 }

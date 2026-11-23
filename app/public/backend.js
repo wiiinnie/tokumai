@@ -103,6 +103,21 @@ export const Backend = {
   supportFetch: () => Promise.resolve({ threads: [] }),
   supportSeen: () => Promise.resolve(),
 
+  // ---- the Memory Palace (palace.rs). The copy on this device is sealed under a key from
+  // the phrase; the keys never come here, only the plaintext the interface shows. Every
+  // request to the enclave goes over a mixnet client of its own, never the account's.
+  palaceStatus: () => invoke("palace_status"),
+  palaceSetConfig: (enabled, localOnly) => invoke("palace_set_config", { enabled: !!enabled, localOnly: !!localOnly }),
+  palaceGet: () => invoke("palace_get"),
+  // ops: [{op:"add"|"update"|"delete"|"restore"|"line.flag"|"file.update"|"file.delete"|"placeholder", …}]
+  palaceApply: (ops) => invoke("palace_apply", { ops }),
+  palaceSync: (upload) => invoke("palace_sync", { upload: upload !== false }),
+  palaceWipe: () => invoke("palace_wipe"),
+  palaceExport: () => invoke("palace_export"),
+  palaceImport: (data) => invoke("palace_import", { data }),
+  // {state, files, pending, lastSync, lastError, phase?, changes?} whenever it changes.
+  onPalaceStatus: (cb) => listen("palace-status", cb),
+
   // ---- the chat vault (files in Rust, key in the OS keychain)
   vaultList: () => invoke("vault_list"),
   vaultLoad: (id) => invoke("vault_load", { id }),
@@ -132,6 +147,13 @@ export const Backend = {
   // stream. onPhase("sent") fires when the question leaves; the answer arriving resolves
   // the call. The reply: { text, images, cost, balance, usage, estimated }.
   cancelChat: () => invoke("cancel_chat"),
+  // One answer, whole, with no phase events and nothing streamed: for the Memory Palace's
+  // extraction, which runs beside the conversation and must not move its status line.
+  chatRaw: (body) => invoke("chat", {
+    model: body.model, messages: body.messages, maxTokens: body.maxTokens || 1024, live: false,
+    thinkingBudget: (typeof body.thinkingBudget === "number" ? body.thinkingBudget : null),
+    imageSize: null, lossless: false, memory: null,
+  }),
   chat: async (body, { onDelta, onDone, onError, onPhase }) => {
     const unlisten = [];
     try {
@@ -152,6 +174,9 @@ export const Backend = {
         thinkingBudget: (typeof body.thinkingBudget === "number" ? body.thinkingBudget : null),
         imageSize: (typeof body.imageSize === "string" ? body.imageSize : null),
         lossless: !!body.lossless,
+        // The Memory Palace's index ({index:[{id,title,description}]}); the answer may then
+        // carry `toolCalls` (read_memory) for the interface to answer.
+        memory: body.memory || null,
       });
       if (onPhase) onPhase("receiving");
       if (r && r.text) {

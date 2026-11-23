@@ -311,7 +311,11 @@ impl Enclave {
         let op = req.op.clone();
         crate::trace::say(|| format!("req {op} arrived"));
         let started = std::time::Instant::now();
-        self.stats.seen(&self.account_key(&account_id), now);
+        // A palace request comes under a key made for it alone (`palace`): it is nobody's
+        // account, and counting it as one would only blur the operator's numbers.
+        if !req.op.starts_with("palace.") {
+            self.stats.seen(&self.account_key(&account_id), now);
+        }
         self.working.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let answer = self.dispatch(&account_id, &req.op, &req.body, now).await;
         self.working.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
@@ -421,6 +425,9 @@ impl Enclave {
                 self.durably(a).await
             }
             op if op.starts_with("admin.") => self.admin_dispatch(account, op, body, now),
+            // The Memory Palace: signed by the palace's own key inside, the envelope's
+            // account is a throwaway and is not used (`palace`).
+            op if op.starts_with("palace.") => self.palace_dispatch(op, body, now),
             "dev.credit" | "dev.allowance" | "dev.bytes" if !self.dev_mode => error("not available on this enclave"),
             // A reply of a given size, to measure what the mixnet does with a big answer
             // without paying a model for a picture. Never on a sealed enclave.
@@ -535,6 +542,17 @@ impl Enclave {
             return error("that model is not offered");
         }
         let Some(provider) = self.providers.find(&req.model) else { return error("that model is not offered") };
+        // The Memory Palace's index and `read_memory` (`memory`): not for a picture model,
+        // and not beside Google's search, which does not share a request with a function.
+        if let Err(e) = crate::memory::check(req.memory.as_ref(), &req.messages) {
+            return error(&e);
+        }
+        let memory = if crate::gemini::is_image_model(&req.model) || (req.live && crate::gemini::is_gemini_model(&req.model)) {
+            None
+        } else {
+            crate::memory::instruction(req.memory.as_ref(), &req.messages)
+        };
+        in_tokens += memory.as_ref().map(|m| m.len() as u64).unwrap_or(0);
         let price = self.pricing.price(&req.model);
         let day = now / 86_400_000;
         let strike_key = (account.to_string(), day, provider.name());
@@ -627,7 +645,7 @@ impl Enclave {
                 // A call went out: cover for everyone else's. (A turn the safety check
                 // stopped went nowhere, and counts for nobody.)
                 self.cover.note(shape, now);
-                let call = Call { req: &req, safety_id: Some(self.safety_id(account, day)), image_size };
+                let call = Call { req: &req, safety_id: Some(self.safety_id(account, day)), image_size, memory: memory.clone() };
                 provider.complete(&call).await
             }
         };
@@ -683,7 +701,11 @@ impl Enclave {
                 // Packed here, where the picture still is: megabytes do not cross the
                 // mixnet well, and what is charged was decided above, on what the model did.
                 let images = c.images.map(|i| crate::picture::pack_all(i, req.lossless));
+                let tool_calls = (!c.tool_calls.is_empty()).then_some(c.tool_calls);
                 json!({
+                    // The model asked to read the Memory Palace: the app answers and asks
+                    // again with the result appended (`memory`). Nothing is kept here.
+                    "toolCalls": tool_calls,
                     "kind": "chat", "text": c.text, "images": images, "cost": charged, "balance": total,
                     // Shortened only if the answer actually ran into the lowered limit.
                     "capped": capped && c.usage.output + 8 >= req.answer_tokens(),

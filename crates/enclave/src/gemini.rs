@@ -90,31 +90,77 @@ pub fn image_placeholder_only(text: &str) -> bool {
 /// Our messages → Gemini's request: `contents[].parts[]`, roles user/model, and the system
 /// turns as `systemInstruction`. Thinking counts against `maxOutputTokens` on Gemini 3, so
 /// the answer gets its budget on top of the thinking budget.
+/// The prefix of a call id made up here because Google gave none; never sent back.
+const SYNTHETIC_ID: &str = "gcall_";
+
+/// The `read_memory` calls among an answer's parts, in the neutral shape.
+pub fn tool_calls(parts: &[Value]) -> Vec<Value> {
+    parts
+        .iter()
+        .enumerate()
+        .filter_map(|(i, p)| {
+            let fc = p.get("functionCall")?;
+            if fc.get("name").and_then(|n| n.as_str()) != Some(crate::memory::TOOL) {
+                return None;
+            }
+            let file = fc.pointer("/args/file_id").and_then(|f| f.as_str()).unwrap_or("");
+            let id = fc.get("id").and_then(|x| x.as_str()).map(str::to_string).unwrap_or_else(|| format!("{SYNTHETIC_ID}{i}"));
+            Some(crate::memory::call(&id, file, p.get("thoughtSignature").and_then(|s| s.as_str())))
+        })
+        .collect()
+}
+
 pub fn to_gemini(messages: &Value, answer_tokens: u64, thinking: u64, live: bool) -> Value {
     let msgs = messages.as_array().map(Vec::as_slice).unwrap_or(&[]);
     let role_of = |m: &Value| m.get("role").and_then(|r| r.as_str()).unwrap_or("user").to_string();
     let system = msgs.iter().filter(|m| role_of(m) == "system").filter_map(|m| m.get("content").and_then(|c| c.as_str())).collect::<Vec<_>>().join("\n");
-    let contents: Vec<Value> = msgs
-        .iter()
-        .filter(|m| role_of(m) != "system")
-        .map(|m| {
-            let mut parts: Vec<Value> = Vec::new();
-            for att in m.get("attachments").and_then(|a| a.as_array()).map(Vec::as_slice).unwrap_or(&[]) {
-                if let (Some(mime), Some(data)) = (att.get("mimeType").and_then(|x| x.as_str()), att.get("data").and_then(|x| x.as_str())) {
-                    parts.push(json!({ "inlineData": { "mimeType": mime, "data": data } }));
+    // A `read_memory` call is the model's turn (`functionCall`, with Google's thought
+    // signature handed back as it came); its results, however many in a row, are one user
+    // turn of `functionResponse` parts, in the order the calls were made (`memory`).
+    let mut contents: Vec<Value> = Vec::new();
+    for m in msgs.iter().filter(|m| role_of(m) != "system") {
+        let role = role_of(m);
+        if role == "tool" {
+            let name = m.get("name").and_then(|n| n.as_str()).unwrap_or(crate::memory::TOOL);
+            let mut resp = json!({ "functionResponse": { "name": name, "response": { "content": m.get("content").and_then(|c| c.as_str()).unwrap_or("") } } });
+            if let Some(id) = m.get("toolCallId").and_then(|i| i.as_str()).filter(|i| !i.starts_with(SYNTHETIC_ID)) {
+                resp["functionResponse"]["id"] = json!(id);
+            }
+            let merge = contents.last().is_some_and(|c: &Value| c["role"] == "user" && c["parts"].as_array().is_some_and(|p| p.iter().all(|x| x.get("functionResponse").is_some())));
+            if merge {
+                if let Some(parts) = contents.last_mut().and_then(|c| c["parts"].as_array_mut()) {
+                    parts.push(resp);
                 }
+            } else {
+                contents.push(json!({ "role": "user", "parts": [resp] }));
             }
-            if let Some(text) = m.get("content").and_then(|c| c.as_str()).filter(|t| !t.is_empty()) {
-                parts.push(json!({ "text": text }));
+            continue;
+        }
+        let mut parts: Vec<Value> = Vec::new();
+        for att in m.get("attachments").and_then(|a| a.as_array()).map(Vec::as_slice).unwrap_or(&[]) {
+            if let (Some(mime), Some(data)) = (att.get("mimeType").and_then(|x| x.as_str()), att.get("data").and_then(|x| x.as_str())) {
+                parts.push(json!({ "inlineData": { "mimeType": mime, "data": data } }));
             }
-            if parts.is_empty() {
-                parts.push(json!({ "text": "" }));
+        }
+        if let Some(text) = m.get("content").and_then(|c| c.as_str()).filter(|t| !t.is_empty()) {
+            parts.push(json!({ "text": text }));
+        }
+        for c in m.get("toolCalls").and_then(|t| t.as_array()).map(Vec::as_slice).unwrap_or(&[]) {
+            let mut fc = json!({ "name": crate::memory::TOOL, "args": { "file_id": crate::memory::file_id_of(c) } });
+            if let Some(id) = c.get("id").and_then(|i| i.as_str()).filter(|i| !i.starts_with(SYNTHETIC_ID)) {
+                fc["id"] = json!(id);
             }
-            json!({ "role": if role_of(m) == "assistant" { "model" } else { "user" }, "parts": parts })
-        })
-        .collect();
-    // Google's filters are off unless we ask for them (see `policy::GEMINI_SAFETY`), so this
-    // is not a tightening of a default — it is the only filter in front of a Gemini question.
+            let mut part = json!({ "functionCall": fc });
+            if let Some(sig) = c.get("sig").and_then(|s| s.as_str()) {
+                part["thoughtSignature"] = json!(sig);
+            }
+            parts.push(part);
+        }
+        if parts.is_empty() {
+            parts.push(json!({ "text": "" }));
+        }
+        contents.push(json!({ "role": if role == "assistant" { "model" } else { "user" }, "parts": parts }));
+    }
     let safety: Vec<Value> = crate::policy::GEMINI_SAFETY.iter().map(|(c, t)| json!({ "category": c, "threshold": t })).collect();
     let mut body = json!({ "contents": contents, "safetySettings": safety,
                            "generationConfig": { "maxOutputTokens": answer_tokens + thinking } });
@@ -189,6 +235,11 @@ impl Gemini {
     /// One request to Google, parsed: the text, the pictures, and the raw answer (for its
     /// finish reason, its usage and its grounding).
     async fn once(&self, model: &str, body: &Value) -> Result<(String, Vec<Value>, Value), String> {
+        let (text, imgs, j, _) = self.once_with_calls(model, body).await?;
+        Ok((text, imgs, j))
+    }
+
+    async fn once_with_calls(&self, model: &str, body: &Value) -> Result<(String, Vec<Value>, Value, Vec<Value>), String> {
         let res = crate::http::client()
             .post(format!("{BASE}/{model}:generateContent"))
             .header("x-goog-api-key", &self.key)
@@ -213,7 +264,8 @@ impl Gemini {
                 Some(json!({ "mimeType": d.get("mimeType")?.as_str()?, "data": d.get("data")?.as_str()? }))
             })
             .collect();
-        Ok((text, imgs, j))
+        let calls = tool_calls(parts);
+        Ok((text, imgs, j, calls))
     }
 }
 
@@ -245,7 +297,17 @@ impl Provider for Gemini {
             if model_takes_image_size(model) {
                 body["generationConfig"]["imageConfig"] = json!({ "imageSize": call.image_size });
             }
-            let (mut text, mut imgs, mut j) = self.once(model, &body).await?;
+            if let Some(memory) = &call.memory {
+                let mut tools = body.get("tools").and_then(|t| t.as_array()).cloned().unwrap_or_default();
+                tools.push(crate::memory::gemini_tool());
+                body["tools"] = json!(tools);
+                let system = body.pointer("/systemInstruction/parts/0/text").and_then(|t| t.as_str()).map(|t| format!("{t}\n\n{memory}")).unwrap_or_else(|| memory.clone());
+                body["systemInstruction"] = json!({ "parts": [{ "text": system }] });
+                if crate::memory::exhausted(&req.messages) {
+                    body["toolConfig"] = json!({ "functionCallingConfig": { "mode": "NONE" } });
+                }
+            }
+            let (mut text, mut imgs, mut j, calls) = self.once_with_calls(model, &body).await?;
             let mut u = usage(j.get("usageMetadata").unwrap_or(&Value::Null), !imgs.is_empty());
             // "I have regenerated the image…" — and no image in the answer (2026-09-29, an
             // edit on gemini-3.1-flash-lite-image). Even with IMAGE among the response
@@ -266,7 +328,7 @@ impl Provider for Gemini {
                     imgs = i2;
                 }
             }
-            if text.trim().is_empty() && imgs.is_empty() {
+            if text.trim().is_empty() && imgs.is_empty() && calls.is_empty() {
                 let finish = j.pointer("/candidates/0/finishReason").and_then(|f| f.as_str());
                 let block = j.pointer("/promptFeedback/blockReason").and_then(|f| f.as_str());
                 if let Some(msg) = decline_message(finish, block, is_image_model(model)) {
@@ -296,7 +358,7 @@ impl Provider for Gemini {
                     .map(|a| a.iter().filter(|q| q.as_str().is_some_and(|s| !s.trim().is_empty())).count() as u64)
                     .unwrap_or(0);
             }
-            Ok(Completion { text, usage: u, images: (!imgs.is_empty()).then(|| json!(imgs)) })
+            Ok(Completion { text, usage: u, images: (!imgs.is_empty()).then(|| json!(imgs)), tool_calls: calls })
         })
     }
 }

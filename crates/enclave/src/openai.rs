@@ -41,18 +41,42 @@ pub fn effort_for(thinking: u64) -> &'static str {
     }
 }
 
-/// Our messages → Responses `input`. Images become `input_image`, PDFs `input_file`.
+/// Our messages → Responses `input`. Images become `input_image`, PDFs `input_file`; a
+/// `read_memory` call and its result become a `function_call` and a `function_call_output`
+/// (`memory`).
 pub fn to_input(messages: &Value) -> Value {
     let items: Vec<Value> = messages
         .as_array()
         .map(Vec::as_slice)
         .unwrap_or(&[])
         .iter()
-        .map(|m| {
+        .flat_map(|m| {
             let role = m.get("role").and_then(|r| r.as_str()).unwrap_or("user");
             let text = m.get("content").and_then(|c| c.as_str()).unwrap_or("");
             match (role, m.get("attachments").and_then(|a| a.as_array())) {
-                ("assistant", _) => json!({ "role": "assistant", "content": text }),
+                ("tool", _) => vec![json!({
+                    "type": "function_call_output",
+                    "call_id": m.get("toolCallId").and_then(|c| c.as_str()).unwrap_or(""),
+                    "output": text,
+                })],
+                ("assistant", _) => {
+                    let mut out = Vec::new();
+                    if !text.is_empty() {
+                        out.push(json!({ "role": "assistant", "content": text }));
+                    }
+                    for c in m.get("toolCalls").and_then(|t| t.as_array()).map(Vec::as_slice).unwrap_or(&[]) {
+                        out.push(json!({
+                            "type": "function_call",
+                            "call_id": c.get("id").and_then(|i| i.as_str()).unwrap_or(""),
+                            "name": crate::memory::TOOL,
+                            "arguments": json!({ "file_id": crate::memory::file_id_of(c) }).to_string(),
+                        }));
+                    }
+                    if out.is_empty() {
+                        out.push(json!({ "role": "assistant", "content": "" }));
+                    }
+                    out
+                }
                 (_, Some(atts)) if !atts.is_empty() => {
                     let mut parts = vec![json!({ "type": "input_text", "text": text })];
                     for (i, att) in atts.iter().enumerate() {
@@ -64,13 +88,30 @@ pub fn to_input(messages: &Value) -> Value {
                             parts.push(json!({ "type": "input_file", "filename": format!("attachment-{}.pdf", i + 1), "file_data": format!("data:{mime};base64,{data}") }));
                         }
                     }
-                    json!({ "role": role, "content": parts })
+                    vec![json!({ "role": role, "content": parts })]
                 }
-                _ => json!({ "role": role, "content": text }),
+                _ => vec![json!({ "role": role, "content": text })],
             }
         })
         .collect();
     Value::Array(items)
+}
+
+/// The `read_memory` calls in an answer, in the neutral shape.
+pub fn tool_calls(j: &Value) -> Vec<Value> {
+    j.get("output")
+        .and_then(|o| o.as_array())
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
+        .iter()
+        .filter(|item| item.get("type").and_then(|t| t.as_str()) == Some("function_call"))
+        .filter(|item| item.get("name").and_then(|n| n.as_str()) == Some(crate::memory::TOOL))
+        .map(|item| {
+            let args: Value = item.get("arguments").and_then(|a| a.as_str()).and_then(|a| serde_json::from_str(a).ok()).unwrap_or(Value::Null);
+            let file = args.get("file_id").and_then(|f| f.as_str()).unwrap_or("");
+            crate::memory::call(item.get("call_id").and_then(|c| c.as_str()).unwrap_or(""), file, None)
+        })
+        .collect()
 }
 
 pub fn output_text(j: &Value) -> String {
@@ -135,8 +176,19 @@ impl Provider for OpenAi {
                 "reasoning": { "effort": effort_for(thinking) },
                 "store": false,
             });
+            let mut tools = Vec::new();
             if req.live {
-                body["tools"] = json!([{ "type": "web_search" }]);
+                tools.push(json!({ "type": "web_search" }));
+            }
+            if let Some(memory) = &call.memory {
+                tools.push(crate::memory::openai_tool());
+                body["instructions"] = json!(memory);
+                if crate::memory::exhausted(&req.messages) {
+                    body["tool_choice"] = json!("none");
+                }
+            }
+            if !tools.is_empty() {
+                body["tools"] = json!(tools);
             }
             if let Some(id) = &call.safety_id {
                 body["safety_identifier"] = json!(id);
@@ -173,7 +225,8 @@ impl Provider for OpenAi {
             }
             let text = output_text(&j);
             let usage = parse_usage(&j);
-            if text.is_empty() {
+            let calls = tool_calls(&j);
+            if text.is_empty() && calls.is_empty() {
                 let reason = j.pointer("/incomplete_details/reason").and_then(|r| r.as_str()).unwrap_or("");
                 return Err(match reason {
                     "content_filter" => "Declined by OpenAI (content filter)".into(),
@@ -181,7 +234,7 @@ impl Provider for OpenAi {
                     _ => "OpenAI returned an empty answer".into(),
                 });
             }
-            Ok(Completion { text, usage, images: None })
+            Ok(Completion { text, usage, images: None, tool_calls: calls })
         })
     }
 }

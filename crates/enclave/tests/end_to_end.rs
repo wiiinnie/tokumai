@@ -239,3 +239,83 @@ async fn a_small_balance_shortens_the_answer_and_an_empty_one_says_so_plainly() 
     let tiny = call(&e2, &s2, &a, "chat", ask).await;
     assert_eq!(tiny["noCredit"], true, "{tiny}");
 }
+
+/// The Memory Palace end to end: two devices of one phrase write and read sealed blobs
+/// under throwaway envelope keys, concurrent writes conflict and merge, and a question
+/// with the palace's index makes the model ask for a file, which the app answers.
+#[tokio::test]
+async fn the_memory_palace_syncs_two_devices_and_the_model_reads_one_file() {
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+    use tokumai_core::palace::{self as palace, MemFile, PalaceKeys, SignedFields};
+    let e = enclave(true);
+    let s = session(&e, &dev_policy()).await.unwrap();
+    let keys = PalaceKeys::from_mnemonic(PHRASE).unwrap();
+    // What the app sends: a palace body signed by the palace key, in an envelope signed by
+    // an account made for that one request.
+    let palace_call = |op: &'static str, blob: String, blobs: Vec<String>, expected: u64, ct: Vec<u8>| {
+        let nonce = palace::new_id("nonce_") + &palace::new_id("");
+        let ts = tokumai_enclave::now_ms();
+        let joined = blobs.join(",");
+        let (b, v) = match op {
+            "get" => (joined.clone(), 0),
+            "put" => (blob.clone(), expected + 1),
+            "delete" => (blob.clone(), expected),
+            _ => (String::new(), 0),
+        };
+        let hash = palace::ct_hash(&ct);
+        let sig = keys.sign_request(&SignedFields { op, blob_id: &b, version: v, ct_sha256: &hash, ts, nonce: &nonce });
+        (format!("palace.{op}"), json!({ "ns": keys.namespace(), "pub": keys.sign_pub_hex(), "ts": ts, "nonce": nonce, "sig": sig,
+            "blobId": blob, "blobIds": blobs, "expected": expected, "ct": B64.encode(&ct) }))
+    };
+    let throwaway = || tokumai_core::account::create_account();
+    let file_blob = keys.blob_id("f_work");
+    let line = |id: &str, text: &str, t: u64| palace::Line { id: id.into(), text: text.into(), never_send: false, updated: t, deleted: false, h: String::new() };
+
+    // Device A writes the first version.
+    let a_file = MemFile { lines: vec![line("l_1", "Works at [EMPLOYER_1]", 1)], ..MemFile::new("f_work") };
+    let (op, body) = palace_call("put", file_blob.clone(), vec![], 0, keys.seal(&file_blob, 1, &serde_json::to_vec(&a_file).unwrap()));
+    assert_eq!(call(&e, &s, &throwaway(), &op, body).await["version"], 1);
+    // Device B, same phrase, never synced: its write is stale and conflicts…
+    let b_file = MemFile { lines: vec![line("l_2", "Leads a team of 12", 2)], ..MemFile::new("f_work") };
+    let (op, body) = palace_call("put", file_blob.clone(), vec![], 0, keys.seal(&file_blob, 1, &serde_json::to_vec(&b_file).unwrap()));
+    let conflict = call(&e, &s, &throwaway(), &op, body).await;
+    assert_eq!((conflict["kind"].as_str(), conflict["version"].as_u64()), (Some("palace.conflict"), Some(1)));
+    // …so it fetches, merges, and writes again.
+    let (op, body) = palace_call("get", String::new(), vec![file_blob.clone()], 0, vec![]);
+    let got = call(&e, &s, &throwaway(), &op, body).await;
+    let ct = B64.decode(got["blobs"][0]["ct"].as_str().unwrap()).unwrap();
+    let theirs: MemFile = serde_json::from_slice(&keys.open(&file_blob, 1, &ct).unwrap()).unwrap();
+    let merged = palace::merge_file(&b_file, &theirs);
+    let (op, body) = palace_call("put", file_blob.clone(), vec![], 1, keys.seal(&file_blob, 2, &serde_json::to_vec(&merged).unwrap()));
+    assert_eq!(call(&e, &s, &throwaway(), &op, body).await["version"], 2);
+    // Device A lists, sees version 2, and gets both lines.
+    let (op, body) = palace_call("list", String::new(), vec![], 0, vec![]);
+    let list = call(&e, &s, &throwaway(), &op, body).await;
+    assert_eq!(list["blobs"][0]["version"], 2);
+    let (op, body) = palace_call("get", String::new(), vec![file_blob.clone()], 0, vec![]);
+    let got = call(&e, &s, &throwaway(), &op, body).await;
+    let ct = B64.decode(got["blobs"][0]["ct"].as_str().unwrap()).unwrap();
+    let now: MemFile = serde_json::from_slice(&keys.open(&file_blob, 2, &ct).unwrap()).unwrap();
+    assert_eq!(now.lines.len(), 2, "no line lost");
+
+    // The account asks a question with the palace's index. The model (the mock) asks for
+    // the file; the app answers from its own copy; the model answers with it. Each round
+    // is billed; nothing of it is kept.
+    let a = from_mnemonic(PHRASE).unwrap();
+    call(&e, &s, &a, "dev.credit", json!({ "toku": 100_000 })).await;
+    let memory = json!({ "index": [{ "id": "f_work", "title": "Work", "description": "Job, role, team size" }] });
+    let mut messages = vec![json!({ "role": "user", "content": "What do you remember about my work?" })];
+    let first = call(&e, &s, &a, "chat", json!({ "model": "mock", "messages": messages, "memory": memory })).await;
+    let calls = first["toolCalls"].as_array().expect("the model asks for a file").clone();
+    assert_eq!(calls[0]["args"]["file_id"], "f_work");
+    assert!(first["cost"].as_u64().unwrap() > 0);
+    messages.push(json!({ "role": "assistant", "content": "", "toolCalls": calls }));
+    messages.push(json!({ "role": "tool", "toolCallId": calls[0]["id"], "name": "read_memory", "content": "- Works at [EMPLOYER_1]\n- Leads a team of 12" }));
+    let answer = call(&e, &s, &a, "chat", json!({ "model": "mock", "messages": messages, "memory": memory })).await;
+    assert!(answer["toolCalls"].is_null());
+    assert!(answer["text"].as_str().unwrap().contains("Leads a team of 12"), "{answer}");
+    // A result larger than the enclave takes is refused before any model is asked.
+    messages.pop();
+    messages.push(json!({ "role": "tool", "toolCallId": calls[0]["id"], "name": "read_memory", "content": "x".repeat(20_000) }));
+    assert_eq!(call(&e, &s, &a, "chat", json!({ "model": "mock", "messages": messages, "memory": memory })).await["kind"], "error");
+}

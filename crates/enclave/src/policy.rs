@@ -115,3 +115,24 @@ pub const OFFERED_MODELS: &[&str] = &[
 /// How long OpenAI keeps API inputs for abuse monitoring (its standard terms; 0 would need
 /// Zero Data Retention). Shown to the user next to the model.
 pub const OPENAI_RETENTION_DAYS: u32 = 30;
+
+// ---- the Memory Palace (`palace`, `memory`) --------------------------------------------
+
+/// One blob at most (a file of facts is a few kilobytes; this is generous).
+pub const PALACE_MAX_BLOB_BYTES: usize = 256 * 1024;
+/// One namespace at most, all blobs together, and how many blobs.
+pub const PALACE_MAX_BYTES: u64 = 2 * 1024 * 1024;
+pub const PALACE_MAX_BLOBS: u64 = 512;
+/// Every namespace together: the palace lives in the book, and the book on a 4 GiB volume.
+pub const PALACE_TOTAL_BYTES: u64 = 1024 * 1024 * 1024;
+/// Blobs one `get` may ask for.
+pub const PALACE_MAX_GET: usize = 64;
+/// `read_memory` calls the model may make for one question; after that the tool is not
+/// offered and the model has to answer with what it has.
+pub const MEMORY_READS_PER_TURN: usize = 3;
+/// What one `read_memory` result may carry.
+pub const MEMORY_RESULT_BYTES: usize = 16 * 1024;
+/// The index sent with a question: entries, and the length of a title and a description.
+pub const MEMORY_INDEX_ENTRIES: usize = 64;
+pub const MEMORY_TITLE_CHARS: usize = 80;
+pub const MEMORY_DESCRIPTION_CHARS: usize = 240;

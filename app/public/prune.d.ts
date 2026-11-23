@@ -3,7 +3,6 @@ export interface PruneOpts {
   topicShift: boolean;
   whitespace: boolean;
   requestTrim: boolean;
-  handover: boolean;
   /** Guaranteed memory floor: the last N complete Q&A pairs are always sent. */
   ctxPairs?: number;
 }
@@ -23,4 +22,3 @@ export function pruneMessages(
   opts?: PruneOpts,
   cfg?: { keepRecentPairs?: number; minRecentPairs?: number; threshold?: number },
 ): PruneMsg[];
-export function pruneForHandover(messages: PruneMsg[], opts?: PruneOpts): PruneMsg[];

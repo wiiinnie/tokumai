@@ -1,7 +1,7 @@
 <!--
   tokumai — client UI (wired to the local dev backend + encrypted local vault)
   Served by the server at GET / (same-origin with /chat, /api/*, and the JS modules).
-  Persistence & crypto live behind vault.js / handover.js — swappable for mobile.
+  Persistence & crypto live behind vault.js (chats) and the Rust side (the Memory Palace).
 -->
 <meta charset="utf-8" />
 <!-- maximum-scale=1 stops iOS from auto-zooming into focused inputs (the zoom
@@ -488,6 +488,46 @@
   .costaudit{font-family:var(--mono);font-size:10px;color:var(--signal);opacity:.9;margin-top:8px;letter-spacing:.02em}
   .costaudit.bad{color:var(--rust);opacity:1;font-weight:700}
   .sizenote{font-family:var(--mono);font-size:11px;color:var(--bone);opacity:.7;margin-top:8px;letter-spacing:.02em}
+  /* ---- the Memory Palace ---- */
+  .palind{position:relative;display:flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:9px;border:1px solid var(--line);background:var(--surface-2);color:var(--bone);cursor:pointer;flex:0 0 auto;padding:0}
+  .palind:hover{border-color:var(--mix)}
+  .palind.locked{opacity:.45}
+  .palind .pi-mark{position:absolute;right:-4px;bottom:-4px;min-width:14px;height:14px;border-radius:7px;font-size:9px;line-height:14px;text-align:center;font-family:var(--mono);color:var(--bone);background:transparent}
+  .palind.syncing::after{content:"";position:absolute;inset:-3px;border-radius:11px;border:2px solid transparent;border-top-color:var(--mix);animation:palspin 1s linear infinite}
+  @keyframes palspin{to{transform:rotate(360deg)}}
+  .palind.up_to_date .pi-mark{background:var(--mix);transition:opacity .6s}
+  .palind.up_to_date.faded .pi-mark{opacity:0}
+  .palind.pending_upload .pi-mark{min-width:8px;width:8px;height:8px;right:-2px;bottom:-2px;background:var(--signal)}
+  .palind.offline .pi-mark,.palind.local_only .pi-mark{background:var(--surface);border:1px solid var(--line);color:var(--muted)}
+  .palind.error .pi-mark{background:var(--rust)}
+  .palline{font-family:var(--mono);font-size:11.5px;color:var(--muted);margin:0 2px 8px;display:flex;gap:10px;align-items:center}
+  .palline .pl-act{color:var(--signal);cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+  .paltoast{position:fixed;left:50%;bottom:110px;transform:translateX(-50%) translateY(20px);opacity:0;pointer-events:none;z-index:1200;background:var(--surface-2);border:1px solid var(--line);border-radius:12px;padding:10px 14px;display:flex;gap:14px;align-items:center;font-size:13px;box-shadow:0 14px 40px rgba(0,0,0,.45);transition:opacity .2s,transform .2s;max-width:calc(100vw - 32px)}
+  .paltoast.show{opacity:1;transform:translateX(-50%);pointer-events:auto}
+  .paltoast .ta{color:var(--signal);font-weight:600;cursor:pointer;background:none;border:none;font-size:13px;padding:0}
+  .palhead{font-family:var(--mono);font-size:11px;color:var(--muted);display:flex;justify-content:space-between;align-items:center;gap:10px;margin:0 4px 12px;flex-wrap:wrap}
+  .palfile{border:1px solid var(--line);border-radius:12px;margin-bottom:10px;background:var(--surface-2);overflow:hidden}
+  .palfile .pf-h{display:flex;gap:10px;align-items:center;padding:10px 12px;border-bottom:1px solid var(--line)}
+  .palfile .pf-h input{flex:1;min-width:0;background:transparent;border:none;color:var(--bone);font-weight:600;font-size:13.5px;font-family:var(--body)}
+  .palfile .pf-d{width:100%;box-sizing:border-box;background:transparent;border:none;border-bottom:1px solid var(--line);color:var(--muted);font-size:12px;padding:6px 12px;font-family:var(--body)}
+  .palline2{display:flex;gap:8px;align-items:flex-start;padding:7px 12px;border-bottom:1px solid var(--line)}
+  .palline2:last-child{border-bottom:none}
+  .palline2 textarea{flex:1;min-width:0;background:transparent;border:none;color:var(--bone);font-size:13px;font-family:var(--body);resize:none;line-height:1.4;padding:0}
+  .palline2.never textarea{opacity:.55}
+  .palmini{font-family:var(--mono);font-size:10px;color:var(--muted);background:none;border:1px solid var(--line);border-radius:6px;padding:2px 6px;cursor:pointer;white-space:nowrap}
+  .palmini.on{color:var(--rust);border-color:var(--rust)}
+  .palseg{display:flex;gap:6px;flex-wrap:wrap}
+  .palseg button{font-size:12px;padding:6px 10px;border-radius:8px;border:1px solid var(--line);background:var(--surface-2);color:var(--bone);cursor:pointer}
+  .palseg button.sel{border-color:var(--mix);color:var(--signal)}
+  .paldiff .grp{font-weight:600;margin:12px 2px 6px}
+  .paldiff .chg{display:flex;gap:10px;align-items:flex-start;padding:6px 2px;font-size:13px}
+  .paldiff .chg .k{font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.08em;min-width:62px;color:var(--muted);padding-top:2px}
+  .paldiff .chg .k.add{color:var(--signal)} .paldiff .chg .k.delete{color:var(--rust)}
+  .paldiff .chg .was{text-decoration:line-through;opacity:.6;display:block}
+  #palBody input[type=number]{background:var(--surface-2);color:var(--bone);border:1px solid var(--line);border-radius:7px;padding:3px 6px;font-family:var(--mono);font-size:12px}
+  .memused{margin-top:8px;font-size:12px;color:var(--muted)}
+  .memused summary{cursor:pointer;font-family:var(--mono);font-size:11px}
+  .piirow{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line);font-size:13px}
   .sizenote.rust{color:var(--rust);opacity:1;font-size:12px;line-height:1.5}
   .msg.err .body{color:var(--rust)}
   .msg .body a.alink{color:var(--signal);text-decoration:underline;text-underline-offset:2px;word-break:break-all;cursor:pointer}
@@ -1110,8 +1150,6 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   <aside class="rail">
     <div class="pad">
       <button class="newbtn" data-click="newChat"><span class="plus">+</span> New conversation</button>
-      <button class="importbtn" data-click="pickImport">⤒ Import handover.md</button>
-      <input type="file" id="importFile" accept=".md,.enc,.txt,text/markdown" style="display:none" data-change="importHandover" data-change-pass="event">
     </div>
     <div class="railhead">On this device <span id="saveStatus" style="color:var(--mix);opacity:0;transition:opacity .2s">· saved ✓</span></div>
     <div class="sessions" id="sessions"></div>
@@ -1122,6 +1160,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       <div class="meta"><span class="d"></span> <span id="acctLine">no account</span></div>
       <button class="refill" id="buyBtn" data-click="openBuy">+ Get credit</button>
       <button class="refill" id="acctBtn" data-click="openAccount" style="margin-top:6px">Account &amp; recovery</button>
+      <button class="refill" id="palBtn" data-click="openPalace" style="margin-top:6px">🏛 <span id="palBtnText">Memory Palace</span></button>
       <button class="refill" id="setBtn" data-click="openSettings" style="margin-top:6px">Settings</button>
     </div>
   </aside>
@@ -1136,6 +1175,11 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         </div>
         <div class="menu" id="menu"></div>
       </div>
+      <!-- The Memory Palace's sync state (§8a): quiet, never blocking. Tap → the palace. -->
+      <button class="palind" id="palInd" data-click="palaceIndTap" style="display:none" aria-label="Memory Palace">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10l9-6 9 6"/><path d="M5 10v8M9.5 10v8M14.5 10v8M19 10v8"/><path d="M3 20h18"/></svg>
+        <span class="pi-mark" id="palIndMark"></span>
+      </button>
       <div class="mix">
         <div class="path off" id="path">
           <div class="hop endhop"><span class="node"></span><span class="cap">you</span></div>
@@ -1166,6 +1210,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     <div class="composer">
       <button class="scrolldn" id="scrollBottom" data-click="scrollToBottom" title="Jump to latest" aria-label="Jump to latest" style="display:none"><span class="a">↓</span><span>latest</span></button>
       <div class="wrap2">
+        <div id="palLine" class="palline" style="display:none"></div>
         <div id="attachRow" class="attachrow" style="display:none"></div>
         <div id="liveNudge" class="nudge" style="display:none">
           <span class="ni">◎</span>
@@ -1212,24 +1257,57 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   </section>
 </div>
 
-<div class="scrim" id="scrim" data-click="__backdrop__" data-close="closeHandover">
+<!-- The Memory Palace (§9): files, lines, settings, sync. Built by renderPalace(). -->
+<div class="scrim" id="palScrim" data-click="__backdrop__" data-close="closePalace">
   <div class="modal">
-    <div class="mh"><span class="ttl">handover<b>.md</b></span><span class="x" data-click="closeHandover">✕</span></div>
-    <div class="mb">
-      <p>The whole conversation lives only on this device. Export a portable file you can archive or move
-      between machines. Add a passphrase to encrypt it (openable anywhere with that passphrase), or save
-      plaintext for reading. The enclave never sees any of this.</p>
-      <div class="passrow"><input type="password" id="expPass" placeholder="passphrase (optional — leave blank for plaintext)"></div>
-      <p class="hint">Encrypted export uses PBKDF2 + AES-256-GCM. Lose the passphrase and the file is unrecoverable — that is the point.</p>
-      <pre id="handoverText"></pre>
-    </div>
+    <div class="mh"><span class="ttl">🏛 <b id="palTitle">Memory Palace</b></span><span class="x" data-click="closePalace">✕</span></div>
+    <div class="mb" id="palBody"></div>
+  </div>
+</div>
+
+<!-- "Memory updated · View" and "Ask before saving" (§6.4): the changes, grouped by file. -->
+<div class="scrim" id="palDiffScrim" data-click="__backdrop__" data-close="closePalDiff">
+  <div class="modal">
+    <div class="mh"><span class="ttl">🏛 <b id="palDiffTitle"></b></span><span class="x" data-click="closePalDiff">✕</span></div>
+    <div class="mb" id="palDiffBody"></div>
+    <div class="mf" id="palDiffFoot"></div>
+  </div>
+</div>
+
+<!-- Opt-in at first start (§9a): what it is, and the trade-off. -->
+<div class="scrim" id="palOptScrim">
+  <div class="modal">
+    <div class="mh"><span class="ttl">🏛 <b id="palOptTitle"></b></span></div>
+    <div class="mb" id="palOptBody"></div>
     <div class="mf">
-      <button class="btn" data-click="closeHandover">Close</button>
-      <button class="btn" data-click="downloadHandover" data-args="false">Save plaintext .md</button>
-      <button class="btn primary" data-click="downloadHandover" data-args="true">Save encrypted</button>
+      <button class="btn" data-click="palaceOptIn" data-args="&quot;no&quot;" id="palOptNo"></button>
+      <button class="btn" data-click="palaceOptIn" data-args="&quot;local&quot;" id="palOptLocal"></button>
+      <button class="btn primary" data-click="palaceOptIn" data-args="&quot;on&quot;" id="palOptOn"></button>
     </div>
   </div>
 </div>
+
+<!-- The personal-information assistant (§7). -->
+<div class="scrim" id="piiScrim" data-click="__backdrop__" data-close="piiCancel">
+  <div class="modal">
+    <div class="mh"><span class="ttl">⚠ <b id="piiTitle"></b></span><span class="x" data-click="piiCancel">✕</span></div>
+    <div class="mb" id="piiBody"></div>
+    <div class="mf"><button class="btn" id="piiAsIs" data-click="piiDecide" data-args="&quot;asis&quot;"></button><button class="btn primary" id="piiAnon" data-click="piiDecide" data-args="&quot;anon&quot;"></button></div>
+  </div>
+</div>
+
+<!-- A yes/no for what cannot be undone (delete everything, export in the clear). -->
+<div class="scrim" id="palConfirmScrim" data-click="__backdrop__" data-close="palConfirmNo">
+  <div class="modal">
+    <div class="mh"><span class="ttl">⚠ <b id="palConfirmTitle"></b></span></div>
+    <div class="mb"><p id="palConfirmText"></p></div>
+    <div class="mf"><button class="btn" id="palConfirmNoBtn" data-click="palConfirmNo"></button><button class="btn primary" id="palConfirmYesBtn" data-click="palConfirmYes"></button></div>
+  </div>
+</div>
+<input type="file" id="palImportFile" accept=".json,application/json" style="display:none" data-change="palaceImportPicked" data-change-pass="event">
+
+<!-- Toasts only for what the person should notice (§8a). -->
+<div class="paltoast" id="palToast" role="status" aria-live="polite"></div>
 
 <div class="scrim" id="updScrim" style="z-index:1000">
   <div class="modal" role="alertdialog" aria-labelledby="updTtl">
@@ -1345,6 +1423,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       <div class="mland">
         <div class="catrow" data-click="navPage" data-click-pass="this" data-page="appearance" data-title="Appearance"><span class="ic c-appear"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></svg></span><span class="tx"><b>Appearance</b><small>Theme for the whole app</small></span><span class="chev">›</span></div>
         <div class="catrow" data-click="navPage" data-click-pass="this" data-page="net" data-title="Network &amp; Privacy"><span class="ic c-net"><svg viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"></path></svg></span><span class="tx"><b>Network &amp; Privacy</b><small>Speed, battery, cover traffic</small></span><span class="chev">›</span></div>
+        <div class="catrow" data-click="openPalace"><span class="ic c-guard"><svg viewBox="0 0 24 24"><path d="M3 10l9-6 9 6"></path><path d="M5 10v8M9.5 10v8M14.5 10v8M19 10v8"></path><path d="M3 20h18"></path></svg></span><span class="tx"><b>Memory Palace</b><small>Encrypted memory, personal-info check</small></span><span class="chev">›</span></div>
         <div class="catrow" data-click="navPage" data-click-pass="this" data-page="guard" data-title="Data Guard"><span class="ic c-guard"><svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg></span><span class="tx"><b>Data Guard</b><small>On-device sensitive-data checks</small></span><span class="chev">›</span></div>
         <div class="catrow" data-click="navPage" data-click-pass="this" data-page="eff" data-title="Efficiency"><span class="ic c-eff"><svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M20 4L8.5 15.5M20 20L8.5 8.5"></path></svg></span><span class="tx"><b>Efficiency</b><small>Trim tokens, save credit</small></span><span class="chev">›</span></div>
         <div class="catrow" data-click="navPage" data-click-pass="this" data-page="general" data-title="General"><span class="ic c-gen"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path></svg></span><span class="tx"><b>General</b><small>Typing, tutorial</small></span><span class="chev">›</span></div>
@@ -1465,7 +1544,6 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       <label class="setrow"><input type="checkbox" id="prTopic"><span><b>Topic-shift trimming</b><small>Drop earlier turns that are unrelated to your new question (e.g. weather → football). Terse follow-ups keep their context. Never drops the recent exchanges above.</small></span></label>
       <label class="setrow"><input type="checkbox" id="prWhite"><span><b>Whitespace normalisation</b><small>Collapse redundant spaces and blank lines. Lossless — wording is never changed.</small></span></label>
       <label class="setrow"><input type="checkbox" id="prReq"><span><b>Request de-fluffing</b><small>Strip leading/trailing filler (“could you please…”, “thanks!”) from your prompt. Meaning is preserved.</small></span></label>
-      <label class="setrow"><input type="checkbox" id="prHand"><span><b>Handover export trimming</b><small>Tidy whitespace and filler when exporting a session — lossless, no turns dropped, so re-imports stay lean without losing anything.</small></span></label>
 
       </div>
       <div class="mpage" data-page="guard">
@@ -1559,21 +1637,6 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     <div class="mh"><span class="ttl" id="gwTitle">Entry <b>gateway</b></span><span class="x" data-click="closeGw">✕</span></div>
     <div class="mb" id="gwBody"></div>
     <div class="mf"><button class="btn" data-click="closeGw">Close</button></div>
-  </div>
-</div>
-
-<div class="scrim" id="importScrim" data-click="__backdrop__" data-close="closeImport">
-  <div class="modal">
-    <div class="mh"><span class="ttl">Import <b>encrypted</b></span><span class="x" data-click="closeImport">✕</span></div>
-    <div class="mb">
-      <p>This handover is encrypted. Enter the passphrase it was saved with to decrypt and import it.</p>
-      <div class="passrow"><input type="password" id="importPass" placeholder="passphrase" data-keydown="__enter__" data-fn="decryptImport"></div>
-      <p class="hint" id="importStatus"></p>
-    </div>
-    <div class="mf">
-      <button class="btn" data-click="closeImport">Cancel</button>
-      <button class="btn primary" data-click="decryptImport">Decrypt &amp; import</button>
-    </div>
   </div>
 </div>
 
@@ -1712,11 +1775,13 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
 </script>
 
 <script type="module">
-  import { Vault, PassphraseCrypto, purgeWebData } from "./vault.js";
-  import { Handover } from "./handover.js";
+  import { Vault, purgeWebData } from "./vault.js";
   import { Backend, isTauri } from "./backend.js";
   import { formatToku, formatTokens, billingNotes, billingDetail } from "./billing.js";
-  import { pruneMessages, pruneForHandover, PRUNE_DEFAULTS } from "./prune.js";
+  import { pruneMessages, PRUNE_DEFAULTS } from "./prune.js";
+  import { buildIndex, toolResult, pendingTurns, worthExtracting, extractionMessages, parseExtraction, groupDiff, inverseOps, ago as palAgo, PALACE_DEFAULTS, MAX_READS } from "./palace.js";
+  import { detectPII, redact as piiRedact, anonymizeKnown, anonymizeAll, deanonymize, PII_DEFAULTS } from "./pii.js";
+  import { t } from "./i18n.js";
   import { scanText, GUARD_DEFAULTS } from "./guard.js";
 
   // --- app state (mirrors what the backend reports; the backend is the truth) ---
@@ -1844,6 +1909,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         if(account && modelRetries<6){ modelRetries++; setTimeout(refreshState, 3000); }
       } else { modelRetries=0; }
       renderBal();
+      if(isTauri()){ palaceStatusRefresh().then(()=>{ palaceRefresh(); palMaybeAsk(); }); }
     }catch(err){
       $("env").className="env bad";
       $("envText").textContent = "core · "+((err&&err.message)||err||"error");
@@ -2239,11 +2305,11 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     el.innerHTML = sessions.map(s=>`
       <div class="swipe">
         <button class="swipeact swipedel" data-click="deleteSession" data-id="${escAttr(s.id)}" data-click-pass="id">Delete</button>
-        <button class="swipeact swipeexp" data-click="exportSession" data-id="${escAttr(s.id)}" data-click-pass="id">Export</button>
+        <button class="swipeact swipeexp" data-click="rememberSession" data-id="${escAttr(s.id)}" data-click-pass="id">🏛 ${esc(t("palace.name"))}</button>
         <div class="session ${current&&s.id===current.id?'active':''}" data-click="openSession" data-id="${escAttr(s.id)}" data-click-pass="id">
           <span class="t">${esc(s.title)}</span>
           <span class="m"><span class="lock">◆</span> ${s.count} msgs</span>
-          <span class="exp" title="Export" data-click="exportSession" data-id="${escAttr(s.id)}" data-click-pass="id" data-stop="1">⤓</span>
+          <span class="exp" title="${escAttr(t("palace.menu.save"))}" data-click="rememberSession" data-id="${escAttr(s.id)}" data-click-pass="id" data-stop="1">🏛</span>
           <span class="del" title="Delete" data-click="deleteSession" data-id="${escAttr(s.id)}" data-click-pass="id" data-stop="1">✕</span>
         </div>
       </div>`).join("");
@@ -2565,10 +2631,17 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     }
     const cursor='<span class="cursor"></span>';
     const mixphase='<span id="mixphase" class="mixphase">'+mixPhaseHTML()+'</span>';
+    // The answer speaks in placeholders ([EMPLOYER_1]); on this device it reads with the
+    // real words put back (§7). The mapping never left the device.
+    const shown = m.role==='ai' ? deanonymize(m.text, palMapping(current)) : m.text;
     const text = m.role==='ai'
-      ? mdHtml(m.text, (m.streaming&&m.text)?cursor:'') + ((m.streaming&&!m.text)?mixphase:'')
-      : linkify(esc(m.text)) + (m.streaming?(m.text?cursor:mixphase):'');
-    return text
+      ? mdHtml(shown, (m.streaming&&m.text)?cursor:'') + ((m.streaming&&!m.text)?mixphase:'')
+      : linkify(esc(shown)) + (m.streaming?(m.text?cursor:mixphase):'');
+    const memUsed = (m.role==='ai' && Array.isArray(m.memUsed) && m.memUsed.length)
+      ? `<details class="memused"><summary>🏛 ${esc(t("palace.used"))}</summary>${m.memUsed.map(x=>esc(x)).join(" · ")}</details>` : '';
+    const memCost = (m.role==='ai' && typeof m.memToku==="number" && m.memToku>0)
+      ? `<div class="sizenote">🏛 ${esc(t("palace.diff.cost"))} · ${esc(formatToku(m.memToku))} TOKU</div>` : '';
+    return text + memUsed + memCost
       + (m.att?attHtml(m.att,m.uploading):(m.uploading?uploadHtml(m.uploading):''))
       + (m.images&&m.images.length?imagesHtml(m.images,mi):'')
       + (m.role==='ai'&&m.dismissed&&!m.streaming&&!m.collapsed?'<div class="sizenote">arrived after dismiss — already billed</div>':'');
@@ -2994,7 +3067,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   const MIX_TICK=26;   // ~26ms/char typing speed
   // The word for the working phase: a picture model is not "thinking", and naming what it
   // is actually doing is what makes a 26 s wait legible (measured 2026-09-17).
-  function mixSteps(){ return ["Sending to mixnet", modelKind==="image" ? "Drawing" : "Thinking"]; }
+  function mixSteps(){ return [t("palace.status.mixnet_send"), modelKind==="image" ? t("palace.status.drawing") : t("palace.status.model_thinking")]; }
   // What that wait usually costs, from the measurements in docs/unlinkability.md. Shown
   // beside the counter so a long wait reads as expected rather than as a hang. Ranges, not
   // averages: the model varies, and a number the user beats feels broken.
@@ -3034,6 +3107,21 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     }, MIX_TICK);
     if(!mixSecTimer) mixSecTimer=setInterval(paintMixPhase, 1000);
   }
+  // A status line that is not one of the two steps (§8): the Memory Palace's — "Model is
+  // requesting memory: Work", "Sending memory to the model (anonymized)", "Using memory
+  // from this device (sync in progress)". Typed out like the others; the step counter is
+  // left where it is, so the real lifecycle still only moves forward.
+  function setMixText(word){
+    if(mixTimer){ clearInterval(mixTimer); mixTimer=null; }
+    mixWord = /(\.\.\.|…)$/.test(word) ? word : word+"..."; mixHint=""; mixSince=performance.now();
+    let i=0; mixShown="";
+    mixTimer=setInterval(()=>{
+      i++; mixShown=mixWord.slice(0,i);
+      if(!paintMixPhase()) return;
+      if(i>=mixWord.length){ clearInterval(mixTimer); mixTimer=null; }
+    }, MIX_TICK);
+    if(!mixSecTimer) mixSecTimer=setInterval(paintMixPhase, 1000);
+  }
   function stopMixPhase(){
     if(mixTimer){ clearInterval(mixTimer); mixTimer=null; }
     if(mixSecTimer){ clearInterval(mixSecTimer); mixSecTimer=null; }
@@ -3062,11 +3150,13 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     // it isn't truly running elsewhere yet). Switching now would orphan its reply and lose
     // the conversation — block until it lands. See also updateSendEnabled's `busy` gate.
     if(busy){ setStatus("wait for the current answer to finish before starting a new chat"); return; }
+    palLeave(current);                 // the chat being left: anything worth remembering (§6.1)
     clearImage(); editTarget=null; current=newSession(); messages=current.messages; pinQuestion=false; followStream=true; renderSessions(); renderThread(); $("input").focus();
   }
   async function openSession(id){
     if(busy){ setStatus("wait for the current answer to finish before switching chats"); return; }
     const s = await Vault.load(id); if(!s) return;
+    if(current && current.id!==id) palLeave(current);
     clearImage();   // an un-sent attachment belongs to the chat you're leaving — drop it
     editTarget=null;
     current=s; messages=current.messages; pinQuestion=false; followStream=true;
@@ -3082,15 +3172,14 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     if(current && current.id===id) newChat();
     await refreshSessions();
   }
-  // Export ONE conversation from the rail (swipe-right on iOS, hover ⤓ on desktop).
-  // Opens the same "Export handover.md" modal as the composer — preview + optional
-  // encryption — but pointed at the chosen session instead of the current one.
-  async function exportSession(id){
+  // "Save to Memory Palace" for ONE conversation from the rail (swipe-right on iOS, hover
+  // on desktop): the manual trigger of the extraction (§6.1).
+  async function rememberSession(id){
     try{
-      const s = await Vault.load(id);
-      if(!s || !(s.messages && s.messages.length)){ setStatus("nothing to export"); return; }
-      showHandover(s);
-    }catch(e){ setStatus("export failed: "+((e&&e.message)||e)); }
+      const s = (current && current.id===id) ? current : await Vault.load(id);
+      if(!s || !(s.messages && s.messages.length)){ setStatus(t("palace.menu.nothing")); return; }
+      await palaceExtract(s, { manual:true });
+    }catch(e){ setStatus("memory: "+((e&&e.message)||e)); }
   }
   async function persist(firstPrompt){
     if(!current) return;
@@ -3960,9 +4049,12 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     if(!guardBypass && text){
       const g=getGuardOpts();
       if(g.enabled && g.scanText){
-        const findings=scanText(text);
+        let findings=scanText(text);
         const smart=await smartScanBatch([text]);        // + open-class entities (names, addresses…)
         if(smart && smart[0]){ const seen=new Set(findings.map(f=>f.type)); smart[0].forEach(x=>{ if(!seen.has(x.type)){ seen.add(x.type); findings.push(x); } }); }
+        // What the personal-info check (§7) handles — and can anonymise instead of only
+        // warning — is left to it, so nobody is asked twice about one email address.
+        if(piiOpts().mode!=="off"){ const PII_HANDLES=new Set(["email","phone","iban","card","name","dob","address"]); findings=findings.filter(f=>!PII_HANDLES.has(f.type)); }
         if(findings.length){
           showGuard(findings, { intro:"This message looks like it contains sensitive data:", confirmLabel:"Send anyway", cancelLabel:"Let me edit", onConfirm:()=>{ guardBypass=true; sendMsg(); } });
           return;
@@ -3971,6 +4063,31 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     }
     guardBypass=false;
     if(!current){ current=newSession(); messages=current.messages; }
+    // The personal-information assistant (§7), on this device, after the guard: an
+    // employer, a name, an address… → [EMPLOYER_1], [PERSON_1] instead, if the person
+    // wants. Values chosen before are replaced without asking again.
+    const piiMode = piiOpts().mode;
+    let sentText = text, piiAdded = [];
+    if(piiMode!=="off" && text){
+      const map = palMapping(current);
+      sentText = anonymizeKnown(text, map);
+      const findings = detectPII(sentText, { ignore: piiOpts().ignore });
+      if(findings.length && piiMode==="ask" && !piiChoice){
+        showPii(findings, (choice)=>{ piiChoice=choice; guardBypass=true; sendMsg(override); });
+        return;
+      }
+      if(findings.length && (piiMode==="always" || piiChoice==="anon")){
+        const r = piiRedact(sentText, findings, map);
+        sentText = r.text; piiAdded = r.added;
+      }
+    }
+    piiChoice = null;
+    if(piiAdded.length){
+      current.pii = [...(current.pii||[]), ...piiAdded];
+      // The palace keeps them too (sealed), so memory written from this chat reads back.
+      if(palOn()) Backend.palaceApply(piiAdded.map(p=>({ op:"placeholder", ph:p.ph, value:p.value, kind:p.kind }))).then(r=>{ if(r&&r.palace) palData=r.palace; }).catch(()=>{});
+    }
+    palDisarm();
 
     const file=pendingFile;                            // capture (may be null)
     // No attachment, image model, a picture explicitly picked with "Iterate / edit" → it
@@ -3994,9 +4111,10 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     // turn as an attachment (refPic → apiAtts), not through the transcript.
     const apiMessages = modelKind === "image" ? [] :
       messages.filter(m=>(m.role==="you"||m.role==="ai") && (m.text||"").trim())
-        .map(m=>({ role:m.role==="you"?"user":"assistant", content:m.text }));
+        .map(m=>({ role:m.role==="you"?"user":"assistant", content:(m.role==="you" && m.sent) ? m.sent : m.text }));
 
     const youMsg={role:"you",text,att:displayAtt};
+    if(sentText!==text) youMsg.sent=sentText;
     if(refPic) youMsg.editRef=true;
     messages.push(youMsg); if(!isRetry){ el.value=""; autogrow(el); }
     const ai={role:"ai",text:"",streaming:true,model:currentModel,img:modelKind==="image"}; messages.push(ai);
@@ -4030,7 +4148,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       return;
     }
     setStatus("streaming…"); renderThread();
-    const outMsg={ role:"user", content:text }; if(apiAtts) outMsg.attachments=apiAtts;
+    const outMsg={ role:"user", content:sentText }; if(apiAtts) outMsg.attachments=apiAtts;
     apiMessages.push(outMsg);
 
     // Smart pruning: trim the transcript down to what THIS question needs before
@@ -4058,7 +4176,22 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     // downgrade (2K on Lite → 1K) is told to the user, not silently swallowed.
     const reqSize = imageSize(), reqLabel = $("mName").textContent || currentModel;
     dlProg=null;
-    Backend.chat({ model: currentModel, messages: sendMessages, maxTokens: 4096, live: useLive, thinkingBudget: thinkingBudget(), bigReply: modelKind === "image", retry: replay, imageSize: reqSize, lossless: imageLossless() }, {
+    // The Memory Palace (§5): the index goes with the question — titles and descriptions,
+    // anonymised, never a file marked "never send" — and the model may ask for a file.
+    let memory = null, memAnon = null;
+    if(palActiveFor(current) && modelKind!=="image"){
+      memAnon = palAnonymizer(current);
+      const index = buildIndex(palData, memAnon);
+      if(index.length) memory = { index };
+      // Never blocking: a sync still running means this device's copy is what is used.
+      if(memory && palStatus.state==="syncing") setMixText(t("palace.sync.in_progress"));
+    }
+    palChat({ model: currentModel, messages: sendMessages, maxTokens: 4096, live: useLive, thinkingBudget: thinkingBudget(), bigReply: modelKind === "image", retry: replay, imageSize: reqSize, lossless: imageLossless(), memory }, {
+      // The model asked for a file, and it is on its way back (anonymised).
+      onMemory:(what, title)=>{
+        if(what==="request") setMixText(t("palace.status.memory_request", { title }));
+        else setMixText(t("palace.status.memory_send"));
+      },
       // Real lifecycle signals drive the status line: request fully sent →
       // "Thinking…", which holds until the answer itself takes over.
       onPhase:(p,info)=>{
@@ -4074,7 +4207,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
           paintMixPhase();
           return;
         }
-        if(p==="sent"){ setMixPhase(1); tSent=performance.now(); }
+        if(p==="sent"){ if(mixStep>=1) setMixText(mixSteps()[1]); else setMixPhase(1); if(!tSent) tSent=performance.now(); }
         else if(p==="image"&&info){
           // The picture was generated (and charged) — now its chunks trickle through the
           // mixnet. Replace the held "Thinking…" with live progress; the first event is
@@ -4161,10 +4294,12 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
           ai.note = "Shortened to fit your balance. Get credit, and the next answers run to full length.";
           ai.noteKind = "rust";
         }
+        if(Array.isArray(evt.memUsed) && evt.memUsed.length) ai.memUsed = evt.memUsed;
         renderThread();
         setPrice(evt.usage);
         await persist(text);
         updateSendEnabled();
+        palArmIdle();
       },
       onError: async (err)=>{
         stopMixPhase();
@@ -4198,102 +4333,6 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         if(/mixnet|no reply|stream ended|not connected/i.test(String(err||""))) refreshRoute();
       }
     });
-  }
-
-  // ---------- export / import ----------
-  // When set (by exportSession from the rail), the handover modal exports THIS session
-  // instead of the current one. Cleared when the modal opens for the composer / closes.
-  let exportTarget = null;
-  function sessionForExport(){
-    const base = exportTarget || current;
-    const s = base && base.messages && base.messages.length ? base : { model:currentModel, messages:[] };
-    const opts = getPruneOpts();
-    if(!opts.handover || !s.messages.length) return s;
-    // Lossless tidy on export (whitespace + filler) — role/text shape in, same out.
-    const conv = s.messages.filter(m=>m.role==="you"||m.role==="ai")
-      .map(m=>({ role:m.role==="you"?"user":"assistant", content:m.text }));
-    const tidied = pruneForHandover(conv, opts);
-    return { ...s, messages: tidied.map(m=>({ role:m.role==="user"?"you":"ai", text:m.content })) };
-  }
-  function showHandover(sess){
-    exportTarget = (sess && sess.messages) ? sess : null;   // rail export targets a session; composer export = current
-    const md=Handover.serialize(sessionForExport());
-    // The preview contains RAW assistant text (untrusted — the server proxies the
-    // model). Escape it BEFORE the two cosmetic highlights so an answer containing
-    // e.g. <img onerror=…> renders as inert text, not live HTML — see H1. The markers
-    // (--- / schema: …) are letters/dashes, unaffected by escaping &<>.
-    $("handoverText").innerHTML = esc(md)
-      .replace(/^---$/gm,'<span class="kc">---</span>')
-      .replace(/^(schema|created|model|title):/gm,'<span class="k">$1</span>:');
-    $("expPass").value="";
-    openScrim("scrim");
-  }
-  // One export path for every platform: encryption (when chosen) happens HERE
-  // in the webview (PBKDF2 + AES-256-GCM via PassphraseCrypto), so the file
-  // that leaves is opaque regardless of where it lands. On iOS an anchor
-  // download is a no-op in WKWebView, so the finished text goes through the
-  // native share sheet instead (Files, AirDrop, …).
-  const onPhone = () => /iPhone|iPad|iPod/.test(navigator.userAgent);
-  async function exportTextFile(name, text){
-    if(isTauri() && onPhone()){ await Backend.shareText(name, text); return; }
-    const a=document.createElement("a");
-    a.href=URL.createObjectURL(new Blob([text],{type:"application/octet-stream"}));
-    a.download=name; a.click();
-    URL.revokeObjectURL(a.href);
-  }
-  async function downloadHandover(encrypt){
-    const md=Handover.serialize(sessionForExport());
-    let text, name;
-    if(encrypt){
-      const pass=$("expPass").value;
-      if(!pass){ $("expPass").focus(); return; }
-      text=await PassphraseCrypto.encrypt(md,pass);
-      name="handover.md.enc";
-    }else{ text=md; name="handover.md"; }
-    try{ await exportTextFile(name, text); }
-    catch(e){ setStatus("export failed: "+((e&&e.message)||e)); return; }
-    closeHandover();
-  }
-  function closeHandover(){ exportTarget=null; $("scrim").classList.remove("open"); }
-
-  function pickImport(){ $("importFile").click(); }
-  // Encrypted imports need a passphrase — but prompt()/alert() are no-ops in the
-  // Tauri webview, so use an in-app modal instead of a native prompt.
-  let pendingImportText = null;
-  function closeImport(){ pendingImportText=null; $("importScrim").classList.remove("open"); }
-  async function importHandover(ev){
-    const file=ev.target.files&&ev.target.files[0]; if(!file) return;
-    ev.target.value="";
-    let text;
-    try{ text=await file.text(); }catch(e){ setStatus("could not read that file"); return; }
-    if(PassphraseCrypto.isEnvelope(text)){
-      pendingImportText=text;
-      $("importStatus").textContent=""; $("importPass").value="";
-      openScrim("importScrim");
-      setTimeout(()=>$("importPass").focus(),50);
-      return;
-    }
-    await finishImport(text);
-  }
-  async function decryptImport(){
-    const pass=$("importPass").value;
-    if(!pass){ $("importStatus").textContent="Enter the passphrase."; return; }
-    if(!pendingImportText){ closeImport(); return; }
-    $("importStatus").textContent="decrypting…";
-    let text;
-    try{ text=await PassphraseCrypto.decrypt(pendingImportText, pass); }
-    catch(_){ $("importStatus").textContent="Wrong passphrase or corrupted file."; return; }
-    closeImport();
-    await finishImport(text);
-  }
-  async function finishImport(text){
-    const parsed=Handover.parse(text);
-    if(!parsed.messages.length){ setStatus("no conversation found in that file"); return; }
-    current={ id:uuid(), title:parsed.title||(parsed.messages[0].text||"imported").slice(0,40),
-      model:parsed.model||currentModel, created:parsed.created||new Date().toISOString(), messages:parsed.messages };
-    messages=current.messages;
-    await Vault.save(current); await refreshSessions(); renderThread();
-    setStatus("imported ✓");
   }
 
   // ---------- settings (smart pruning) ----------
@@ -4423,7 +4462,6 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     $("prTopic").checked = !!o.topicShift;
     $("prWhite").checked = !!o.whitespace;
     $("prReq").checked   = !!o.requestTrim;
-    $("prHand").checked  = !!o.handover;
     const g = getGuardOpts();
     $("grEnabled").checked = !!g.enabled;
     $("grText").checked    = !!g.scanText;
@@ -4666,7 +4704,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
 
 
   function persistSettings(){
-    const o = { ctxPairs:CTX_STEPS[parseInt($("prCtx").value,10)] ?? 4, topicShift:$("prTopic").checked, whitespace:$("prWhite").checked, requestTrim:$("prReq").checked, handover:$("prHand").checked };
+    const o = { ctxPairs:CTX_STEPS[parseInt($("prCtx").value,10)] ?? 4, topicShift:$("prTopic").checked, whitespace:$("prWhite").checked, requestTrim:$("prReq").checked };
     savePruneOpts(o);
     const mem = o.ctxPairs>=999 ? "full history" : ("last "+o.ctxPairs+" exchanges");
     $("setStatus").textContent = "Saved — sending "+mem+" as context, from your next message.";
@@ -6162,12 +6200,567 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     }
   }
 
+  // ---------- the Memory Palace ----------
+  // The copy on this device, the queue and the sync are Rust's (palace.rs); this is what
+  // the person sees and decides: the indicator, the palace screen, the opt-in, the
+  // "Memory updated" toast and its undo, the personal-info prompt, and the extraction.
+  const PAL_KEY = "scrai.palace", PII_KEY = "scrai.pii";
+  function palOpts(){ try{ return { ...PALACE_DEFAULTS, ...(JSON.parse(localStorage.getItem(PAL_KEY)||"{}")) }; }catch(_){ return { ...PALACE_DEFAULTS }; } }
+  function savePalOpts(o){ try{ localStorage.setItem(PAL_KEY, JSON.stringify(o)); }catch(_){} }
+  function piiOpts(){ try{ const o = { ...PII_DEFAULTS, ignore:[], ...(JSON.parse(localStorage.getItem(PII_KEY)||"{}")) }; if(!Array.isArray(o.ignore)) o.ignore=[]; return o; }catch(_){ return { ...PII_DEFAULTS, ignore:[] }; } }
+  function savePiiOpts(o){ try{ localStorage.setItem(PII_KEY, JSON.stringify(o)); }catch(_){} }
+  let palStatus = { state:"locked" }, palData = { files:[], placeholders:[] };
+  let palAskedThisRun = false, palFirstSyncSeen = false, palFailToastAt = 0, palDiffState = null, palConfirmFn = null;
+  let piiChoice = null, piiPending = null;
+  const palOn = () => palStatus.enabled === true;
+  const palActiveFor = (sess) => palOn() && !(sess && sess.incognito);
+  // Placeholders → values, from the palace (sealed, synced) and from this chat.
+  function palMapping(sess){ return [ ...((palData && palData.placeholders) || []), ...((sess && sess.pii) || []) ]; }
+  // For what leaves the device from the palace — the index, a file the model asked for:
+  // anonymised whenever the check is not off. New placeholders are kept in the palace.
+  function palAnonymizer(sess){
+    if(piiOpts().mode === "off") return (x)=>x;
+    const map = palMapping(sess);
+    const added = [];
+    const fn = (x)=>{
+      const r = anonymizeAll(String(x||""), map, { ignore: piiOpts().ignore });
+      if(r.added.length){ map.push(...r.added); added.push(...r.added); }
+      return r.text;
+    };
+    fn.flush = ()=>{ if(added.length && palOn()) Backend.palaceApply(added.map(p=>({ op:"placeholder", ph:p.ph, value:p.value, kind:p.kind }))).then(r=>{ if(r&&r.palace) palData=r.palace; }).catch(()=>{}); };
+    return fn;
+  }
+  async function palaceRefresh(){
+    if(!isTauri()) return;
+    try{ palData = await Backend.palaceGet(); }catch(_){}
+  }
+  async function palaceStatusRefresh(){
+    if(!isTauri()) return;
+    try{ palStatus = await Backend.palaceStatus(); renderPalInd(); }catch(_){}
+  }
+
+  // A question, and the rounds of `read_memory` it takes (§5). Each round is an ordinary
+  // request, billed as such; the costs are added up for the footer.
+  function palChat(body, h){
+    if(!body.memory) return Backend.chat(body, h);
+    const anon = palAnonymizer(current);
+    const msgs = [...body.messages];
+    const used = [];
+    let rounds = 0, cost = 0, tin = 0, tout = 0;
+    const go = () => Backend.chat({ ...body, messages: msgs }, {
+      onPhase: h.onPhase, onDelta: h.onDelta, onError: h.onError,
+      onDone: async (evt)=>{
+        const calls = Array.isArray(evt.toolCalls) ? evt.toolCalls : [];
+        if(calls.length && rounds < MAX_READS){
+          rounds++;
+          cost += Number(evt.cost)||0;
+          tin += Number(evt.usage && evt.usage.inputTokens)||0; tout += Number(evt.usage && evt.usage.outputTokens)||0;
+          msgs.push({ role:"assistant", content: evt.text || "", toolCalls: calls });
+          for(const c of calls){
+            const fid = c && c.args && c.args.file_id;
+            const f = (palData.files||[]).find(x=>x.id===fid);
+            // The title shown is this device's; it is never sent anywhere.
+            h.onMemory && h.onMemory("request", f ? deanonymize(f.title, palMapping(current)) : "?");
+            await new Promise(r=>setTimeout(r, 400));
+            const r = toolResult(palData, fid, anon);
+            if(r.found && f && !used.includes(f.title)) used.push(f.title);
+            msgs.push({ role:"tool", toolCallId: c.id, name:"read_memory", content: r.content });
+          }
+          anon.flush && anon.flush();
+          h.onMemory && h.onMemory("send");
+          go();
+          return;
+        }
+        if(rounds){
+          evt.cost = (Number(evt.cost)||0) + cost;
+          if(evt.usage){
+            evt.usage.inputTokens = (Number(evt.usage.inputTokens)||0) + tin;
+            evt.usage.outputTokens = (Number(evt.usage.outputTokens)||0) + tout;
+            if(evt.usage.billing) evt.usage.billing.priceToku = evt.cost;
+          }
+        }
+        evt.memUsed = used;
+        anon.flush && anon.flush();
+        h.onDone(evt);
+      },
+    });
+    return go();
+  }
+
+  // ---- the indicator (§8a) and the line above the composer
+  let palFadeTimer = null;
+  function renderPalInd(){
+    const el = $("palInd"); if(!el) return;
+    const st = palStatus.state || "locked";
+    const hidden = st === "off";
+    el.style.display = hidden ? "none" : "";
+    el.className = "palind " + st;
+    el.title = t("palace.sync." + st);
+    el.setAttribute("aria-label", t("palace.name") + " · " + t("palace.sync." + st));
+    const mark = $("palIndMark");
+    if(mark) mark.textContent = st==="up_to_date" ? "✓" : st==="error" ? "!" : st==="offline" ? "⌀" : st==="local_only" ? "⌂" : "";
+    clearTimeout(palFadeTimer);
+    if(st === "up_to_date") palFadeTimer = setTimeout(()=>el.classList.add("faded"), 2000);
+    const b = $("palBtnText"); if(b) b.textContent = t("palace.name");
+  }
+  let palLineTimer = null;
+  // Only over an empty or new chat; routine news hides itself.
+  function showPalLine(text, { action, actionLabel, hideAfter } = {}){
+    const el = $("palLine"); if(!el) return;
+    clearTimeout(palLineTimer);
+    if(!text || (messages && messages.length && !action)){ el.style.display = "none"; return; }
+    el.innerHTML = `<span>🏛 ${esc(text)}</span>` + (action ? ` <span class="pl-act" data-click="${escAttr(action)}">${esc(actionLabel||t("palace.sync.view"))}</span>` : "");
+    el.style.display = "";
+    if(hideAfter) palLineTimer = setTimeout(()=>{ el.style.display = "none"; }, hideAfter);
+  }
+  function hidePalLine(){ const el=$("palLine"); if(el) el.style.display="none"; }
+
+  let toastTimer = null;
+  function palToast(text, actions = []){
+    const el = $("palToast"); if(!el) return;
+    clearTimeout(toastTimer);
+    el.innerHTML = `<span>🏛 ${esc(text)}</span>` + actions.map(a=>`<button class="ta" data-click="${escAttr(a.fn)}">${esc(a.label)}</button>`).join("");
+    el.classList.add("show");
+    toastTimer = setTimeout(()=>el.classList.remove("show"), 10_000);
+  }
+  function palToastHide(){ const el=$("palToast"); if(el) el.classList.remove("show"); clearTimeout(toastTimer); }
+
+  function onPalaceStatus(st){
+    const was = palStatus.state;
+    palStatus = st || palStatus;
+    renderPalInd();
+    if(st.phase === "start" && !palFirstSyncSeen) showPalLine(t("palace.sync.syncing"));
+    if(st.phase === "done"){
+      const first = !palFirstSyncSeen; palFirstSyncSeen = true;
+      const n = Number(st.changes)||0;
+      if(n > 0){
+        palaceRefresh().then(()=>{ if($("palScrim").classList.contains("open")) renderPalace(); });
+        const msg = n === 1 ? t("palace.sync.remote1") : t("palace.sync.remote", { n });
+        showPalLine(msg, { action:"openPalace" });
+        palToast(msg, [{ fn:"openPalace", label:t("palace.sync.view") }]);
+      } else if(first){
+        showPalLine(t("palace.sync.up_to_date"), { hideAfter: 2000 });
+      }
+    }
+    if(st.phase === "failed"){
+      if(!palFirstSyncSeen && st.state === "offline") showPalLine(t("palace.sync.offline"), { hideAfter: 4000 });
+      palFirstSyncSeen = true;
+      // A toast only once the retries are used up, and not every five seconds after that.
+      if(st.state === "error" && Date.now() - palFailToastAt > 30*60_000){
+        palFailToastAt = Date.now();
+        palToast(t("palace.sync.failed_toast"), [{ fn:"palaceSyncNow", label:t("palace.sync.now") }]);
+      }
+    }
+    if(was !== palStatus.state && $("palScrim").classList.contains("open")) renderPalaceHead();
+  }
+
+  async function palaceStart(){
+    if(!isTauri()) return;
+    Backend.onPalaceStatus(onPalaceStatus);
+    // One-time cleanup: the handover.md feature is gone (replaced by the palace), and so
+    // are its leftovers on dev and test devices.
+    try{
+      if(!localStorage.getItem("scrai.cleanup.handover")){
+        const o = JSON.parse(localStorage.getItem("scrai.prune")||"{}");
+        if(o && "handover" in o){ delete o.handover; localStorage.setItem("scrai.prune", JSON.stringify(o)); }
+        for(const k of Object.keys(localStorage)) if(/handover/i.test(k)) localStorage.removeItem(k);
+        localStorage.setItem("scrai.cleanup.handover", "1");
+      }
+    }catch(_){}
+    await palaceStatusRefresh();
+    await palaceRefresh();
+  }
+  // Opt-in (§9a): asked once, when there is an account, and never over another sheet.
+  function palMaybeAsk(){
+    if(palAskedThisRun || !account || palStatus.enabled !== null && palStatus.enabled !== undefined) return;
+    palAskedThisRun = true;
+    let tries = 0;
+    const tryAsk = ()=>{
+      if(palStatus.enabled != null) return;
+      // Never over the boot animation, the tutorial, the terms or any other sheet.
+      if(!bootEnded || document.querySelector(".scrim.open")){ if(++tries < 60) setTimeout(tryAsk, 3000); else palAskedThisRun = false; return; }
+      $("palOptTitle").textContent = t("palace.optin.title");
+      $("palOptBody").innerHTML = `<p>${esc(t("palace.optin.body"))}</p><p><b>${esc(t("palace.optin.tradeoff"))}</b></p><p class="hint">${esc(t("palace.optin.phrase"))}</p>`;
+      $("palOptOn").textContent = t("palace.optin.on"); $("palOptLocal").textContent = t("palace.optin.local"); $("palOptNo").textContent = t("palace.optin.no");
+      openScrim("palOptScrim");
+    };
+    setTimeout(tryAsk, 1500);
+  }
+  async function palaceOptIn(choice){
+    $("palOptScrim").classList.remove("open");
+    try{
+      palStatus = await Backend.palaceSetConfig(choice !== "no", choice === "local");
+      renderPalInd();
+      if(choice !== "no"){ await palaceRefresh(); if(choice === "on") Backend.palaceSync(false).catch(()=>{}); }
+    }catch(e){ setStatus("memory: "+((e&&e.message)||e)); }
+  }
+  function palaceIndTap(){
+    if(palStatus.state === "error" || palStatus.state === "offline"){ palaceSyncNow(); return; }
+    openPalace();
+  }
+  async function palaceSyncNow(){
+    palToastHide();
+    try{ await Backend.palaceSync(true); }catch(_){}
+    await palaceRefresh();
+    if($("palScrim").classList.contains("open")) renderPalace();
+  }
+
+  // ---- the extraction (§6): idle, chat end, manual
+  let palIdleTimer = null, palExtracting = false;
+  function palDisarm(){ clearTimeout(palIdleTimer); palIdleTimer = null; }
+  function palArmIdle(){
+    palDisarm();
+    if(!current || !palActiveFor(current) || palOpts().updates === "off") return;
+    const secs = Math.max(10, Math.min(3600, Number(palOpts().idleSecs) || 45));
+    const sess = current;
+    palIdleTimer = setTimeout(()=>{ palIdleTimer = null; palaceExtract(sess, {}); }, secs*1000);
+  }
+  // Leaving a chat (another chat, a new one, the app going to the background).
+  function palLeave(sess){
+    palDisarm();
+    if(sess && palActiveFor(sess) && palOpts().updates !== "off" && worthExtracting(pendingTurns(sess))) palaceExtract(sess, {});
+  }
+  // The cheapest text model of the provider this chat already uses (its terms are
+  // accepted), for the extraction.
+  function extractionModel(){
+    const cur = models.find(m=>m.model===currentModel);
+    const pool = models.filter(m=>m.kind!=="image" && (!cur || !cur.vendor || m.vendor===cur.vendor));
+    const price = (m)=> m.rate ? (Number(m.rate.in)||0) + (Number(m.rate.out)||0) : 1e12;
+    pool.sort((a,b)=>price(a)-price(b));
+    return (pool[0] && pool[0].model) || currentModel;
+  }
+  async function palaceExtract(sess, { manual } = {}){
+    if(!sess) return;
+    if(!palOn()){ if(manual) openPalace(); return; }
+    if(sess.incognito){ if(manual) setStatus(t("palace.screen.incognito_hint")); return; }
+    const mode = palOpts().updates;
+    if(mode === "off" && !manual) return;
+    if(palExtracting) return;
+    // Never beside a question in flight: it would wait behind it on the one connection.
+    if(busy){ if(!manual) palArmIdle(); return; }
+    const turns = pendingTurns(sess);
+    if(!worthExtracting(turns)){ if(manual) palToast(t("palace.menu.nothing")); return; }
+    palExtracting = true;
+    if(manual) palToast(t("palace.menu.saving"));
+    showPalLine(t("palace.status.palace_update"), { action: null });
+    const el = $("palLine"); if(el && messages.length){ el.innerHTML = `<span>🏛 ${esc(t("palace.status.palace_update"))}</span>`; el.style.display=""; }
+    try{
+      await palaceRefresh();
+      const anon = palAnonymizer(sess);
+      const index = buildIndex(palData, anon);
+      const msgs = extractionMessages(turns, index);
+      const r = await Backend.chatRaw({ model: extractionModel(), messages: msgs, maxTokens: 1024, thinkingBudget: 0 });
+      anon.flush && anon.flush();
+      // These turns are done, whatever came out of them.
+      sess.palaceAt = (sess.messages||[]).length;
+      const cost = Number(r && r.cost) || 0;
+      const last = [...(sess.messages||[])].reverse().find(m=>m.role==="ai");
+      if(last && cost){ last.memToku = (Number(last.memToku)||0) + cost; }
+      if(typeof r.balance === "number"){ balance = r.balance; renderBal(); }
+      try{ await Vault.save(sess); }catch(_){}
+      if(sess === current) renderThread();
+      let ops = parseExtraction(r && r.text, palData);
+      // The personal-info check on what is about to be kept (§6.2): values anonymised
+      // before stay anonymised; in "always" new ones are too; in "ask" the person sees them.
+      const piiMode = piiOpts().mode;
+      const map = palMapping(sess);
+      let flagged = false;
+      ops = ops.map(o=>{
+        if(!o.text || piiMode === "off") return o;
+        let text = anonymizeKnown(o.text, map);
+        const f = detectPII(text, { ignore: piiOpts().ignore });
+        if(f.length && piiMode === "always"){ const rr = piiRedact(text, f, map); map.push(...rr.added); text = rr.text; }
+        else if(f.length){ flagged = true; return { ...o, text, pii: f }; }
+        return { ...o, text };
+      });
+      // Placeholders the lines use must be in the palace, or another device could not
+      // read them back.
+      const phOps = [];
+      for(const m of map){ if(ops.some(o=>o.text && o.text.includes(m.ph)) && !(palData.placeholders||[]).some(p=>p.ph===m.ph)) phOps.push({ op:"placeholder", ph:m.ph, value:m.value, kind:m.kind }); }
+      if(!ops.length){ if(manual) palToast(t("palace.menu.nothing")); return; }
+      if(mode === "ask" || flagged){ showPalAsk(ops, phOps, sess); return; }
+      await palApplyAndToast([...phOps, ...ops]);
+    }catch(e){
+      if(manual) palToast(String((e&&e.message)||e).replace(/^NO_CREDIT:\s*/, ""));
+    }finally{
+      palExtracting = false;
+      hidePalLine();
+    }
+  }
+  async function palApplyAndToast(ops){
+    const r = await Backend.palaceApply(ops);
+    if(r && r.palace) palData = r.palace;
+    const applied = ((r && r.applied) || []).filter(c=>["add","update","delete"].includes(c.op));
+    if(!applied.length) return;                       // no changes, no toast (§6.4)
+    palDiffState = { applied, ask:false };
+    palToast(t("palace.toast.updated"), [{ fn:"palDiffOpen", label:t("palace.toast.view") }, { fn:"palUndoAll", label:t("palace.toast.undo") }]);
+  }
+  async function palUndo(changes){
+    try{
+      const r = await Backend.palaceApply(inverseOps(changes));
+      if(r && r.palace) palData = r.palace;
+      palToast(t("palace.toast.undone"));
+    }catch(e){ setStatus("memory: "+((e&&e.message)||e)); }
+  }
+  async function palUndoAll(){
+    if(!palDiffState || !palDiffState.applied) return;
+    const changes = palDiffState.applied; palDiffState = null;
+    closePalDiff();
+    await palUndo(changes);
+  }
+  async function palUndoOne(el){
+    const i = Number(el && el.dataset.i);
+    if(!palDiffState || !palDiffState.applied || !palDiffState.applied[i] || palDiffState.applied[i].undone) return;
+    palDiffState.applied[i].undone = true;
+    await palUndo([palDiffState.applied[i]]);
+    renderPalDiff();
+  }
+  function palDiffOpen(){ palToastHide(); if(palDiffState) { renderPalDiff(); openScrim("palDiffScrim"); } }
+  function closePalDiff(){ $("palDiffScrim").classList.remove("open"); }
+  // "Ask before saving": the same sheet with checkboxes, before anything is stored.
+  function showPalAsk(ops, phOps, sess){
+    palDiffState = { ask:true, ops, phOps, sess };
+    renderPalDiff();
+    openScrim("palDiffScrim");
+  }
+  function fileTitleOf(o){
+    if(o.newFileTitle) return o.newFileTitle;
+    const f = (palData.files||[]).find(x=>x.id===o.fileId);
+    return f ? f.title : "—";
+  }
+  function renderPalDiff(){
+    const st = palDiffState; if(!st) return;
+    const map = palMapping(st.sess || current);
+    const show = (x)=>esc(deanonymize(x||"", map));
+    const kindLbl = { add:t("palace.diff.added"), update:t("palace.diff.changed"), delete:t("palace.diff.removed") };
+    let html = '<div class="paldiff">';
+    if(st.ask){
+      $("palDiffTitle").textContent = t("palace.diff.ask");
+      const groups = new Map();
+      st.ops.forEach((o,i)=>{ const k=fileTitleOf(o); if(!groups.has(k)) groups.set(k,[]); groups.get(k).push([o,i]); });
+      for(const [title, list] of groups){
+        html += `<div class="grp">${esc(deanonymize(title, map))}</div>`;
+        for(const [o,i] of list){
+          const old = o.lineId ? ((palData.files||[]).find(f=>f.id===o.fileId)||{lines:[]}).lines.find(l=>l.id===o.lineId) : null;
+          const piiNote = o.pii ? `<label class="hint" style="display:block;margin-top:3px"><input type="checkbox" class="palAnonChk" data-i="${i}" checked> ${esc(t("palace.pii.anonymize"))}: ${o.pii.map(f=>esc(f.value)).join(", ")}</label>` : "";
+          html += `<div class="chg"><input type="checkbox" class="palAskChk" data-i="${i}" checked><span class="k ${o.op}">${esc(kindLbl[o.op]||o.op)}</span><span>${old?`<span class="was">${show(old.text)}</span>`:""}${o.op==="delete"?"":show(o.text)}${piiNote}</span></div>`;
+        }
+      }
+      $("palDiffFoot").innerHTML = `<button class="btn" data-click="palAskDiscard">${esc(t("palace.diff.discard"))}</button><button class="btn primary" data-click="palAskSave">${esc(t("palace.diff.save"))}</button>`;
+    } else {
+      $("palDiffTitle").textContent = t("palace.diff.title");
+      st.applied.forEach((c,i)=>{ c._i = i; });
+      for(const g of groupDiff(st.applied)){
+        html += `<div class="grp">${esc(deanonymize(g.title, map))}</div>`;
+        for(const c of g.changes){
+          html += `<div class="chg"><span class="k ${c.op}">${esc(kindLbl[c.op]||c.op)}</span><span style="flex:1">${c.op==="update"?`<span class="was">${show(c.before)}</span>`:""}${c.op==="delete"?`<span class="was">${show(c.before)}</span>`:show(c.text)}</span>${c.undone?`<span class="hint">${esc(t("palace.toast.undone"))}</span>`:`<button class="palmini" data-click="palUndoOne" data-click-pass="this" data-i="${c._i}">${esc(t("palace.toast.undo"))}</button>`}</div>`;
+        }
+      }
+      $("palDiffFoot").innerHTML = `<button class="btn" data-click="closePalDiff">${esc(t("palace.diff.close"))}</button>`;
+    }
+    $("palDiffBody").innerHTML = html + "</div>";
+  }
+  async function palAskSave(){
+    const st = palDiffState; if(!st || !st.ask) return;
+    const keep = new Set([...document.querySelectorAll(".palAskChk")].filter(c=>c.checked).map(c=>Number(c.dataset.i)));
+    const anonI = new Set([...document.querySelectorAll(".palAnonChk")].filter(c=>c.checked).map(c=>Number(c.dataset.i)));
+    const map = palMapping(st.sess || current);
+    const extra = [];
+    const ops = st.ops.map((o,i)=>{
+      if(!keep.has(i)) return null;
+      const { pii, ...clean } = o;
+      if(pii && anonI.has(i)){ const r = piiRedact(clean.text, pii, map); map.push(...r.added); extra.push(...r.added); clean.text = r.text; }
+      return clean;
+    }).filter(Boolean);
+    closePalDiff();
+    palDiffState = null;
+    if(!ops.length) return;
+    const phOps = [...(st.phOps||[]), ...extra.map(p=>({ op:"placeholder", ph:p.ph, value:p.value, kind:p.kind }))];
+    try{ await palApplyAndToast([...phOps, ...ops]); }catch(e){ setStatus("memory: "+((e&&e.message)||e)); }
+  }
+  function palAskDiscard(){ palDiffState = null; closePalDiff(); }
+
+  // ---- the personal-info prompt (§7)
+  function showPii(findings, then){
+    piiPending = { findings, then };
+    $("piiTitle").textContent = t("palace.pii.title");
+    const rows = findings.map((f,i)=>`<div class="piirow"><span><b>“${esc(f.value)}”</b> <span class="hint">(${esc(t("palace.pii.kind."+f.kind))})</span></span><button class="palmini" data-click="piiNever" data-click-pass="this" data-i="${i}">${esc(t("palace.pii.never", { value: f.value }))}</button></div>`).join("");
+    $("piiBody").innerHTML = `<p>${esc(t("palace.pii.intro"))}</p>${rows}<p style="margin-top:12px">${esc(t("palace.pii.ask"))}</p>`;
+    $("piiAnon").textContent = t("palace.pii.anonymize"); $("piiAsIs").textContent = t("palace.pii.as_is");
+    openScrim("piiScrim");
+  }
+  function piiDecide(choice){
+    const p = piiPending; piiPending = null;
+    $("piiScrim").classList.remove("open");
+    if(p && p.then) p.then(choice === "anon" ? "anon" : "asis");
+  }
+  function piiCancel(){ piiPending = null; $("piiScrim").classList.remove("open"); }
+  function piiNever(el){
+    if(!piiPending) return;
+    const i = Number(el.dataset.i);
+    const f = piiPending.findings[i]; if(!f) return;
+    const o = piiOpts();
+    if(!o.ignore.some(v=>v.toLowerCase()===f.value.toLowerCase())) o.ignore.push(f.value);
+    savePiiOpts(o);
+    piiPending.findings.splice(i, 1);
+    if(!piiPending.findings.length){ piiDecide("asis"); return; }
+    showPii(piiPending.findings, piiPending.then);
+  }
+
+  // ---- the palace screen (§9)
+  async function openPalace(){
+    if(!account){ openAccount(); return; }
+    await palaceStatusRefresh();
+    if(palStatus.enabled == null){ palAskedThisRun = false; palMaybeAsk(); return; }
+    await palaceRefresh();
+    renderPalace();
+    openScrim("palScrim");
+  }
+  function closePalace(){ $("palScrim").classList.remove("open"); }
+  function palPendingLabel(n){ return n===0 ? t("palace.sync.pending0") : n===1 ? t("palace.sync.pending1") : t("palace.sync.pendingN", { n }); }
+  function renderPalaceHead(){
+    const h = $("palHeadLine"); if(!h) return;
+    const st = palStatus;
+    const head = st.localOnly ? t("palace.sync.local_only")
+      : t("palace.sync.header", { ago: palAgo(st.lastSync, Date.now(), t("palace.sync.never")), files: st.files||0, pending: palPendingLabel(st.pending||0) });
+    h.innerHTML = `<span>${esc(head)}${st.state && st.state!=="up_to_date" && st.state!=="local_only" ? " · "+esc(t("palace.sync."+st.state)) : ""}</span>` +
+      (st.enabled && !st.localOnly ? `<button class="palmini" data-click="palaceSyncNow">${esc(t("palace.sync.now"))}</button>` : "");
+  }
+  function seg(name, value, options){
+    return `<div class="palseg">` + options.map(([v,label])=>`<button class="${v===value?"sel":""}" data-click="palSet" data-args="${escAttr(JSON.stringify(name))},${escAttr(JSON.stringify(v))}">${esc(label)}</button>`).join("") + `</div>`;
+  }
+  function renderPalace(){
+    $("palTitle").textContent = t("palace.screen.title");
+    const st = palStatus, po = palOpts(), pio = piiOpts();
+    const map = palMapping(current);
+    const show = (x)=>esc(deanonymize(x||"", map));
+    let html = `<div class="palhead" id="palHeadLine"></div>`;
+    html += `<p class="pagelead">${esc(t("palace.screen.lead"))}</p>`;
+    html += `<label class="setrow"><input type="checkbox" ${st.enabled?"checked":""} data-change="palToggle" data-change-pass="this" data-k="enabled"><span><b>${esc(t("palace.screen.on"))}</b><small>${esc(t("palace.screen.on_hint"))}</small></span></label>`;
+    if(st.enabled){
+      html += `<label class="setrow"><input type="checkbox" ${st.localOnly?"checked":""} data-change="palToggle" data-change-pass="this" data-k="localOnly"><span><b>${esc(t("palace.screen.local"))}</b><small>${esc(t("palace.screen.local_hint"))}</small></span></label>`;
+      html += `<label class="setrow"><input type="checkbox" ${current&&current.incognito?"checked":""} data-change="palToggle" data-change-pass="this" data-k="incognito"><span><b>${esc(t("palace.screen.incognito"))}</b><small>${esc(t("palace.screen.incognito_hint"))}</small></span></label>`;
+      html += `<div class="grouplbl">${esc(t("palace.screen.updates"))}</div>` + seg("updates", po.updates, [["auto",t("palace.screen.updates_auto")],["ask",t("palace.screen.updates_ask")],["off",t("palace.screen.updates_off")]]);
+      html += `<p class="hint" style="margin:8px 4px">${esc(t("palace.screen.idle", { n: po.idleSecs }))} <input type="number" min="10" max="3600" step="5" value="${Number(po.idleSecs)||45}" style="width:70px" data-change="palIdleSet" data-change-pass="this"></p>`;
+    }
+    html += `<div class="grouplbl">${esc(t("palace.screen.pii"))}</div>` + seg("pii", pio.mode, [["ask",t("palace.screen.pii_ask")],["always",t("palace.screen.pii_always")],["off",t("palace.screen.pii_off")]]);
+    html += `<p class="hint" style="margin:6px 4px 12px">${esc(t("palace.screen.pii_hint"))}</p>`;
+    if(st.enabled){
+      html += `<div class="grouplbl">${esc(t("palace.name"))}</div>`;
+      const files = (palData.files||[]);
+      if(!files.length) html += `<p class="hint" style="margin:4px">${esc(t("palace.screen.empty"))}</p>`;
+      for(const f of files){
+        html += `<div class="palfile"><div class="pf-h"><input value="${escAttr(deanonymize(f.title, map))}" data-change="palFileEdit" data-change-pass="this" data-fid="${escAttr(f.id)}" data-k="title" aria-label="${escAttr(t("palace.screen.file_title"))}">`
+          + `<button class="palmini ${f.neverSend?"on":""}" data-click="palFileNever" data-click-pass="this" data-fid="${escAttr(f.id)}" title="${escAttr(t("palace.screen.never_file"))}">${esc(t("palace.screen.never"))}</button>`
+          + `<button class="palmini" data-click="palFileDelete" data-click-pass="this" data-fid="${escAttr(f.id)}" title="${escAttr(t("palace.screen.delete_file"))}">✕</button></div>`
+          + `<input class="pf-d" value="${escAttr(deanonymize(f.description, map))}" placeholder="${escAttr(t("palace.screen.file_desc"))}" data-change="palFileEdit" data-change-pass="this" data-fid="${escAttr(f.id)}" data-k="description">`;
+        for(const l of (f.lines||[])){
+          html += `<div class="palline2 ${l.neverSend?"never":""}"><textarea rows="1" data-change="palLineEdit" data-change-pass="this" data-fid="${escAttr(f.id)}" data-lid="${escAttr(l.id)}">${show(l.text)}</textarea>`
+            + `<button class="palmini ${l.neverSend?"on":""}" data-click="palLineNever" data-click-pass="this" data-fid="${escAttr(f.id)}" data-lid="${escAttr(l.id)}">${esc(t("palace.screen.never"))}</button>`
+            + `<button class="palmini" data-click="palLineDelete" data-click-pass="this" data-fid="${escAttr(f.id)}" data-lid="${escAttr(l.id)}">✕</button></div>`;
+        }
+        html += `<div class="palline2"><textarea rows="1" placeholder="+ ${escAttr(t("palace.screen.add_line"))}" data-change="palLineAdd" data-change-pass="this" data-fid="${escAttr(f.id)}"></textarea></div></div>`;
+      }
+      html += `<div class="palfile"><div class="pf-h"><input id="palNewTitle" placeholder="+ ${escAttr(t("palace.screen.add_file"))}: ${escAttr(t("palace.screen.file_title"))}"></div><input class="pf-d" id="palNewDesc" placeholder="${escAttr(t("palace.screen.file_desc"))}"><div class="palline2"><textarea rows="1" id="palNewLine" placeholder="${escAttr(t("palace.screen.add_line"))}" data-change="palNewFile" data-change-pass="this"></textarea></div></div>`;
+      html += `<div class="btnrow" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px"><button class="btn" data-click="palaceExportTap">${esc(t("palace.screen.export"))}</button><button class="btn" data-click="palaceImportTap">${esc(t("palace.screen.import"))}</button><button class="btn" style="color:var(--rust)" data-click="palaceWipeTap">${esc(t("palace.screen.wipe"))}</button></div>`;
+    }
+    $("palBody").innerHTML = html;
+    renderPalaceHead();
+  }
+  async function palEdit(ops){
+    try{
+      const r = await Backend.palaceApply(ops);
+      if(r && r.palace) palData = r.palace;
+    }catch(e){ setStatus("memory: "+((e&&e.message)||e)); }
+    renderPalace();
+  }
+  // Edits are shown with the real words; what is kept goes back to placeholders where
+  // the value was anonymised before.
+  const palStore = (x)=> anonymizeKnown(String(x||""), palMapping(current));
+  function palFileEdit(el){ palEdit([{ op:"file.update", fileId:el.dataset.fid, [el.dataset.k]: palStore(el.value) }]); }
+  function palFileNever(el){ const f=(palData.files||[]).find(x=>x.id===el.dataset.fid); palEdit([{ op:"file.update", fileId:el.dataset.fid, neverSend: !(f&&f.neverSend) }]); }
+  function palFileDelete(el){ palConfirm(t("palace.screen.delete_file"), (palData.files||[]).find(x=>x.id===el.dataset.fid)?.title || "", ()=>palEdit([{ op:"file.delete", fileId:el.dataset.fid }])); }
+  function palLineEdit(el){ const v=el.value.trim(); palEdit(v ? [{ op:"update", fileId:el.dataset.fid, lineId:el.dataset.lid, text: palStore(v) }] : [{ op:"delete", fileId:el.dataset.fid, lineId:el.dataset.lid }]); }
+  function palLineNever(el){ const f=(palData.files||[]).find(x=>x.id===el.dataset.fid); const l=f&&(f.lines||[]).find(x=>x.id===el.dataset.lid); palEdit([{ op:"line.flag", fileId:el.dataset.fid, lineId:el.dataset.lid, neverSend: !(l&&l.neverSend) }]); }
+  function palLineDelete(el){ palEdit([{ op:"delete", fileId:el.dataset.fid, lineId:el.dataset.lid }]); }
+  function palLineAdd(el){ const v=el.value.trim(); if(v) palEdit([{ op:"add", fileId:el.dataset.fid, text: palStore(v) }]); }
+  function palNewFile(){
+    const title = ($("palNewTitle").value||"").trim(), text = ($("palNewLine").value||"").trim();
+    if(!title || !text) return;
+    palEdit([{ op:"add", newFileTitle: palStore(title), newFileDescription: palStore($("palNewDesc").value||""), text: palStore(text) }]);
+  }
+  async function palToggle(el){
+    const k = el.dataset.k;
+    if(k === "incognito"){
+      if(!current){ current=newSession(); messages=current.messages; }
+      current.incognito = !!el.checked;
+      if(current.incognito) palDisarm();
+      if(messages.length) persist(messages.find(m=>m.role==="you")?.text || "");
+      return;
+    }
+    const enabled = k === "enabled" ? !!el.checked : !!palStatus.enabled;
+    const localOnly = k === "localOnly" ? !!el.checked : !!palStatus.localOnly;
+    try{ palStatus = await Backend.palaceSetConfig(enabled, localOnly); }catch(e){ setStatus("memory: "+((e&&e.message)||e)); }
+    renderPalInd();
+    if(enabled && !localOnly) Backend.palaceSync(true).catch(()=>{});
+    await palaceRefresh();
+    renderPalace();
+  }
+  function palSet(name, value){
+    if(name === "updates"){ const o = palOpts(); o.updates = value; savePalOpts(o); if(value==="off") palDisarm(); }
+    if(name === "pii"){ const o = piiOpts(); o.mode = value; savePiiOpts(o); }
+    renderPalace();
+  }
+  function palIdleSet(el){ const o = palOpts(); o.idleSecs = Math.max(10, Math.min(3600, Math.round(Number(el.value)||45))); savePalOpts(o); renderPalace(); }
+
+  function palConfirm(title, text, yes){
+    palConfirmFn = yes;
+    $("palConfirmTitle").textContent = title; $("palConfirmText").textContent = text;
+    $("palConfirmYesBtn").textContent = t("palace.screen.confirm"); $("palConfirmNoBtn").textContent = t("palace.screen.cancel");
+    // On top of the palace sheet, which stays open beneath.
+    $("palConfirmScrim").classList.add("open");
+  }
+  function palConfirmNo(){ palConfirmFn = null; $("palConfirmScrim").classList.remove("open"); }
+  function palConfirmYes(){ const f = palConfirmFn; palConfirmNo(); if(f) f(); }
+  function palaceWipeTap(){
+    palConfirm(t("palace.screen.wipe"), t("palace.screen.wipe_warn"), async ()=>{
+      try{ palStatus = await Backend.palaceWipe(); palData = { files:[], placeholders:[] }; renderPalInd(); palToast(t("palace.screen.wipe_done")); }
+      catch(e){ setStatus("memory: "+((e&&e.message)||e)); }
+      renderPalace();
+    });
+  }
+  // The only export left (§9b): plain JSON, asked for by the person, with a warning.
+  function palaceExportTap(){
+    palConfirm(t("palace.screen.export"), t("palace.screen.export_warn"), async ()=>{
+      try{
+        const data = await Backend.palaceExport();
+        const text = JSON.stringify(data, null, 2);
+        const name = "memory-palace-" + new Date().toISOString().slice(0,10) + ".json";
+        try{ await Backend.saveFile(bytesToB64(new TextEncoder().encode(text)), name); }
+        catch(_){
+          const a=document.createElement("a"); a.href=URL.createObjectURL(new Blob([text],{type:"application/json"})); a.download=name; a.click(); URL.revokeObjectURL(a.href);
+        }
+      }catch(e){ setStatus("memory: "+((e&&e.message)||e)); }
+    });
+  }
+  function palaceImportTap(){ $("palImportFile").click(); }
+  async function palaceImportPicked(ev){
+    const file = ev.target.files && ev.target.files[0]; if(!file) return;
+    ev.target.value = "";
+    try{
+      const data = JSON.parse(await file.text());
+      const r = await Backend.palaceImport(data);
+      await palaceRefresh(); renderPalace();
+      palToast(t("palace.screen.imported", { n: Number(r && r.imported) || 0 }));
+    }catch(e){ setStatus("memory: "+((e&&e.message)||e)); }
+  }
+
   // expose for inline handlers
   Object.assign(window,{
     toggleGwRandom, tapVersion, hideDev, openPlans, closePlans, loadPlans, selectPlan, planPeriod,
     subscribePlan, restorePurchases, changeWebPlan, togglePlanConsent, reopenPlanCheckout, abandonPlanCheckout, pickModel,
-    copyPhrase, newChat, openSession, deleteSession, exportSession, toggleMenu, selectModelIdx, autogrow,
-    onKey, sendMsg, retryMsg, showHandover, downloadHandover, closeHandover, pickImport, importHandover,
+    copyPhrase, newChat, openSession, deleteSession, toggleMenu, selectModelIdx, autogrow,
+    onKey, sendMsg, retryMsg, rememberSession,
     cancelMsg, resendMsg, showDismissed, retrieveMsg, openConnSheet, closeConnSheet, rebuildRoute,
     rebuildRouteFromSheet, copyResumeLog, routeDismiss, iterateImg, openBuy, closeBuy, openAccount,
     closeAccount, doAccountNew, doAccountReveal, doAccountRestore, doAccountDelete, doMigrate, startQrScan,
@@ -6178,10 +6771,14 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     runMixPing, resetMixPerf, pickImage, attachTap, pickNative, pickFile, closeAttachMenu, onImagePicked,
     clearImage, openSupport, closeSupport, openSupportForm, openSupportList, supCat, supPick, onSupPicked,
     supShotClear, supSend, supSendReply, supOpenThread, setMenuKind, toggleLatest, startMode,
-    imgSettled, closeImport, decryptImport, openSettings, closeSettings, navPage, navBack, acctNav, acctBack,
+    imgSettled, openSettings, closeSettings, navPage, navBack, acctNav, acctBack,
     backFromRestore, confirmGuard, closeGuardModal, guardImgKeep, guardImgRemove, closeGuardImg, giZoom,
     giZoomReset, giToggleFull, giProcess, giBack, giApprove, tutShow, tutNext, tutBack, tutSkip,
-    cancelUpload, voiceTap, voiceStopTap, voiceSendTap, voiceCancelTap });
+    cancelUpload, voiceTap, voiceStopTap, voiceSendTap, voiceCancelTap,
+    openPalace, closePalace, palaceIndTap, palaceSyncNow, palaceOptIn, palDiffOpen, closePalDiff, palUndoAll, palUndoOne,
+    palAskSave, palAskDiscard, piiDecide, piiCancel, piiNever, palFileEdit, palFileNever, palFileDelete, palLineEdit,
+    palLineNever, palLineDelete, palLineAdd, palNewFile, palToggle, palSet, palIdleSet, palConfirmNo, palConfirmYes,
+    palaceWipeTap, palaceExportTap, palaceImportTap, palaceImportPicked });
 
   // ---- CSP-safe event delegation (H7) ---------------------------------------
   // Inline on*= handlers are being replaced by data-* attributes so a strict CSP
@@ -6193,8 +6790,8 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   //   data-click="__backdrop__" + data-close="fn"  → close only when the backdrop itself is clicked
   //   data-keydown="__enter__"  + data-fn="fn"      → run fn on the Enter key
   const PRIVILEGED = new Set(['sendMsg','doAccountNew','doAccountDelete','doAccountReveal','copyPhrase','doMigrate',
-    'doAccountRestore','decryptImport','acceptTerms','subscribePlan','changeWebPlan','selectPlan','restorePurchases',
-    'exportSession','deleteSession','downloadHandover','checkCredit','submitPhraseCheck','startQrScan','supSend','supSendReply']);
+    'doAccountRestore','acceptTerms','subscribePlan','changeWebPlan','selectPlan','restorePurchases',
+    'deleteSession','palaceWipeTap','palaceExportTap','checkCredit','submitPhraseCheck','startQrScan','supSend','supSendReply']);
   function actArgs(el){
     if (el.dataset.args == null) return [];
     try { return JSON.parse('[' + el.dataset.args + ']'); } catch (_) { return []; }
@@ -6320,6 +6917,10 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     if(vaultOk) sessions = await Vault.list();
     await refreshState();                 // models, balance, account, plan
     current=newSession(); messages=current.messages; renderSessions(); renderThread();
+    // The Memory Palace: its status, its copy, and — once, with an account — the opt-in.
+    await palaceStart();
+    palMaybeAsk();
+    $("input").addEventListener("input", ()=>{ if(palIdleTimer) palArmIdle(); });
     renderBal();
     // The tutorial is shown AFTER the connect animation settles into the logo (see
     // finishLogo/maybeShowTutorial), so it never overlaps the bootup. Only when it's
@@ -6350,6 +6951,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     document.addEventListener("visibilitychange",()=>{
       if(document.visibilityState==="hidden"){
         hiddenAt=Date.now();
+        palLeave(current);             // the app goes to the background: a chat end (§6.1)
         // Android keeps the webview (and the cover-traffic loop) running in the background.
         // Not while a reply is in flight — dropping the client would kill that transfer.
         if(isTauri() && isAndroid() && mixOn && !hiddenDropTimer){

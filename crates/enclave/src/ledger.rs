@@ -40,6 +40,10 @@ const TABLES: &[(&str, &[&str])] = &[
     ("minted", &["ref", "fp"]),
     // Counts for the operator (`admin`): aggregates under a key, never an account.
     ("tally", &["key", "n"]),
+    // The Memory Palace (`palace`): opaque names and ciphertext, nothing else. The
+    // namespace's signing key is registered on its first write.
+    ("palace_ns", &["ns", "pub"]),
+    ("palace", &["ns", "blob", "version", "ct", "size", "updated_ms"]),
 ];
 
 /// A value as it travels in a journal record. The book writes nothing else.
@@ -299,7 +303,10 @@ impl Ledger {
              CREATE TABLE IF NOT EXISTS rails (rail TEXT PRIMARY KEY, acct TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS payments (ref TEXT PRIMARY KEY, at_ms INTEGER NOT NULL);
              CREATE TABLE IF NOT EXISTS minted (ref TEXT PRIMARY KEY, fp TEXT NOT NULL);
-             CREATE TABLE IF NOT EXISTS tally (key TEXT PRIMARY KEY, n INTEGER NOT NULL);",
+             CREATE TABLE IF NOT EXISTS tally (key TEXT PRIMARY KEY, n INTEGER NOT NULL);
+             CREATE TABLE IF NOT EXISTS palace_ns (ns TEXT PRIMARY KEY, pub TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS palace (ns TEXT NOT NULL, blob TEXT NOT NULL, version INTEGER NOT NULL,
+                 ct TEXT NOT NULL, size INTEGER NOT NULL, updated_ms INTEGER NOT NULL, PRIMARY KEY (ns, blob));",
         )
         .map_err(|e| e.to_string())?;
         Ok(Ledger { conn, data_key, kept: None, replayed: 0 })
@@ -455,6 +462,12 @@ impl Ledger {
             all.insert((*table).to_string(), serde_json::to_value(rows).map_err(|e| e.to_string())?);
         }
         Ok(serde_json::Value::Object(all))
+    }
+
+    /// Every row, as a snapshot would carry it: for the tests of what the book holds.
+    #[cfg(test)]
+    pub(crate) fn rows_for_tests(&self) -> serde_json::Value {
+        self.rows().expect("rows")
     }
 
     /// Put the rows of a snapshot back, in place of whatever is there.
@@ -818,6 +831,77 @@ impl Ledger {
             self.change(SQL, vec![Val::S(format!("ghost:{}", "x".repeat(pad)))])?;
         }
         Ok(())
+    }
+
+    // ---- the Memory Palace (see `palace`) ---------------------------------------------
+    //
+    // What is kept per blob: the namespace, the blob's name, its version, the ciphertext,
+    // its size and when it was written. Nothing names an account; nothing is plaintext.
+
+    pub fn palace_pub(&self, ns: &str) -> Result<Option<String>, String> {
+        self.conn.query_row("SELECT pub FROM palace_ns WHERE ns = ?1", params![ns], |r| r.get(0)).optional().map_err(|e| e.to_string())
+    }
+
+    pub fn palace_register(&self, ns: &str, public: &str) -> Result<(), String> {
+        self.change("INSERT OR IGNORE INTO palace_ns (ns, pub) VALUES (?1, ?2)", vec![Val::S(ns.into()), Val::S(public.into())]).map(|_| ())
+    }
+
+    /// (blob, version, size) of every blob in the namespace.
+    pub fn palace_list(&self, ns: &str) -> Result<Vec<(String, u64, u64)>, String> {
+        let mut st = self.conn.prepare("SELECT blob, version, size FROM palace WHERE ns = ?1 ORDER BY blob").map_err(|e| e.to_string())?;
+        let rows = st
+            .query_map(params![ns], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64, r.get::<_, i64>(2)? as u64)))
+            .map_err(|e| e.to_string())?;
+        rows.collect::<rusqlite::Result<_>>().map_err(|e| e.to_string())
+    }
+
+    /// (version, ciphertext as base64) of one blob.
+    pub fn palace_get(&self, ns: &str, blob: &str) -> Result<Option<(u64, String)>, String> {
+        self.conn
+            .query_row("SELECT version, ct FROM palace WHERE ns = ?1 AND blob = ?2", params![ns, blob], |r| Ok((r.get::<_, i64>(0)? as u64, r.get::<_, String>(1)?)))
+            .optional()
+            .map_err(|e| e.to_string())
+    }
+
+    /// The version a blob has now (0: there is none).
+    pub fn palace_version(&self, ns: &str, blob: &str) -> Result<u64, String> {
+        Ok(self.palace_get(ns, blob)?.map(|(v, _)| v).unwrap_or(0))
+    }
+
+    pub fn palace_put(&self, ns: &str, blob: &str, version: u64, ct_b64: &str, size: u64, now_ms: u64) -> Result<(), String> {
+        self.change(
+            "INSERT INTO palace (ns, blob, version, ct, size, updated_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(ns, blob) DO UPDATE SET version = excluded.version, ct = excluded.ct, size = excluded.size, updated_ms = excluded.updated_ms",
+            vec![Val::S(ns.into()), Val::S(blob.into()), Val::I(version as i64), Val::S(ct_b64.into()), Val::I(size as i64), Val::I(now_ms as i64)],
+        )
+        .map(|_| ())
+    }
+
+    pub fn palace_delete(&self, ns: &str, blob: &str) -> Result<(), String> {
+        self.change("DELETE FROM palace WHERE ns = ?1 AND blob = ?2", vec![Val::S(ns.into()), Val::S(blob.into())]).map(|_| ())
+    }
+
+    /// Everything of a namespace, its key included: the next write starts it afresh.
+    pub fn palace_wipe(&self, ns: &str) -> Result<(), String> {
+        self.change("DELETE FROM palace WHERE ns = ?1", vec![Val::S(ns.into())])?;
+        self.change("DELETE FROM palace_ns WHERE ns = ?1", vec![Val::S(ns.into())]).map(|_| ())
+    }
+
+    /// (blobs, bytes) of one namespace.
+    pub fn palace_usage(&self, ns: &str) -> Result<(u64, u64), String> {
+        self.conn
+            .query_row("SELECT COUNT(*), COALESCE(SUM(size), 0) FROM palace WHERE ns = ?1", params![ns], |r| Ok((r.get::<_, i64>(0)? as u64, r.get::<_, i64>(1)? as u64)))
+            .map_err(|e| e.to_string())
+    }
+
+    /// (namespaces, blobs, bytes) over everyone: all the operator is ever shown.
+    pub fn palace_totals(&self) -> Result<(u64, u64, u64), String> {
+        let namespaces: i64 = self.conn.query_row("SELECT COUNT(*) FROM palace_ns", [], |r| r.get(0)).map_err(|e| e.to_string())?;
+        let (blobs, bytes): (i64, i64) = self
+            .conn
+            .query_row("SELECT COUNT(*), COALESCE(SUM(size), 0) FROM palace", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .map_err(|e| e.to_string())?;
+        Ok((namespaces as u64, blobs as u64, bytes as u64))
     }
 
     pub fn holds_open(&self) -> Result<u64, String> {

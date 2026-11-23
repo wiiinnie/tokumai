@@ -16,10 +16,6 @@
 //       on the first start of 0.4.2 the app moves every chat from IndexedDB into the
 //       native vault, then deletes the IndexedDB and asks the webview to purge its
 //       stored site data (so the old key does not linger in WebView2's LevelDB logs).
-//
-//   PassphraseCrypto — encrypt/decrypt a handover.md for archiving or moving
-//                      between devices, unlocked by a passphrase (PBKDF2 →
-//                      AES-GCM). Openable anywhere the passphrase is known.
 // ---------------------------------------------------------------------------
 
 import { Backend, isTauri } from "./backend.js";
@@ -246,80 +242,3 @@ export const Vault = {
   save: (session) => impl().save(session),
   remove: (id) => impl().remove(id),
 };
-
-// ---- PassphraseCrypto: for portable handover.md ---------------------------
-// Envelope is JSON so it round-trips as text. Not age's on-disk format, but the
-// same primitive shape; swap here if you later want `age` CLI interop.
-
-const PBKDF2_ITERS = 210000;
-const ENVELOPE_TAG = "scrambleai-enc@1";
-
-async function deriveFromPassphrase(passphrase, salt) {
-  const base = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(passphrase),
-    "PBKDF2",
-    false,
-    ["deriveKey"],
-  );
-  return crypto.subtle.deriveKey(
-    { name: "PBKDF2", salt, iterations: PBKDF2_ITERS, hash: "SHA-256" },
-    base,
-    { name: "AES-GCM", length: 256 },
-    false,
-    ["encrypt", "decrypt"],
-  );
-}
-
-export const PassphraseCrypto = {
-  /** @returns {Promise<string>} a text envelope safe to write to a .md.enc file */
-  async encrypt(plaintext, passphrase) {
-    const salt = crypto.getRandomValues(new Uint8Array(16));
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    const key = await deriveFromPassphrase(passphrase, salt);
-    const ct = await crypto.subtle.encrypt(
-      { name: "AES-GCM", iv },
-      key,
-      new TextEncoder().encode(plaintext),
-    );
-    return JSON.stringify({
-      tag: ENVELOPE_TAG,
-      kdf: `pbkdf2-sha256:${PBKDF2_ITERS}`,
-      salt: b64(salt),
-      iv: b64(iv),
-      ct: b64(new Uint8Array(ct)),
-    });
-  },
-
-  isEnvelope(text) {
-    try {
-      return JSON.parse(text).tag === ENVELOPE_TAG;
-    } catch {
-      return false;
-    }
-  },
-
-  async decrypt(envelopeText, passphrase) {
-    const env = JSON.parse(envelopeText);
-    if (env.tag !== ENVELOPE_TAG) throw new Error("not a tokumai envelope");
-    const key = await deriveFromPassphrase(passphrase, ub64(env.salt));
-    const pt = await crypto.subtle.decrypt(
-      { name: "AES-GCM", iv: ub64(env.iv) },
-      key,
-      ub64(env.ct),
-    );
-    return new TextDecoder().decode(pt);
-  },
-};
-
-function b64(bytes) {
-  let s = "";
-  for (const b of bytes) s += String.fromCharCode(b);
-  return btoa(s);
-}
-function ub64(str) {
-  const bin = atob(str);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
-}

@@ -29,6 +29,9 @@ pub struct ChatRequest {
     /// the bytes over the mixnet. Off by default.
     #[serde(default)]
     pub lossless: bool,
+    /// The Memory Palace's index, when the app offers the model `read_memory` (`memory`).
+    #[serde(default)]
+    pub memory: Option<crate::memory::MemoryIndex>,
 }
 
 impl ChatRequest {
@@ -48,6 +51,9 @@ pub struct Call<'a> {
     pub safety_id: Option<String>,
     /// The picture size actually requested (see `gemini::effective_image_size`).
     pub image_size: &'static str,
+    /// What the model is told about the Memory Palace, with its index. When set, the
+    /// provider offers `read_memory` (`memory`).
+    pub memory: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -56,6 +62,9 @@ pub struct Completion {
     pub usage: TokenUsage,
     /// Generated pictures, `[{mimeType, data}]`.
     pub images: Option<Value>,
+    /// `read_memory` calls the model made instead of (or before) answering, in the neutral
+    /// shape (`memory::call`). The app answers them and asks again.
+    pub tool_calls: Vec<Value>,
 }
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -120,7 +129,7 @@ impl Providers {
         if openai {
             let _ = self.moderate(&req.messages).await;
         }
-        let call = Call { req: &req, safety_id: None, image_size: "1K" };
+        let call = Call { req: &req, safety_id: None, image_size: "1K", memory: None };
         let _ = provider.complete(&call).await;
     }
 
@@ -165,15 +174,33 @@ impl Provider for MockProvider {
     fn complete<'a>(&'a self, call: &'a Call<'a>) -> BoxFuture<'a, Result<Completion, String>> {
         Box::pin(async move {
             let msgs = call.req.messages.as_array().cloned().unwrap_or_default();
+            let role = |m: &Value| m.get("role").and_then(|r| r.as_str()).unwrap_or("").to_string();
+            let asked = msgs.iter().rev().find(|m| role(m) == "user").and_then(|m| m.get("content")).and_then(|c| c.as_str()).unwrap_or("").to_string();
             let last = msgs.last().and_then(|m| m.get("content")).and_then(|c| c.as_str()).unwrap_or("").to_string();
-            let text = format!("(mock) you said: {last}");
+            // With the palace offered, a question that mentions memory reads the first file
+            // once — enough to walk the whole round trip on a laptop without a provider.
+            let wants = ["memory", "remember", "erinner"].iter().any(|w| asked.to_lowercase().contains(w));
+            let first = call.memory.as_deref().and_then(|i| i.lines().find_map(|l| l.strip_prefix("- ").and_then(|r| r.split(':').next()).map(str::to_string)));
+            if let (true, Some(file), false) = (wants, first, crate::memory::exhausted(&call.req.messages) || msgs.last().is_some_and(|m| role(m) == "tool")) {
+                return Ok(Completion {
+                    text: String::new(),
+                    usage: TokenUsage { input: 10, output: 5, ..Default::default() },
+                    images: None,
+                    tool_calls: vec![crate::memory::call("mock-1", &file, None)],
+                });
+            }
+            let text = if msgs.last().is_some_and(|m| role(m) == "tool") {
+                format!("(mock) you said: {asked} — and your memory says: {last}")
+            } else {
+                format!("(mock) you said: {last}")
+            };
             let input: u64 = msgs
                 .iter()
                 .filter_map(|m| m.get("content").and_then(|c| c.as_str()))
                 .map(|c| tokumai_core::billing::estimate_tokens(c.len() as u64))
                 .sum();
             let output = tokumai_core::billing::estimate_tokens(text.len() as u64).min(call.req.answer_tokens());
-            Ok(Completion { text, usage: TokenUsage { input, output, ..Default::default() }, images: None })
+            Ok(Completion { text, usage: TokenUsage { input, output, ..Default::default() }, images: None, tool_calls: Vec::new() })
         })
     }
 }

@@ -40,6 +40,7 @@ cargo run -p tokumai-server --bin tokumai-enclave-dev [-- --mix]   # the enclave
 cargo run -p tokumai-server --bin tokumai-dev-client -- [--mix] "a question" [model]
 cd app && npm install && npm run dev                         # the app (first run installs the Tauri CLI)
 cargo test                                                   # everything
+cd app && npm test                                           # the interface's logic (palace, personal-info check)
 deploy/audit.sh                                              # the dependency audit (cargo-audit, .cargo/audit.toml)
 ```
 
@@ -61,7 +62,10 @@ Early. Built so far:
 - the Nym transport: the enclave's own client, its address attested, messages in
   acknowledged frames (`crates/proto`);
 - the app core (`crates/client`): connect, attest, re-attest after a restart, reconnect
-  after sleep, and never enter the mixnet through a gateway of ours (rule A1).
+  after sleep, and never enter the mixnet through a gateway of ours (rule A1);
+- the Memory Palace: an end-to-end encrypted memory across chats and devices, unlinkable to
+  the account and to payments, read by the model one file at a time, with an on-device
+  personal-information check (`docs/memory-palace.md`, threat model included).
 
 Crates: `core` (account, billing, plans' calendar), `attest`, `proto` (what app and
 enclave share), `enclave` (the attested core), `client` (the app core), `server` (the

@@ -20,6 +20,7 @@ the system, and only the second is worth anything to somebody who does not know 
 | The enclave | Everything, for as long as it takes to answer: the question, the account, the balance. It keeps the question nowhere. |
 | The model provider | The question and the answer, from our egress, with a per-account-per-day safety identifier and no user identity. |
 | Stripe / Apple | Who paid, when, and how much. Never what was asked. |
+| The Memory Palace's store (in the enclave) | A namespace no account names, blobs under HMAC names, ciphertext, sizes, and when they were written. Not who, not what. Its requests come under throwaway keys over a mixnet client of their own (`docs/memory-palace.md`). |
 | Apple's / Google's speech recogniser | Nothing. A spoken question is transcribed on the phone (iOS: `requiresOnDeviceRecognition`; Android 12+: the on-device recogniser), and only the text goes on, as if typed. Where the phone has no on-device model, the microphone is not offered. The audio is never stored. |
 
 ## What we must disclose, because it is true
@@ -71,6 +72,15 @@ the system, and only the second is worth anything to somebody who does not know 
 7. **Recovery phrase, not account.** There is no email, no password and no way for us to
    help: a lost phrase is a lost balance, and we must say so in plain words rather than in a
    clause.
+
+4. **With the Memory Palace on, a pseudonym lives on our side, and the provider can
+   recognise a person by what they told it.** The palace's namespace is long-lived: its
+   sync times and sizes form a pattern, even though nothing ties it to an account or a
+   payment and its content is unreadable to us. When the model reads a memory file, the
+   provider sees facts about the person (anonymised where the check finds them), and can
+   recognise them across chats by that content. Opt-in, with this said at the moment of
+   choice; "this device only" and incognito chats avoid it. Threat model in
+   `docs/memory-palace.md`.
 
 ## What the published text must not claim
 

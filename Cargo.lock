@@ -11074,11 +11074,13 @@ dependencies = [
 name = "tokumai-core"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm 0.10.3",
  "base64 0.22.1",
  "bip39",
  "ed25519-dalek",
  "hex",
  "hkdf",
+ "hmac",
  "num-bigint-dig",
  "rand_chacha 0.3.1",
  "rsa",
