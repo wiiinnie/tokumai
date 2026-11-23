@@ -102,7 +102,7 @@ pub fn instruction(index: Option<&MemoryIndex>, messages: &Value) -> Option<Stri
         "The user keeps a Memory Palace: facts about themselves, end-to-end encrypted on their own devices. \
 You see only its index below. If a file looks relevant to the user's message, call read_memory with its id before you answer; \
 otherwise answer directly. Read only what you need. Never mention file ids or the tool. \
-Placeholders in square brackets such as [EMPLOYER_1] or [PERSON_1] stand for details the user anonymised: use them exactly as written and never guess what they stand for.\n\nMemory Palace index:\n",
+Placeholders in square brackets such as [EMPLOYER_1] or [PERSON_1] are the user's real details, hidden from you on purpose: treat them as known and write them exactly as they are where the value belongs (\"Your name is [PERSON_1]\"); the user's device shows the real value. Never guess what they stand for.\n\nMemory Palace index:\n",
     );
     for e in ix.index.iter().take(policy::MEMORY_INDEX_ENTRIES) {
         let id = clip(&e.id, 40);

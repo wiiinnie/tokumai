@@ -136,3 +136,10 @@ pub const MEMORY_RESULT_BYTES: usize = 16 * 1024;
 pub const MEMORY_INDEX_ENTRIES: usize = 64;
 pub const MEMORY_TITLE_CHARS: usize = 80;
 pub const MEMORY_DESCRIPTION_CHARS: usize = 240;
+/// Gemini with search on and the palace offered: Google does not take its own search and
+/// a function in one request, so search becomes a function the enclave carries out
+/// (`gemini::web_search`). Rounds of it per question, what one search may bring back, and
+/// how long its own answer may be (thinking included).
+pub const GEMINI_SEARCH_ROUNDS: usize = 3;
+pub const GEMINI_SEARCH_RESULT_CHARS: usize = 6000;
+pub const GEMINI_SEARCH_ANSWER_TOKENS: u64 = 4096;

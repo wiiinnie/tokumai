@@ -547,12 +547,20 @@ impl Enclave {
         if let Err(e) = crate::memory::check(req.memory.as_ref(), &req.messages) {
             return error(&e);
         }
-        let memory = if crate::gemini::is_image_model(&req.model) || (req.live && crate::gemini::is_gemini_model(&req.model)) {
+        let memory = if crate::gemini::is_image_model(&req.model) {
             None
         } else {
             crate::memory::instruction(req.memory.as_ref(), &req.messages)
         };
         in_tokens += memory.as_ref().map(|m| m.len() as u64).unwrap_or(0);
+        // Gemini with search and the palace: search runs as rounds here (`gemini`), each
+        // reading the conversation again plus what was found, and each search a short
+        // answer of its own. Held for the worst case, settled at what was used.
+        if memory.is_some() && req.live && crate::gemini::is_gemini_model(&req.model) {
+            let rounds = policy::GEMINI_SEARCH_ROUNDS as u64;
+            in_tokens = in_tokens * (rounds + 1)
+                + rounds * 3 * (policy::GEMINI_SEARCH_RESULT_CHARS as u64 * (rounds + 1) + policy::GEMINI_SEARCH_ANSWER_TOKENS * 4);
+        }
         let price = self.pricing.price(&req.model);
         let day = now / 86_400_000;
         let strike_key = (account.to_string(), day, provider.name());

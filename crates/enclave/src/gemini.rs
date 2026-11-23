@@ -110,6 +110,59 @@ pub fn tool_calls(parts: &[Value]) -> Vec<Value> {
         .collect()
 }
 
+/// The function standing in for Google's search when the palace is offered too.
+pub const SEARCH_TOOL: &str = "web_search";
+
+pub fn search_declaration() -> Value {
+    json!({
+        "name": SEARCH_TOOL,
+        "description": "Search the web for current or factual information you do not have: news, prices, dates, facts about the world. Not for anything about the user: that is in the Memory Palace.",
+        "parameters": { "type": "object", "properties": { "query": { "type": "string", "description": "What to search for, as a short web search query." } }, "required": ["query"] },
+    })
+}
+
+/// The `web_search` calls among an answer's parts: (query, id if Google gave one).
+pub fn search_calls(parts: &[Value]) -> Vec<(String, Option<String>)> {
+    parts
+        .iter()
+        .filter_map(|p| {
+            let fc = p.get("functionCall")?;
+            if fc.get("name").and_then(|n| n.as_str()) != Some(SEARCH_TOOL) {
+                return None;
+            }
+            let q: String = fc.pointer("/args/query").and_then(|q| q.as_str()).unwrap_or("").chars().take(300).collect();
+            Some((q, fc.get("id").and_then(|i| i.as_str()).map(str::to_string)))
+        })
+        .collect()
+}
+
+/// What one search found, as the function's answer: Google's grounded summary, then its
+/// sources, cut to size.
+pub fn search_result(j: &Value, text: &str) -> String {
+    let mut out: String = text.trim().chars().take(crate::policy::GEMINI_SEARCH_RESULT_CHARS).collect();
+    let sources: Vec<String> = j
+        .pointer("/candidates/0/groundingMetadata/groundingChunks")
+        .and_then(|c| c.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|c| {
+                    let w = c.get("web")?;
+                    Some(format!("- {}: {}", w.get("title").and_then(|t| t.as_str()).unwrap_or(""), w.get("uri").and_then(|u| u.as_str())?))
+                })
+                .take(8)
+                .collect()
+        })
+        .unwrap_or_default();
+    if !sources.is_empty() {
+        out.push_str("\n\nSources:\n");
+        out.push_str(&sources.join("\n"));
+    }
+    if out.trim().is_empty() {
+        out = "The search found nothing.".into();
+    }
+    out
+}
+
 pub fn to_gemini(messages: &Value, answer_tokens: u64, thinking: u64, live: bool) -> Value {
     let msgs = messages.as_array().map(Vec::as_slice).unwrap_or(&[]);
     let role_of = |m: &Value| m.get("role").and_then(|r| r.as_str()).unwrap_or("user").to_string();
@@ -239,6 +292,29 @@ impl Gemini {
         Ok((text, imgs, j))
     }
 
+    /// One `web_search`, carried out here: the same model, asked with Google's own search
+    /// and nothing else of the conversation — only the query leaves.
+    async fn web_search(&self, model: &str, query: &str) -> (String, TokenUsage, u64) {
+        let safety: Vec<Value> = crate::policy::GEMINI_SAFETY.iter().map(|(c, t)| json!({ "category": c, "threshold": t })).collect();
+        let body = json!({
+            "contents": [{ "role": "user", "parts": [{ "text": format!("Search the web for: {query}\n\nReport what you find that answers it, with dates where they matter. Plain text, no preamble.") }] }],
+            "tools": [{ "google_search": {} }],
+            "safetySettings": safety,
+            "generationConfig": { "maxOutputTokens": crate::policy::GEMINI_SEARCH_ANSWER_TOKENS },
+        });
+        match self.once(model, &body).await {
+            Ok((text, _, j)) => {
+                let queries = j
+                    .pointer("/candidates/0/groundingMetadata/webSearchQueries")
+                    .and_then(|w| w.as_array())
+                    .map(|a| a.iter().filter(|q| q.as_str().is_some_and(|s| !s.trim().is_empty())).count() as u64)
+                    .unwrap_or(0);
+                (search_result(&j, &text), usage(j.get("usageMetadata").unwrap_or(&Value::Null), false), queries)
+            }
+            Err(e) => (format!("The search failed: {e}"), TokenUsage::default(), 0),
+        }
+    }
+
     async fn once_with_calls(&self, model: &str, body: &Value) -> Result<(String, Vec<Value>, Value, Vec<Value>), String> {
         let res = crate::http::client()
             .post(format!("{BASE}/{model}:generateContent"))
@@ -289,7 +365,10 @@ impl Provider for Gemini {
         Box::pin(async move {
             let req = call.req;
             let model = req.model.as_str();
-            let mut body = to_gemini(&req.messages, req.answer_tokens(), req.thinking_tokens(), req.live);
+            // Search and the palace together: Google's search cannot share a request with a
+            // function, so search becomes a function carried out here (`web_search`).
+            let relay_search = req.live && call.memory.is_some() && !is_image_model(model);
+            let mut body = to_gemini(&req.messages, req.answer_tokens(), req.thinking_tokens(), req.live && !relay_search);
             if is_image_model(model) {
                 // Without this the image models sometimes answer in text only.
                 body["generationConfig"]["responseModalities"] = json!(["TEXT", "IMAGE"]);
@@ -299,7 +378,15 @@ impl Provider for Gemini {
             }
             if let Some(memory) = &call.memory {
                 let mut tools = body.get("tools").and_then(|t| t.as_array()).cloned().unwrap_or_default();
-                tools.push(crate::memory::gemini_tool());
+                let mut decl = crate::memory::gemini_tool();
+                let mut memory = memory.clone();
+                if relay_search {
+                    if let Some(list) = decl["functionDeclarations"].as_array_mut() {
+                        list.push(search_declaration());
+                    }
+                    memory.push_str("\nFor current or factual information about the world, call web_search; for anything about the user, read the Memory Palace first.\n");
+                }
+                tools.push(decl);
                 body["tools"] = json!(tools);
                 let system = body.pointer("/systemInstruction/parts/0/text").and_then(|t| t.as_str()).map(|t| format!("{t}\n\n{memory}")).unwrap_or_else(|| memory.clone());
                 body["systemInstruction"] = json!({ "parts": [{ "text": system }] });
@@ -307,8 +394,49 @@ impl Provider for Gemini {
                     body["toolConfig"] = json!({ "functionCallingConfig": { "mode": "NONE" } });
                 }
             }
-            let (mut text, mut imgs, mut j, calls) = self.once_with_calls(model, &body).await?;
-            let mut u = usage(j.get("usageMetadata").unwrap_or(&Value::Null), !imgs.is_empty());
+            let (mut text, mut imgs, mut j, mut calls) = self.once_with_calls(model, &body).await?;
+            // The searches the model asks for are done here, round by round, until it answers
+            // or asks for a memory file (which the app answers: those go back as before).
+            let mut before = TokenUsage::default();
+            let mut searched = 0u64;
+            if relay_search {
+                for round in 0..crate::policy::GEMINI_SEARCH_ROUNDS {
+                    let parts = j.pointer("/candidates/0/content/parts").and_then(|p| p.as_array()).cloned().unwrap_or_default();
+                    let wanted = search_calls(&parts);
+                    if wanted.is_empty() || !calls.is_empty() {
+                        break;
+                    }
+                    before = add(before, usage(j.get("usageMetadata").unwrap_or(&Value::Null), false));
+                    let mut answers: Vec<Value> = Vec::new();
+                    for (query, id) in wanted.iter().take(3) {
+                        let (found, su, q) = self.web_search(model, query).await;
+                        before = add(before, su);
+                        searched += q.max(1);
+                        let mut r = json!({ "functionResponse": { "name": SEARCH_TOOL, "response": { "content": found } } });
+                        if let Some(id) = id {
+                            r["functionResponse"]["id"] = json!(id);
+                        }
+                        answers.push(r);
+                    }
+                    // Calls beyond three are answered too: Google wants an answer to each.
+                    for (_, id) in wanted.iter().skip(3) {
+                        let mut r = json!({ "functionResponse": { "name": SEARCH_TOOL, "response": { "content": "Not searched: three searches at a time." } } });
+                        if let Some(id) = id {
+                            r["functionResponse"]["id"] = json!(id);
+                        }
+                        answers.push(r);
+                    }
+                    if let Some(contents) = body["contents"].as_array_mut() {
+                        contents.push(json!({ "role": "model", "parts": parts }));
+                        contents.push(json!({ "role": "user", "parts": answers }));
+                    }
+                    if round + 1 == crate::policy::GEMINI_SEARCH_ROUNDS {
+                        body["toolConfig"] = json!({ "functionCallingConfig": { "mode": "NONE" } });
+                    }
+                    (text, imgs, j, calls) = self.once_with_calls(model, &body).await?;
+                }
+            }
+            let mut u = add(before, usage(j.get("usageMetadata").unwrap_or(&Value::Null), !imgs.is_empty()));
             // "I have regenerated the image…" — and no image in the answer (2026-09-29, an
             // edit on gemini-3.1-flash-lite-image). Even with IMAGE among the response
             // modalities the model sometimes narrates instead. One more attempt, because a
@@ -351,7 +479,9 @@ impl Provider for Gemini {
                     ..Default::default()
                 };
             }
-            if req.live {
+            if relay_search {
+                u.grounding_queries = searched;
+            } else if req.live {
                 u.grounding_queries = j
                     .pointer("/candidates/0/groundingMetadata/webSearchQueries")
                     .and_then(|w| w.as_array())
@@ -444,5 +574,24 @@ mod tests {
         let b = to_gemini(&json!([{ "role": "user", "content": "hi" }]), 100, 0, false);
         assert!(b["generationConfig"].get("thinkingConfig").is_none());
         assert_eq!(b["generationConfig"]["maxOutputTokens"], 100);
+    }
+
+    /// Search as a function: the calls are read off the answer, and what Google found
+    /// comes back with its sources, cut to size.
+    #[test]
+    fn web_search_calls_and_their_answers() {
+        let parts = vec![
+            json!({ "functionCall": { "name": "web_search", "args": { "query": "Volvo EX60 range" }, "id": "c1" }, "thoughtSignature": "sig" }),
+            json!({ "functionCall": { "name": "read_memory", "args": { "file_id": "f_car" } } }),
+            json!({ "text": "Let me check." }),
+        ];
+        assert_eq!(search_calls(&parts), vec![("Volvo EX60 range".to_string(), Some("c1".to_string()))]);
+        assert_eq!(tool_calls(&parts).len(), 1, "read_memory is still the app's");
+        let j = json!({ "candidates": [{ "groundingMetadata": { "groundingChunks": [{ "web": { "title": "volvocars.com", "uri": "https://example.test/a" } }] } }] });
+        let r = search_result(&j, "Up to 810 km (WLTP).");
+        assert!(r.starts_with("Up to 810 km") && r.contains("Sources:\n- volvocars.com: https://example.test/a"), "{r}");
+        assert_eq!(search_result(&json!({}), "  "), "The search found nothing.");
+        let long = "x".repeat(crate::policy::GEMINI_SEARCH_RESULT_CHARS + 500);
+        assert_eq!(search_result(&json!({}), &long).len(), crate::policy::GEMINI_SEARCH_RESULT_CHARS);
     }
 }
