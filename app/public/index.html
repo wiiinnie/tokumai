@@ -4468,7 +4468,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     $("grImages").checked  = !!g.scanImages;
     $("devCostChk").checked = devCost;
     $("setStatus").textContent = "";
-    ["prCtx","prTopic","prWhite","prReq","prHand"].forEach(id=>{ $(id).onchange = persistSettings; });
+    ["prCtx","prTopic","prWhite","prReq"].forEach(id=>{ $(id).onchange = persistSettings; });
     syncRowTint();
     ["grEnabled","grText","grImages"].forEach(id=>{ $(id).onchange = persistGuard; });
     $("devCostChk").onchange = ()=>{
