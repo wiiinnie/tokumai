@@ -79,3 +79,17 @@ test("undo reverses each change", () => {
 test("German and English have the same palace strings", () => {
   assert.deepEqual(Object.keys(_tables.de).sort(), Object.keys(_tables.en).sort());
 });
+
+test("a fact already kept, in any file and in other words around it, is not added again", () => {
+  const p = { files: [
+    { id: "f_p", title: "Persönliches", lines: [{ id: "l1", text: "Der Nutzer fährt einen Porsche 911." }, { id: "l2", text: "Ist 53 Jahre alt." }] },
+    { id: "f_i", title: "Interessen", lines: [] },
+  ] };
+  const ops = parseExtraction(JSON.stringify([
+    { op: "add", fileId: "f_i", text: "Fährt einen Porsche 911." },
+    { op: "add", fileId: "f_p", text: "Ist 54 Jahre alt." },
+    { op: "add", fileId: "f_i", text: "Segelt gern." },
+    { op: "add", fileId: "f_p", text: "Der Nutzer segelt gern." },
+  ]), p);
+  assert.deepEqual(ops.map((o) => o.text), ["Ist 54 Jahre alt.", "Segelt gern."]);
+});

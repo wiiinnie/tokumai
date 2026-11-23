@@ -6666,10 +6666,14 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     }
     $("palBody").innerHTML = html;
     // A fact is as tall as its words: one row cut "Drives a Volvo EX60" to "Drives a".
-    $("palBody").querySelectorAll(".palline2 textarea").forEach(ta=>{
-      const fit = ()=>{ ta.style.height = "auto"; ta.style.height = ta.scrollHeight + "px"; };
-      fit(); ta.addEventListener("input", fit);
+    // Measured once the sheet is on screen — hidden, everything measures 0 and a 0 px
+    // field shows nothing at all; so a 0 never becomes the height.
+    const fitAll = ()=>$("palBody").querySelectorAll(".palline2 textarea").forEach(ta=>{
+      const h = ta.scrollHeight; if(h > 0){ ta.style.height = "auto"; ta.style.height = ta.scrollHeight + "px"; }
     });
+    $("palBody").querySelectorAll(".palline2 textarea").forEach(ta=>ta.addEventListener("input", ()=>{ ta.style.height = "auto"; ta.style.height = ta.scrollHeight + "px"; }));
+    requestAnimationFrame(()=>requestAnimationFrame(fitAll));
+    setTimeout(fitAll, 350);
     renderPalaceHead();
   }
   async function palEdit(ops){

@@ -637,15 +637,23 @@ async fn chat(
     });
     // The Memory Palace's index (titles and descriptions, anonymised by the interface):
     // the model may then ask for a file with `read_memory` (the answer's `toolCalls`).
+    let index_len = memory.as_ref().and_then(|m| m["index"].as_array().map(Vec::len)).unwrap_or(0);
     if let Some(m) = memory.filter(|m| m["index"].as_array().is_some_and(|a| !a.is_empty())) {
         body["memory"] = m;
     }
+    // Which question could read the palace, and whether it did: the model, search on or
+    // off, how many files the index named, and the turn's tool messages so far. No content.
+    let tool_turns = body["messages"].as_array().map(|a| a.iter().filter(|m| m["role"] == "tool").count()).unwrap_or(0);
+    log::info!("[palace] chat {model}: live {}, index {index_len}, memory read so far {tool_turns}", body["live"]);
     let _ = app.emit("chat-sent", ());
     let st = app.state::<AppState>();
     let mut answer = tokio::select! {
         a = Box::pin(call(&app, "chat", body)) => a?,
         _ = st.cancel.notified() => return Err("stopped".into()),
     };
+    if index_len > 0 {
+        log::info!("[palace] the model asked to read {} file(s)", answer["toolCalls"].as_array().map(Vec::len).unwrap_or(0));
+    }
     // The footer's words for what the answer took and what it cost.
     let u = answer["usage"].clone();
     answer["usage"] = json!({

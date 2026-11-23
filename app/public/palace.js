@@ -106,6 +106,9 @@ export function extractionMessages(turns, index) {
 
 const norm = (s) => String(s || "").toLowerCase().replace(/\s+/g, " ").replace(/[.!;,]+$/, "").trim();
 
+/** Words that say nothing about the fact itself ("Der Nutzer fährt …", "The user drives …"). */
+const FILLER = new Set(["der", "die", "das", "nutzer", "nutzerin", "user", "the", "is", "ist", "a", "an", "ein", "eine", "einen"]);
+
 function words(s) {
   return new Set(norm(s).split(/[^\p{L}\p{N}\[\]_]+/u).filter((w) => w.length > 1));
 }
@@ -143,10 +146,20 @@ export function parseExtraction(text, palace) {
   if (!Array.isArray(arr)) return [];
   const files = (palace && palace.files) || [];
   const ops = [];
+  // Every fact already kept, anywhere, and those added in this answer: a new one whose
+  // words one of them already holds is the same fact again, often in another file
+  // ("Fährt einen Porsche 911" beside "Der Nutzer fährt einen Porsche 911").
+  const known = files.flatMap((f) => (f.lines || []).filter((l) => !l.deleted).map((l) => words(l.text)));
+  const isKnown = (t) => {
+    const w = [...words(t)].filter((x) => !FILLER.has(x));
+    return w.length > 0 && known.some((k) => w.every((x) => k.has(x)));
+  };
   for (const o of arr.slice(0, 40)) {
     if (!o || typeof o !== "object") continue;
     const text = typeof o.text === "string" ? o.text.trim().slice(0, 500) : "";
     const file = files.find((f) => f.id === o.fileId);
+    if (o.op === "add" && text && isKnown(text)) continue;
+    if (o.op === "add" && text) known.push(words(text));
     if (o.op === "add" && text) {
       if (file) ops.push({ op: "add", fileId: file.id, text });
       else if (typeof o.newFileTitle === "string" && o.newFileTitle.trim())
