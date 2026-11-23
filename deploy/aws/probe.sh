@@ -311,7 +311,9 @@ dnf install -y aws-nitro-enclaves-cli
 sed -i "s/^memory_mib:.*/memory_mib: $ENCLAVE_MIB/; s/^cpu_count:.*/cpu_count: $ENCLAVE_CPUS/" /etc/nitro_enclaves/allocator.yaml
 systemctl enable --now nitro-enclaves-allocator.service
 usermod -aG ne ec2-user
-touch /var/tmp/tokumai-host-ready
+# /var/lib, not /var/tmp: the system empties /var/tmp at boot, and a host that had been
+# stopped and started again then looked as if it were still preparing (2026-11-23).
+touch /var/lib/tokumai-host-ready
 UD
 )
     aws ec2 run-instances --image-id "$AMI" --instance-type "$TYPE" --key-name $NAME --security-group-ids "$SG" \
@@ -324,7 +326,9 @@ UD
     [ -n "$VOL" ] && echo "then 'volume' attaches the book volume, and 'deploy' starts the enclave on it"
     ;;
   deploy|debug)
-    remote 'test -f /var/tmp/tokumai-host-ready' || { echo "the host is not ready yet (user data still running)"; exit 1; }
+    # (Hosts launched before 2026-11-23 have the mark in /var/tmp, gone after a restart:
+    # set /var/lib's by hand once, `sudo touch /var/lib/tokumai-host-ready`.)
+    remote 'test -f /var/lib/tokumai-host-ready || test -f /var/tmp/tokumai-host-ready' || { echo "the host is not ready yet (user data still running)"; exit 1; }
     refuse_sandbox_beside_production
     # Stop first: a running proxy binary cannot be overwritten ("text file busy").
     remote "sudo systemctl stop tokumai-enclave 2>/dev/null || true; sudo nitro-cli terminate-enclave --all >/dev/null 2>&1 || true; sudo systemctl stop tokumai-egress 2>/dev/null || true; pkill -f '[t]okumai-egress-host' || true; sleep 1" || true
@@ -410,7 +414,7 @@ PY
       exit 0
     fi
     echo "instance $ID at $(public_ip)"
-    remote 'test -f /var/tmp/tokumai-host-ready && echo "host ready" || echo "host still preparing"; systemctl is-active tokumai-egress 2>/dev/null | sed "s/^/egress service: /"; systemctl is-active tokumai-enclave 2>/dev/null | sed "s/^/enclave service: /"; findmnt -n -o SOURCE,SIZE,USED /home/ec2-user/book 2>/dev/null | sed "s/^/book volume: /" || echo "book: on the root volume"; nitro-cli describe-enclaves 2>/dev/null | grep -E "EnclaveID|State|Flags" || echo "no enclave running"; tail -n 20 egress.log 2>/dev/null || true'
+    remote '{ test -f /var/lib/tokumai-host-ready || test -f /var/tmp/tokumai-host-ready; } && echo "host ready" || echo "host still preparing"; systemctl is-active tokumai-egress 2>/dev/null | sed "s/^/egress service: /"; systemctl is-active tokumai-enclave 2>/dev/null | sed "s/^/enclave service: /"; findmnt -n -o SOURCE,SIZE,USED /home/ec2-user/book 2>/dev/null | sed "s/^/book volume: /" || echo "book: on the root volume"; nitro-cli describe-enclaves 2>/dev/null | grep -E "EnclaveID|State|Flags" || echo "no enclave running"; tail -n 20 egress.log 2>/dev/null || true'
     ;;
   ssh)
     [ "$(instance_state)" = "running" ] || { echo "the instance is $(instance_state) — 'start' first"; exit 1; }
