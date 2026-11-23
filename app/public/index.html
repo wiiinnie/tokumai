@@ -6665,6 +6665,11 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       html += `<div class="btnrow" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px"><button class="btn" data-click="palaceExportTap">${esc(t("palace.screen.export"))}</button><button class="btn" data-click="palaceImportTap">${esc(t("palace.screen.import"))}</button><button class="btn" style="color:var(--rust)" data-click="palaceWipeTap">${esc(t("palace.screen.wipe"))}</button></div>`;
     }
     $("palBody").innerHTML = html;
+    // A fact is as tall as its words: one row cut "Drives a Volvo EX60" to "Drives a".
+    $("palBody").querySelectorAll(".palline2 textarea").forEach(ta=>{
+      const fit = ()=>{ ta.style.height = "auto"; ta.style.height = ta.scrollHeight + "px"; };
+      fit(); ta.addEventListener("input", fit);
+    });
     renderPalaceHead();
   }
   async function palEdit(ops){

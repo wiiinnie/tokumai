@@ -24,6 +24,12 @@ export const MAX_INDEX = 64;
 
 const bytes = (s) => new TextEncoder().encode(s).length;
 
+const PLACEHOLDER = /\[[A-Z]+_\d+\]/;
+export const PLACEHOLDER_NOTE =
+  "Values in square brackets such as [PERSON_1] are the user's real details, hidden from you on purpose. " +
+  "Treat them as known: use them exactly as written wherever the real value belongs " +
+  "(for example \"Your name is [PERSON_1]\"). The user's device shows the real value in their place.";
+
 /**
  * The index sent with a question.
  * @param {{files:Array}} palace  the Rust side's view (live files and lines)
@@ -51,6 +57,9 @@ export function toolResult(palace, fileId, anon = (s) => s) {
     lines.pop();
     out = lines.join("\n") + "\n- (more facts left out)";
   }
+  // Told why a value is in brackets, or the model takes "[PERSON_1]" for a name it does
+  // not know and says so — when the person asked for exactly that name (2026-11-23).
+  if (PLACEHOLDER.test(out)) out = PLACEHOLDER_NOTE + "\n\n" + out;
   return { content: out || "This file is empty.", title: f.title, found: true };
 }
 
@@ -71,7 +80,7 @@ export function worthExtracting(turns) {
 
 const RULES = `You maintain the user's Memory Palace: short, durable facts about the user, filed by topic.
 Read the conversation and decide what to remember. Rules:
-- Only durable facts about the user: identity, role and work, preferences, ongoing projects, people and things that keep mattering. No one-off details, no tasks, no small talk, nothing about the assistant.
+- Only durable facts about the user: name, age, where they live, family, role and work, what they own or use (a car, a phone), preferences, ongoing projects, people and things that keep mattering. Every such fact the user states is worth keeping. No one-off details, no tasks, no small talk, nothing about the assistant.
 - Only what the user said or clearly confirmed. Never infer or guess.
 - One fact per line, short, in the third person ("Prefers short answers"). Write in the language the user writes in.
 - Keep placeholders in square brackets such as [EMPLOYER_1] or [PERSON_1] exactly as they are.

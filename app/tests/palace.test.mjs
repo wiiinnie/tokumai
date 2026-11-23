@@ -1,7 +1,7 @@
 // node --test app/tests — the Memory Palace's interface-side logic.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildIndex, toolResult, pendingTurns, worthExtracting, extractionMessages, parseExtraction, inverseOps, groupDiff, findLine, MAX_RESULT_BYTES } from "../public/palace.js";
+import { buildIndex, toolResult, pendingTurns, worthExtracting, extractionMessages, parseExtraction, inverseOps, groupDiff, findLine, MAX_RESULT_BYTES, PLACEHOLDER_NOTE } from "../public/palace.js";
 import { _tables } from "../public/i18n.js";
 
 const palace = {
@@ -22,7 +22,7 @@ test("the index lists titles only, never a file marked never-send, anonymised", 
 
 test("read_memory answers without never-send lines, anonymised and within size", () => {
   const r = toolResult(palace, "f_work", anon);
-  assert.equal(r.content, "- Works at [EMPLOYER_1] as head of a VFX studio");
+  assert.equal(r.content, PLACEHOLDER_NOTE + "\n\n- Works at [EMPLOYER_1] as head of a VFX studio", "with the note that says what a placeholder is");
   assert.ok(!r.content.includes("Salary"));
   assert.equal(toolResult(palace, "f_health").found, false);
   assert.equal(toolResult(palace, "f_nope").found, false);
