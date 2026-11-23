@@ -6460,17 +6460,17 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       try{ await Vault.save(sess); }catch(_){}
       if(sess === current) renderThread();
       let ops = parseExtraction(r && r.text, palData);
-      // The personal-info check on what is about to be kept (§6.2): values anonymised
-      // before stay anonymised; in "always" new ones are too; in "ask" the person sees them.
+      // The personal-info check on what is about to be kept (§6.2), without asking: what
+      // it finds is anonymised quietly. Saving memory happens in the background and must
+      // not interrupt; whoever wants it otherwise turns the check off in the palace's
+      // settings, or chooses "Ask before saving" there.
       const piiMode = piiOpts().mode;
       const map = palMapping(sess);
-      let flagged = false;
       ops = ops.map(o=>{
         if(!o.text || piiMode === "off") return o;
         let text = anonymizeKnown(o.text, map);
         const f = detectPII(text, { ignore: piiOpts().ignore });
-        if(f.length && piiMode === "always"){ const rr = piiRedact(text, f, map); map.push(...rr.added); text = rr.text; }
-        else if(f.length){ flagged = true; return { ...o, text, pii: f }; }
+        if(f.length){ const rr = piiRedact(text, f, map); map.push(...rr.added); text = rr.text; }
         return { ...o, text };
       });
       // Placeholders the lines use must be in the palace, or another device could not
@@ -6478,7 +6478,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       const phOps = [];
       for(const m of map){ if(ops.some(o=>o.text && o.text.includes(m.ph)) && !(palData.placeholders||[]).some(p=>p.ph===m.ph)) phOps.push({ op:"placeholder", ph:m.ph, value:m.value, kind:m.kind }); }
       if(!ops.length){ if(manual) palToast(t("palace.menu.nothing")); return; }
-      if(mode === "ask" || flagged){ showPalAsk(ops, phOps, sess); return; }
+      if(mode === "ask"){ showPalAsk(ops, phOps, sess); return; }
       await palApplyAndToast([...phOps, ...ops]);
     }catch(e){
       if(manual) palToast(String((e&&e.message)||e).replace(/^NO_CREDIT:\s*/, ""));

@@ -10,7 +10,8 @@ test("an employer named after a trigger phrase is found, in German and English",
   assert.deepEqual(kinds("ich arbeite für Siemens"), [["employer", "Siemens"]]);
   assert.deepEqual(kinds("I work at Acme Robotics Inc. in Berlin"), [["employer", "Acme Robotics Inc"]]);
   assert.deepEqual(kinds("Mein Chef bei Bosch ist streng"), [["employer", "Bosch"]]);
-  assert.deepEqual(kinds("We met at Google last year"), [["company", "Google"]], "a known company without a trigger");
+  assert.deepEqual(kinds("We met at Google last year"), [], "a company without a trigger is not personal");
+  assert.deepEqual(kinds("Ich fahre einen BMW 3er"), [], "nor is a brand");
 });
 
 test("people, email, phone, IBAN, card, address and birth date", () => {

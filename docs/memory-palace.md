@@ -97,16 +97,18 @@ person's) and the index to the cheapest text model of the provider the chat alre
 with a prompt that asks for JSON only: durable facts, no inferences, placeholders kept.
 The answer becomes changes (`palace.js::parseExtraction`; a correction names the old fact
 by its words, so the lines themselves are never sent). The personal-information check runs
-on them before they are kept. Then: "Memory updated · View · Undo" — or, with "Ask before
-saving", the sheet with checkboxes first. The cost shows under the answer as "Memory update".
+on them before they are kept and anonymises what it finds without asking (saving runs in
+the background and must not interrupt; turning the check off is the way to keep values as
+they are). Then: "Memory updated · View · Undo" — or, with "Ask before saving", the sheet
+with checkboxes first. The cost shows under the answer as "Memory update".
 
 Off, paused for the chat (incognito), or no palace: nothing runs.
 
 ## The personal-information check
 
 On the device, before anything leaves it: the prompt, the index, a file the model asked
-for. Employer and company names (trigger phrases and a DE/EU/US gazetteer), people's names
-after a trigger, email, phone, postal address, IBAN and card numbers (with their
+for. Employers and people's names after a trigger phrase ("ich arbeite bei …", "my wife …";
+a company or brand merely mentioned is not personal), email, phone, postal address, IBAN and card numbers (with their
 checksums), birth dates after a trigger. Modes: ask (default) / always anonymise / off.
 "Anonymize" puts a stable placeholder in place (`[EMPLOYER_1]`); the mapping is kept in the
 chat (vault) and in the palace (sealed, so another device can read lines back) and never

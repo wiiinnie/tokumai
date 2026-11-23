@@ -9,8 +9,10 @@
 // to value stays on the device (in the chat, and in the palace, sealed), and the answer
 // is shown with the real values put back.
 //
-// Detection is deterministic: patterns for structured data, a gazetteer of companies
-// (DE/EU/US), and trigger phrases ("ich arbeite bei …", "I work at …", "meine Frau …").
+// Detection is deterministic: patterns for structured data and trigger phrases ("ich
+// arbeite bei …", "I work at …", "meine Frau …"). A company named without such a phrase
+// is not personal: "I drive a BMW" says nothing about who the person is, and a list of
+// known companies flagged every brand (2026-11-23, a car remembered as [EMPLOYER_1]).
 // A small on-device NER model can come later behind the same interface. It can be turned
 // off completely (mode "off").
 //
@@ -25,34 +27,7 @@ const PREFIX = {
   address: "ADDRESS", iban: "IBAN", card: "CARD", birthdate: "BIRTHDATE",
 };
 
-// Companies worth recognising without a trigger phrase. Matched as whole words, with
-// their capitals: "Apple" the company, not "apple" the fruit. Names that are also common
-// words or first names (Otto, Meta, Puma, Shell…) are left to the trigger phrases.
-const COMPANIES = [
-  // Germany
-  "Deutsche Telekom", "Telekom", "Siemens", "SAP", "BMW", "Volkswagen", "Daimler", "Mercedes-Benz", "Bosch",
-  "BASF", "Bayer", "Allianz", "Deutsche Bank", "Commerzbank", "Lufthansa", "Deutsche Bahn", "Deutsche Post", "DHL",
-  "Adidas", "Henkel", "Continental", "Porsche", "Audi", "Infineon", "Zalando", "Aldi", "Lidl", "Rewe", "Edeka",
-  "Vodafone", "Telefónica", "Airbus", "Heidelberg Materials", "Merck", "Fresenius", "Siemens Energy", "Rheinmetall",
-  "ProSiebenSat.1", "Bertelsmann", "Axel Springer", "Sparkasse", "Volksbank", "Hapag-Lloyd", "Beiersdorf", "Covestro",
-  "Thyssenkrupp", "ThyssenKrupp", "E.ON", "RWE", "EnBW", "Vonovia", "Zeiss", "Trumpf", "Würth", "Schwarz Gruppe",
-  "Kaufland", "Dm", "Rossmann", "MediaMarkt", "Otto Group", "Delivery Hero", "N26", "Celonis", "Personio", "Flix",
-  // Europe
-  "Nestlé", "Novartis", "Roche", "UBS", "ABB", "Philips", "Unilever", "ING", "Spotify", "Ericsson", "Nokia",
-  "Renault", "Peugeot", "Stellantis", "TotalEnergies", "LVMH", "L'Oréal", "Danone", "Airbnb", "Ikea", "IKEA",
-  "H&M", "Volvo", "Siemens Healthineers", "ASML", "Shell plc", "BP", "HSBC", "Barclays", "BNP Paribas", "Santander",
-  "Ubisoft", "Booking.com", "Adyen", "Klarna", "Revolut", "Novo Nordisk", "Maersk", "Lego", "LEGO",
-  // United States
-  "Google", "Alphabet", "Apple", "Microsoft", "Amazon", "Facebook", "Netflix", "Tesla", "IBM", "Oracle", "Intel",
-  "Nvidia", "NVIDIA", "Salesforce", "Adobe", "OpenAI", "Anthropic", "McKinsey", "Deloitte", "PwC", "KPMG",
-  "Goldman Sachs", "JPMorgan", "J.P. Morgan", "Morgan Stanley", "Uber", "Walmart", "Disney", "Pixar", "Coca-Cola",
-  "PepsiCo", "Boeing", "Accenture", "Cisco", "Qualcomm", "PayPal", "Stripe", "SpaceX", "Starbucks", "McDonald's",
-  "Procter & Gamble", "Johnson & Johnson", "Pfizer", "Moderna", "ExxonMobil", "Chevron", "General Motors", "Ford",
-  "Lockheed Martin", "Palantir", "Snowflake", "Databricks", "Dropbox", "LinkedIn", "Twitter", "ByteDance", "TikTok",
-];
-
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-const COMPANY_RE = new RegExp("(?<![\\p{L}\\p{N}])(" + [...COMPANIES].sort((a, b) => b.length - a.length).map(esc).join("|") + ")(?![\\p{L}\\p{N}])", "gu");
 
 // Words after a trigger that are not names.
 const NOT_NAMES = new Set(["Ich", "I", "Er", "Sie", "Es", "Wir", "Ihr", "Der", "Die", "Das", "Den", "Dem", "Ein", "Eine",
@@ -146,8 +121,6 @@ export function detectPII(text, opts = {}) {
   for (const f of triggered(text, BIRTH_TRIGGER, DATE_AT, "birthdate")) found.push(f);
   for (const f of triggered(text, EMPLOYER_TRIGGER, ORG_AT, "employer")) found.push(f);
   for (const f of triggered(text, PERSON_TRIGGER, PERSON_AT, "person")) found.push(f);
-  // A company named without a trigger: "company"; with one it was found as "employer".
-  for (const m of text.matchAll(COMPANY_RE)) push("company", m[1], m.index);
   // Structured finds and triggered ones first, then the longer; no overlaps.
   const rank = { email: 0, iban: 0, card: 0, phone: 1, address: 1, birthdate: 1, employer: 2, person: 2, company: 3 };
   found.sort((a, b) => rank[a.kind] - rank[b.kind] || (b.end - b.start) - (a.end - a.start) || a.start - b.start);
@@ -196,7 +169,9 @@ export function redact(text, findings, mapping) {
     at = f.end;
   }
   parts.push(text.slice(at));
-  return { text: parts.join(""), added };
+  // The same value again where nothing flagged it ("bei der Telekom … auch bei der
+  // Telekom"): once anonymised, it is anonymised everywhere in the text.
+  return { text: anonymizeKnown(parts.join(""), added), added };
 }
 
 /** Values the person already chose to anonymize are replaced without asking again. */
