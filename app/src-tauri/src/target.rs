@@ -36,13 +36,12 @@ const RELEASE_ENCLAVE: Option<&str> = Some(concat!(
     "GPscM2poKqpkHdDD3JPGEHiLHufBNRtQyLsvjrMUHQ3o.FhmyxZfn6dHvxASzcR44foa2TjMrCHmm8sQJziAQD3ds@6KZ96sPW6BBcgmghYb7c7BtCXgAEr1nmwnJzzRsszyhe"
 ));
 const RELEASE_MEASUREMENTS: &[&str] = &[
-    // tokumai-mark-sandbox — the image under App Review with 1.0 (0.8.1): the data key
-    // born in the enclave, the doors kept by it, the audit's fixes, and the witness mark
-    // that S3 accepts (deploy/enclave/measurements/mark-sandbox.json); sandbox receipts
-    "0a301171580f9ae607ef4b09ffb76889eab597ed2af5b858990b3540566486daeeb7f35d51206f8ab6a67eefffcbfeb6",
-    // tokumai-mark — production, the same code without the sandbox feature; deployed at
-    // the same doors once the app is approved
-    "7b4c5c142144fbcbcee73c0a7d3379da93ada7c98514b96e2f4bc9b5f4453836938f745796110b660af79c761add8958",
+    // tokumai-palace-sandbox — the Memory Palace (2026-11-23): the palace's store and
+    // read_memory, on top of everything mark had (deploy/enclave/measurements/
+    // palace-sandbox.json); sandbox receipts
+    "b269929c91262437eb0169ea6a36965bd439111e1b7cece85daa17d8b40ab24089ca7b240d50cf08c72a05a9c76cd455",
+    // tokumai-palace — production, the same code without the sandbox feature
+    "63d1a4060f30132e5c53fbd90d91e3788c9e5c185dcfbfc263254025c9df3645187151ff37b7435cd8d624c547bfed74",
 ];
 
 fn dev_data() -> PathBuf {
