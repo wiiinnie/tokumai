@@ -36,12 +36,12 @@ const RELEASE_ENCLAVE: Option<&str> = Some(concat!(
     "GPscM2poKqpkHdDD3JPGEHiLHufBNRtQyLsvjrMUHQ3o.FhmyxZfn6dHvxASzcR44foa2TjMrCHmm8sQJziAQD3ds@6KZ96sPW6BBcgmghYb7c7BtCXgAEr1nmwnJzzRsszyhe"
 ));
 const RELEASE_MEASUREMENTS: &[&str] = &[
-    // tokumai-palace-sandbox — the Memory Palace (2026-11-23): the palace's store and
-    // read_memory, on top of everything mark had (deploy/enclave/measurements/
-    // palace-sandbox.json); sandbox receipts
-    "b269929c91262437eb0169ea6a36965bd439111e1b7cece85daa17d8b40ab24089ca7b240d50cf08c72a05a9c76cd455",
-    // tokumai-palace — production, the same code without the sandbox feature
-    "63d1a4060f30132e5c53fbd90d91e3788c9e5c185dcfbfc263254025c9df3645187151ff37b7435cd8d624c547bfed74",
+    // tokumai-search-sandbox — the Memory Palace with Gemini's search carried out by the
+    // enclave beside read_memory (deploy/enclave/measurements/search-sandbox.json);
+    // sandbox receipts
+    "d535d773f89ff5b21a79802b884145cd527ace716e893a922d28e23e23600612bb4d0e048b8bf7a06e1074afe6e6c7a9",
+    // tokumai-search — production, the same code without the sandbox feature
+    "c297862ad964f8758e10eb2965caa2106c1fba8fb3c56777f76fe98dcc4658c8ee03801b5b84d7b2a8ef70586346b9cf",
 ];
 
 fn dev_data() -> PathBuf {
