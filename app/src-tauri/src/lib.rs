@@ -775,17 +775,36 @@ async fn iap_buy(app: AppHandle, product_id: String) -> Result<Value, String> {
     if !plans.contains(&product_id) && !credit.contains(&product_id) {
         return Err("that product is not sold here".into());
     }
-    let bought = iap_ios::purchase(&product_id).await?;
-    match bought["status"].as_str().unwrap_or("") {
-        "cancelled" => return Ok(json!({ "status": "cancelled" })),
-        // "Ask to Buy": a parent has to approve, and the transaction turns up later.
-        "pending" => return Ok(json!({ "status": "pending" })),
-        _ => {}
-    }
-    let jws = bought["jws"].as_str().unwrap_or("").to_string();
-    if jws.is_empty() {
-        return Err("the App Store returned no signed transaction".into());
-    }
+    // StoreKit (seen in the sandbox, 2026-09-24 and 2026-11-23) answers a purchase with an
+    // earlier transaction of the same product that was never finished — long ended — in
+    // place of a new one. Such a transaction is finished and the purchase asked once more.
+    let mut tries = 0;
+    let jws = loop {
+        tries += 1;
+        let bought = iap_ios::purchase(&product_id).await?;
+        match bought["status"].as_str().unwrap_or("") {
+            "cancelled" => return Ok(json!({ "status": "cancelled" })),
+            // "Ask to Buy": a parent has to approve, and the transaction turns up later.
+            "pending" => return Ok(json!({ "status": "pending" })),
+            _ => {}
+        }
+        let jws = bought["jws"].as_str().unwrap_or("").to_string();
+        if jws.is_empty() {
+            return Err("the App Store returned no signed transaction".into());
+        }
+        let ended = paid_from_jws(&jws).is_some_and(|p| p.until_ms <= tokumai_proto::now_ms());
+        if !ended {
+            break jws;
+        }
+        let tx = bought["transactionId"].as_str().unwrap_or("");
+        log::warn!("[notes] the App Store answered with an ended transaction {tx}; finished, asking again");
+        if !tx.is_empty() {
+            let _ = iap_ios::finish(tx).await;
+        }
+        if tries >= 2 {
+            return Err("The App Store handed back an earlier purchase that has ended. It is cleared now: please try once more.".into());
+        }
+    };
     // The purchase becomes notes, and the notes become the month — the same path a launch
     // takes, so a crash between paying and minting costs nobody anything: Apple keeps
     // offering the transaction until it is finished, and the sync finishes it once minted.
@@ -801,7 +820,8 @@ async fn iap_buy(app: AppHandle, product_id: String) -> Result<Value, String> {
     }
     // The month of this payment went to another phrase: the note was made before (on this
     // device, for the account that was here then) or the enclave has one for it already.
-    let elsewhere = mine.iter().any(|x| {
+    let this_month = core_notes::epoch_of_ms(tokumai_proto::now_ms());
+    let elsewhere = mine.iter().any(|x| x["epoch"] == this_month) && mine.iter().filter(|x| x["epoch"] == this_month).any(|x| {
         x["result"] == "done" || x["error"].as_str().is_some_and(|e| e.contains("already minted") || e.contains("already pays a plan"))
     });
     if elsewhere {
@@ -1297,6 +1317,13 @@ async fn notes_sync(app: &AppHandle) -> Result<Value, String> {
         let jws = t["jws"].as_str().unwrap_or("").to_string();
         let tx = t["transactionId"].as_str().unwrap_or("").to_string();
         let Some(paid) = paid_from_jws(&jws) else { continue };
+        // Every month it paid is behind the window: nothing left to make of it, so it is
+        // finished, or StoreKit keeps handing it back.
+        if !tx.is_empty() && core_notes::epochs_covered(paid.start_ms, paid.until_ms, paid.yearly).iter().all(|e| *e < from) {
+            log::info!("[notes] {}: its months are over; finished", paid.rail);
+            let _ = iap_ios::finish(&tx).await;
+            continue;
+        }
         for epoch in core_notes::epochs_covered(paid.start_ms, paid.until_ms, paid.yearly) {
             if epoch < from || epoch > to {
                 continue;
@@ -1309,6 +1336,11 @@ async fn notes_sync(app: &AppHandle) -> Result<Value, String> {
             if p.notes_done.contains(&key) || p.notes.iter().any(|n| n.rail == paid.rail && n.epoch == epoch) {
                 log::info!("[notes] {key}: already made on this device");
                 outcomes.push(json!({ "rail": paid.rail, "epoch": epoch, "result": "done" }));
+                // Finished with Apple too: a transaction left open is what StoreKit hands
+                // back to the next purchase in place of a new one.
+                if !tx.is_empty() {
+                    let _ = iap_ios::finish(&tx).await;
+                }
                 continue;
             }
             seen.push(key.clone());
