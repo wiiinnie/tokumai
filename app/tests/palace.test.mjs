@@ -93,3 +93,13 @@ test("a fact already kept, in any file and in other words around it, is not adde
   ]), p);
   assert.deepEqual(ops.map((o) => o.text), ["Ist 54 Jahre alt.", "Segelt gern."]);
 });
+
+test("a category named in another language is renamed, in English", () => {
+  const p = { files: [{ id: "f_p", title: "Persönliches", description: "Persönliche Informationen", lines: [] }] };
+  const ops = parseExtraction(JSON.stringify([
+    { op: "rename", fileId: "f_p", title: "About me", description: "Name, age, family, home" },
+    { op: "rename", fileId: "f_nope", title: "X" },
+    { op: "rename", fileId: "f_p", title: "" },
+  ]), p);
+  assert.deepEqual(ops, [{ op: "file.update", fileId: "f_p", title: "About me", description: "Name, age, family, home" }]);
+});

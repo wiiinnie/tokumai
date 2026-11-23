@@ -29,6 +29,13 @@ const CONFIG: &str = "palace-config.json";
 /// the delay a change waits before it is uploaded.
 pub const SPEND_GAP_MS: u64 = 90_000;
 const UPLOAD_DELAY_MS: (u64, u64) = (5_000, 120_000);
+
+/// Whether this is an upload window: a session's start (the app started, or came back
+/// after an hour away, or "Sync now"). What the palace learns during a session is kept
+/// on the device and goes up at the NEXT one: hours or days between a conversation and
+/// the upload it caused, not seconds — so the namespace's writes cannot be lined up with
+/// an account's questions by their timing (2026-11-23). Closed once the queue is empty.
+pub static UPLOAD_WINDOW: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 /// After this many failed attempts in a row the indicator says so (and keeps trying).
 const ATTEMPTS_BEFORE_ERROR: u32 = 5;
 /// The longest wait between two attempts.

@@ -13,7 +13,7 @@
 
 export const PALACE_DEFAULTS = Object.freeze({
   updates: "auto",      // "auto" | "ask" | "off"
-  idleSecs: 45,         // after an answer, this long without input → look for new facts
+  idleSecs: 60,         // after an answer, this long without input → look for new facts
 });
 
 /** What the enclave accepts per `read_memory` result, with room to spare. */
@@ -91,7 +91,8 @@ Read the conversation and decide what to remember. Rules:
 - If there is nothing worth remembering, return [].
 Answer with JSON only, no prose and no code fences: an array of
 {"op":"add","fileId":"…","text":"…"} | {"op":"add","newFileTitle":"…","newFileDescription":"…","text":"…"} |
-{"op":"update","fileId":"…","old":"…","text":"…"} | {"op":"delete","fileId":"…","old":"…"}`;
+{"op":"update","fileId":"…","old":"…","text":"…"} | {"op":"delete","fileId":"…","old":"…"} |
+{"op":"rename","fileId":"…","title":"…","description":"…"} — the last only for an existing file whose title or description is not in English, or no longer says what the file holds.`;
 
 /**
  * The request that asks a model for new facts: the rules, the index, the new turns.
@@ -166,6 +167,10 @@ export function parseExtraction(text, palace) {
       if (file) ops.push({ op: "add", fileId: file.id, text });
       else if (typeof o.newFileTitle === "string" && o.newFileTitle.trim())
         ops.push({ op: "add", newFileTitle: o.newFileTitle.trim().slice(0, 80), newFileDescription: String(o.newFileDescription || "").slice(0, 240), text });
+    } else if (o.op === "rename" && file && typeof o.title === "string" && o.title.trim()) {
+      const title = o.title.trim().slice(0, 80);
+      const description = typeof o.description === "string" && o.description.trim() ? o.description.trim().slice(0, 240) : file.description || "";
+      if (title !== file.title || description !== (file.description || "")) ops.push({ op: "file.update", fileId: file.id, title, description });
     } else if ((o.op === "update" || o.op === "delete") && file) {
       const line = findLine(file, o.old || o.text);
       if (!line) continue;

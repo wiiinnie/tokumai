@@ -59,8 +59,13 @@ blobs, bytes.
 
 Local first. A change is merged into the device's copy and sealed to disk before anything
 else; from then on it counts as saved. The blobs it touched go into a queue kept in the same
-file (it survives a restart) and are uploaded after a random 5–120 s, never within 90 s of
-a blind note being minted or redeemed (`palace::SPEND_GAP_MS`). Failures back off (10 s
+file (it survives a restart) and are uploaded at the NEXT session — when the app starts, or
+comes back after an hour or more in the background, or on "Sync now" (`palace::UPLOAD_WINDOW`)
+— after a random 5–120 s, and never within 90 s of a blind note being minted or redeemed
+(`palace::SPEND_GAP_MS`). Hours or days lie between a conversation and the upload it caused,
+so the namespace's writes cannot be lined up with an account's questions by their timing;
+the extraction itself is the account's own request like any question and needs no delay.
+Until then the indicator says "Saved on this device · uploads next session". Failures back off (10 s
 doubling to 30 min, with jitter); after five in a row the indicator says "failed".
 
 At start (and on "Sync now"): `list`, then `get` for what changed — the index first, then
@@ -90,7 +95,7 @@ with its thought signature handed back, `functionResponse`). Not beside Gemini's
 
 ## Writing memory
 
-After an answer and 45 s without input (configurable), when the chat is left, when the app
+After an answer and 60 s without input (configurable), when the chat is left, when the app
 goes to the background, or by hand ("Save to Memory Palace" on the chat in the rail), the
 app sends the turns since the last extraction (at least two, at least one of them the
 person's) and the index to the cheapest text model of the provider the chat already uses,

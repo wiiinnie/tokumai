@@ -1462,6 +1462,7 @@ fn palace_status_json(app: &AppHandle) -> Value {
     json!({
         "state": palace::state(&cfg, keys.is_some(), syncing, &l),
         "enabled": cfg.enabled, "localOnly": cfg.local_only, "wipePending": cfg.wipe_pending,
+        "nextSession": !palace::UPLOAD_WINDOW.load(std::sync::atomic::Ordering::Relaxed),
         "files": l.manifest.files.iter().filter(|f| !f.deleted).count(),
         "pending": l.dirty.len() + l.gone.len(),
         "dueMs": l.due_ms, "lastSync": l.last_sync_ms, "lastError": l.last_error, "attempts": l.attempts,
@@ -1699,14 +1700,27 @@ async fn palace_loop(app: AppHandle) {
         }
         let (due, pending) = with_palace(&app, |l| (l.due_ms, !l.dirty.is_empty() || !l.gone.is_empty())).unwrap_or((0, false));
         let now = palace::now_ms();
+        let window = palace::UPLOAD_WINDOW.load(std::sync::atomic::Ordering::Relaxed);
         if first {
             first = false;
-            let _ = palace_burst(&app, pending && due <= now).await;
+            let _ = palace_burst(&app, window && pending && due <= now).await;
+            palace_close_window(&app);
             continue;
         }
-        if pending && due <= now {
+        if window && pending && due <= now {
             let _ = palace_burst(&app, true).await;
+            palace_close_window(&app);
         }
+    }
+}
+
+/// The session's upload window closes once nothing is left to send; a failed upload
+/// keeps it open, and the queue's own backoff tries again.
+fn palace_close_window(app: &AppHandle) {
+    let empty = with_palace(app, |l| l.dirty.is_empty() && l.gone.is_empty()).unwrap_or(false);
+    if empty {
+        palace::UPLOAD_WINDOW.store(false, std::sync::atomic::Ordering::Relaxed);
+        palace_emit(app, json!({}));
     }
 }
 
@@ -1748,7 +1762,16 @@ fn palace_apply(app: AppHandle, ops: Vec<palace::Op>) -> Result<Value, String> {
 /// "Sync now": fetch, merge and upload whatever is queued, at once.
 #[tauri::command]
 async fn palace_sync(app: AppHandle, upload: Option<bool>) -> Result<Value, String> {
-    let changes = palace_burst(&app, upload.unwrap_or(true)).await?;
+    // "Sync now", the palace switched on, the app back after an hour: a new session, and
+    // its window opens (`palace::UPLOAD_WINDOW`).
+    let upload = upload.unwrap_or(true);
+    if upload {
+        palace::UPLOAD_WINDOW.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    let changes = palace_burst(&app, upload).await?;
+    if upload {
+        palace_close_window(&app);
+    }
     let mut s = palace_status_json(&app);
     s["changes"] = json!(changes);
     Ok(s)

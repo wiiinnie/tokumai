@@ -6301,8 +6301,9 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     const hidden = st === "off";
     el.style.display = hidden ? "none" : "";
     el.className = "palind " + st;
-    el.title = t("palace.sync." + st);
-    el.setAttribute("aria-label", t("palace.name") + " · " + t("palace.sync." + st));
+    const said = palStateText();
+    el.title = said;
+    el.setAttribute("aria-label", t("palace.name") + " · " + said);
     const mark = $("palIndMark");
     if(mark) mark.textContent = st==="up_to_date" ? "✓" : st==="error" ? "!" : st==="offline" ? "⌀" : st==="local_only" ? "⌂" : "";
     clearTimeout(palFadeTimer);
@@ -6412,7 +6413,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   }
 
   // ---- the extraction (§6): idle, chat end, manual
-  let palIdleTimer = null, palExtracting = false;
+  var palIdleTimer = null, palExtracting = false;   // var: read by the indicator before this line runs
   function palDisarm(){ clearTimeout(palIdleTimer); palIdleTimer = null; }
   function palArmIdle(){
     palDisarm();
@@ -6446,7 +6447,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     if(busy){ if(!manual) palArmIdle(); return; }
     const turns = pendingTurns(sess);
     if(!worthExtracting(turns)){ if(manual) palToast(t("palace.menu.nothing")); return; }
-    palExtracting = true;
+    palExtracting = true; renderPalInd();
     if(manual) palToast(t("palace.menu.saving"));
     showPalLine(t("palace.status.palace_update"), { action: null });
     const el = $("palLine"); if(el && messages.length){ el.innerHTML = `<span>${esc(t("palace.status.palace_update"))}</span>`; el.style.display=""; }
@@ -6492,7 +6493,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     }catch(e){
       if(manual) palToast(String((e&&e.message)||e).replace(/^NO_CREDIT:\s*/, ""));
     }finally{
-      palExtracting = false;
+      palExtracting = false; renderPalInd();
       hidePalLine();
     }
   }
@@ -6626,13 +6627,21 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     openScrim("palScrim");
   }
   function closePalace(){ $("palScrim").classList.remove("open"); }
+  // What the palace is doing, in words: looking for facts, saved here and waiting for
+  // the next session, or the Rust side's own state.
+  function palStateText(){
+    const st = palStatus.state || "locked";
+    if(palExtracting) return t("palace.sync.extracting");
+    if(st === "pending_upload" && palStatus.nextSession) return t("palace.sync.next_session");
+    return t("palace.sync." + st);
+  }
   function palPendingLabel(n){ return n===0 ? t("palace.sync.pending0") : n===1 ? t("palace.sync.pending1") : t("palace.sync.pendingN", { n }); }
   function renderPalaceHead(){
     const h = $("palHeadLine"); if(!h) return;
     const st = palStatus;
     const head = st.localOnly ? t("palace.sync.local_only")
       : t("palace.sync.header", { ago: palAgo(st.lastSync, Date.now(), t("palace.sync.never")), files: st.files||0, pending: palPendingLabel(st.pending||0) });
-    h.innerHTML = `<span>${esc(head)}${st.state && st.state!=="up_to_date" && st.state!=="local_only" ? " · "+esc(t("palace.sync."+st.state)) : ""}</span>` +
+    h.innerHTML = `<span>${esc(head)}${(st.state && st.state!=="up_to_date" && st.state!=="local_only") || palExtracting ? " · "+esc(palStateText()) : ""}</span>` +
       (st.enabled && !st.localOnly ? `<button class="palmini" data-click="palaceSyncNow">${esc(t("palace.sync.now"))}</button>` : "");
   }
   function seg(name, value, options){
@@ -6995,6 +7004,11 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
         return;
       }
       if(hiddenDropTimer){ clearTimeout(hiddenDropTimer); hiddenDropTimer=null; }
+      // Back after an hour or more: a new session for the palace, whose waiting facts go
+      // up now (an upload window, `palace::UPLOAD_WINDOW`), and whose copy is refreshed.
+      if(document.visibilityState==="visible" && hiddenAt && Date.now()-hiddenAt >= 3600*1000 && palOn()){
+        Backend.palaceSync(true).catch(()=>{});
+      }
       if(document.visibilityState==="visible" && isTauri() && mixOn){
         const away = hiddenAt ? Date.now()-hiddenAt : 0; hiddenAt=0;
         if(everConnected && away > 3000) appResumed(away); else refreshRoute();
