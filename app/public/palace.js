@@ -84,7 +84,9 @@ Read the conversation and decide what to remember. Rules:
 - Only what the user said or clearly confirmed. Never infer or guess.
 - One fact per line, short, in the third person ("Prefers short answers"). Write in the language the user writes in.
 - Keep placeholders in square brackets such as [EMPLOYER_1] or [PERSON_1] exactly as they are.
-- File each fact under an existing file id from the index when one fits; otherwise give a short new file title (one or two words) and a short description of what that file holds.
+- File each fact under an existing file id from the index when one fits. Each fact goes into exactly one file, never two.
+- Files are broad. The usual ones: "About me" (name, age, where they live, family, what they own such as a car), "Work" (job, employer, role, colleagues), "Preferences" (how they like answers, tastes, likes and dislikes), "Health" (only what the user volunteers). A hobby, interest or project the user talks about in its own right gets a file of its own, named after it ("Aquariums", "Plant breeding", "House renovation"); a passing mention goes under "Preferences".
+- A new file needs a title (one or two words) and a short description of what it holds, both in English, whatever language the facts are in.
 - If the user corrects or withdraws a fact, use "update" (with "old": the old fact's words and "text": the new one) or "delete" (with "old").
 - If there is nothing worth remembering, return [].
 Answer with JSON only, no prose and no code fences: an array of

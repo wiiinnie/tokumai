@@ -507,7 +507,14 @@
   .paltoast .ta{color:var(--signal);font-weight:600;cursor:pointer;background:none;border:none;font-size:13px;padding:0}
   .palhead{font-family:var(--mono);font-size:11px;color:var(--muted);display:flex;justify-content:space-between;align-items:center;gap:10px;margin:0 4px 12px;flex-wrap:wrap}
   .palfile{border:1px solid var(--line);border-radius:12px;margin-bottom:10px;background:var(--surface-2);overflow:hidden}
-  .palfile .pf-h{display:flex;gap:10px;align-items:center;padding:10px 12px;border-bottom:1px solid var(--line)}
+  .palfile .pf-h{display:flex;gap:10px;align-items:center;padding:10px 12px}
+  .palfile.open .pf-h{border-bottom:1px solid var(--line)}
+  .palfile .pf-b{display:none}
+  .palfile.open .pf-b{display:block}
+  .palfile .pf-t{background:none;border:none;padding:2px;margin:0;color:var(--signal);cursor:pointer;display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11px}
+  .palfile .pf-t svg{transition:transform .15s ease}
+  .palfile.open .pf-t svg{transform:rotate(90deg)}
+  .palfile .pf-n{color:var(--muted);font-family:var(--mono);font-size:11px;white-space:nowrap}
   .palfile .pf-h input{flex:1;min-width:0;background:transparent;border:none;color:var(--bone);font-weight:600;font-size:13.5px;font-family:var(--body)}
   .palfile .pf-d{width:100%;box-sizing:border-box;background:transparent;border:none;border-bottom:1px solid var(--line);color:var(--muted);font-size:12px;padding:6px 12px;font-family:var(--body)}
   .palline2{display:flex;gap:8px;align-items:flex-start;padding:7px 12px;border-bottom:1px solid var(--line)}
@@ -1160,7 +1167,6 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       <div class="meta"><span class="d"></span> <span id="acctLine">no account</span></div>
       <button class="refill" id="buyBtn" data-click="openBuy">+ Get credit</button>
       <button class="refill" id="acctBtn" data-click="openAccount" style="margin-top:6px">Account &amp; recovery</button>
-      <button class="refill" id="palBtn" data-click="openPalace" style="margin-top:6px"><span id="palBtnText">Memory Palace</span></button>
       <button class="refill" id="setBtn" data-click="openSettings" style="margin-top:6px">Settings</button>
     </div>
   </aside>
@@ -6650,16 +6656,21 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       const files = (palData.files||[]);
       if(!files.length) html += `<p class="hint" style="margin:4px">${esc(t("palace.screen.empty"))}</p>`;
       for(const f of files){
-        html += `<div class="palfile"><div class="pf-h"><input value="${escAttr(deanonymize(f.title, map))}" data-change="palFileEdit" data-change-pass="this" data-fid="${escAttr(f.id)}" data-k="title" aria-label="${escAttr(t("palace.screen.file_title"))}">`
+        // Folded by default: the categories first, a category's facts behind its arrow.
+        const n = (f.lines||[]).length;
+        html += `<div class="palfile ${palOpenFiles.has(f.id)?"open":""}" data-fid="${escAttr(f.id)}"><div class="pf-h">`
+          + `<button class="pf-t" data-click="palFileFold" data-click-pass="this" data-fid="${escAttr(f.id)}" aria-label="${escAttr(t("palace.screen.show_facts"))}"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg></button>`
+          + `<input value="${escAttr(deanonymize(f.title, map))}" data-change="palFileEdit" data-change-pass="this" data-fid="${escAttr(f.id)}" data-k="title" aria-label="${escAttr(t("palace.screen.file_title"))}">`
+          + `<span class="pf-n">${n}</span>`
           + `<button class="palmini ${f.neverSend?"on":""}" data-click="palFileNever" data-click-pass="this" data-fid="${escAttr(f.id)}" title="${escAttr(t("palace.screen.never_file"))}">${esc(t("palace.screen.never"))}</button>`
-          + `<button class="palmini" data-click="palFileDelete" data-click-pass="this" data-fid="${escAttr(f.id)}" title="${escAttr(t("palace.screen.delete_file"))}">✕</button></div>`
+          + `<button class="palmini" data-click="palFileDelete" data-click-pass="this" data-fid="${escAttr(f.id)}" title="${escAttr(t("palace.screen.delete_file"))}">✕</button></div><div class="pf-b">`
           + `<input class="pf-d" value="${escAttr(deanonymize(f.description, map))}" placeholder="${escAttr(t("palace.screen.file_desc"))}" data-change="palFileEdit" data-change-pass="this" data-fid="${escAttr(f.id)}" data-k="description">`;
         for(const l of (f.lines||[])){
           html += `<div class="palline2 ${l.neverSend?"never":""}"><textarea rows="1" data-change="palLineEdit" data-change-pass="this" data-fid="${escAttr(f.id)}" data-lid="${escAttr(l.id)}">${show(l.text)}</textarea>`
             + `<button class="palmini ${l.neverSend?"on":""}" data-click="palLineNever" data-click-pass="this" data-fid="${escAttr(f.id)}" data-lid="${escAttr(l.id)}">${esc(t("palace.screen.never"))}</button>`
             + `<button class="palmini" data-click="palLineDelete" data-click-pass="this" data-fid="${escAttr(f.id)}" data-lid="${escAttr(l.id)}">✕</button></div>`;
         }
-        html += `<div class="palline2"><textarea rows="1" placeholder="+ ${escAttr(t("palace.screen.add_line"))}" data-change="palLineAdd" data-change-pass="this" data-fid="${escAttr(f.id)}"></textarea></div></div>`;
+        html += `<div class="palline2"><textarea rows="1" placeholder="+ ${escAttr(t("palace.screen.add_line"))}" data-change="palLineAdd" data-change-pass="this" data-fid="${escAttr(f.id)}"></textarea></div></div></div>`;
       }
       html += `<div class="palfile"><div class="pf-h"><input id="palNewTitle" placeholder="+ ${escAttr(t("palace.screen.add_file"))}: ${escAttr(t("palace.screen.file_title"))}"></div><input class="pf-d" id="palNewDesc" placeholder="${escAttr(t("palace.screen.file_desc"))}"><div class="palline2"><textarea rows="1" id="palNewLine" placeholder="${escAttr(t("palace.screen.add_line"))}" data-change="palNewFile" data-change-pass="this"></textarea></div></div>`;
       html += `<div class="btnrow" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px"><button class="btn" data-click="palaceExportTap">${esc(t("palace.screen.export"))}</button><button class="btn" data-click="palaceImportTap">${esc(t("palace.screen.import"))}</button><button class="btn" style="color:var(--rust)" data-click="palaceWipeTap">${esc(t("palace.screen.wipe"))}</button></div>`;
@@ -6722,6 +6733,17 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
   }
   function palIdleSet(el){ const o = palOpts(); o.idleSecs = Math.max(10, Math.min(3600, Math.round(Number(el.value)||45))); savePalOpts(o); renderPalace(); }
 
+  // Which categories are unfolded on the palace screen (this run only).
+  const palOpenFiles = new Set();
+  function palFileFold(el){
+    const id = el.dataset.fid, box = el.closest(".palfile");
+    if(palOpenFiles.has(id)) palOpenFiles.delete(id); else palOpenFiles.add(id);
+    if(box){
+      box.classList.toggle("open", palOpenFiles.has(id));
+      // Measured now that they are on screen (folded, every field measures 0).
+      box.querySelectorAll(".palline2 textarea").forEach(ta=>{ if(ta.scrollHeight > 0){ ta.style.height = "auto"; ta.style.height = ta.scrollHeight + "px"; } });
+    }
+  }
   function palConfirm(title, text, yes){
     palConfirmFn = yes;
     $("palConfirmTitle").textContent = title; $("palConfirmText").textContent = text;
@@ -6787,7 +6809,7 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
     cancelUpload, voiceTap, voiceStopTap, voiceSendTap, voiceCancelTap,
     openPalace, closePalace, palaceIndTap, palaceSyncNow, palaceOptIn, palDiffOpen, closePalDiff, palUndoAll, palUndoOne,
     palAskSave, palAskDiscard, piiDecide, piiCancel, piiNever, palFileEdit, palFileNever, palFileDelete, palLineEdit,
-    palLineNever, palLineDelete, palLineAdd, palNewFile, palToggle, palSet, palIdleSet, palConfirmNo, palConfirmYes,
+    palFileFold, palLineNever, palLineDelete, palLineAdd, palNewFile, palToggle, palSet, palIdleSet, palConfirmNo, palConfirmYes,
     palaceWipeTap, palaceExportTap, palaceImportTap, palaceImportPicked });
 
   // ---- CSP-safe event delegation (H7) ---------------------------------------
