@@ -90,9 +90,10 @@ Read the conversation and decide what to remember. Rules:
 - If the user corrects or withdraws a fact, use "update" (with "old": the old fact's words and "text": the new one) or "delete" (with "old").
 - If there is nothing worth remembering, return [].
 Answer with JSON only, no prose and no code fences: an array of
-{"op":"add","fileId":"…","text":"…"} | {"op":"add","newFileTitle":"…","newFileDescription":"…","text":"…"} |
+{"op":"add","fileId":"…","text":"…"} | {"op":"add","newFileTitleEnglish":"…","newFileDescriptionEnglish":"…","text":"…"} |
 {"op":"update","fileId":"…","old":"…","text":"…"} | {"op":"delete","fileId":"…","old":"…"} |
-{"op":"rename","fileId":"…","title":"…","description":"…"} — the last only for an existing file whose title or description is not in English, or no longer says what the file holds.`;
+{"op":"rename","fileId":"…","titleEnglish":"…","descriptionEnglish":"…"} — the last only for an existing file whose title or description is not in English, or no longer says what the file holds.
+File titles and descriptions are ALWAYS English ("Gardening", not "Gärtnern"), even when the user writes German; only "text" keeps the user's language.`;
 
 /**
  * The request that asks a model for new facts: the rules, the index, the new turns.
@@ -165,11 +166,16 @@ export function parseExtraction(text, palace) {
     if (o.op === "add" && text) known.push(words(text));
     if (o.op === "add" && text) {
       if (file) ops.push({ op: "add", fileId: file.id, text });
-      else if (typeof o.newFileTitle === "string" && o.newFileTitle.trim())
-        ops.push({ op: "add", newFileTitle: o.newFileTitle.trim().slice(0, 80), newFileDescription: String(o.newFileDescription || "").slice(0, 240), text });
-    } else if (o.op === "rename" && file && typeof o.title === "string" && o.title.trim()) {
-      const title = o.title.trim().slice(0, 80);
-      const description = typeof o.description === "string" && o.description.trim() ? o.description.trim().slice(0, 240) : file.description || "";
+      else {
+        // The English field first; the plain name is still read, from older prompts.
+        const title = String(o.newFileTitleEnglish || o.newFileTitle || "").trim();
+        const description = String(o.newFileDescriptionEnglish || o.newFileDescription || "");
+        if (title) ops.push({ op: "add", newFileTitle: title.slice(0, 80), newFileDescription: description.slice(0, 240), text });
+      }
+    } else if (o.op === "rename" && file && String(o.titleEnglish || o.title || "").trim()) {
+      const title = String(o.titleEnglish || o.title).trim().slice(0, 80);
+      const d = String(o.descriptionEnglish || o.description || "").trim();
+      const description = d ? d.slice(0, 240) : file.description || "";
       if (title !== file.title || description !== (file.description || "")) ops.push({ op: "file.update", fileId: file.id, title, description });
     } else if ((o.op === "update" || o.op === "delete") && file) {
       const line = findLine(file, o.old || o.text);

@@ -97,9 +97,14 @@ test("a fact already kept, in any file and in other words around it, is not adde
 test("a category named in another language is renamed, in English", () => {
   const p = { files: [{ id: "f_p", title: "Persönliches", description: "Persönliche Informationen", lines: [] }] };
   const ops = parseExtraction(JSON.stringify([
-    { op: "rename", fileId: "f_p", title: "About me", description: "Name, age, family, home" },
+    { op: "rename", fileId: "f_p", titleEnglish: "About me", descriptionEnglish: "Name, age, family, home" },
     { op: "rename", fileId: "f_nope", title: "X" },
     { op: "rename", fileId: "f_p", title: "" },
   ]), p);
   assert.deepEqual(ops, [{ op: "file.update", fileId: "f_p", title: "About me", description: "Name, age, family, home" }]);
+});
+
+test("a new file's English title is read from its English field", () => {
+  const ops = parseExtraction(JSON.stringify([{ op: "add", newFileTitleEnglish: "Gardening", newFileDescriptionEnglish: "Plants and the garden", text: "Züchtet Tomaten." }]), { files: [] });
+  assert.deepEqual(ops, [{ op: "add", newFileTitle: "Gardening", newFileDescription: "Plants and the garden", text: "Züchtet Tomaten." }]);
 });
