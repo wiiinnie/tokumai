@@ -797,7 +797,11 @@ async fn iap_buy(app: AppHandle, product_id: String) -> Result<Value, String> {
             break jws;
         }
         let tx = bought["transactionId"].as_str().unwrap_or("");
-        log::warn!("[notes] the App Store answered with an ended transaction {tx}; finished, asking again");
+        let c = jws_claims(&jws).unwrap_or(Value::Null);
+        log::warn!(
+            "[notes] the App Store answered with an ended transaction {tx}; finished, asking again (product {}, original {}, purchased {}, expires {}, signed {}, env {}, now {})",
+            c["productId"], c["originalTransactionId"], c["purchaseDate"], c["expiresDate"], c["signedDate"], c["environment"], tokumai_proto::now_ms()
+        );
         if !tx.is_empty() {
             let _ = iap_ios::finish(tx).await;
         }
@@ -1331,6 +1335,12 @@ async fn notes_sync(app: &AppHandle) -> Result<Value, String> {
             let key = format!("{}:{}", paid.rail, epoch);
             let p = profile::load(&dir);
             if seen.contains(&key) {
+                // A second transaction for a month already in hand this round — in the
+                // sandbox every five-minute renewal is one, dozens of them. Once ended, it
+                // is finished: StoreKit hands an open one back in place of a new purchase.
+                if !tx.is_empty() && paid.until_ms <= now {
+                    let _ = iap_ios::finish(&tx).await;
+                }
                 continue;
             }
             if p.notes_done.contains(&key) || p.notes.iter().any(|n| n.rail == paid.rail && n.epoch == epoch) {
