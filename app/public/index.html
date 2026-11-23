@@ -6455,7 +6455,10 @@ try{if(/Windows/i.test(navigator.userAgent))document.documentElement.classList.a
       const anon = palAnonymizer(sess);
       const index = buildIndex(palData, anon);
       const msgs = extractionMessages(turns, index);
-      const r = await Backend.chatRaw({ model: extractionModel(), messages: msgs, maxTokens: 1024, thinkingBudget: 0 });
+      // Room for the model to think first: OpenAI's reasoning counts against the same
+      // budget, and at 1024 a small model ran out before writing a word — the facts were
+      // lost without a sign (2026-11-23). Billed at what is used, not at the cap.
+      const r = await Backend.chatRaw({ model: extractionModel(), messages: msgs, maxTokens: 4096, thinkingBudget: 0 });
       anon.flush && anon.flush();
       // These turns are done, whatever came out of them.
       sess.palaceAt = (sess.messages||[]).length;

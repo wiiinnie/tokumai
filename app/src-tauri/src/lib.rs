@@ -648,7 +648,15 @@ async fn chat(
     let _ = app.emit("chat-sent", ());
     let st = app.state::<AppState>();
     let mut answer = tokio::select! {
-        a = Box::pin(call(&app, "chat", body)) => a?,
+        a = Box::pin(call(&app, "chat", body)) => match a {
+            Ok(a) => a,
+            Err(e) => {
+                // Said in the log too: a request the interface makes in the background (the
+                // palace's extraction) has nobody looking at its error.
+                log::warn!("[chat] {model}: {e}");
+                return Err(e);
+            }
+        },
         _ = st.cancel.notified() => return Err("stopped".into()),
     };
     if index_len > 0 {
